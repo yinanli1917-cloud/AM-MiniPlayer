@@ -908,14 +908,21 @@ public final class MetadataResolver {
             if resultArtistIsASCII && !artistMatch {
                 return .none
             }
-            // 🔑 Title corroboration: when the romanized input is NOT likely
-            // English (i.e. it looks like pinyin/romaji), a translated candidate
-            // whose CJK title does NOT romanize to the input is a sibling-track
-            // collision (e.g. '快节奏' Δ0.3 on the same album as '二十岁的浪漫' Δ0.5).
-            // Skip it so the real title track can be collected instead.
-            if !LanguageUtils.isLikelyEnglishTitle(title),
-               !LanguageUtils.isRomanizedTitleCorroborated(input: title, candidateTitle: trackName) {
-                return .none
+            // 🔑 Title corroboration: a translated candidate whose CJK title
+            // does NOT relate to the input title is a sibling-track collision
+            // (e.g. '快节奏' Δ0.3 on the same album as '二十岁的浪漫' Δ0.5) —
+            // regardless of whether the input LOOKS English. An English input
+            // can still be corroborated via the katakana-loanword lane
+            // ("Lemon" ⇄ "レモン"); a genuine semantic translation ("Dinner" →
+            // 三個人的晚餐) has no phonetic relation to verify here, so it is
+            // only admitted when the search itself was scoped by the input
+            // title — the round-level consensus in promoteSafeTranslatedCandidates
+            // then still requires uniqueness/majority before promoting it.
+            // A bare artist-only search carries no title evidence at all and
+            // must never admit an uncorroborated translated candidate.
+            if !LanguageUtils.isRomanizedTitleCorroborated(input: title, candidateTitle: trackName) {
+                let searchTermIncludesTitle = searchTerm.lowercased().contains(inputTitleLower)
+                guard searchTermIncludesTitle else { return .none }
             }
             DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 翻译候选('\(searchTerm)'): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.1f", durationDiff))s")
             return .translated((trackName, artistName, durationDiff, "duration-precise+CN"))
@@ -1479,11 +1486,27 @@ public final class MetadataResolver {
             let best = close.min(by: { $0.trackName.count < $1.trackName.count }) ?? sorted[0]
             return (best.trackName, best.artistName, region, best.durationDiff)
         }
-        // artist+CJK 需唯一候选（同歌手不同歌时长可能极度接近）
-        if tiers.artistCJK.count == 1 {
-            let best = tiers.artistCJK[0]
-            DebugLogger.log("MetadataResolver", "[\(region)] artist+CJK 唯一候选: '\(best.trackName)' Δ\(String(format: "%.2f", best.durationDiff))s")
-            return (best.trackName, best.artistName, region, best.durationDiff)
+        // artist+CJK: uniqueness/duration alone is NOT title identity evidence
+        // (postmortem 006 class — a storefront artist+duration query can
+        // return exactly one SIBLING track, e.g. Love Lee → 후라이의 꿈).
+        // Require the same title relation the romanized tier already
+        // demands: phonetic/katakana-loanword corroboration first, then —
+        // only for a song-scoped query — Apple's own catalog-alias
+        // consensus. No relation → fall through (graceful "unresolved"),
+        // never promote on uniqueness/duration alone.
+        if !tiers.artistCJK.isEmpty {
+            let corroborating = tiers.artistCJK.filter {
+                Self.hasRomanizedRegionTitleEvidence(inputTitle: inputTitle, candidateTitle: $0.trackName)
+            }
+            if let best = corroborating.min(by: { $0.durationDiff < $1.durationDiff }) {
+                DebugLogger.log("MetadataResolver", "[\(region)] artist+CJK 标题印证: '\(best.trackName)' Δ\(String(format: "%.2f", best.durationDiff))s [\(corroborating.count)/\(tiers.artistCJK.count)]")
+                return (best.trackName, best.artistName, region, best.durationDiff)
+            }
+            if isSongScopedQuery, let alias = Self.titleQueryAliasCandidate(tiers.artistCJK) {
+                DebugLogger.log("MetadataResolver", "[\(region)] artist+CJK 目录别名共识: '\(alias.trackName)' Δ\(String(format: "%.2f", alias.durationDiff))s [\(tiers.artistCJK.count)条同一身份]")
+                return (alias.trackName, alias.artistName, region, alias.durationDiff)
+            }
+            DebugLogger.log("MetadataResolver", "⏭️ [\(region)] artist+CJK 候选无标题印证，跳过该层")
         }
         // romanized→CJK：仅接受标题印证的候选；无印证保持未解析
         guard !tiers.romanized.isEmpty else { return nil }

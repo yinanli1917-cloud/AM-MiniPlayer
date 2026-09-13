@@ -201,6 +201,40 @@ final class JapaneseReadingTests: XCTestCase {
         )
     }
 
+    // ────────────────────────────────────────────────────────────────────
+    // MARK: Katakana loanword lane (Gap 3, 2026-09-11)
+    //
+    // "Lemon"/"Pretender" have no Mandarin pinyin or Japanese on'yomi/
+    // kun'yomi reading of their own — they are English loanwords indexed
+    // under their katakana transliteration (レモン/プリテンダー). The
+    // ranking door must corroborate them via the katakana-loanword
+    // approximation lane (`LanguageUtils.englishLoanwordReadingKey`).
+    // ────────────────────────────────────────────────────────────────────
+
+    func testCorroborationLearnsKatakanaLoanwords() {
+        XCTAssertTrue(
+            LanguageUtils.isRomanizedTitleCorroborated(input: "Lemon", candidateTitle: "レモン")
+        )
+        XCTAssertTrue(
+            LanguageUtils.isRomanizedTitleCorroborated(input: "Pretender", candidateTitle: "プリテンダー")
+        )
+    }
+
+    func testKatakanaLoanwordLaneRejectsUnrelatedTitles() {
+        XCTAssertFalse(
+            LanguageUtils.isRomanizedTitleCorroborated(input: "Lemon", candidateTitle: "ミカン")
+        )
+        XCTAssertFalse(
+            LanguageUtils.isRomanizedTitleCorroborated(input: "Pretender", candidateTitle: "プリンセス")
+        )
+    }
+
+    func testEqualityDoorAdmitsExactKatakanaLoanword() {
+        // "Lemon" transliterates exactly onto レモン's own reading ("remon")
+        // via the loanword lane — the equality door (no fuzz) still admits it.
+        XCTAssertTrue(titleMatch("Lemon", "レモン"))
+    }
+
     func testCorroborationFailsClosedOnPartialReadings() {
         // 二十歲的浪漫 has no complete Japanese reading (void, fail closed);
         // a fabricated input resembling its partial reading must not match.
