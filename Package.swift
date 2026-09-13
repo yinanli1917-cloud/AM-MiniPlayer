@@ -19,7 +19,9 @@ let package = Package(
             name: "MusicMiniPlayerCore",
             targets: ["MusicMiniPlayerCore"]),
     ],
-    dependencies: [],
+    dependencies: [
+        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", exact: "3.0.1")
+    ],
     targets: [
         .target(
             name: "ObjCSupport",
@@ -28,7 +30,7 @@ let package = Package(
         ),
         .target(
             name: "MusicMiniPlayerCore",
-            dependencies: ["ObjCSupport"],
+            dependencies: ["ObjCSupport", "KeyboardShortcuts"],
             path: "Sources/MusicMiniPlayerCore",
             exclude: [
                 "Models/CLAUDE.md"
@@ -48,7 +50,7 @@ let package = Package(
         ),
         .target(
             name: "MusicMiniPlayerAppKit",
-            dependencies: ["MusicMiniPlayerCore"],
+            dependencies: ["MusicMiniPlayerCore", "KeyboardShortcuts"],
             path: "Sources/MusicMiniPlayerAppKit",
             exclude: ["CLAUDE.md"]
         ),
@@ -89,7 +91,7 @@ let package = Package(
         ),
         .testTarget(
             name: "MusicMiniPlayerTests",
-            dependencies: ["MusicMiniPlayerCore"]
+            dependencies: ["MusicMiniPlayerCore", "KeyboardShortcuts"]
         ),
     ]
 )

@@ -311,6 +311,18 @@ public final class MetadataDiskCache {
         }
     }
 
+    /// Positive localized resolutions overwrite a stale negative row via
+    /// `set(...)`; this clears it directly (no positive row available yet),
+    /// e.g. a user-initiated retry that must not be short-circuited by a
+    /// negative row within its 24h TTL.
+    public func clearNegative(title: String, artist: String, duration: TimeInterval) {
+        let key = Self.cacheKey(title: title, artist: artist, duration: duration)
+        queue.sync {
+            ensureLoaded()
+            negativeMemory.removeValue(forKey: key)
+        }
+    }
+
     /// CN-tier negative check.
     public func getNegativeChinese(title: String, artist: String, duration: TimeInterval) -> Bool {
         #if DEBUG
@@ -335,6 +347,15 @@ public final class MetadataDiskCache {
             guard cnMemory[key] == nil else { return }
             negativeCnMemory[key] = MetadataNegativeEntry(ts: Date().timeIntervalSince1970)
             scheduleDebouncedPersist()
+        }
+    }
+
+    /// Clears a CN-tier negative row directly (mirrors `clearNegative`).
+    public func clearNegativeChinese(title: String, artist: String, duration: TimeInterval) {
+        let key = Self.cacheKey(title: title, artist: artist, duration: duration)
+        queue.sync {
+            ensureLoaded()
+            negativeCnMemory.removeValue(forKey: key)
         }
     }
 
@@ -385,6 +406,20 @@ public final class MetadataDiskCache {
             return false
         }
         return true
+    }
+
+    /// Clears negative rows across ALL tiers for a song's keys: localized,
+    /// CN, and (when `album` is non-empty) album-scoped. Used by the retry
+    /// (forceRefresh) path so a metadata miss recorded within the 24h TTL
+    /// never short-circuits a user-initiated re-fetch (commit 6cef712 added
+    /// the negative-evidence rows; retry only cleared LyricsMissMemo, not
+    /// these).
+    public func clearNegatives(title: String, artist: String, duration: TimeInterval, album: String) {
+        clearNegative(title: title, artist: artist, duration: duration)
+        clearNegativeChinese(title: title, artist: artist, duration: duration)
+        if !album.isEmpty {
+            clearNegativeAlbumScoped(title: title, artist: artist, duration: duration, album: album)
+        }
     }
 
     // ------------------------------------------------------------------------

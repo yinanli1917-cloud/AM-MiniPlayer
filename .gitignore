@@ -13,7 +13,6 @@ xcuserdata/
 # Swift Package Manager
 Packages/
 Package.pins
-Package.resolved
 .build/
 
 # Sensitive files

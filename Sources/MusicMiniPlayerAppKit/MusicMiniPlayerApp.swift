@@ -14,7 +14,7 @@ import MusicMiniPlayerCore
 // ──────────────────────────────────────────────
 
 /// macOS menu bar mini player with floating-window support.
-public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
+public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelCommands {
     static var shared: AppMain!
 
     /// Extra playback sources passed in by the caller of `main(extraPlaybackSources:)`
@@ -36,6 +36,7 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let edgePresentationModel = MainActor.assumeIsolated { EdgePresentationModel() }
     let settingsWindowState = SettingsWindowState()
     private var windowDelegate: FloatingWindowDelegate?
+    private var globalShortcutRegistrar: GlobalShortcutRegistrar?
     private var settingsWindowDelegate: SettingsWindowDelegate?
     /// Bumped on every present/dismiss transition of `floatingWindow` so a
     /// pending fade-out's `orderOut` completion can detect it was superseded
@@ -106,6 +107,10 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // sweep itself polls until the queue snapshot populates.
         // ──────────────────────────────────────────────
         MetadataWarmupSweep.shared.startIfNeeded()
+
+        let registrar = GlobalShortcutRegistrar(controller: musicController, panel: self)
+        registrar.activate()
+        globalShortcutRegistrar = registrar
 
         debugPrint("[AppMain] Setup complete\n")
         E2EEventLog.emit("app_ready", [
@@ -446,6 +451,16 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
             presentFloatingWindow(window, makeKey: false)
             musicController.setPanelOccluded(false)
         }
+    }
+
+    /// PanelCommands conformance for GlobalShortcutRegistrar (nanoPod.togglePanel).
+    public func togglePanel() {
+        toggleFloatingWindow()
+    }
+
+    /// PanelCommands conformance for GlobalShortcutRegistrar (nanoPod.hideToEdge).
+    public func hideToEdge() {
+        (floatingWindow as? SnappablePanel)?.hideToNearestEdge()
     }
 
     /// Collapses the floating window back to the menu bar.
