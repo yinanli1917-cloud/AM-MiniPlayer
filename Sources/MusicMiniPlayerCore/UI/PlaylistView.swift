@@ -129,17 +129,29 @@ public struct PlaylistView: View {
                                 title: PlaylistL10n.localized("history"),
                                 headerHeight: headerHeight
                             ) {
-                                if musicController.recentTracks.isEmpty {
+                                if musicController.playbackHistory.isEmpty {
                                     emptyStateText(PlaylistL10n.localized("noRecentTracks"))
                                 } else {
-                                    ForEach(musicController.recentTracks.reversed(), id: \.persistentID) { track in
+                                    // Real playback history nanoPod itself observed (founder
+                                    // ruling 2026-09-13) — already newest-first, unlike the
+                                    // legacy `recentTracks` (Apple Music account "recently
+                                    // played", kept fetching but no longer read by this
+                                    // section — WT-E still calls the public API for it).
+                                    ForEach(musicController.playbackHistory) { entry in
                                         PlaylistItemRowCompact(
-                                            track: track,
+                                            track: (
+                                                title: entry.title,
+                                                artist: entry.artist,
+                                                album: entry.album,
+                                                persistentID: entry.persistentID,
+                                                duration: entry.duration
+                                            ),
                                             artSize: rowArtSize,
                                             currentPage: $currentPage,
                                             isScrolling: isManualScrolling,
                                             fadeHeaderHeight: headerHeight,
-                                            pendingJump: $pendingJump
+                                            pendingJump: $pendingJump,
+                                            isDisabled: entry.sourceKind == .radioOrStream
                                         )
                                     }
                                 }
@@ -160,32 +172,40 @@ public struct PlaylistView: View {
                             // ═══════════════════════════════════════════
                             // MARK: - Up Next Section（有 sticky header）
                             // ═══════════════════════════════════════════
-                            PlaylistSection(
-                                sectionID: "upNext",
-                                title: PlaylistL10n.localized("upNext"),
-                                headerHeight: headerHeight
-                            ) {
-                                if musicController.upNextTracks.isEmpty {
-                                    emptyStateText(PlaylistL10n.localized(
-                                        UpNextEmptyState.messageKey(
-                                            provenance: musicController.queueProvenance,
-                                            isEmpty: musicController.upNextTracks.isEmpty
-                                        )
-                                    ))
-                                } else {
-                                    ForEach(musicController.upNextTracks, id: \.persistentID) { track in
-                                        PlaylistItemRowCompact(
-                                            track: track,
-                                            artSize: rowArtSize,
-                                            currentPage: $currentPage,
-                                            isScrolling: isManualScrolling,
-                                            fadeHeaderHeight: headerHeight,
-                                            pendingJump: $pendingJump
-                                        )
+                            // Founder ruling 2026-09-13: Up Next renders ONLY when it is
+                            // provably exact (library playlist context + shuffle off);
+                            // otherwise the whole section is hidden and a single fixed
+                            // caption explains why — no flicker between the two.
+                            if upNextVisibility == .shown {
+                                PlaylistSection(
+                                    sectionID: "upNext",
+                                    title: PlaylistL10n.localized("upNext"),
+                                    headerHeight: headerHeight
+                                ) {
+                                    if musicController.upNextTracks.isEmpty {
+                                        emptyStateText(PlaylistL10n.localized(
+                                            UpNextEmptyState.messageKey(
+                                                provenance: musicController.queueProvenance,
+                                                isEmpty: musicController.upNextTracks.isEmpty
+                                            )
+                                        ))
+                                    } else {
+                                        ForEach(musicController.upNextTracks, id: \.persistentID) { track in
+                                            PlaylistItemRowCompact(
+                                                track: track,
+                                                artSize: rowArtSize,
+                                                currentPage: $currentPage,
+                                                isScrolling: isManualScrolling,
+                                                fadeHeaderHeight: headerHeight,
+                                                pendingJump: $pendingJump
+                                            )
+                                        }
                                     }
                                 }
+                                .id("upNextSection")
+                            } else {
+                                upNextHiddenCaption
                             }
-                            .id("upNextSection")
 
                             // 底部留白
                             Spacer().frame(height: 120)
@@ -318,6 +338,26 @@ public struct PlaylistView: View {
             .foregroundStyle(.white.opacity(0.5))
             .padding(.horizontal, 12)
             .padding(.vertical, 20)
+    }
+
+    /// Founder ruling 2026-09-13: whether the Up Next section may render at all.
+    private var upNextVisibility: UpNextVisibility {
+        UpNextVisibility.decide(
+            provenance: musicController.queueProvenance,
+            shuffleEnabled: musicController.shuffleEnabled
+        )
+    }
+
+    /// One fixed caption line shown under the Now Playing card in place of the
+    /// entire Up Next section when it is hidden. Stable text per reason — no
+    /// animation beyond whatever default transition SwiftUI applies when the
+    /// branch itself switches.
+    @ViewBuilder
+    private var upNextHiddenCaption: some View {
+        if case .hidden(let reason) = upNextVisibility {
+            let key = reason == .shuffle ? "upNextHiddenShuffle" : "upNextHiddenNoQueue"
+            emptyStateText(PlaylistL10n.localized(key))
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -652,6 +692,9 @@ struct PlaylistItemRowCompact: View {
     var isScrolling: Bool = false
     var fadeHeaderHeight: CGFloat = 0
     @Binding var pendingJump: JumpToPendingState?
+    /// Radio/stream history rows: cannot be jumped to (no stable identity to
+    /// resume), shown disabled — dimmed, no hover cursor, tap does nothing.
+    var isDisabled: Bool = false
 
     @State private var isHovering = false
     @State private var isCursorPushed = false
@@ -671,6 +714,7 @@ struct PlaylistItemRowCompact: View {
 
     var body: some View {
         Button(action: {
+            guard !isDisabled else { return }
             if isCurrentTrack {
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                     currentPage = .album
@@ -746,8 +790,10 @@ struct PlaylistItemRowCompact: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.5 : 1.0)
         .onHover { hovering in
-            guard !isScrolling else { return }
+            guard !isScrolling, !isDisabled else { return }
             withAnimation(.smooth(duration: 0.2)) {
                 isHovering = hovering
             }

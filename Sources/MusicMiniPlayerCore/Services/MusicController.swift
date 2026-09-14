@@ -164,6 +164,11 @@ public class MusicController: ObservableObject {
     @Published public var repeatMode: Int = 0 // 0 = off, 1 = one, 2 = all
     @Published public var upNextTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
     @Published public var recentTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
+    /// Real playback history nanoPod itself observed (any source, any shuffle
+    /// state) — newest first. Founder ruling 2026-09-13: distinct from
+    /// `recentTracks` (Apple Music account "recently played"), which is not
+    /// what THIS app played. See PlaybackHistoryStore.swift.
+    @Published public private(set) var playbackHistory: [PlaybackHistoryEntry] = []
     /// Why `upNextTracks` looks the way it does — lets the UI explain an empty Up Next
     /// (e.g. radio/Apple Music streams expose no `currentPlaylist`) instead of just
     /// showing a generic empty state. Written only from the queue-fetch pipeline.
@@ -225,6 +230,7 @@ public class MusicController: ObservableObject {
     var lastUserActionTime: Date = .distantPast
 
     public var lyricsService: LyricsService { LyricsService.shared }
+    private let playbackHistoryStore = PlaybackHistoryStore()
 
     var artworkCache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
@@ -795,6 +801,44 @@ public class MusicController: ObservableObject {
             (title: "Next Song 3", artist: "Artist Z", album: "Album Z", persistentID: "6", duration: 195.0)
         ]
         self.queueProvenance = .preview
+        self.playbackHistory = [
+            PlaybackHistoryEntry(
+                persistentID: "7", title: "History Song 1", artist: "Artist H1", album: "Album H1",
+                duration: 200.0, sourceKind: .library, startedAt: Date().addingTimeInterval(-600)
+            ),
+            PlaybackHistoryEntry(
+                persistentID: "8", title: "History Song 2", artist: "Artist H2", album: "Album H2",
+                duration: 180.0, sourceKind: .library, startedAt: Date().addingTimeInterval(-1200)
+            )
+        ]
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Playback History (WT-D plan H — real playback history, not Apple Music's)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// Records a CONFIRMED track change (called only from the two identity-
+    /// discipline-gated points: `handleTrackChange`'s SB-resolved persistentID
+    /// completion, and `applySnapshot`'s `trackChanged` branch) into the
+    /// playback history store, then republishes `playbackHistory`.
+    private func recordPlaybackHistory(
+        title: String, artist: String, album: String,
+        persistentID: String, duration: TimeInterval, isURLTrack: Bool,
+        now: Date = Date()
+    ) {
+        let candidate = PlaybackHistoryEntry.make(
+            title: title, artist: artist, album: album,
+            persistentID: persistentID, duration: duration,
+            isURLTrack: isURLTrack, startedAt: now
+        )
+        playbackHistoryStore.record(candidate, now: now)
+        playbackHistory = playbackHistoryStore.entries
+    }
+
+    /// Settings → "Clear Playback History".
+    public func clearPlaybackHistory() {
+        playbackHistoryStore.clear()
+        playbackHistory = playbackHistoryStore.entries
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1416,6 +1460,16 @@ public class MusicController: ObservableObject {
                     self.currentPlaylistName = playlistName
                 }
                 DiagnosticsService.shared.enrichTrackContext(self.diagnosticsTrackContext())
+
+                // 🔑 Confirmed-track-change point (notification path, PID now resolved):
+                // record real playback history. Dedupe (same-PID-as-last / rapid radio
+                // jitter) lives in PlaybackHistoryStore.shouldRecord.
+                self.recordPlaybackHistory(
+                    title: name, artist: artist, album: capturedAlbum,
+                    persistentID: persistentID,
+                    duration: sbDuration > 0 ? sbDuration : capturedDuration,
+                    isURLTrack: self.currentTrackIsURLTrack
+                )
 
                 // Backfill cache: if artwork already arrived, cache it under persistentID
                 if !persistentID.isEmpty, let artwork = self.currentArtwork,
@@ -2245,6 +2299,16 @@ public class MusicController: ObservableObject {
             postTrackChangePollDeferrals = 0
             let generation = incrementGeneration()
             currentPersistentID = s.persistentID
+
+            // 🔑 Confirmed-track-change point (snapshot/radio path, gated by
+            // snapshotIndicatesTrackChange / shouldConfirmSnapshotTrackChange
+            // upstream): record real playback history.
+            recordPlaybackHistory(
+                title: s.trackName, artist: s.trackArtist, album: s.trackAlbum,
+                persistentID: s.persistentID, duration: s.trackDuration,
+                isURLTrack: currentTrackIsURLTrack
+            )
+
             let artworkPersistentID = currentTrackIsURLTrack ? "" : s.persistentID
             fetchArtwork(for: s.trackName, artist: s.trackArtist, album: s.trackAlbum, persistentID: artworkPersistentID, generation: generation)
             // 🔑 Actively fetch lyrics on track changes; do not depend on SwiftUI onChange timing.

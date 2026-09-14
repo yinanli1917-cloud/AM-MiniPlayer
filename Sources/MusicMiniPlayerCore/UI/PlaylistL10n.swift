@@ -25,6 +25,8 @@ enum PlaylistL10n {
         "upNext":               ("Up Next", "接下来播放"),
         "noRecentTracks":       ("No recent tracks", "暂无最近播放"),
         "queueEmpty":           ("Queue is empty", "队列为空"),
-        "queueUnavailableForSource": ("Music exposes no queue for this source", "Music 未提供此来源的队列")
+        "queueUnavailableForSource": ("Music exposes no queue for this source", "Music 未提供此来源的队列"),
+        "upNextHiddenShuffle":  ("Turn off Shuffle to see Up Next", "关闭随机后显示接下来播放"),
+        "upNextHiddenNoQueue":  ("Up Next is available when playing from a library playlist", "Up Next 仅在从资料库歌单播放时可用")
     ]
 }
