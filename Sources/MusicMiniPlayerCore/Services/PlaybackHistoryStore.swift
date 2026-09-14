@@ -18,7 +18,13 @@ import Foundation
 /// 2026-09-13: History must be REAL playback history nanoPod witnessed (any
 /// source, any shuffle state) — never Apple Music's account-level "recently
 /// played", which is not what this app played.
-public struct PlaybackHistoryEntry: Codable, Equatable {
+public struct PlaybackHistoryEntry: Codable, Equatable, Identifiable {
+    /// Stable identity for SwiftUI `ForEach` — index-based identity shifts
+    /// every row's identity on each new insertion (entries prepend at index
+    /// 0), forcing full row rebuilds and artwork-reload churn. `persistentID`
+    /// may be empty for radio/stream tracks, so `startedAt` disambiguates.
+    public var id: String { "\(persistentID)|\(startedAt.timeIntervalSince1970)" }
+
     public enum SourceKind: String, Codable, Equatable {
         case library
         case appleMusicCatalog

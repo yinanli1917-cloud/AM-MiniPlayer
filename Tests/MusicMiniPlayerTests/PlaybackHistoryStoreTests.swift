@@ -25,6 +25,27 @@ final class PlaybackHistoryStoreTests: XCTestCase {
         )
     }
 
+    // MARK: - Identifiable id (stable row identity, not array index)
+
+    func test_id_sameStartedAt_differsWhenPersistentIDDiffers() {
+        let a = entry(pid: "AAAA", startedAt: Date(timeIntervalSince1970: 1000))
+        let b = entry(pid: "BBBB", startedAt: Date(timeIntervalSince1970: 1000))
+        XCTAssertNotEqual(a.id, b.id)
+    }
+
+    func test_id_samePersistentID_differsWhenStartedAtDiffers() {
+        let a = entry(pid: "AAAA", startedAt: Date(timeIntervalSince1970: 1000))
+        let b = entry(pid: "AAAA", startedAt: Date(timeIntervalSince1970: 2000))
+        XCTAssertNotEqual(a.id, b.id)
+    }
+
+    func test_id_survivesEncodeDecodeRoundTrip() throws {
+        let original = entry(pid: "CCCC", startedAt: Date(timeIntervalSince1970: 4242))
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(PlaybackHistoryEntry.self, from: data)
+        XCTAssertEqual(original.id, decoded.id)
+    }
+
     // MARK: - make(...) sourceKind derivation
 
     func test_make_amPrefixedPID_isAppleMusicCatalog() {

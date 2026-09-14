@@ -137,7 +137,7 @@ public struct PlaylistView: View {
                                     // legacy `recentTracks` (Apple Music account "recently
                                     // played", kept fetching but no longer read by this
                                     // section — WT-E still calls the public API for it).
-                                    ForEach(Array(musicController.playbackHistory.enumerated()), id: \.offset) { _, entry in
+                                    ForEach(musicController.playbackHistory) { entry in
                                         PlaylistItemRowCompact(
                                             track: (
                                                 title: entry.title,
