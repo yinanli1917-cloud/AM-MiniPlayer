@@ -23,6 +23,7 @@ public struct PlaybackSourceID: RawRepresentable, Hashable, Codable, Sendable {
 
 extension PlaybackSourceID {
     public static let appleMusic = PlaybackSourceID(rawValue: "appleMusic")
+    public static let spotify = PlaybackSourceID(rawValue: "spotify")
 }
 
 /// 持久身份：跨轮询、跨重启稳定。
