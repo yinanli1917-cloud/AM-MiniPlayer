@@ -21,6 +21,8 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
     var menuBarMenu: NSMenu?
     var floatingWindow: NSPanel?
     var settingsWindow: NSWindow?
+    var onboardingWindow: NSWindow?
+    private var onboardingWindowDelegate: SettingsWindowDelegate?
     #if DEBUG || LOCAL_DEVELOPER_BUILD
     var diagnosticsWindow: NSWindow?
     #endif
@@ -106,6 +108,16 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         registrar.activate()
         globalShortcutRegistrar = registrar
 
+        // ──────────────────────────────────────────────
+        // C6 引导页：仅首次启动展示（status item 已就绪之后），
+        // 非模态、不改激活策略，绝不阻塞迷你播放器本身。
+        // ──────────────────────────────────────────────
+        let launchCount = OnboardingState.shared.incrementLaunchCount()
+        OnboardingState.shared.presentIfNeeded(launchCount: launchCount)
+        if OnboardingState.shared.isPresented {
+            showOnboardingWindow()
+        }
+
         debugPrint("[AppMain] Setup complete\n")
         E2EEventLog.emit("app_ready", [
             "pid": String(ProcessInfo.processInfo.processIdentifier)
@@ -185,9 +197,17 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
             // nanopod://debug/feel/wave/<topdown|sync>
             // nanopod://debug/feel/<hoverCapsule|pressScale|progressHover|shuffleRepeat|windowPresent>/<arm>
             // nanopod://debug/feel/reset — resets both NativeLyricsFeelParity and MicroInteractionFeel
+            // nanopod://debug/onboarding/<show|reset> — force-show or reset the C6 onboarding window
             let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
             if path == "animsweep" {
                 Task { @MainActor in WindowAnimationCensus.dump() }
+            } else if path.hasPrefix("onboarding/") {
+                let action = String(path.dropFirst("onboarding/".count))
+                Task { @MainActor in
+                    if OnboardingState.shared.handleDebugAction(action), OnboardingState.shared.isPresented {
+                        self.showOnboardingWindow()
+                    }
+                }
             } else if path == "feel/reset" {
                 _ = NativeLyricsFeelParity.apply(channel: "reset", value: "reset")
                 MicroInteractionFeel.reset()
@@ -754,6 +774,58 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
 
     @objc func openSettings(_ sender: Any?) {
         showSettingsWindow()
+    }
+
+    // MARK: - Onboarding Window (C6)
+
+    func createOnboardingWindow() {
+        guard onboardingWindow == nil else { return }
+        let onboardingContent = OnboardingWindowView(onboardingState: OnboardingState.shared) { [weak self] in
+            Task { @MainActor in
+                self?.closeOnboardingWindow()
+            }
+        }
+        .environmentObject(musicController)
+
+        let hostingController = NSHostingController(rootView: onboardingContent)
+
+        // Plain window, no Liquid Glass material — avoids glass-on-glass with the
+        // floating panel's own backdrop; same visual family as the settings window.
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = ""
+        window.styleMask = [.titled, .closable, .fullSizeContentView]
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.isMovableByWindowBackground = true
+        window.setContentSize(NSSize(width: 460, height: 380))
+        window.center()
+        window.isReleasedWhenClosed = false
+        // Non-modal: the mini player keeps running underneath.
+        window.level = .normal
+
+        onboardingWindowDelegate = SettingsWindowDelegate()
+        window.delegate = onboardingWindowDelegate
+
+        onboardingWindow = window
+    }
+
+    func showOnboardingWindow() {
+        if onboardingWindow == nil {
+            createOnboardingWindow()
+        }
+        guard let window = onboardingWindow else { return }
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        // LSUIElement app: a newly created window needs one explicit activation
+        // to gain focus. This does NOT touch NSApp.activationPolicy — only
+        // updateDockVisibility() may do that (banned-patterns.md).
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @MainActor
+    func closeOnboardingWindow() {
+        OnboardingState.shared.isPresented = false
+        onboardingWindow?.close()
     }
 
     #if DEBUG || LOCAL_DEVELOPER_BUILD
