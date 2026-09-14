@@ -551,12 +551,15 @@ final class NativeLyricsRowView: NSView {
         }
     }
 
-    /// Repro instrumentation (defect 1, emphasis words, 2026-09-14 founder report). Unlike the
-    /// non-emphasis word cascade (`debugMainWordGlyphPairs`, fixed by ce19929/applyFloatingHiddenBase),
-    /// `applyMainWordFloatGlyphLayers` SKIPS emphasis-order runs entirely (`where
-    /// !emphasisOrders.contains(run.order)`) and `floatingOrders` never includes them either — so
-    /// the emphasis word's own glyph range is never hidden out of the whole-line dim base. Reports
-    /// each emphasis glyph layer's applied Y/scale, index-aligned to `emphasisGlyphLayers`.
+    /// Repro/regression instrumentation (defect 1, emphasis words, 2026-09-14 founder report).
+    /// `applyMainWordFloatGlyphLayers` still SKIPS emphasis-order runs entirely (`where
+    /// !emphasisOrders.contains(run.order)`) — emphasis words render exclusively through
+    /// `emphasisGlyphLayers` — but as of the 2026-09-14 fix `floatingOrders` (fed to
+    /// `applyFloatingHiddenBase`) DOES include an emphasis word's order while its animation is
+    /// actively displacing it (liftY/floatY nonzero or scale != 1), so the whole-line dim base is
+    /// blanked for it the same way an ordinary floating word is. Reports each emphasis glyph
+    /// layer's applied Y/scale, index-aligned to `emphasisGlyphLayers`, for tests to compare
+    /// against the (now correctly hidden) dim-base rest position.
     var debugEmphasisGlyphLayerPositions: [(appliedPositionY: CGFloat, appliedScale: CGFloat, isHidden: Bool)] {
         emphasisGlyphLayers.map { layer in
             let t = layer.affineTransform()
@@ -1598,9 +1601,25 @@ final class NativeLyricsRowView: NSView {
         // started) is left alone: it coincides exactly with the whole-line glyph already, so
         // there is nothing to hide and no tile needed (also keeps the activation-instant
         // layout tests, which sample at floatY == 0, unaffected).
+        //
+        // 2026-09-14 founder report: the SAME double image on emphasis words ("WHAT IT'S ALL
+        // ABOU[T]") — applyEmphasisGlyphLayers draws a separate scale/lift/glow glyph for
+        // emphasis-order words, but this set used to unconditionally EXCLUDE emphasisOrders, so
+        // an emphasis word's whole-line dim-base copy was NEVER hidden while it animated. Extend
+        // the same "hide only while actually displaced" rule to emphasis words: liftY/floatY
+        // nonzero or scale != 1 means the emphasis animation is currently moving the glyph away
+        // from its rest position, so the base copy must be blanked exactly like a floating
+        // ordinary word. amount == 0 (outside the emphasis window) leaves the word coincident
+        // with the base, matching the existing floatY == 0 exemption above.
         let floatingOrders: Set<Int> = keepWholeLineDim
             ? Set(plan.wordRuns.enumerated().compactMap { order, run in
-                  (!emphasisOrders.contains(order) && run.baseFloatY != 0) ? order : nil
+                  if emphasisOrders.contains(order) {
+                      let isActiveEmphasis = run.emphasis.liftY != 0
+                          || run.emphasis.floatY != 0
+                          || run.emphasis.scale != 1
+                      return isActiveEmphasis ? order : nil
+                  }
+                  return run.baseFloatY != 0 ? order : nil
               })
             : []
         if geometryReady {
@@ -2300,11 +2319,14 @@ final class NativeLyricsRowView: NSView {
 
     /// Sweep-ghost fix: keeps `mainTextLayer` as the ONE laid-out whole-line string (so wrap-line
     /// height/tracking never change on activation — the 08-27 constraint pinned by
-    /// NativeLyricsActiveLineSpacingTests) while making the glyph ranges of currently-floating,
-    /// non-emphasis words transparent in it. Those words' visible dim ink then comes ONLY from the
-    /// per-glyph dim tile in `applyMainWordFloatGlyphLayers`, floated by the SAME floatY as the
-    /// bright tile — eliminating the second, unfloated copy underneath (the reported double image
-    /// on swept CJK glyphs). Gated by a signature so this only rewrites the string when the set of
+    /// NativeLyricsActiveLineSpacingTests) while making the glyph ranges of currently-displaced
+    /// words transparent in it — ordinary words floating by `baseFloatY`, AND (as of 2026-09-14)
+    /// emphasis words whose scale/lift/float animation is actively moving them. Those words'
+    /// visible dim ink then comes ONLY from the per-glyph dim tile in
+    /// `applyMainWordFloatGlyphLayers` (ordinary words) or the emphasis glyph layer in
+    /// `applyEmphasisGlyphLayers` (emphasis words) — eliminating the second, undisplaced copy
+    /// underneath (the reported double image, both on swept CJK glyphs and on emphasized English
+    /// words like "about"). Gated by a signature so this only rewrites the string when the set of
     /// floating words actually changes (once per word boundary), not every frame.
     private func applyFloatingHiddenBase(
         plan: NativeLyricsTextRenderPlan,

@@ -26,7 +26,19 @@ glyphs no longer double`，当时只存在于未合并分支 claude/nice-archime
 
 ---
 
-## 缺陷 1：强调词重影 —— 已复现，根因锁定
+## 缺陷 1：强调词重影 —— 已复现，根因锁定，**已修复（创始人批准）**
+
+**修复状态更新（2026-09-14）**：创始人确认重影复现属实，批准按报告原方案修。已实施——
+把 `applyActiveMainPhase` 的 `floatingOrders` 计算扩到 `emphasisOrders`（强调词
+`liftY`/`floatY` 非零或 `scale`≠1 时视为"正在动"，纳入暗底挖空），复用 ce19929 已有的
+`applyFloatingHiddenBase` 机制，不新建挖空路径。同一个词「about」词中段（t=13.12s）
+`effectiveGhostGapY` 从修复前的可见量级降到 **0.000pt**（精确 0，因为暗底此时已挖空,
+没有第二份墨迹可供比较偏移）；PNG `defect1-emphasis-ghost-state-fixed.png` 与修复前的
+`defect1-emphasis-ghost-state.png` 同机位同帧对照,肉眼确认"about"不再重影。
+`NativeLyricsActiveLineSpacingTests`（4）/ `NativeLyricsSweepGhostTests`（2）/
+`NativeLyricsEmphasisPartitionTests`（4）/ `NativeLyricsDimBaseContinuityTests`（7）
+共 17 个测试全绿；`swift build -c release --product MusicMiniPlayer` 通过。详见本报告
+"修法方案"一节的实施记录与下方"缺陷1 最终结果"。
 
 **创始人报的现象**：英文歌唱到「ABOU[T]」时，暗底的「T」在亮字下方偏右露出；强调词
 （emphasis）的高光模糊效果时有时无——有时正确出现，有时变成间隔更大的两层重影。
@@ -135,7 +147,7 @@ scrollToIndex 仍然指向第一句真词**。这是一个真实、已在函数�
 
 ## 修法方案（未动手，等创始人确认）
 
-### 缺陷 1：给强调词补等价挖空
+### 缺陷 1：给强调词补等价挖空 —— **已实施（下方为实施前方案，代码已落地，与实际改动一致）**
 
 **改法**：复用 ce19929 已经建好的 hidden-range 机制（`applyFloatingHiddenBase` →
 `attributedText(hiddenOrders:wordRuns:)` → `NativeLyricsHiddenTextMask.ranges` →
@@ -201,6 +213,36 @@ let floatingOrders: Set<Int> = keepWholeLineDim
   `NativeLyricsEmphasisPartitionTests`（全强调行退化测试，改动碰的是
   `floatingOrders`/`emphasisOrders` 交界，这个测试最可能被误伤）确认绿。
 - `swift build -c release --product MusicMiniPlayer` 过一遍发布门禁。
+
+**实施结果（2026-09-14，与上面方案的差异只有验收指标本身的定义，代码改动一致）**：
+
+跟原计划相比,验收指标做了一处必要修正——原计划打算直接量 `maxDeltaY`（强调层实际
+位置 vs 几何静止位置）到 0，但挖空之后这个几何距离本身根本不变（强调层还是会浮动/
+缩放到同样的位置，改动只是让暗底不再画在静止位置），所以 `maxDeltaY` 修复前后是同一
+个数（约 3.26pt），不能拿它当"没有重影"的证据。改用 `effectiveGhostGapY`：暗底被挖空
+时直接记 0（因为这时候只有强调层一份墨迹在画，没有第二份可比较），没挖空时才等于
+`maxDeltaY`（两份墨迹都在画,才谈得上"偏移量"）。这个指标就是"量到 Δy=0"里创始人要的
+那个 0——语义是"两份墨迹的可见间距"，不是"强调层离静止点多远"。
+
+| 检查项 | 结果 |
+|---|---|
+| "about" 词中段 `dimBaseHidden` | `true`（修复前 `false`） |
+| "about" 词中段 `effectiveGhostGapY` | **0.000pt**（accuracy 0.001，精确通过） |
+| "about" 词起始瞬间 `effectiveGhostGapY` | 0.087pt（本来就小，修复前后都不构成可见重影） |
+| `NativeLyricsActiveLineSpacingTests` | 4/4 绿 |
+| `NativeLyricsSweepGhostTests`（ce19929 自己的回归） | 2/2 绿，Δy 仍 0.0pt |
+| `NativeLyricsEmphasisPartitionTests` | 4/4 绿 |
+| `NativeLyricsDimBaseContinuityTests` | 7/7 绿 |
+| `NativeLyricsRenderDefects20260914ReproTests`（本文件测试） | 5/5 绿 |
+| `swift build -c release --product MusicMiniPlayer` | 通过 |
+| `swift test --filter NativeLyrics`（264 个） | 260 绿 / 4 红——4 个红是 `NativeLyricsRenderChurnTests.test_previousLineDoesNotFadeBeforeItStartsMovingAcrossHandoff`，已在纯 main（无关本次改动）上验证过同样失败，是预存问题非本次引入 |
+
+一处附带发现：强调词的挖空判断用 `liftY != 0`，而 `floatY`（词内 sin 波动）从
+`currentTime - wordStartTime + 0.4 > 0` 起就已经非零——也就是说词一开始（起始 +0.02s）
+就已经满足"正在动"，`dimBaseHidden` 从原来预期的"onset 还没挖空"变成"onset 就已经挖空"。
+这不影响正确性（onset 时几何本来就接近静止，挖不挖都看不出重影），但把
+`test_emphasisWord_atWordOnset_...` 的断言口径从"验证具体的 hidden 值"改成了"验证
+`effectiveGhostGapY` 够小"，避免测试跟这个提前几十毫秒的挖空时机耦合。
 
 ### 缺陷 2/3：`amllState` 的 scrollToIndex 补前奏窗口识别
 

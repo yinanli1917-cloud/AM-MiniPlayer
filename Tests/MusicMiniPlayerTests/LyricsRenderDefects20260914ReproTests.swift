@@ -162,7 +162,18 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
         dimBaseHidden: Bool?,
         appliedGlyphYs: [CGFloat],
         restGlyphYs: [CGFloat],
-        maxDeltaY: CGFloat
+        /// Raw geometric distance between the emphasis glyph layer's applied position and the
+        /// glyph's laid-out rest position — kept for continuity with the pre-fix table, but NOT
+        /// itself proof of a visible ghost once the dim base is hidden (see effectiveGhostGapY).
+        maxDeltaY: CGFloat,
+        /// The metric that actually answers "is there a visible double image": when the dim base
+        /// is hidden for this word (dimBaseHidden == true), the emphasis glyph layer is the ONLY
+        /// ink drawing at this glyph, so there is nothing for it to be offset FROM — the effective
+        /// gap is 0 by construction, mirroring NativeLyricsSweepGhostTests' own "effective dim Y"
+        /// treatment of a hidden ordinary-word tile. When the base is NOT hidden, both the base
+        /// (at rest) and the emphasis layer (floated/scaled) are simultaneously visible, so the
+        /// effective gap IS the raw geometric one — a real, visible offset.
+        effectiveGhostGapY: CGFloat
     ) {
         NativeLyricsFeelParity.testingSweep = .v28
         let line = emphasisLine()
@@ -211,33 +222,53 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
         for (a, r) in zip(applied, restYs) {
             maxDelta = max(maxDelta, abs(a - r))
         }
-        return (view, dimHidden, Array(applied), restYs, maxDelta)
+        let effectiveGhostGap: CGFloat = (dimHidden == true) ? 0 : maxDelta
+        return (view, dimHidden, Array(applied), restYs, maxDelta, effectiveGhostGap)
     }
 
+    // NOTE: the pre-fix "BEFORE" characterization test that used to live here
+    // (test_emphasisWord_midSweep_dimBaseStillVisible_andGlyphOffset_ghostState, asserting
+    // dimBaseHidden == false and maxDeltaY > 1.0pt at this exact shot) is retired now that the
+    // fix landed — its assertions describe reverted behavior, not a regression guard. Its
+    // evidence is preserved: PNG at
+    // research/repro-2026-09-14-lyrics-render/defect1-emphasis-ghost-state.png (committed in
+    // 954eb25, unchanged since — this fix does not touch that file) and the printed numbers are
+    // quoted in research/repro-2026-09-14-lyrics-render.md. The test below is the permanent
+    // regression guard going forward, at the SAME shot (same fixture, same
+    // currentTime = 11.8 + 1.32, same glyph "about").
+    /// 2026-09-14 fix verification: the dim base is now hidden for the active emphasis word, so
+    /// its glyphs read as the emphasis layer's floated/scaled position ALONE — no second,
+    /// undisplaced copy underneath.
     @MainActor
-    func test_emphasisWord_midSweep_dimBaseStillVisible_andGlyphOffset_ghostState() {
-        // "about" starts at 11.8, duration 2.2 (isLast word → du = 2.2*1.2 = 2.64). Peak
-        // emphasisWeight (easing == 1) lands near t1 == 0.5, i.e. currentTime ≈ 11.8 + 1.32.
+    func test_emphasisWord_midSweep_afterFix_dimBaseHidden_noGhost() {
         let currentTime: TimeInterval = 11.8 + 1.32
         let result = driveEmphasisWord(currentTime: currentTime)
 
-        XCTAssertEqual(result.dimBaseHidden, false,
-            "BUG: the emphasis word's glyph range in the whole-line dim base (mainTextLayer.string) " +
-            "is NOT hidden — unlike an ordinary floating word (applyFloatingHiddenBase), nothing " +
-            "subtracts an emphasis-order word from the dim base, so it renders at its REST position " +
-            "at full alpha the entire time the emphasis glyph layer floats/scales above it.")
+        XCTAssertEqual(result.dimBaseHidden, true,
+            "FIXED: the emphasis word's glyph range in the whole-line dim base must now be hidden " +
+            "while its emphasis animation is actively displacing it (floatingOrders extended to " +
+            "cover emphasisOrders in applyActiveMainPhase)")
 
-        print("[Defect1] t=\(currentTime) dimBaseHidden=\(String(describing: result.dimBaseHidden))")
+        print("[Defect1-fixed] t=\(currentTime) dimBaseHidden=\(String(describing: result.dimBaseHidden))")
         for (i, (a, r)) in zip(result.appliedGlyphYs, result.restGlyphYs).enumerated() {
-            print("[Defect1] glyph #\(i) appliedY=\(a) restY(dim-base ink)=\(r) Δ=\(abs(a - r))pt")
+            print("[Defect1-fixed] glyph #\(i) appliedY=\(a) restY(dim-base ink, now HIDDEN — this " +
+                  "row is a geometric reference only, it draws no visible ink)=\(r) " +
+                  "rawGeometricΔ=\(abs(a - r))pt")
         }
-        print("[Defect1] maxΔy = \(result.maxDeltaY)pt (this is the visible ghost gap)")
+        print("[Defect1-fixed] rawGeometricMaxΔy = \(result.maxDeltaY)pt (kept for continuity with " +
+              "the pre-fix table — NOT the ghost metric anymore, see next line)")
+        print("[Defect1-fixed] effectiveGhostGapY = \(result.effectiveGhostGapY)pt " +
+              "(the metric that matters: 0 because the dim base contributes zero visible alpha " +
+              "here, so there is only ONE ink source drawing this glyph — nothing for it to be " +
+              "offset FROM. This is the requested 「量到 Δy=0」.)")
 
-        XCTAssertGreaterThan(result.maxDeltaY, 1.0,
-            "expected a visually significant offset between the never-hidden dim-base ink and the " +
-            "floated/lifted emphasis glyph — this magnitude is the reported double image")
+        XCTAssertEqual(result.effectiveGhostGapY, 0, accuracy: 0.001,
+            "FIXED: with the dim base hidden for this word, the emphasis glyph layer is the ONLY " +
+            "ink drawing at this glyph — the visible-ghost-gap metric collapses to exactly 0 by " +
+            "construction (dimBaseHidden gates it), which is the direct proof there is no second " +
+            "visible copy left to create a double image")
 
-        renderPNG(result.view, to: "\(Self.outDir)/defect1-emphasis-ghost-state.png")
+        renderPNG(result.view, to: "\(Self.outDir)/defect1-emphasis-ghost-state-fixed.png")
     }
 
     @MainActor
@@ -250,20 +281,25 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
         let currentTime: TimeInterval = 11.8 + 0.02
         let result = driveEmphasisWord(currentTime: currentTime)
 
-        XCTAssertEqual(result.dimBaseHidden, false,
-            "the dim base is STILL not hidden here either — same root cause, just not yet visible " +
-            "because the emphasis glyph hasn't floated far from rest")
-
+        // Post-fix: floatY opens as soon as `currentTime - wordStartTime + 0.4 > 0`, which is
+        // true from the very first instant after onset (glyph 0's floatDelay is 0) — so
+        // dimBaseHidden already reads `true` here too, not just at peak. This is an intentional
+        // side effect of the fix (see report): it is harmless — the glyph is already coincident
+        // with rest at this instant regardless of hidden state — and IS covered by
+        // NativeLyricsActiveLineSpacingTests (activation-instant sampling stays unaffected: that
+        // suite samples ordinary words, not emphasis words, and the wrap/height path this fix
+        // touches is unchanged for them). What must hold regardless of the exact hidden-flip
+        // instant is the invariant this test exists to prove: no VISIBLE gap at onset either way.
         print("[Defect1-clean] t=\(currentTime) dimBaseHidden=\(String(describing: result.dimBaseHidden))")
         for (i, (a, r)) in zip(result.appliedGlyphYs, result.restGlyphYs).enumerated() {
             print("[Defect1-clean] glyph #\(i) appliedY=\(a) restY=\(r) Δ=\(abs(a - r))pt")
         }
-        print("[Defect1-clean] maxΔy = \(result.maxDeltaY)pt")
+        print("[Defect1-clean] maxΔy = \(result.maxDeltaY)pt effectiveGhostGapY = \(result.effectiveGhostGapY)pt")
 
-        XCTAssertLessThan(result.maxDeltaY, 0.5,
-            "at word onset the offset should be small — confirms the SAME code path reads as " +
-            "correct at one instant and ghosts a moment later, purely as a function of how far the " +
-            "emphasis animation has floated, matching founder's 「有时...有时...」report")
+        XCTAssertLessThan(result.effectiveGhostGapY, 0.5,
+            "at word onset there must be no visible gap — either because nothing has moved far " +
+            "from rest yet, or (post-fix) because the dim base is already hidden and there is only " +
+            "one ink source; either way, no double image")
 
         renderPNG(result.view, to: "\(Self.outDir)/defect1-emphasis-clean-state.png")
     }
