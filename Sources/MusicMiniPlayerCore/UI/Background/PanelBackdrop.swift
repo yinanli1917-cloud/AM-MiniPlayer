@@ -41,25 +41,39 @@ public struct PanelBackdrop: View {
     @AppStorage(PanelBackdropStyle.defaultsKey)
     private var rawStyle: String = PanelBackdropStyle.fluid.rawValue
 
+    // C1 commit 2 (research/c1-edge-morph-design-2026-09-12.md §2): the
+    // EdgePresentationModel is injected as an environment object next to
+    // musicController in MusicMiniPlayerApp.swift, above PanelBackdrop in the
+    // hierarchy — verified: MiniPlayerView.mainBody mounts PanelBackdrop
+    // inside the same content tree that receives `.environmentObject(edgePresentationModel)`.
+    @EnvironmentObject private var edgePresentation: EdgePresentationModel
+
     public init(artwork: NSImage?, role: PanelBackdropRole = .base) {
         self.artwork = artwork
         self.role = role
     }
 
     public var body: some View {
-        switch PanelBackdropStyle.resolve(from: rawStyle) {
-        case .fluid:
-            FluidGradientBackground(artwork: artwork)
-        case .glass:
-            if #available(macOS 26.0, *) {
-                switch role {
-                case .base:
-                    GlassBackdropView(artwork: artwork)
-                case .pageOverlay:
-                    Color.clear
-                }
-            } else {
+        if role == .base, EdgeMorphHost.baseBackdropHidden(presentation: edgePresentation.presentation, arm: MicroInteractionFeel.edgeMorph) {
+            // Exactly one material at a time (design §2): while the pill
+            // carries the glass, the base backdrop mirrors the existing
+            // `.pageOverlay` Color.clear precedent below.
+            Color.clear
+        } else {
+            switch PanelBackdropStyle.resolve(from: rawStyle) {
+            case .fluid:
                 FluidGradientBackground(artwork: artwork)
+            case .glass:
+                if #available(macOS 26.0, *) {
+                    switch role {
+                    case .base:
+                        GlassBackdropView(artwork: artwork)
+                    case .pageOverlay:
+                        Color.clear
+                    }
+                } else {
+                    FluidGradientBackground(artwork: artwork)
+                }
             }
         }
     }
