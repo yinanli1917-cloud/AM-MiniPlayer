@@ -242,3 +242,31 @@ End state：Music.app 已 `stop`；`launchctl getenv NANOPOD_BLUR_RASTER_OFF` �
 **End state**：nanoPod 已重新 `open`（新 pid 8086，非本次测量用的任一旧 pid），Music.app 已执行 `stop` 并确认 `player state` = `stopped`；`launchctl getenv NANOPOD_BLUR_RASTER_OFF` 为空。未 build/test/commit。
 
 **更正（规划会话核对缓存）**：附录 4 的 idle 门读数无效而非 FAIL。所用曲目「At Your Best (You Are Love)」在 lyrics_cache.json 中是 NetEase 逐字源（43/43 行带 words），播放中 app 9% 是逐字扫掠的正常开销（历史基线 8–18%），不是 CPU-idle 门的场景。CPU-idle 门要求行级 + 译文；歌单内已确认行级的候选：Fureai（NetEase，21 行，0 words）、Be My Venus（NetEase，32 行，0 words）。下一次静止窗只需 2 分钟：Fureai 歌词页 30s×3。Gate5 三项 PASS 有效。
+
+## B5 附录 5（2026-09-13 静止窗：idle 门，Fureai 行级+译文）
+
+环境：19:08 机器空闲（build/clang/xcodebuild 进程数=0，仅 pgrep 自身），load avg 3.6-6.1（本底非零，见 caveat）。nanoPod 已在跑（pid 8086），WindowServer pid 563。
+
+歌曲：Fureai（柏原芳恵，encore，dur=340.13s），NetEase 源，21 行，无逐字 timing（confirmed in lyrics_cache.json，日志确认 22 lines incl. 首行元数据，`unsynced=false` 即行级 synced 非纯文本）。翻译按创始人设置常开并行拉取。
+
+选源与出词证据（`/tmp/nanopod_debug.log`）：
+```
+[19:08:56] [LyricsResultSelection.swift:827] 🏆 Final selection: NetEase (score=63.6, kind=synced)
+[19:08:57] [LyricsFetcher.swift:2257] 🧭 Authoritative lyrics backfill HIT: NetEase 21L in 2.7s
+[19:08:54] [LyricsService] 📋 Applied: 'fureai|yoshie kashiwabara|encore|340' 22L, firstReal="悲しみに　出会うたび", unsynced=false
+```
+（`19:08:57` 的第二次 `📦 Cached` 是去重重复抓取被冻结："🧊 Display frozen ... P1, not an upgrade"，不影响 19:08:54 已 Applied 出词，出词延迟 <3s，达标 A 规则。）
+
+未跑 `NANOPOD_PROBES`，日志中无 `ActiveBrightness`/`LineGaps` 逐帧行——这是探针默认关闭的预期行为（`Utils/DebugConfig.swift`），非渲染异常；已用 `Applied` 行代替验证出词与行级判定。
+
+三窗 30s CPU（`ps`-based，app pid=8086, WS pid=563，脚本自带 caveat：绝对值随环境本底漂移，仅同session相邻窗口可比）：
+
+| 窗口 | 起止时间 | app median | app p95 | WS median | WS p95 |
+|---|---|---|---|---|---|
+| r5_idle_fureai_1 | 19:09:58–19:11:11 | 0.6% | 6.7% | 37.5% | 45.4% |
+| r5_idle_fureai_2 | 19:11:14–19:12:26 | 0.5% | 8.2% | 41.15% | 48.6% |
+| r5_idle_fureai_3 | 19:12:31–19:13:44 | 0.5% | 9.4% | 42.1% | 51.2% |
+
+LoopStop 计数：跑前 0，三窗跑完后 0（歌曲全程未播完，无需重播）。
+
+**判定：PASS** — 三窗 app CPU median 均 ≤1.5%（README idle 门槛），行级+译文场景下静止 idle 无异常常驻负载。WS median 40%±5 区间与本底负载相关（load avg 4.5-6.1 非空闲机器），非本次改动引入的新增成本，仅供参照不作为门槛项。
