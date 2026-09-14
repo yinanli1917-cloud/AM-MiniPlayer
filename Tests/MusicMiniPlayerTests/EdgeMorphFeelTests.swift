@@ -21,12 +21,12 @@ final class EdgeMorphFeelTests: XCTestCase {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     func test_resolve_absentValue_fallsBackToMorph() {
-        XCTAssertEqual(MicroInteractionFeel.EdgeMorphMode.resolve(from: nil), .morph)
+        XCTAssertEqual(MicroInteractionFeel.EdgeMorphMode.resolve(from: nil), .v0)
     }
 
     func test_resolve_unknownValue_fallsBackToMorph() {
-        XCTAssertEqual(MicroInteractionFeel.EdgeMorphMode.resolve(from: "glassy"), .morph)
-        XCTAssertEqual(MicroInteractionFeel.EdgeMorphMode.resolve(from: ""), .morph)
+        XCTAssertEqual(MicroInteractionFeel.EdgeMorphMode.resolve(from: "glassy"), .v0)
+        XCTAssertEqual(MicroInteractionFeel.EdgeMorphMode.resolve(from: ""), .v0)
     }
 
     func test_resolve_knownValues_caseInsensitive() {

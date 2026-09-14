@@ -94,9 +94,11 @@ public enum MicroInteractionFeel {
         case morph = "morph"
         case v0 = "v0"
 
+        // 2026-09-14 创始人裁决：morph 第一版撤回，默认回到 v0（旧的整卡滑出）；
+        // morph 臂保留，只能经 nanopod://debug/feel/edgeMorph/morph 显式开启。
         public static func resolve(from raw: String?) -> EdgeMorphMode {
-            guard let raw else { return .morph }
-            return EdgeMorphMode(rawValue: raw.lowercased()) ?? .morph
+            guard let raw else { return .v0 }
+            return EdgeMorphMode(rawValue: raw.lowercased()) ?? .v0
         }
     }
 
@@ -106,9 +108,11 @@ public enum MicroInteractionFeel {
         case custom = "custom"
         case system = "system"
 
+        // 2026-09-14 创始人裁决：自定义分页转场方向反了，默认回到 system；
+        // custom 臂保留，只能经 nanopod://debug/feel/settingsTab/custom 显式开启。
         public static func resolve(from raw: String?) -> SettingsTabMode {
-            guard let raw else { return .custom }
-            return SettingsTabMode(rawValue: raw.lowercased()) ?? .custom
+            guard let raw else { return .system }
+            return SettingsTabMode(rawValue: raw.lowercased()) ?? .system
         }
     }
 
