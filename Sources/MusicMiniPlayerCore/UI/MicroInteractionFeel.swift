@@ -228,6 +228,13 @@ public enum MicroInteractionFeel {
 
         public static let windowFadeInDuration: TimeInterval = 0.18
         public static let windowFadeOutDuration: TimeInterval = 0.14
+
+        // C1 edgeMorph three-clock scheduler (research/c1-edge-morph-design-2026-09-12.md §4/§9 commit 3).
+        public static let edgeMorphPreSeedLead: TimeInterval = 0.02
+        public static let edgeMorphContentLagMin: TimeInterval = 0.02
+        public static let edgeMorphContentLagMax: TimeInterval = 0.08
+        public static let edgeMorphMaterialSettle: TimeInterval = 0.31
+        public static let edgeMorphContentDuration: TimeInterval = 0.14
     }
 }
 

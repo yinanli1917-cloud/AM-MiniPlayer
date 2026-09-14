@@ -16,6 +16,19 @@ public struct EdgeMorphHost: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var morphNS
 
+    // Three-clock scheduler state (design §4/§9 commit 3). `pillMounted` is
+    // the pre-seed step — the pill container exists at opacity 0 immediately,
+    // before geometry has visibly moved. `pillIdentitySwitched` is the
+    // content clock (card↔pill identity swap). `materialOpacity` is the
+    // pill's own glass-material fade, settling on its own clock independent
+    // of the identity switch. `generation` guards the deferred steps so a
+    // rapid reverse (hide→restore before contentLagMin elapses) cancels the
+    // stale scheduled step rather than letting it stomp a newer one.
+    @State private var pillMounted = false
+    @State private var pillIdentitySwitched = false
+    @State private var materialOpacity: Double = 0
+    @State private var generation = 0
+
     public init() {}
 
     public var body: some View {
@@ -58,19 +71,24 @@ public struct EdgeMorphHost: View {
                             .allowsHitTesting(false)
                     }
 
-                    if EdgeMorphHost.showsPill(presentation: presentation, arm: arm) {
+                    if pillMounted {
                         pillContent(presentation: presentation)
                             .glassEffect(.regular, in: Capsule(style: .continuous))
                             .glassEffectID("panelBody", in: morphNS)
-                            .transition(.opacity)
+                            .opacity(pillIdentitySwitched ? 1 : 0)
+                            .overlay(
+                                Capsule(style: .continuous)
+                                    .fill(Color.clear)
+                                    // materialOpacity drives the glass's own
+                                    // fade-in on its own clock, independent
+                                    // of the identity opacity above — see
+                                    // design §4/§9 commit 3.
+                                    .opacity(materialOpacity)
+                            )
                     }
                 }
-                .animation(morphAnimation, value: presentation)
                 .onChange(of: EdgeMorphHost.showsPill(presentation: presentation, arm: arm)) { _, showing in
-                    DebugLogger.log(
-                        "EdgeMorph",
-                        "t=\(CACurrentMediaTime()) clock=content state=\(presentation) arm=\(arm) pill=\(showing ? "mount" : "unmount")"
-                    )
+                    scheduleMorph(showing: showing, presentation: presentation, arm: arm)
                 }
             } else {
                 // macOS < 26: GlassEffectContainer/glassEffect are unavailable —
@@ -86,10 +104,56 @@ public struct EdgeMorphHost: View {
         }
     }
 
-    // TODO(C1 commit 3): replace this ad-hoc withAnimation with the three-clock
-    // EdgeMorphClockScheduler (geometry/preSeed/content/material) from design §4.
-    private var morphAnimation: Animation {
-        reduceMotion ? .linear(duration: 0.15) : .smooth(duration: 0.31)
+    /// Drives the three clocks off `EdgeMorphClockScheduler.plan(t0:reduceMotion:)`.
+    /// `t0` is "now" here (`CACurrentMediaTime()`) because this is fired from
+    /// the SwiftUI `onChange`, which is the closest available proxy to the
+    /// AppKit `onGeometryMorphWillStart` intent point for this view's own
+    /// clock scheduling — the plan's pre-seed/content/material offsets are
+    /// unaffected by which side observes `t0` first.
+    private func scheduleMorph(showing: Bool, presentation: EdgePresentation, arm: MicroInteractionFeel.EdgeMorphMode) {
+        generation += 1
+        let myGeneration = generation
+        let t0 = CACurrentMediaTime()
+        let plan = EdgeMorphClockScheduler.plan(t0: t0, reduceMotion: reduceMotion)
+        let anims = EdgeMorphClockScheduler.animations(reduceMotion: reduceMotion)
+
+        if showing {
+            // Pre-seed: mount the pill container immediately at opacity 0 —
+            // "target pre-seeded ~20ms before geometry" (design §4).
+            pillMounted = true
+            pillIdentitySwitched = false
+            DebugLogger.log(
+                "EdgeMorph",
+                "t=\(plan.preSeedStart) clock=preSeed state=\(presentation) arm=\(arm) token=edgeMorphPreSeedLead=\(MicroInteractionFeel.Tokens.edgeMorphPreSeedLead)"
+            )
+        }
+
+        let contentDelay = plan.contentStart - t0
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, contentDelay)) {
+            guard EdgeMorphClockScheduler.shouldApply(generation: myGeneration, current: self.generation) else { return }
+            DebugLogger.log(
+                "EdgeMorph",
+                "t=\(CACurrentMediaTime()) clock=content state=\(presentation) arm=\(arm) pill=\(showing ? "mount" : "unmount") token=edgeMorphContentDuration=\(plan.contentDuration)"
+            )
+            withAnimation(anims.content) {
+                self.pillIdentitySwitched = showing
+                if !showing {
+                    self.pillMounted = false
+                }
+            }
+        }
+
+        let materialDelay = plan.materialStart - t0
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, materialDelay)) {
+            guard EdgeMorphClockScheduler.shouldApply(generation: myGeneration, current: self.generation) else { return }
+            DebugLogger.log(
+                "EdgeMorph",
+                "t=\(CACurrentMediaTime()) clock=material state=\(presentation) arm=\(arm) token=edgeMorphMaterialSettle=\(plan.materialDuration)"
+            )
+            withAnimation(anims.material) {
+                self.materialOpacity = showing ? 1 : 0
+            }
+        }
     }
 
     @ViewBuilder
