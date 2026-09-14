@@ -67,6 +67,8 @@ enum L10n {
         "translationLang":      ("Lyrics Translation", "歌词翻译"),
         "translationLangDesc":  ("Target language for lyrics translation", "歌词翻译的目标语言"),
         "showInDockDesc":       ("Show app icon in the Dock", "在 Dock 中显示应用图标"),
+        "clearPlaybackHistory":     ("Clear Playback History", "清除播放记录"),
+        "clearPlaybackHistoryDesc": ("Removes nanoPod's own record of played tracks", "移除 nanoPod 自己记录的播放历史"),
         "version":              ("Version", "版本"),
         "developer":            ("Developer", "开发者"),
         "website":              ("Website", "网站"),

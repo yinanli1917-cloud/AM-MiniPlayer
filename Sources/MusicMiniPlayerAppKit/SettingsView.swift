@@ -108,6 +108,20 @@ struct SettingsWindowView: View {
                     }
                 }
             }
+
+            // WT-D plan H4 — minimal entry; WT-C restyles the settings page later.
+            Section {
+                Button(role: .destructive) {
+                    musicController.clearPlaybackHistory()
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.localized("clearPlaybackHistory"))
+                        Text(L10n.localized("clearPlaybackHistoryDesc"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
     }
