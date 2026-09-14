@@ -9,16 +9,45 @@ import SwiftUI
 import MusicMiniPlayerCore
 import Translation
 import UniformTypeIdentifiers
+import KeyboardShortcuts
 
 // ──────────────────────────────────────────────
 // MARK: - 设置窗口（独立 NSWindow）
 // ──────────────────────────────────────────────
 
-enum SettingsTab: Hashable {
+enum SettingsTab: Hashable, CaseIterable {
     case general
     case appearance
     case diagnostics
     case about
+
+    /// `.custom` tab-transition arm 用的可见 tab 列表——DEBUG/LOCAL_DEVELOPER_BUILD 外
+    /// diagnostics 从不出现，和 `.system` 臂（TabView 内 `#if` 条件页）保持一致。
+    static var visibleCases: [SettingsTab] {
+        #if DEBUG || LOCAL_DEVELOPER_BUILD
+        return allCases
+        #else
+        return allCases.filter { $0 != .diagnostics }
+        #endif
+    }
+
+    var title: String {
+        switch self {
+        case .general: return L10n.localized("general")
+        case .appearance: return L10n.localized("appearance")
+        case .diagnostics: return "Diagnostics"
+        case .about: return L10n.localized("about")
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .general: return "gear"
+        case .appearance: return "paintbrush"
+        case .diagnostics: return "waveform.path.ecg"
+        case .about: return "info.circle"
+        }
+    }
 }
 
 final class SettingsWindowState: ObservableObject {
@@ -29,8 +58,29 @@ struct SettingsWindowView: View {
     @EnvironmentObject var musicController: MusicController
     @ObservedObject var state: SettingsWindowState
     @StateObject private var lyricsService = LyricsService.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    // Tab 切换转场臂状态（settingsTab channel）：仅 `.custom` 臂使用，
+    // `.system` 臂原样走 TabView，这两个 @State 不参与渲染。
+    @State private var tabTransitionKind: SettingsTabTransitionKind = .none
+    @State private var tabTransitionAnimation: Animation?
 
     var body: some View {
+        Group {
+            switch MicroInteractionFeel.settingsTab {
+            case .system:
+                systemTabView
+            case .custom:
+                customTabView
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 450, minHeight: 350)
+    }
+
+    // MARK: - `.system` 臂：今天原样的 TabView（不改）
+
+    private var systemTabView: some View {
         TabView(selection: $state.selectedTab) {
             generalTab
                 .tabItem { Label(L10n.localized("general"), systemImage: "gear") }
@@ -47,8 +97,76 @@ struct SettingsWindowView: View {
                 .tabItem { Label(L10n.localized("about"), systemImage: "info.circle") }
                 .tag(SettingsTab.about)
         }
-        .padding(20)
-        .frame(minWidth: 450, minHeight: 350)
+    }
+
+    // MARK: - `.custom` 臂：segmented Picker 页头 + ZStack 内容做 crossfade/slide
+    //
+    // 为什么不直接在 TabView 里挂 `.transition`：macOS 的 TabView 由 NSTabView host，
+    // 切页时机由 AppKit 决定，SwiftUI 的 transition/animation 不会在页内容上真正播放
+    // （已验证：内容跳变，没有可见转场）。所以 `.custom` 臂另起一套 Picker(.segmented)
+    // 驱动的头部 + ZStack 内容，`.system` 臂继续用未改动的 TabView。
+
+    private var customTabView: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $state.selectedTab) {
+                ForEach(SettingsTab.visibleCases, id: \.self) { tab in
+                    Text(tab.title).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.bottom, 16)
+
+            ZStack {
+                customTabContent(state.selectedTab)
+                    .id(state.selectedTab)
+                    .transition(transitionView(for: tabTransitionKind))
+            }
+            .animation(tabTransitionAnimation, value: state.selectedTab)
+        }
+        .onChange(of: state.selectedTab) { oldTab, newTab in
+            let resolved = SettingsTabTransition.resolve(
+                arm: .custom,
+                from: SettingsTab.visibleCases.firstIndex(of: oldTab) ?? 0,
+                to: SettingsTab.visibleCases.firstIndex(of: newTab) ?? 0,
+                reduceMotion: reduceMotion
+            )
+            tabTransitionKind = resolved.kind
+            tabTransitionAnimation = resolved.animation
+        }
+    }
+
+    @ViewBuilder
+    private func customTabContent(_ tab: SettingsTab) -> some View {
+        switch tab {
+        case .general: generalTab
+        case .appearance: appearanceTab
+        #if DEBUG || LOCAL_DEVELOPER_BUILD
+        case .diagnostics: DiagnosticsDebugPanel(musicController: musicController)
+        #else
+        case .diagnostics: EmptyView()
+        #endif
+        case .about: aboutTab
+        }
+    }
+
+    private func transitionView(for kind: SettingsTabTransitionKind) -> AnyTransition {
+        switch kind {
+        case .none:
+            return .identity
+        case .opacity:
+            return .opacity
+        case .slideForward:
+            return .asymmetric(
+                insertion: .move(edge: .trailing).combined(with: .opacity),
+                removal: .move(edge: .leading).combined(with: .opacity)
+            )
+        case .slideBackward:
+            return .asymmetric(
+                insertion: .move(edge: .leading).combined(with: .opacity),
+                removal: .move(edge: .trailing).combined(with: .opacity)
+            )
+        }
     }
 
     // MARK: - General Tab
@@ -106,7 +224,20 @@ struct SettingsWindowView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    .settingsFeedbackPulse(value: AppMain.shared?.showInDock ?? true)
                 }
+            }
+
+            Section {
+                ForEach(GlobalShortcutAction.allCases) { action in
+                    KeyboardShortcuts.Recorder(action.localizedTitle, name: action.name)
+                }
+            } header: {
+                Text(L10n.localized("shortcuts"))
+            } footer: {
+                Text(L10n.localized("shortcutsFooter"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             // WT-D plan H4 — minimal entry; WT-C restyles the settings page later.
@@ -138,6 +269,7 @@ struct SettingsWindowView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    .settingsFeedbackPulse(value: UserDefaultsBinding.bool(forKey: "fullscreenAlbumCover").wrappedValue)
                 }
             }
 
@@ -163,6 +295,7 @@ struct SettingsWindowView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        .settingsFeedbackPulse(value: lyricsService.translationLanguage)
                     }
                 }
             }

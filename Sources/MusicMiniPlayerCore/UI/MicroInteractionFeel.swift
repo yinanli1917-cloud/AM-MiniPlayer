@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// Runtime A/B registry for micro-interaction feel channels (buttons, hover
 /// capsules, progress-bar hover, window present/dismiss). Modelled exactly on
@@ -18,6 +19,9 @@ public enum MicroInteractionFeel {
     public static let progressHoverDefaultsKey = "nanoPodFeelProgressHover"
     public static let shuffleRepeatDefaultsKey = "nanoPodFeelShuffleRepeat"
     public static let windowPresentDefaultsKey = "nanoPodFeelWindowPresent"
+    public static let edgeMorphDefaultsKey = "nanoPodFeelEdgeMorph"
+    public static let settingsTabDefaultsKey = "nanoPodFeelSettingsTab"
+    public static let settingsToggleDefaultsKey = "nanoPodFeelSettingsToggle"
 
     public enum HoverCapsuleMode: String, CaseIterable {
         case capsule = "capsule"
@@ -69,12 +73,53 @@ public enum MicroInteractionFeel {
         }
     }
 
+    /// C1 贴边形变对照臂：`.morph`（默认，card↔pill Liquid Glass morph）vs `.v0`
+    /// （今天的行为，字节级不变——`EdgeMorphHost` 整体不渲染）。默认是 `.morph`
+    /// 而非其余 channel 惯用的 legacy 默认，因为这是「默认新行为」型 channel，
+    /// 与 `NativeLyricsFeelParity` 的默认惯例一致（design doc §7）。
+    public enum EdgeMorphMode: String, CaseIterable {
+        case morph = "morph"
+        case v0 = "v0"
+
+        public static func resolve(from raw: String?) -> EdgeMorphMode {
+            guard let raw else { return .morph }
+            return EdgeMorphMode(rawValue: raw.lowercased()) ?? .morph
+        }
+    }
+
+    /// C4 设置页 Tab 切换转场：`.custom`（默认，crossfade + slide）vs `.system`
+    /// （今天的原样 `TabView(selection:)`，不改）。
+    public enum SettingsTabMode: String, CaseIterable {
+        case custom = "custom"
+        case system = "system"
+
+        public static func resolve(from raw: String?) -> SettingsTabMode {
+            guard let raw else { return .custom }
+            return SettingsTabMode(rawValue: raw.lowercased()) ?? .custom
+        }
+    }
+
+    /// C4 设置页 Toggle/Picker 反馈：`.custom`（默认，标签轻微 scale pulse）vs
+    /// `.system`（不加任何反馈，控件原样）。
+    public enum SettingsToggleMode: String, CaseIterable {
+        case custom = "custom"
+        case system = "system"
+
+        public static func resolve(from raw: String?) -> SettingsToggleMode {
+            guard let raw else { return .custom }
+            return SettingsToggleMode(rawValue: raw.lowercased()) ?? .custom
+        }
+    }
+
     #if DEBUG
     nonisolated(unsafe) public static var testingHoverCapsule: HoverCapsuleMode?
     nonisolated(unsafe) public static var testingPressScale: PressScaleMode?
     nonisolated(unsafe) public static var testingProgressHover: ProgressHoverMode?
     nonisolated(unsafe) public static var testingShuffleRepeat: ShuffleRepeatMode?
     nonisolated(unsafe) public static var testingWindowPresent: WindowPresentMode?
+    nonisolated(unsafe) public static var testingEdgeMorph: EdgeMorphMode?
+    nonisolated(unsafe) public static var testingSettingsTab: SettingsTabMode?
+    nonisolated(unsafe) public static var testingSettingsToggle: SettingsToggleMode?
 
     public static func resetTestingOverrides() {
         testingHoverCapsule = nil
@@ -82,6 +127,9 @@ public enum MicroInteractionFeel {
         testingProgressHover = nil
         testingShuffleRepeat = nil
         testingWindowPresent = nil
+        testingEdgeMorph = nil
+        testingSettingsTab = nil
+        testingSettingsToggle = nil
     }
     #endif
 
@@ -135,6 +183,36 @@ public enum MicroInteractionFeel {
         )
     }
 
+    public static var edgeMorph: EdgeMorphMode {
+        #if DEBUG
+        if let testingEdgeMorph { return testingEdgeMorph }
+        if isRunningTests { return .morph }
+        #endif
+        return EdgeMorphMode.resolve(
+            from: UserDefaults.standard.string(forKey: edgeMorphDefaultsKey)
+        )
+    }
+
+    public static var settingsTab: SettingsTabMode {
+        #if DEBUG
+        if let testingSettingsTab { return testingSettingsTab }
+        if isRunningTests { return .custom }
+        #endif
+        return SettingsTabMode.resolve(
+            from: UserDefaults.standard.string(forKey: settingsTabDefaultsKey)
+        )
+    }
+
+    public static var settingsToggle: SettingsToggleMode {
+        #if DEBUG
+        if let testingSettingsToggle { return testingSettingsToggle }
+        if isRunningTests { return .custom }
+        #endif
+        return SettingsToggleMode.resolve(
+            from: UserDefaults.standard.string(forKey: settingsToggleDefaultsKey)
+        )
+    }
+
     private static var isRunningTests: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
@@ -163,6 +241,15 @@ public enum MicroInteractionFeel {
         case "windowpresent":
             UserDefaults.standard.set(WindowPresentMode.resolve(from: value).rawValue, forKey: windowPresentDefaultsKey)
             return true
+        case "edgemorph":
+            UserDefaults.standard.set(EdgeMorphMode.resolve(from: value).rawValue, forKey: edgeMorphDefaultsKey)
+            return true
+        case "settingstab":
+            UserDefaults.standard.set(SettingsTabMode.resolve(from: value).rawValue, forKey: settingsTabDefaultsKey)
+            return true
+        case "settingstoggle":
+            UserDefaults.standard.set(SettingsToggleMode.resolve(from: value).rawValue, forKey: settingsToggleDefaultsKey)
+            return true
         default:
             return false
         }
@@ -174,6 +261,9 @@ public enum MicroInteractionFeel {
         UserDefaults.standard.removeObject(forKey: progressHoverDefaultsKey)
         UserDefaults.standard.removeObject(forKey: shuffleRepeatDefaultsKey)
         UserDefaults.standard.removeObject(forKey: windowPresentDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: edgeMorphDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: settingsTabDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: settingsToggleDefaultsKey)
         #if DEBUG
         resetTestingOverrides()
         #endif
@@ -197,6 +287,92 @@ public enum MicroInteractionFeel {
 
         public static let windowFadeInDuration: TimeInterval = 0.18
         public static let windowFadeOutDuration: TimeInterval = 0.14
+
+        // C1 edgeMorph three-clock scheduler (research/c1-edge-morph-design-2026-09-12.md §4/§9 commit 3).
+        public static let edgeMorphPreSeedLead: TimeInterval = 0.02
+        public static let edgeMorphContentLagMin: TimeInterval = 0.02
+        public static let edgeMorphContentLagMax: TimeInterval = 0.08
+        public static let edgeMorphMaterialSettle: TimeInterval = 0.31
+        public static let edgeMorphContentDuration: TimeInterval = 0.14
+
+        // C4 settings page (design doc §10).
+        public static let settingsTabDuration: TimeInterval = 0.22
+        public static let settingsTabReducedMotionDuration: TimeInterval = 0.12
+        public static let settingsToggleBumpScale: Double = 1.03
+        public static let settingsToggleBumpResponse: Double = 0.18
+    }
+}
+
+/// C4 设置页 Tab 切换转场的纯决策函数，从 `SettingsWindowView` 拆出以便无 UI 测试。
+/// `.system` 臂 = 今天的行为，恒返回 `.none` + `nil` animation（TabView 原样，不接管转场）。
+/// `.custom` 臂按 `from`/`to` 的 tab 索引推导滑动方向；Reduce Motion 恒赢，只剩 opacity。
+public enum SettingsTabTransitionKind: Equatable {
+    case none
+    case opacity
+    case slideForward
+    case slideBackward
+}
+
+public enum SettingsTabTransition {
+    public static func resolve(
+        arm: MicroInteractionFeel.SettingsTabMode,
+        from: Int,
+        to: Int,
+        reduceMotion: Bool
+    ) -> (kind: SettingsTabTransitionKind, animation: Animation?) {
+        guard arm == .custom else { return (.none, nil) }
+
+        if reduceMotion {
+            return (.opacity, .linear(duration: MicroInteractionFeel.Tokens.settingsTabReducedMotionDuration))
+        }
+
+        let animation = Animation.smooth(duration: MicroInteractionFeel.Tokens.settingsTabDuration)
+        guard to != from else { return (.opacity, animation) }
+        return (to > from ? .slideForward : .slideBackward, animation)
+    }
+}
+
+/// C4 设置页 Toggle/Picker 反馈脉冲的纯策略函数：`.custom` 臂在非 Reduce Motion 时脉冲，
+/// 否则（`.system` 臂，或 Reduce Motion）不脉冲。
+public enum SettingsTogglePulsePolicy {
+    public static func shouldPulse(arm: MicroInteractionFeel.SettingsToggleMode, reduceMotion: Bool) -> Bool {
+        arm == .custom && !reduceMotion
+    }
+}
+
+/// One ViewModifier reused on every Toggle/Picker row: on `value` change, the row's
+/// label does a brief scale pulse (1.0→bump→1.0). The control itself (Toggle/Picker)
+/// is never touched — only the label wrapping this modifier animates.
+public struct SettingsFeedbackPulseModifier<Value: Equatable>: ViewModifier {
+    let value: Value
+
+    @State private var scale: CGFloat = 1.0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    public init(value: Value) {
+        self.value = value
+    }
+
+    public func body(content: Content) -> some View {
+        content
+            .scaleEffect(scale)
+            .onChange(of: value) { _, _ in
+                guard SettingsTogglePulsePolicy.shouldPulse(arm: MicroInteractionFeel.settingsToggle, reduceMotion: reduceMotion) else { return }
+                let response = MicroInteractionFeel.Tokens.settingsToggleBumpResponse
+                withAnimation(.spring(response: response, dampingFraction: 1.0)) {
+                    scale = MicroInteractionFeel.Tokens.settingsToggleBumpScale
+                }
+                withAnimation(.spring(response: response, dampingFraction: 1.0).delay(response)) {
+                    scale = 1.0
+                }
+            }
+    }
+}
+
+public extension View {
+    /// Applies the settings-row label feedback pulse (see `SettingsFeedbackPulseModifier`).
+    func settingsFeedbackPulse<V: Equatable>(value: V) -> some View {
+        modifier(SettingsFeedbackPulseModifier(value: value))
     }
 }
 

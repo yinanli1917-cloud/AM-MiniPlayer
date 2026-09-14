@@ -17,6 +17,11 @@ import MusicMiniPlayerCore
 public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelCommands {
     static var shared: AppMain!
 
+    /// Extra playback sources passed in by the caller of `main(extraPlaybackSources:)`
+    /// (e.g. the full-edition executable). Stored only — not yet wired into any
+    /// registry or launch logic; this is skeleton plumbing for a later pass.
+    public static private(set) var extraPlaybackSources: [PlaybackSource] = []
+
     var statusItem: NSStatusItem!
     var menuBarMenu: NSMenu?
     var floatingWindow: NSPanel?
@@ -53,7 +58,8 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         }
     }
 
-    public static func main() {
+    public static func main(extraPlaybackSources: [PlaybackSource] = []) {
+        Self.extraPlaybackSources = extraPlaybackSources
         let app = NSApplication.shared
         let delegate = AppMain()
         AppMain.shared = delegate
@@ -370,11 +376,22 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         // C1 贴边形变 hook 接线（research/c1-edge-morph-design-2026-09-12.md §9
         // commit 1）：几何弹簧的起播/落定信号译成 `SnapEvent`，喂给独立的
         // `edgePresentationModel`（偏离设计文档 §1 的 MusicController 挂载方案）。
-        snappableWindow.onGeometryMorphWillStart = { [weak self] event, time in
+        snappableWindow.onGeometryMorphWillStart = { [weak self, weak snappableWindow] event, time in
             guard let self else { return }
             MainActor.assumeIsolated {
             let before = self.edgePresentationModel.presentation
             self.edgePresentationModel.apply(event)
+            // commit 2 一行钩子：把 SnappablePanel 已公开的 hiddenEdge 镜像进
+            // EdgePresentationModel，SnappablePanel.swift 本身不改动。
+            if let hiddenEdge = snappableWindow?.hiddenEdge {
+                let mirrored: SnappedEdge
+                switch hiddenEdge {
+                case .none: mirrored = .none
+                case .left: mirrored = .left
+                case .right: mirrored = .right
+                }
+                self.edgePresentationModel.updateSnappedEdge(mirrored)
+            }
             #if DEBUG
             let after = self.edgePresentationModel.presentation
             DebugLogger.log(

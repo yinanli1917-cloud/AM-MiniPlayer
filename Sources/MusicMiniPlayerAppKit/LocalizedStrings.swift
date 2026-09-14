@@ -76,6 +76,8 @@ enum L10n {
         "musicKitDesc":         ("Required for album artwork and song info", "用于获取专辑封面和歌曲信息"),
         "musicKitRequest":      ("Request Access", "请求访问"),
         "musicKitOpen":         ("Open Settings", "打开设置"),
+        "shortcuts":            ("Keyboard Shortcuts", "快捷键"),
+        "shortcutsFooter":      ("Shortcuts are global and work from any app. Unbound by default.", "快捷键全局生效，在任何 App 下都能触发；默认未绑定。"),
     ]
 }
 
