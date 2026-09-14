@@ -341,6 +341,17 @@ public class LyricsService: ObservableObject {
 
     private let lyricsCache = NSCache<NSString, CachedLyricsItem>()
 
+    #if DEBUG
+    /// Test-only seam: exposes the live `lyricsCache`'s governance knobs so
+    /// tests can assert configuration deterministically instead of relying
+    /// on NSCache's undocumented, memory-pressure-dependent retention
+    /// behaviour (Apple docs: NSCache may evict entries at any time; not a
+    /// testable guarantee). See LyricsMemoryCacheCostTests.
+    var lyricsCacheGovernanceForTesting: (countLimit: Int, totalCostLimit: Int) {
+        (lyricsCache.countLimit, lyricsCache.totalCostLimit)
+    }
+    #endif
+
     private class CachedLyricsItem: NSObject {
         let lyrics: [LyricLine]
         let firstRealLyricIndex: Int
