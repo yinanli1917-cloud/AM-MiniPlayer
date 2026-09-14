@@ -172,6 +172,7 @@ extension MusicController {
         let newShuffleState = !shuffleEnabled
         // Optimistic UI update
         self.shuffleEnabled = newShuffleState
+        self.lastPlaybackModeUserActionTime = Date()
         markQueueMayHaveChanged()
 
         // 🔑 User-initiated control uses dedicated controlQueue
@@ -312,6 +313,7 @@ extension MusicController {
 
         // Optimistic UI update
         self.repeatMode = newMode
+        self.lastPlaybackModeUserActionTime = Date()
 
         // 🔑 User-initiated control uses dedicated controlQueue
         controlQueue.async { [weak self] in
