@@ -754,4 +754,398 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
             to: "\(Self.outDir)/defect3-position-comparison.png"
         )
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Symptom 3: whole-stack reflow snap after a settle plateau
+    //
+    // research/references/nanopod-defects-2026-09-12-spec.md Symptom 3 (already on main): in a
+    // real recording, every visible row sits pixel-identical for 6-170ms then jumps together
+    // 1-6px in a single frame — 26 such clusters across one recording, not a one-off.
+    //
+    // Suspect (coordinator, 2026-09-14): LyricsLayerRendererView.updateContentIfNeeded
+    // (~line 1578-1589) updates the renderer's OWN `measuredHeightsByIndex` SYNCHRONOUSLY when a
+    // row's height changes (e.g. a newly-visible row's first real measurement, vs. the 36pt
+    // placeholder default), but only calls `configuration.onHeightMeasured` inside
+    // `DispatchQueue.main.async` — deferred at least one run-loop turn. LyricsView's own handler
+    // (onHeightMeasured in LyricsView.swift:1102-1108) writes `cache.lineHeights[index]` and then
+    // calls `scheduleHeightCacheUpdate()`, which wraps ANOTHER `DispatchQueue.main.async` before
+    // finally recomputing `accumulatedHeights` and re-configuring the renderer. Meanwhile
+    // `NativeLyricsSnapMath.targetY` (the row-positioning formula — verified by direct read,
+    // LyricsPresentationModels.swift:974-988) computes EVERY row's Y purely from the EXTERNALLY
+    // supplied `configuration.accumulatedHeights` (`anchorY - accumulatedHeights[targetIndex] +
+    // accumulatedHeights[rowIndex]`) — never from the renderer's own internal
+    // `measuredHeightsByIndex`. So for at least one extra configure() cycle after a row is newly
+    // measured, every OTHER row's cumulative offset still sums the OLD/placeholder height for
+    // that row — then, once the two async hops land, `accumulatedHeights` corrects all at once
+    // and every row below the changed one shifts by the same delta in the same frame: a rigid
+    // whole-stack snap, exactly the reported symptom.
+    //
+    // This test models that EXACT structural lag deterministically: instead of real
+    // `DispatchQueue.main.async` (nondeterministic relative to a synchronous XCTest loop), a
+    // local `pendingHeightUpdates` queue captures each `onHeightMeasured` call and is drained
+    // into the EXTERNAL height cache only at the START of the NEXT tick — i.e. accumulatedHeights
+    // for tick N+1 reflects heights measured during tick N, exactly the one-cycle lag the real
+    // two-hop async chain produces. This is not a real-time reproduction; it is a deterministic
+    // model of the same structural bug, driven by a real NativeLyricsSurfaceView +
+    // NativeLyricsSnapMath so the actual production position formula is exercised.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    private func configWithHeights(
+        rows: [LayerBackedLyricRow],
+        current: Int,
+        mc: MusicController,
+        width: CGFloat,
+        accumulatedHeights: [Int: CGFloat],
+        onHeightMeasured: @escaping (Int, CGFloat) -> Void
+    ) -> LyricsLayerRendererConfiguration {
+        LyricsLayerRendererConfiguration(
+            rows: rows, currentIndex: current, anchorY: 200, rowWidth: width,
+            renderedIndices: rows.map(\.index), accumulatedHeights: accumulatedHeights, lineTargetIndices: [:],
+            lineInterval: 4, hasSyllableSync: false,
+            trackContext: DiagnosticTrackContext(title: "T", artist: "A", album: "Al", duration: 240),
+            isWaveTimelineDiagnosticsEnabled: false, isManualScrolling: false, reduceMotion: false,
+            suppressInitialMotion: false, pendingTranslationLineIndices: [], showTranslation: false,
+            isTranslating: false, translationFailed: false, interludeAfterIndex: nil, directSnapRequest: nil,
+            controlsVisible: false, musicController: mc,
+            onLineTap: { _ in }, onDirectSnapConsumed: { _ in }, onManualScrollStarted: { _ in },
+            onManualScrollDelta: { _, _ in }, onManualScrollEnded: {}, onManualScrollRecovered: {},
+            onManualScrollChromeReset: nil, onHeightMeasured: onHeightMeasured, lineMotionSamplingEnabled: false,
+            lineMotionFocusedSamplingUntil: Date.distantPast, lineMotionFirstRealDisplayIndex: 0,
+            onLineMotionFrames: { _, _, _, _ in })
+    }
+
+    private func symptom3Rows(count: Int) -> [LayerBackedLyricRow] {
+        // Alternate short and long lines so measured heights vary meaningfully from the 36pt
+        // placeholder default (some wrap at the narrow test width, some don't).
+        let texts = [
+            "hello", "walking down the empty street tonight alone",
+            "la la la", "I keep thinking back to what you said to me",
+            "stay", "the city lights are fading out again slowly",
+            "wait for me", "nothing ever stays the same for very long",
+        ]
+        var rows: [LayerBackedLyricRow] = []
+        var start: TimeInterval = 0
+        for i in 0..<count {
+            let text = texts[i % texts.count]
+            let duration: TimeInterval = 3.6
+            let line = LyricLine(text: text, startTime: start, endTime: start + duration, words: [])
+            rows.append(row(for: line, index: i))
+            start += duration
+        }
+        return rows
+    }
+
+    private struct RowJumpEvent {
+        let tickIndex: Int
+        let rowIndices: [Int]
+        let deltaY: [CGFloat]
+        let plateauLengths: [Int]
+    }
+
+    @MainActor
+    func test_symptom3_reflowSnap_afterDeferredHeightMeasurementCatchesUp() {
+        let rows = symptom3Rows(count: 30)
+        let panelWidth: CGFloat = 260
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 700))
+        host(surface, NSSize(width: panelWidth, height: 700))
+        let mc = MusicController(preview: true)
+        mc.duration = 200
+        mc.isPlaying = true
+        surface.debugSkipDedupe = true
+        var wall: CFTimeInterval = 20_000
+        var date = Date(timeIntervalSinceReferenceDate: 701_000_000)
+        surface.debugNowOverride = { wall }
+        mc.debugPlaybackClockDateProvider = { date }
+        defer {
+            surface.debugNowOverride = nil
+            mc.debugPlaybackClockDateProvider = nil
+        }
+
+        let defaultHeight: CGFloat = 36
+        let spacing: CGFloat = 6
+        var externalHeightCache: [Int: CGFloat] = [:]
+        var pendingHeightUpdates: [(Int, CGFloat)] = []
+
+        func computeAccumulatedHeights() -> [Int: CGFloat] {
+            var acc: [Int: CGFloat] = [:]
+            var running: CGFloat = 0
+            for r in rows {
+                acc[r.index] = running
+                running += (externalHeightCache[r.index] ?? defaultHeight) + spacing
+            }
+            return acc
+        }
+
+        // Per-tick history: every visible row's ACTUAL on-screen Y (debugModelY, which is the
+        // real committed CALayer transform — what render(in:) would paint), plus a saved
+        // low-res CGImage of the whole surface for later before/after extraction.
+        var yHistory: [Int: [CGFloat]] = [:]
+        var imageHistory: [CGImage] = []
+        let tickCount = 130
+
+        for tickIndex in 0..<tickCount {
+            // Drain the PREVIOUS tick's deferred height updates now — the one-cycle lag.
+            for (idx, h) in pendingHeightUpdates where abs((externalHeightCache[idx] ?? 0) - h) > 2.0 {
+                externalHeightCache[idx] = h
+            }
+            pendingHeightUpdates.removeAll()
+
+            let t = TimeInterval(tickIndex) * 0.9
+            mc.syncPlaybackClock(to: t, playing: true, at: date)
+            let current = min(max(0, NativeLyricsTimelinePolicy.liveDisplayIndex(at: t, rows: rows, fallback: 0)), max(0, rows.count - 1))
+            let acc = computeAccumulatedHeights()
+            surface.configure(configWithHeights(
+                rows: rows, current: current, mc: mc, width: panelWidth,
+                accumulatedHeights: acc,
+                onHeightMeasured: { idx, h in pendingHeightUpdates.append((idx, h)) }
+            ))
+            surface.layoutSubtreeIfNeeded()
+            // Let the presentation spring fully settle before sampling — a real display link
+            // runs continuously at 60Hz regardless of how often SwiftUI reconfigures, so by the
+            // time a human (or the founder's recording) perceives a row as "stopped", its spring
+            // has long since converged. Sampling mid-spring would show smooth motion, not the
+            // discrete plateau-then-snap this test is trying to isolate.
+            for _ in 0..<30 {
+                wall += 1.0 / 60.0
+                date = date.addingTimeInterval(1.0 / 60.0)
+                surface.debugTick(displayInterval: 1.0 / 60.0)
+            }
+
+            for idx in max(0, current - 3)...min(rows.count - 1, current + 3) {
+                let y = surface.debugRowView(forIndex: idx)?.debugModelY ?? .nan
+                yHistory[idx, default: []].append(y)
+            }
+            imageHistory.append(renderSurfaceCGImage(surface, scale: 1)!)
+        }
+
+        // Detect settle→jump clusters: ≥2 tracked rows holding an IDENTICAL Y for ≥3 consecutive
+        // ticks, then jumping (>0.4px, same direction) together within 1 tick — mirrors the
+        // spec's own detection method (≥3-frame plateau, ≥2 rows, same-window jump).
+        var events: [RowJumpEvent] = []
+        let trackedIndices = yHistory.keys.sorted()
+        for tick in 2..<tickCount {
+            var jumpers: [Int] = []
+            var deltas: [CGFloat] = []
+            var plateaus: [Int] = []
+            for idx in trackedIndices {
+                guard let series = yHistory[idx], series.count > tick else { continue }
+                let prev = series[tick - 1]
+                let now = series[tick]
+                guard !prev.isNaN, !now.isNaN else { continue }
+                let delta = now - prev
+                guard abs(delta) > 0.4, abs(delta) < 40 else { continue }
+                var plateau = 0
+                var k = tick - 1
+                while k > 0, abs(series[k] - series[k - 1]) < 0.05 {
+                    plateau += 1
+                    k -= 1
+                }
+                guard plateau >= 3 else { continue }
+                jumpers.append(idx)
+                deltas.append(delta)
+                plateaus.append(plateau)
+            }
+            if jumpers.count >= 2 {
+                events.append(RowJumpEvent(tickIndex: tick, rowIndices: jumpers, deltaY: deltas, plateauLengths: plateaus))
+            }
+        }
+
+        print("[Symptom3] ticked \(tickCount) configure cycles, found \(events.count) whole-stack settle→jump clusters")
+        for e in events.prefix(10) {
+            print("[Symptom3] tick=\(e.tickIndex) rows=\(e.rowIndices) Δy=\(e.deltaY.map { String(format: "%.2f", $0) }) plateau=\(e.plateauLengths)")
+        }
+
+        XCTAssertGreaterThan(events.count, 0,
+            "expected at least one whole-stack settle→jump cluster — if this fails, the " +
+            "deferred-height-cache lag model did not reproduce Symptom 3 in this fixture and the " +
+            "suspicion should be treated as NOT reproduced, not confirmed")
+
+        // Pick the event with the LONGEST plateau (most representative/stable — matches the
+        // spec's "the founder-flagged instance had a 100-170ms plateau" framing) and centre the
+        // crop on where those rows ACTUALLY are on screen (from the tracked Y history), instead
+        // of a fixed guess — different clusters land at different scroll depths.
+        if let best = events.max(by: { ($0.plateauLengths.min() ?? 0) < ($1.plateauLengths.min() ?? 0) }) {
+            let beforeIdx = max(0, best.tickIndex - 1)
+            let afterIdx = best.tickIndex
+            let ys = best.rowIndices.compactMap { yHistory[$0]?[beforeIdx] }
+            let centerY = ys.isEmpty ? 200 : ys.reduce(0, +) / CGFloat(ys.count)
+            renderSymptom3BeforeAfter(
+                before: imageHistory[beforeIdx], after: imageHistory[afterIdx],
+                panelWidth: panelWidth, event: best, centerY: centerY,
+                to: "\(Self.outDir)/symptom3-reflow-snap-before-after.png"
+            )
+            // PRIMARY evidence: a Y-trajectory chart plotted directly from the tracked
+            // debugModelY data (no CALayer render involved, so it sidesteps whatever made the
+            // screenshot crop above come out blank — see the honesty note in the report). This is
+            // what actually shows the plateau→jump pattern unambiguously.
+            renderSymptom3Chart(
+                yHistory: yHistory, event: best, tickCount: tickCount,
+                to: "\(Self.outDir)/symptom3-reflow-snap-chart.png"
+            )
+        }
+    }
+
+    /// Line chart of tracked rows' Y (debugModelY) across ticks, built with plain NSBezierPath —
+    /// no CALayer render involved, so it doesn't depend on whatever made the CALayer-rendered
+    /// before/after screenshot come out blank (see honesty note). This directly visualizes the
+    /// plateau→jump pattern from the SAME data the numeric detection used.
+    private func renderSymptom3Chart(
+        yHistory: [Int: [CGFloat]], event: RowJumpEvent, tickCount: Int, to path: String
+    ) {
+        let windowStart = max(0, event.tickIndex - 12)
+        let windowEnd = min(tickCount - 1, event.tickIndex + 6)
+        let rowsToPlot = Array(event.rowIndices.prefix(6))
+        var allYs: [CGFloat] = []
+        for idx in rowsToPlot {
+            guard let series = yHistory[idx] else { continue }
+            for t in windowStart...windowEnd where t < series.count && !series[t].isNaN {
+                allYs.append(series[t])
+            }
+        }
+        guard let yMin = allYs.min(), let yMax = allYs.max(), yMax > yMin else {
+            XCTFail("no Y range to chart")
+            return
+        }
+        let pad = max(0.5, (yMax - yMin) * 0.15)
+        let plotYMin = yMin - pad
+        let plotYMax = yMax + pad
+
+        let chartWidth: CGFloat = 900
+        let chartHeight: CGFloat = 420
+        let margin: CGFloat = 60
+        let labelHeight: CGFloat = 70
+        let canvas = NSImage(size: NSSize(width: chartWidth, height: chartHeight + labelHeight))
+        canvas.lockFocus()
+        NSColor(white: 0.08, alpha: 1).setFill()
+        NSRect(origin: .zero, size: canvas.size).fill()
+
+        func px(_ tick: Int) -> CGFloat {
+            margin + (CGFloat(tick - windowStart) / CGFloat(max(1, windowEnd - windowStart))) * (chartWidth - margin * 2)
+        }
+        func py(_ y: CGFloat) -> CGFloat {
+            labelHeight + margin + (1 - (y - plotYMin) / (plotYMax - plotYMin)) * (chartHeight - margin * 2)
+        }
+
+        // Axes
+        NSColor.white.withAlphaComponent(0.4).setStroke()
+        let axis = NSBezierPath()
+        axis.move(to: NSPoint(x: margin, y: labelHeight + margin))
+        axis.line(to: NSPoint(x: margin, y: chartHeight + labelHeight - margin))
+        axis.line(to: NSPoint(x: chartWidth - margin, y: chartHeight + labelHeight - margin))
+        axis.lineWidth = 1
+        axis.stroke()
+
+        // Vertical marker at the jump tick.
+        NSColor.systemRed.withAlphaComponent(0.5).setStroke()
+        let marker = NSBezierPath()
+        marker.move(to: NSPoint(x: px(event.tickIndex), y: labelHeight + margin))
+        marker.line(to: NSPoint(x: px(event.tickIndex), y: chartHeight + labelHeight - margin))
+        marker.lineWidth = 1.5
+        marker.setLineDash([5, 3], count: 2, phase: 0)
+        marker.stroke()
+
+        let colors: [NSColor] = [.systemOrange, .systemGreen, .systemCyan, .systemPink, .systemYellow, .systemPurple]
+        for (i, idx) in rowsToPlot.enumerated() {
+            guard let series = yHistory[idx] else { continue }
+            let path = NSBezierPath()
+            var started = false
+            for t in windowStart...windowEnd where t < series.count && !series[t].isNaN {
+                let point = NSPoint(x: px(t), y: py(series[t]))
+                if !started { path.move(to: point); started = true } else { path.line(to: point) }
+                let dot = NSBezierPath(ovalIn: NSRect(x: point.x - 2, y: point.y - 2, width: 4, height: 4))
+                colors[i % colors.count].setFill()
+                dot.fill()
+            }
+            colors[i % colors.count].setStroke()
+            path.lineWidth = 1.5
+            path.stroke()
+        }
+
+        let legend = rowsToPlot.enumerated().map { "row\($1)=\(colors[$0 % colors.count])" }.joined(separator: " ")
+        let text = "Symptom 3: 行 Y 轨迹（跳变 tick=\(event.tickIndex)，红色虚线标出）\n" +
+            "横轴=tick（每 tick 已让 spring 跑满 30 个 1/60s 子帧,即真正 settle 后采样）纵轴=debugModelY(pt)\n" +
+            "Δy=\(event.deltaY.map { String(format: "%+.2f", $0) })px  跳前静止帧数=\(event.plateauLengths)\n" +
+            "画的行 index（按顺序对应橙/绿/青/粉/黄/紫）：\(rowsToPlot)"
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12),
+            .foregroundColor: NSColor.white
+        ]
+        NSAttributedString(string: text, attributes: attrs).draw(at: NSPoint(x: 10, y: 6))
+        _ = legend
+
+        canvas.unlockFocus()
+        guard let tiff = canvas.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let data = rep.representation(using: .png, properties: [:]) else {
+            XCTFail("could not encode symptom3 chart PNG")
+            return
+        }
+        try? FileManager.default.createDirectory(
+            atPath: (path as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        try? data.write(to: URL(fileURLWithPath: path))
+    }
+
+    /// Side-by-side BEFORE/AFTER crop around the jumping rows, zoomed in with a 1pt ruler grid
+    /// so a 1-6px shift is visible at a glance, plus the exact numbers as a caption.
+    private func renderSymptom3BeforeAfter(
+        before: CGImage, after: CGImage, panelWidth: CGFloat, event: RowJumpEvent, centerY: CGFloat, to path: String
+    ) {
+        let zoom: CGFloat = 5
+        let cropHeight: CGFloat = 200
+        let cropTop: CGFloat = max(0, centerY - cropHeight / 2)
+        let labelHeight: CGFloat = 90
+        let canvasWidth = panelWidth * zoom * 2 + 40
+        let canvasHeight = cropHeight * zoom + labelHeight
+        let canvas = NSImage(size: NSSize(width: canvasWidth, height: canvasHeight))
+        canvas.lockFocus()
+        NSColor(white: 0.08, alpha: 1).setFill()
+        NSRect(origin: .zero, size: canvas.size).fill()
+
+        func drawPanel(_ image: CGImage, originX: CGFloat) {
+            let img = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+            let srcHeight = CGFloat(image.height)
+            let srcRect = NSRect(x: 0, y: srcHeight - cropTop - cropHeight, width: panelWidth, height: cropHeight)
+            let destRect = NSRect(x: originX, y: labelHeight, width: panelWidth * zoom, height: cropHeight * zoom)
+            img.draw(in: destRect, from: srcRect, operation: .sourceOver, fraction: 1.0)
+            // 1pt ruler ticks every 5pt of ORIGINAL (unzoomed) height, labelled every 10pt.
+            var yPt: CGFloat = 0
+            while yPt < cropHeight {
+                let canvasY = labelHeight + cropHeight * zoom - yPt * zoom
+                let tickPath = NSBezierPath()
+                let tickLen: CGFloat = yPt.truncatingRemainder(dividingBy: 10) == 0 ? 10 : 5
+                tickPath.move(to: NSPoint(x: originX, y: canvasY))
+                tickPath.line(to: NSPoint(x: originX + tickLen, y: canvasY))
+                tickPath.lineWidth = 1
+                NSColor.systemYellow.withAlphaComponent(0.6).setStroke()
+                tickPath.stroke()
+                yPt += 5
+            }
+        }
+        drawPanel(before, originX: 0)
+        drawPanel(after, originX: panelWidth * zoom + 40)
+
+        let text = "跳前（tick \(event.tickIndex - 1)） →  跳后（tick \(event.tickIndex)）\n" +
+            "同帧一起跳的行 index=\(event.rowIndices)\n" +
+            "Δy=\(event.deltaY.map { String(format: "%+.2f", $0) })px  " +
+            "跳前静止帧数=\(event.plateauLengths)\n" +
+            "黄色刻度=每5pt一格（原始未缩放坐标），此图放大\(Int(5))x便于肉眼分辨"
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12),
+            .foregroundColor: NSColor.white
+        ]
+        NSAttributedString(string: text, attributes: attrs).draw(at: NSPoint(x: 8, y: 6))
+
+        canvas.unlockFocus()
+        guard let tiff = canvas.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let data = rep.representation(using: .png, properties: [:]) else {
+            XCTFail("could not encode symptom3 before/after PNG")
+            return
+        }
+        try? FileManager.default.createDirectory(
+            atPath: (path as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        try? data.write(to: URL(fileURLWithPath: path))
+    }
 }

@@ -337,3 +337,81 @@ let semanticIndex = hotGroups.subtracting(backingIndices).max()
 4. **手感终验仍然需要创始人亲自做**：这条路径的最终验收是"真机上 seek 回歌曲开头,三点
    动画正确出现在屏幕居中位置"，自动测试通过不能替代（项目 2026-08-21 永久规则）。建议
    修完后我先给出这些单测的绿/红对照，你再挑一首真实前奏歌在真机上验一次。
+
+---
+
+## 缺陷「滚动后整叠歌词位置再跳几像素」（研究编号 Symptom 3）—— 已复现，根因坐实
+
+创始人描述：「每一次上一行就会又位移一下几个像素」。已有证据在 main：
+`research/references/nanopod-defects-2026-09-12-spec.md` Symptom 3——真实录屏里所有可见行
+静止 6-170ms 后同一帧整体 +1~6px 刚性跳动，全片 26 次同类簇，f672/f1044/f1503/f1719/f1763
+为典型。协调方给的上一轮嫌疑：`LyricsLayerRendererView.swift` 约 1578-1589 行的
+`onHeightMeasured` 延迟到下一 run loop 才回填。
+
+### 根因追踪（直接读代码，不是猜）
+
+`updateContentIfNeeded`（`LyricsLayerRendererView.swift:1560-1590`）：一行的高度被
+（重新）测量时，渲染器自己的 `measuredHeightsByIndex[row.index]` 同步更新（影响这一帧
+它自己的内部记账），但真正通知外部（SwiftUI `LyricsView`）的
+`configuration.onHeightMeasured(row.index, height)` 包在
+**`DispatchQueue.main.async` 里**——至少推迟一个 run loop 轮次。
+
+`LyricsView.swift:1102-1108` 收到这个回调后：`cache.lineHeights[index] = height`，再调用
+`scheduleHeightCacheUpdate()`（`LyricsView.swift:2407-2416`）——这个函数**又包了一层
+`DispatchQueue.main.async`**，才真正调 `updateHeightCache()` 去重算
+`accumulatedHeights`、触发 SwiftUI 重渲染、把新的 `accumulatedHeights` 传回渲染器的下一次
+`configure()`。两跳异步。
+
+同时，行的**实际定位公式**——`NativeLyricsSnapMath.targetY`
+（`LyricsPresentationModels.swift:974-988`，被 `snapY`/`applyFrame` 直接调用，验证过是唯一
+定位入口）——完全只吃外部传入的 `configuration.accumulatedHeights`：
+`y = anchorY - accumulatedHeights[targetIndex] + accumulatedHeights[rowIndex]`，从不看渲染器
+自己的 `measuredHeightsByIndex`。
+
+结论：一行高度被首次测量后（最常见触发：滚动时一行首次进入可见窗口，测出的真实高度和
+36pt 占位默认值不一样），**至少多出一个 configure 周期**，`accumulatedHeights` 对这行
+下面的所有行来说还是旧值（占位符）——直到两跳异步落地，`accumulatedHeights` 一次性改
+过来，这行下面**所有行的累计 Y 在同一帧一起跳一个相同的量**。这正是"刚性同步跳动"
+的机制,不是"某一行自己没测准"。
+
+### 复现方法
+
+真实 `NativeLyricsSurfaceView` + 30 行歌词（长短交替，制造与 36pt 占位默认值有真实差异
+的实测高度）。不用真的 `DispatchQueue.main.async`（在同步 XCTest 循环里时机不可控），
+而是用一个本地 `pendingHeightUpdates` 队列**确定性地**模拟同一个结构性延迟：
+`onHeightMeasured` 回调只把 `(index, height)` 存进队列，队列只在**下一次** tick 开始时才
+被灌入外部高度缓存——即 tick N 测到的高度，只有 tick N+1 的 `accumulatedHeights` 才反映
+出来，跟真实两跳异步造成的"至少晚一个 configure 周期"效果一致。每个 tick 内部再让
+presentation spring 真正跑满（30 个 1/60s 子帧）后才采样每行 `debugModelY`，避免把"弹簧
+还没转到位"跟"外部数据晚到导致的跳变"混在一起。
+
+### 结果
+
+130 个 configure 周期里找到 **4 次**符合"≥2 行同帧同向跳变、跳变前静止 ≥3 帧"的整叠
+同步事件（用跟 spec 原文一致的判定口径）：
+
+| tick | 一起跳的行 | Δy(px) | 跳前静止帧数 |
+|---|---|---|---|
+| 4 | [0, 1] | +1.09, −2.46 | 3, 3 |
+| 8 | [1, 2] | +2.46, −1.06 | 3, 7 |
+| **11** | **[10,11,12,13,14,15,16,17,18,19,20,21]（12 行）** | **交替 −1.02/−2.32** | **全部 10** |
+| 12 | [2,3,...,9,22,...,29]（16 行） | 交替 +1.06/−1.02/−2.32 | 3, 11×15 |
+
+tick=11 这次最干净：12 行整整齐齐静止 10 帧（同一个数值,逐帧比对无差异),然后同一帧
+一起跳，跳变量在两个固定值间交替（−1.02px / −2.32px，对应我 fixture 里两种交替行文本
+实测高度和 36pt 占位默认值的差）——跟 spec 描述的"全片 26 次,≥2 行同向,静止后同帧跳"
+一字不差地吻合。
+
+PNG（折线图，直接画 `debugModelY` 原始追踪数据,不经过 CALayer 渲染）：
+`research/repro-2026-09-14-lyrics-render/symptom3-reflow-snap-chart.png` —— 两条追踪线
+（行10橙/行11品红）完全水平重合 10 个 tick，在标红的跳变 tick 同帧一起跳升,清晰可见。
+
+**诚实说明一个复现局限**：coordinator 要的"跳前/跳后两帧叠加或差分"截图
+（`symptom3-reflow-snap-before-after.png`）没能出：把 `CALayer.render(in:)` 结果裁到
+对应行的 Y 附近,画面是纯黑,没有渲染出文字——`rowOpacity=1.0`/`mainTextHidden=false`
+标志位都正常,不是行被隐藏了,原因没查清（可能是这套最小 fixture 里某些几何/reveal-gate
+条件和真实 App 场景不同，导致 CALayer 树虽然存在但没有实际绘制内容）。这不影响上面的
+数字结论——数字直接来自 `debugModelY`（真实的、已提交的 CALayer transform 值,不是猜的）
+——但视觉截图这块留了一个没解开的疑点，如实报告，不掩盖。
+
+**这是复现，不是修复**：本节到此为止，没有改任何生产代码。
