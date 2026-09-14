@@ -22,6 +22,7 @@ public enum MicroInteractionFeel {
     public static let edgeMorphDefaultsKey = "nanoPodFeelEdgeMorph"
     public static let settingsTabDefaultsKey = "nanoPodFeelSettingsTab"
     public static let settingsToggleDefaultsKey = "nanoPodFeelSettingsToggle"
+    public static let pageSwitchDefaultsKey = "nanoPodFeelPageSwitch"
 
     public enum HoverCapsuleMode: String, CaseIterable {
         case capsule = "capsule"
@@ -111,6 +112,19 @@ public enum MicroInteractionFeel {
         }
     }
 
+    /// C2 三页切换三时钟：`.split`（默认，geometry/content/material 分拆）vs
+    /// `.single`（今天的行为——单一 `.spring(response:0.25, dampingFraction:0.9)`
+    /// 字节级不变）。
+    public enum PageSwitchMode: String, CaseIterable {
+        case split = "split"
+        case single = "single"
+
+        public static func resolve(from raw: String?) -> PageSwitchMode {
+            guard let raw else { return .split }
+            return PageSwitchMode(rawValue: raw.lowercased()) ?? .split
+        }
+    }
+
     #if DEBUG
     nonisolated(unsafe) public static var testingHoverCapsule: HoverCapsuleMode?
     nonisolated(unsafe) public static var testingPressScale: PressScaleMode?
@@ -120,6 +134,7 @@ public enum MicroInteractionFeel {
     nonisolated(unsafe) public static var testingEdgeMorph: EdgeMorphMode?
     nonisolated(unsafe) public static var testingSettingsTab: SettingsTabMode?
     nonisolated(unsafe) public static var testingSettingsToggle: SettingsToggleMode?
+    nonisolated(unsafe) public static var testingPageSwitch: PageSwitchMode?
 
     public static func resetTestingOverrides() {
         testingHoverCapsule = nil
@@ -130,6 +145,7 @@ public enum MicroInteractionFeel {
         testingEdgeMorph = nil
         testingSettingsTab = nil
         testingSettingsToggle = nil
+        testingPageSwitch = nil
     }
     #endif
 
@@ -213,6 +229,16 @@ public enum MicroInteractionFeel {
         )
     }
 
+    public static var pageSwitch: PageSwitchMode {
+        #if DEBUG
+        if let testingPageSwitch { return testingPageSwitch }
+        if isRunningTests { return .split }
+        #endif
+        return PageSwitchMode.resolve(
+            from: UserDefaults.standard.string(forKey: pageSwitchDefaultsKey)
+        )
+    }
+
     private static var isRunningTests: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
@@ -250,6 +276,9 @@ public enum MicroInteractionFeel {
         case "settingstoggle":
             UserDefaults.standard.set(SettingsToggleMode.resolve(from: value).rawValue, forKey: settingsToggleDefaultsKey)
             return true
+        case "pageswitch":
+            UserDefaults.standard.set(PageSwitchMode.resolve(from: value).rawValue, forKey: pageSwitchDefaultsKey)
+            return true
         default:
             return false
         }
@@ -264,6 +293,7 @@ public enum MicroInteractionFeel {
         UserDefaults.standard.removeObject(forKey: edgeMorphDefaultsKey)
         UserDefaults.standard.removeObject(forKey: settingsTabDefaultsKey)
         UserDefaults.standard.removeObject(forKey: settingsToggleDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: pageSwitchDefaultsKey)
         #if DEBUG
         resetTestingOverrides()
         #endif
@@ -300,6 +330,17 @@ public enum MicroInteractionFeel {
         public static let settingsTabReducedMotionDuration: TimeInterval = 0.12
         public static let settingsToggleBumpScale: Double = 1.03
         public static let settingsToggleBumpResponse: Double = 0.18
+
+        // C2 page-switch three-clock scheduler (mirrors edgeMorph's pattern).
+        // geometry: matchedGeometryEffect hero move + page offset.
+        // content: incoming page's textual/control opacity (lags geometry slightly).
+        // material: PanelBackdrop/page-overlay material crossfade — where the page
+        // itself carries no independent material surface, this clock drives the
+        // whole-page opacity crossfade that plays that role instead.
+        public static let pageGeometryDuration: TimeInterval = 0.14
+        public static let pageContentLag: TimeInterval = 0.04
+        public static let pageContentDuration: TimeInterval = 0.16
+        public static let pageMaterialDuration: TimeInterval = 0.31
     }
 }
 
