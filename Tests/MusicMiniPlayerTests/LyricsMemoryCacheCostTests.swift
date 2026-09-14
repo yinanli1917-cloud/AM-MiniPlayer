@@ -99,50 +99,27 @@ final class LyricsMemoryCacheCostTests: XCTestCase {
         XCTAssertEqual(cost, LyricsService.lyricsCacheFixedItemOverheadBytes)
     }
 
-    // MARK: - Behavioural: cost-governed cache evicts by cost, not entry count
+    // MARK: - Configuration: cache is governed by cost, not entry count
     //
-    // This is the failing-before behaviour: with `countLimit = 50` (the old
-    // production config), inserting a 51st small item evicts the 1st
-    // regardless of size. A pure cost-governed cache (no countLimit) instead
-    // holds N > 50 small items as long as their total cost stays under the
-    // limit, and evicts large items that exceed it on their own.
+    // The actual behaviour we care about — "51 small items all survive
+    // while a 50-item countLimit would have evicted the first" — is NOT a
+    // guarantee NSCache makes. Apple's NSCache docs state the cache "may
+    // automatically evict objects... at any time" (memory pressure, or any
+    // other reason) and none of its eviction behaviour is a strict LRU/FIFO
+    // contract you can assert on a real cache instance. A prior full-suite
+    // run under heavy load flaked here even though the production
+    // configuration was correct — the test was asserting something Apple
+    // does not promise, not detecting a product regression.
     //
-    // `LyricsService.lyricsCache` itself is `private`, so this test builds a
-    // standalone NSCache with the identical configuration contract (cost is
-    // the sole governor, no countLimit) rather than reaching into the
-    // production instance — the production wiring (no countLimit, cost:
-    // estimatedLyricsCacheCost(for:) on every insert) is verified textually
-    // by the three call sites plus `init()`, not by reflection here.
-
-    private final class DummyItem: NSObject {
-        let payload: String
-        init(_ payload: String) { self.payload = payload }
-    }
-
-    func test_costGovernedCache_evictsByCostNotCount() {
-        let cache = NSCache<NSString, DummyItem>()
-        cache.totalCostLimit = 1000 // bytes
-
-        // 51 tiny items (cost 10 each = 510 total), well under the limit.
-        // With the OLD countLimit = 50 config, item #1 would already have
-        // been evicted by the time #51 is inserted. With cost-only
-        // governance, all 51 survive.
-        for i in 0..<51 {
-            cache.setObject(DummyItem("tiny-\(i)"), forKey: "tiny-\(i)" as NSString, cost: 10)
-        }
-        var survivors = 0
-        for i in 0..<51 where cache.object(forKey: "tiny-\(i)" as NSString) != nil {
-            survivors += 1
-        }
-        XCTAssertEqual(survivors, 51, "cost-only governance must not evict small items purely on count")
-
-        // Now push the total cost over the limit with one large item; NSCache
-        // is permitted (not guaranteed on every platform build) to evict
-        // older entries to make room. We assert the large item itself is
-        // always retrievable immediately after insertion, and that total
-        // resident cost cannot literally exceed limit + the one active insert.
-        cache.setObject(DummyItem("large"), forKey: "large" as NSString, cost: 900)
-        XCTAssertNotNil(cache.object(forKey: "large" as NSString))
+    // So this pins the actual product invariant deterministically instead:
+    // the live `lyricsCache` has no countLimit (cost is the sole governor)
+    // and totalCostLimit is the documented 20 MiB budget. The per-insert
+    // `cost:` wiring (estimatedLyricsCacheCost(for:) at every setObject call
+    // site) is verified textually by the three call sites plus `init()`.
+    func test_lyricsCache_isGovernedByCostNotCount() {
+        let governance = LyricsService.shared.lyricsCacheGovernanceForTesting
+        XCTAssertEqual(governance.countLimit, 0, "no countLimit: cost must be the sole governor")
+        XCTAssertEqual(governance.totalCostLimit, 20 * 1024 * 1024, "20 MiB budget per architecture note in init()")
     }
 
     func test_costGovernedCache_singleOversizedItem_stillStoredButBoundsFutureGrowth() {

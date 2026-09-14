@@ -396,6 +396,18 @@ public class MusicController: ObservableObject {
     let queueFetchMinimumInterval: TimeInterval = 2.0
     let recentHistoryRefreshInterval: TimeInterval = 15.0
     private let userActionLockDuration: TimeInterval = 1.5
+
+    // Shuffle/repeat freshness: notifications carry only track metadata, never
+    // Shuffle/Repeat keys (verified 2026-09-12 with an ObjC playerInfo listener
+    // toggling both in Music.app), so the 30s fullSyncTimer used to be the only
+    // path that noticed a change. Re-read on every playerInfo notification and
+    // on panel show instead, debounced/coalesced so a burst of notifications
+    // (rapid taps, other apps also observing playerInfo) only triggers one SB read.
+    private var lastPlaybackModesRereadScheduledAt: Date?
+    private var playbackModesRereadWorkItem: DispatchWorkItem?
+    var lastPlaybackModeUserActionTime: Date = .distantPast
+    static let playbackModesRereadMinInterval: TimeInterval = 0.3
+    private static let playbackModesRereadDebounce: TimeInterval = 0.3
     private static var isRunningUnitTests: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
             || ProcessInfo.processInfo.processName.contains("xctest")
@@ -895,6 +907,7 @@ public class MusicController: ObservableObject {
             if !lyricsService.isManualScrolling {
                 lyricsService.updateCurrentTime(time)
             }
+            schedulePlaybackModesReread()
         }
         updateTimerState()
     }
@@ -1078,6 +1091,103 @@ public class MusicController: ObservableObject {
             // Lightweight SB poll for position sync (notification doesn't carry position)
             self.pollPositionViaSB()
             self.updateTimerState()
+
+            // playerInfo's userInfo never carries Shuffle/Repeat keys (verified
+            // 2026-09-12) — schedule a dedicated re-read via ScriptingBridge.
+            self.schedulePlaybackModesReread()
+        }
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Shuffle/Repeat Freshness (pure policies + SB re-read)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// Whether a playerInfo notification (or panel-show) should schedule a
+    /// shuffle/repeat re-read. Coalesces a burst of triggers within
+    /// `minInterval` of the last scheduled re-read into a single SB read.
+    static func shouldRereadPlaybackModes(
+        notificationName: String,
+        lastRereadAt: Date?,
+        now: Date,
+        minInterval: TimeInterval
+    ) -> Bool {
+        guard let lastRereadAt else { return true }
+        return now.timeIntervalSince(lastRereadAt) >= minInterval
+    }
+
+    /// Merges a fresh ScriptingBridge read of shuffle/repeat into the current
+    /// @Published values. Reports `changed` only when the read actually
+    /// differs, so callers can skip an unnecessary SwiftUI redraw.
+    /// Whether a fresh shuffle/repeat read should be applied at all: skipped
+    /// while an optimistic nanoPod-initiated toggle is still within its
+    /// window, so a stale-but-in-flight SB read can't fight the user's tap.
+    static func shouldApplyPlaybackModesRead(
+        lastUserActionTime: Date,
+        now: Date,
+        lockDuration: TimeInterval
+    ) -> Bool {
+        now.timeIntervalSince(lastUserActionTime) > lockDuration
+    }
+
+    static func mergedPlaybackModes(
+        current: (shuffle: Bool, repeat: Int),
+        read: (shuffle: Bool, repeat: Int)
+    ) -> (changed: Bool, value: (shuffle: Bool, repeat: Int)) {
+        let changed = current.shuffle != read.shuffle || current.repeat != read.repeat
+        return (changed, read)
+    }
+
+    /// Schedules a debounced, coalesced shuffle/repeat re-read. Called on every
+    /// playerInfo notification and when the panel becomes visible again; the
+    /// 30s fullSyncTimer remains as a fallback.
+    func schedulePlaybackModesReread() {
+        guard !isPreview else { return }
+        let now = Date()
+        guard Self.shouldRereadPlaybackModes(
+            notificationName: "com.apple.Music.playerInfo",
+            lastRereadAt: lastPlaybackModesRereadScheduledAt,
+            now: now,
+            minInterval: Self.playbackModesRereadMinInterval
+        ) else { return }
+        lastPlaybackModesRereadScheduledAt = now
+
+        playbackModesRereadWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in self?.rereadPlaybackModes() }
+        playbackModesRereadWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.playbackModesRereadDebounce, execute: workItem)
+    }
+
+    /// Reads shuffle/repeat via ScriptingBridge on scriptingBridgeQueue and
+    /// applies the result on main only when it differs and the user hasn't
+    /// toggled either control from nanoPod within the optimistic-update window.
+    private func rereadPlaybackModes() {
+        guard !isPreview else { return }
+        guard let app = stateApp, app.isRunning else { return }
+
+        scriptingBridgeQueue.async { [weak self] in
+            guard let self else { return }
+            let result = SBTimeoutRunner.run(timeout: 1.5, lane: "playbackModes") { () -> (shuffle: Bool, repeatRaw: Int)? in
+                let sh = app.value(forKey: "shuffleEnabled") as? Bool ?? false
+                let r = app.value(forKey: "songRepeat") as? Int ?? 0
+                return (sh, r)
+            }
+            guard let result else { return }
+            let repeatModeRead = AppleEventCode.repeatMode(from: result.repeatRaw)
+
+            DispatchQueue.main.async {
+                guard Self.shouldApplyPlaybackModesRead(
+                    lastUserActionTime: self.lastPlaybackModeUserActionTime,
+                    now: Date(),
+                    lockDuration: self.userActionLockDuration
+                ) else { return }
+                let merged = Self.mergedPlaybackModes(
+                    current: (shuffle: self.shuffleEnabled, repeat: self.repeatMode),
+                    read: (shuffle: result.shuffle, repeat: repeatModeRead)
+                )
+                guard merged.changed else { return }
+                self.shuffleEnabled = merged.value.shuffle
+                self.repeatMode = merged.value.repeat
+            }
         }
     }
 

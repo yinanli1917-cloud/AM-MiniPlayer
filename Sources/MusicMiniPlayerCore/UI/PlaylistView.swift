@@ -513,17 +513,40 @@ public struct PlaylistView: View {
         let upNextMinY = sectionOffsets["upNext_minY"] ?? 1000
         let upNextMaxY = sectionOffsets["upNext_maxY"] ?? 1000
 
-        // History: 当 section 顶部滚过视口顶部，且底部还在视口内
-        if historyMinY <= 0 && historyMaxY > headerHeight {
+        if PlaylistStickyHeaderPolicy.shouldShow(minY: historyMinY, maxY: historyMaxY, headerHeight: headerHeight) {
             return "History"
         }
 
-        // Up Next: 当 section 顶部滚过视口顶部，且底部还在视口内
-        if upNextMinY <= 0 && upNextMaxY > headerHeight {
+        if PlaylistStickyHeaderPolicy.shouldShow(minY: upNextMinY, maxY: upNextMaxY, headerHeight: headerHeight) {
             return "Up Next"
         }
 
         return nil
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - PlaylistStickyHeaderPolicy
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔑 Pure layout policy: when should the global sticky header overlay stand in
+// for a section's own inline header?
+//
+// A section reports its own frame (minY/maxY) in the shared "playlistScroll"
+// coordinate space via SectionOffsetKey. At the ScrollView's natural resting
+// position, the very first section's minY is already ~0 (flush with the
+// viewport top) even though nothing has been scrolled — `minY <= 0` treated
+// that as "already scrolled past top", so the sticky overlay could appear the
+// instant the playlist page opened, drawn directly on top of the section's own
+// (still fully visible) inline header and its body (e.g. the "No recent
+// tracks" empty-state text sits right where the duplicate title renders).
+//
+// The inline header must have scrolled FULLY out of view — not merely started
+// to move — before the fixed duplicate takes its place, so the two never
+// occupy the same pixels regardless of how tall the section's body is (a
+// short empty-state body reserves exactly `headerHeight` like any other body).
+enum PlaylistStickyHeaderPolicy {
+    static func shouldShow(minY: CGFloat, maxY: CGFloat, headerHeight: CGFloat) -> Bool {
+        minY <= -headerHeight && maxY > headerHeight
     }
 }
 
