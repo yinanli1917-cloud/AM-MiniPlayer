@@ -62,6 +62,10 @@ final class NativeLyricsRowView: NSView {
     private var emphasisGlyphLayers: [CATextLayer] = []
     private var emphasisGlyphLayerSignatures: [EmphasisGlyphLayerSignature?] = []
     private var activeHiddenEmphasisSignature: String?
+    // Sweep-ghost fix (2026-09-12): mirrors activeHiddenEmphasisSignature but tracks which
+    // NON-emphasis word orders are currently blanked out of the whole-line dim base because
+    // they are floating (see applyFloatingHiddenBase / applyMainWordFloatGlyphLayers).
+    private var activeFloatingHiddenSignature: String?
     // v2.8 per-word cascade: non-emphasis words render as per-glyph layers so each WORD can float by
     // its own baseFloatY (rolling rise), while brightness still comes from the shared sweep mask. The
     // dim glyphs parent to mainTextLayer (always visible), the bright glyphs to mainBrightTextLayer
@@ -364,6 +368,7 @@ final class NativeLyricsRowView: NSView {
         cachedStaticTextPlan = nil
         lastLineLayoutCacheKey = nil
         activeHiddenEmphasisSignature = nil
+        activeFloatingHiddenSignature = nil
         // The base-layer opacity reset below (opacity = 1) is only safe because the
         // compensation flags reset with it — a recycled row must start uncompensated.
         mainDimCompensationActive = false
@@ -534,6 +539,16 @@ final class NativeLyricsRowView: NSView {
 
     var debugVisibleBrightWordGlyphCount: Int {
         mainBrightWordGlyphLayers.filter { !$0.isHidden }.count
+    }
+
+    /// Sweep-ghost diagnostic: dim/bright glyph tile pairs, index-aligned (both loops in
+    /// `applyMainWordFloatGlyphLayers` build `inputs` in the same order, so index i's dim and
+    /// bright layer represent the SAME glyph). `dimHidden` distinguishes "no tile drawn — the
+    /// whole-line base is still showing this glyph, unfloated" from "tile drawn and floated".
+    var debugMainWordGlyphPairs: [(dimPositionY: CGFloat, brightPositionY: CGFloat, dimHidden: Bool)] {
+        zip(mainDimWordGlyphLayers, mainBrightWordGlyphLayers).map {
+            ($0.position.y, $1.position.y, $0.isHidden)
+        }
     }
 
     var debugDimCompensationActive: Bool { mainDimCompensationActive }
@@ -926,6 +941,69 @@ final class NativeLyricsRowView: NSView {
         return lines.joined(separator: "\n")
     }
 
+    /// Sweep-ghost fix: the RAW-text character ranges `displayWrapped` breaks the line into (its
+    /// wrap points, computed the same way, minus each fragment's trailing space). Shared with
+    /// `attributedDisplayWrapped` below so the hidden-ranges variant of the dim base wraps
+    /// IDENTICALLY to `wholeLineMainString` — same fragment count, same fragment content — instead
+    /// of accidentally re-wrapping the (unwrapped) `plan.displayText` and shifting the line height.
+    private static func wrapLineRanges(for text: String, width: CGFloat, font: NSFont) -> [NSRange]? {
+        guard width > 1, text.count > 1, !text.contains("\n") else { return nil }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        let storage = NSTextStorage(attributedString: NSAttributedString(
+            string: text,
+            attributes: [.font: font, .paragraphStyle: paragraph]
+        ))
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        container.maximumNumberOfLines = 0
+        container.lineBreakMode = .byWordWrapping
+        manager.addTextContainer(container)
+        storage.addLayoutManager(manager)
+        manager.ensureLayout(for: container)
+
+        let ns = text as NSString
+        var ranges: [NSRange] = []
+        var glyphIndex = 0
+        let glyphCount = manager.numberOfGlyphs
+        while glyphIndex < glyphCount {
+            var lineGlyphRange = NSRange()
+            _ = manager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineGlyphRange)
+            var charRange = manager.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
+            if charRange.length > 0,
+               ns.substring(with: NSRange(location: charRange.location + charRange.length - 1, length: 1)) == " " {
+                charRange.length -= 1
+            }
+            ranges.append(charRange)
+            glyphIndex = NSMaxRange(lineGlyphRange)
+        }
+        guard ranges.count > 1 else { return nil }
+        return ranges
+    }
+
+    /// Wraps an ALREADY-ATTRIBUTED string (e.g. one with hidden-range glyphs colored `.clear`) the
+    /// same way `displayWrapped` wraps plain text — same wrap points (from `rawText`), fragments
+    /// re-joined with `\n` — while preserving every existing per-character attribute (the hidden
+    /// ranges' color). Falls back to the input unchanged when the raw text doesn't wrap.
+    private static func attributedDisplayWrapped(
+        _ attributed: NSAttributedString,
+        rawText: String,
+        width: CGFloat,
+        font: NSFont
+    ) -> NSAttributedString {
+        guard let ranges = wrapLineRanges(for: rawText, width: width, font: font) else { return attributed }
+        let result = NSMutableAttributedString()
+        for (index, range) in ranges.enumerated() {
+            if index > 0 {
+                result.append(NSAttributedString(string: "\n", attributes: [.font: font]))
+            }
+            guard range.location + range.length <= attributed.length else { return attributed }
+            result.append(attributed.attributedSubstring(from: range))
+        }
+        return result
+    }
+
     // No per-row tracking area. The surface (NativeLyricsSurfaceView) is the SINGLE hover authority:
     // it hit-tests the cursor against each row's real frame and drives setPointerHovering. A per-row
     // tracking area could fire mouseEntered but not mouseExited when the row slid out from under a
@@ -1031,6 +1109,7 @@ final class NativeLyricsRowView: NSView {
             hideEmphasisGlyphLayers()
             hideMainWordGlyphLayers()
             activeHiddenEmphasisSignature = nil
+            activeFloatingHiddenSignature = nil
             translationTextLayer.string = nil
             translationBrightTextLayer.string = nil
             hideTranslationLoadingDots()
@@ -1093,6 +1172,7 @@ final class NativeLyricsRowView: NSView {
             : nil
         mainBrightTextLayer.string = wholeLineBrightString
         activeHiddenEmphasisSignature = nil
+        activeFloatingHiddenSignature = nil
         hideEmphasisGlyphLayers()
         if let translation = plan.translation {
             // Sweep the translation ONLY for word-timed songs (match appliesMainSweep's gating).
@@ -1405,6 +1485,7 @@ final class NativeLyricsRowView: NSView {
         hideEmphasisGlyphLayers()
         hideMainWordGlyphLayers()
         activeHiddenEmphasisSignature = nil
+        activeFloatingHiddenSignature = nil
         translationBrightTextLayer.isHidden = true
         hideTranslationSweepMaskLayers()
         mainTextLayer.setAffineTransform(.identity)
@@ -1466,13 +1547,23 @@ final class NativeLyricsRowView: NSView {
             && !linePlan.isEmpty
         let keepWholeLineDim = NativeLyricsFeelParity.keepsWholeLineDimBase
         let wordFloatResult: MainWordFloatAppliedMetrics
+        // Sweep-ghost fix: non-emphasis words that are ACTUALLY floating (baseFloatY != 0)
+        // must not also show through the whole-line dim base — that second, unfloated copy
+        // is the reported double image on swept CJK glyphs. A word at floatY == 0 (not yet
+        // started) is left alone: it coincides exactly with the whole-line glyph already, so
+        // there is nothing to hide and no tile needed (also keeps the activation-instant
+        // layout tests, which sample at floatY == 0, unaffected).
+        let floatingOrders: Set<Int> = keepWholeLineDim
+            ? Set(plan.wordRuns.enumerated().compactMap { order, run in
+                  (!emphasisOrders.contains(order) && run.baseFloatY != 0) ? order : nil
+              })
+            : []
         if geometryReady {
             if keepWholeLineDim {
-                if mainTextLayer.string == nil, let wholeLineMainString {
-                    mainTextLayer.string = wholeLineMainString
-                }
+                applyFloatingHiddenBase(plan: plan, floatingOrders: floatingOrders)
             } else if mainTextLayer.string != nil {
                 mainTextLayer.string = nil
+                activeFloatingHiddenSignature = nil
             }
             if mainBrightTextLayer.string != nil { mainBrightTextLayer.string = nil }
             activeHiddenEmphasisSignature = nil
@@ -1487,7 +1578,8 @@ final class NativeLyricsRowView: NSView {
                 currentTime: currentTime,
                 linePlan: linePlan,
                 emphasisOrders: emphasisOrders,
-                floatsDimBase: !keepWholeLineDim
+                floatsDimBase: !keepWholeLineDim,
+                floatingOrders: floatingOrders
             )
         } else {
             // Geometry is not ready (fresh/pooled/offscreen row). A whole-line bright
@@ -1639,6 +1731,7 @@ final class NativeLyricsRowView: NSView {
         hidePerRunSweepMaskLayers()
         hideEmphasisGlyphLayers()
         activeHiddenEmphasisSignature = nil
+        activeFloatingHiddenSignature = nil
         clearEmphasis(from: mainBrightTextLayer)
         let layoutResult = lastLineLayoutMetrics
         return MainTextPhaseAppliedMetrics(
@@ -2160,9 +2253,57 @@ final class NativeLyricsRowView: NSView {
         )
     }
 
+    /// Sweep-ghost fix: keeps `mainTextLayer` as the ONE laid-out whole-line string (so wrap-line
+    /// height/tracking never change on activation — the 08-27 constraint pinned by
+    /// NativeLyricsActiveLineSpacingTests) while making the glyph ranges of currently-floating,
+    /// non-emphasis words transparent in it. Those words' visible dim ink then comes ONLY from the
+    /// per-glyph dim tile in `applyMainWordFloatGlyphLayers`, floated by the SAME floatY as the
+    /// bright tile — eliminating the second, unfloated copy underneath (the reported double image
+    /// on swept CJK glyphs). Gated by a signature so this only rewrites the string when the set of
+    /// floating words actually changes (once per word boundary), not every frame.
+    private func applyFloatingHiddenBase(
+        plan: NativeLyricsTextRenderPlan,
+        floatingOrders: Set<Int>
+    ) {
+        let signature = floatingOrders.isEmpty
+            ? "\(plan.displayText)|float|"
+            : "\(plan.displayText)|float|\(floatingOrders.sorted().map(String.init).joined(separator: ","))"
+        guard activeFloatingHiddenSignature != signature else { return }
+        activeFloatingHiddenSignature = signature
+        guard !floatingOrders.isEmpty else {
+            if let wholeLineMainString {
+                mainTextLayer.string = wholeLineMainString
+            }
+            return
+        }
+        // Hidden ranges are computed against the RAW (unwrapped) displayText — matches
+        // NativeLyricsHiddenTextMask's assumption that displayText is exactly the concatenation of
+        // word-run texts. Re-wrap the result with the SAME wrap points `wholeLineMainString` used
+        // (from `configuration`'s known width — never bounds.width, which can be stale/zero) so the
+        // 08-27 constraint (wrap-line count / height / tracking never change on activation) holds.
+        let hiddenRaw = attributedText(
+            plan.displayText,
+            fontSize: plan.constants.mainFontSize,
+            alpha: 1,
+            hiddenOrders: floatingOrders,
+            wordRuns: plan.wordRuns
+        )
+        guard let configuration else {
+            mainTextLayer.string = hiddenRaw
+            return
+        }
+        mainTextLayer.string = Self.attributedDisplayWrapped(
+            hiddenRaw,
+            rawText: plan.displayText,
+            width: contentTextWidth(configuration),
+            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
+        )
+    }
+
     private func restoreMainTextIfNeeded(plan: NativeLyricsTextRenderPlan) {
         guard activeHiddenEmphasisSignature != nil else { return }
         activeHiddenEmphasisSignature = nil
+        activeFloatingHiddenSignature = nil
         mainTextLayer.string = attributedText(
             plan.displayText,
             fontSize: plan.constants.mainFontSize,
@@ -2221,15 +2362,22 @@ final class NativeLyricsRowView: NSView {
         currentTime: TimeInterval,
         linePlan: [NativeLyricsTextSweepVisualLinePlan],
         emphasisOrders: Set<Int>,
-        floatsDimBase: Bool
+        floatsDimBase: Bool,
+        floatingOrders: Set<Int> = []
     ) -> MainWordFloatAppliedMetrics {
         let floats = plan.perWordFloatY(at: currentTime)
-        var inputs: [(glyph: NativeLyricsTextSweepVisualRun.Glyph, floatY: CGFloat)] = []
+        var inputs: [(glyph: NativeLyricsTextSweepVisualRun.Glyph, floatY: CGFloat, isFloatingWord: Bool)] = []
         for line in linePlan {
             for run in line.runs where !emphasisOrders.contains(run.order) {
                 let floatY = run.order < floats.count ? floats[run.order] : 0
+                // `floatsDimBase` (the `layer` A/B arm) always tessellates every non-emphasis word as
+                // a dim tile. The default (whole-line dim base) arm shows a dim tile ONLY for a word
+                // that is actually floating — `applyFloatingHiddenBase` blanks that same word's range
+                // out of the whole-line string, so exactly one visible copy of the glyph exists, at
+                // the SAME floated position as the bright tile (no ghost).
+                let isFloatingWord = floatsDimBase || floatingOrders.contains(run.order)
                 for glyph in run.glyphs {
-                    inputs.append((glyph, floatY))
+                    inputs.append((glyph, floatY, isFloatingWord))
                 }
             }
         }
@@ -2247,9 +2395,10 @@ final class NativeLyricsRowView: NSView {
         var maxFloat = -CGFloat.greatestFiniteMagnitude
         for (index, input) in inputs.enumerated() {
             let glyph = input.glyph
+            let isFloatingWord = input.isFloatingWord
             let dimLayer = mainDimWordGlyphLayers[index]
             let brightLayer = mainBrightWordGlyphLayers[index]
-            dimLayer.isHidden = !floatsDimBase
+            dimLayer.isHidden = !isFloatingWord
             brightLayer.isHidden = false
             let signature = EmphasisGlyphLayerSignature(
                 glyph: glyph,
@@ -2263,26 +2412,26 @@ final class NativeLyricsRowView: NSView {
                 // ink of CJK strokes / descenders is shaved (same trap the whole-line layer pads
                 // around). The view is flipped (y-down), so glyph.rect.minY is the top: extend the box
                 // DOWNWARD by textBottomClipPad (keeping the top edge fixed) for room below the glyph.
-                let layersToWrite = floatsDimBase ? [dimLayer, brightLayer] : [brightLayer]
-                for layer in layersToWrite {
+                // Always write BOTH layers here (even though the dim tile may render hidden this
+                // frame): the dim tile can become visible on a LATER frame without this signature
+                // changing (same glyph/size/alpha), and it must already carry the right text/color.
+                for layer in [dimLayer, brightLayer] {
                     layer.string = glyph.text
                     layer.bounds = CGRect(
                         origin: .zero,
                         size: CGSize(width: glyph.rect.width, height: glyph.rect.height + Self.textBottomClipPad)
                     )
                 }
-                if floatsDimBase {
-                    dimLayer.foregroundColor = dimColor
-                    debugWordGlyphColorAssignCount += 1
-                }
+                dimLayer.foregroundColor = dimColor
                 brightLayer.foregroundColor = brightColor
-                debugWordGlyphColorAssignCount += 1
+                debugWordGlyphColorAssignCount += 2
             }
             // Center sits pad/2 below the glyph midY so the taller box keeps its TOP at glyph.rect.minY
             // (text stays exactly where the whole-line layer drew it; only the bottom gains room).
-            // v2.8 Canvas: dim pass has zero vertical float; only the bright overlay lifts.
-            // The `layer` A/B arm floats dim tiles too (the activation 行距 jump).
-            let dimCenterY = glyph.rect.midY + Self.textBottomClipPad / 2 + (floatsDimBase ? input.floatY : 0)
+            // The dim tile floats in lockstep with the bright tile whenever it is the one standing in
+            // for the (now-blanked) whole-line glyph — otherwise it sits at rest, coincident with the
+            // whole-line copy that is still showing through (floatY == 0 there anyway).
+            let dimCenterY = glyph.rect.midY + Self.textBottomClipPad / 2 + (isFloatingWord ? input.floatY : 0)
             let brightCenterY = glyph.rect.midY + Self.textBottomClipPad / 2 + input.floatY
             dimLayer.position = CGPoint(x: glyph.rect.midX, y: dimCenterY)
             brightLayer.position = CGPoint(x: glyph.rect.midX, y: brightCenterY)

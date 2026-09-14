@@ -153,8 +153,20 @@ final class NativeLyricsActiveLineSpacingTests: XCTestCase {
                         "\(label): activation must keep the whole-line dim base (v2.8 Canvas pass 1)")
         XCTAssertEqual(view.debugMainTextLayerString, inactiveString,
                        "\(label): dim string must not be rewritten into a different wrap")
-        XCTAssertEqual(view.debugVisibleDimWordGlyphCount, 0,
-                       "\(label): dim must not retessellate into glyph tiles")
+        // Sweep-ghost fix (2026-09-12, founder: "很多歌词重影，集中在 CJK 亮字"): a word can start
+        // floating (baseFloatY != 0) from the very first post-activation frame — even syncing the
+        // clock to exactly line.startTime, a real Date()-driven clock accrues a sub-millisecond
+        // delta by the time updatePlaybackPhase reads it, so word 0 is already (barely) floating
+        // here. applyFloatingHiddenBase/applyMainWordFloatGlyphLayers now legitimately draw a dim
+        // TILE for that one floating word (parented inside mainTextLayer, floated by the SAME
+        // amount as its bright tile) so the two coincide — that is the fix for the reported double
+        // image. What this test must still guard is the ORIGINAL 08-27 regression: a FULL
+        // retessellation of the whole line into per-glyph dim tiles (which is what changed 行距/字距).
+        // A partial tessellation of only the already-floating word(s) leaves layout untouched (the
+        // assertions above/below pin that); asserting it stays partial (never the whole line) is the
+        // right invariant now, not "exactly zero".
+        XCTAssertLessThan(view.debugVisibleDimWordGlyphCount, view.debugVisibleBrightWordGlyphCount,
+                          "\(label): dim tessellation must stay partial (only currently-floating words), never retessellate the whole line")
         XCTAssertEqual(inactiveGlyphs, 0, "\(label): inactive dim was already whole-line")
         XCTAssertEqual(view.debugMainTextLayerFrame.height, inactiveHeight, accuracy: 0.5,
                        "\(label): dim-base frame height (行高) must not jump on activation")
