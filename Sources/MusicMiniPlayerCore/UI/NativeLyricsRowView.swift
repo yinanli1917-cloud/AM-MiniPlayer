@@ -645,6 +645,23 @@ final class NativeLyricsRowView: NSView {
     var debugPreludeDotCenterX: CGFloat { dotContainerLayer.position.x }
     var debugPreludeDotContainerHidden: Bool { dotContainerLayer.isHidden }
     var debugPreludeDotContainerOpacity: Float { dotContainerLayer.opacity }
+
+    /// Cross-hierarchy position readback for annotated diagrams (defect 3, 2026-09-14). Walks
+    /// the REAL CALayer tree (`CALayer.convert(_:to:)`, which correctly folds in any ancestor
+    /// `setAffineTransform` — e.g. the row's own `positioningTransform` — unlike hand-adding
+    /// `frame.minX/minY`) so the returned point matches exactly where `CALayer.render(in:)` would
+    /// actually paint the dots, in `targetLayer`'s coordinate space (pass the hosting surface's
+    /// own `.layer` to get surface-space coordinates for a full-panel screenshot annotation).
+    func debugDotContainerCenter(in targetLayer: CALayer) -> CGPoint {
+        dotContainerLayer.superlayer?.convert(dotContainerLayer.position, to: targetLayer) ?? .zero
+    }
+
+    /// Same cross-hierarchy conversion for the main (dim) text layer's own centre — used as the
+    /// "current line's text horizontal centre" reference line in the defect-3 diagram.
+    func debugMainTextLayerCenter(in targetLayer: CALayer) -> CGPoint {
+        let localCenter = CGPoint(x: mainTextLayer.frame.midX, y: mainTextLayer.frame.midY)
+        return mainTextLayer.superlayer?.convert(localCenter, to: targetLayer) ?? .zero
+    }
     #endif
 
     // Available to both the unit tests (DEBUG) and the in-app brightness diagnostic

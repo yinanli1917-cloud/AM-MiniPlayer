@@ -510,4 +510,248 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
                   "— \(abs(preludeView.debugModelY - 200) > 1 ? "OFF anchor" : "at anchor")")
         }
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Defect 3 annotated position diagram
+    //
+    // Coordinator 2026-09-14: the earlier single-row PNG didn't show POSITION clearly enough.
+    // This renders the FULL panel width, draws the panel's left/right edges, a reference line at
+    // the current active line's text horizontal centre, and a marker at the dots' actual centre —
+    // with pixel numbers labelled — for two scenarios side by side: reaching the prelude normally
+    // (forward, first time) vs. seeking back into it after deep playback.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    private func renderSurfaceCGImage(_ view: NSView, scale: CGFloat = 2, backgroundColor: NSColor = .black) -> CGImage? {
+        guard let hostLayer = view.layer else { return nil }
+        let width = max(1, Int(view.bounds.width * scale))
+        let height = max(1, Int(view.bounds.height * scale))
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else { return nil }
+        context.setFillColor(backgroundColor.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: scale, y: -scale)
+        hostLayer.render(in: context)
+        return context.makeImage()
+    }
+
+    private struct AnnotatedPanelCapture {
+        let title: String
+        let image: CGImage
+        let panelWidth: CGFloat
+        let cropHeight: CGFloat
+        let dotCenter: CGPoint
+        let textCenterX: CGFloat
+        let textCenterLabel: String
+        let notes: String
+    }
+
+    /// Composites 1+ panel captures side by side into one labelled PNG: panel edges (blue),
+    /// current-line text horizontal centre (green dashed), dots' actual centre (orange dashed +
+    /// red dot marker), and a caption block with the raw pixel numbers per panel.
+    private func composeAnnotatedComparison(_ captures: [AnnotatedPanelCapture], to path: String) {
+        guard let first = captures.first else { return }
+        let labelHeight: CGFloat = 130
+        let gap: CGFloat = 30
+        let panelWidth = first.panelWidth
+        let cropHeight = first.cropHeight
+        let totalWidth = panelWidth * CGFloat(captures.count) + gap * CGFloat(max(0, captures.count - 1))
+        let totalHeight = cropHeight + labelHeight
+        let canvas = NSImage(size: NSSize(width: totalWidth, height: totalHeight))
+        canvas.lockFocus()
+        NSColor(white: 0.08, alpha: 1).setFill()
+        NSRect(origin: .zero, size: canvas.size).fill()
+
+        var x: CGFloat = 0
+        for cap in captures {
+            let fullImage = NSImage(cgImage: cap.image, size: NSSize(width: cap.image.width, height: cap.image.height))
+            let srcHeightPx = CGFloat(cap.image.height)
+            let srcRect = NSRect(x: 0, y: srcHeightPx - cropHeight * 2, width: panelWidth * 2, height: cropHeight * 2)
+            let destRect = NSRect(x: x, y: labelHeight, width: panelWidth, height: cropHeight)
+            fullImage.draw(in: destRect, from: srcRect, operation: .sourceOver, fraction: 1.0)
+
+            func vLine(at lx: CGFloat, color: NSColor, width: CGFloat, dashed: Bool) {
+                let path = NSBezierPath()
+                path.move(to: NSPoint(x: lx, y: labelHeight))
+                path.line(to: NSPoint(x: lx, y: labelHeight + cropHeight))
+                path.lineWidth = width
+                if dashed { path.setLineDash([4, 3], count: 2, phase: 0) }
+                color.setStroke()
+                path.stroke()
+            }
+            vLine(at: x + 0.75, color: .systemBlue, width: 1.5, dashed: false)
+            vLine(at: x + panelWidth - 0.75, color: .systemBlue, width: 1.5, dashed: false)
+            vLine(at: x + cap.textCenterX, color: .systemGreen, width: 1.5, dashed: true)
+            vLine(at: x + cap.dotCenter.x, color: .systemOrange, width: 1.5, dashed: true)
+
+            // Hollow ring + crosshair ticks (NOT a filled marker) so the actual rendered dots —
+            // small, ~8pt — stay visible THROUGH the middle of the annotation instead of being
+            // covered by it.
+            let markerY = labelHeight + cropHeight - cap.dotCenter.y
+            let ringRadius: CGFloat = 16
+            let ringRect = NSRect(
+                x: x + cap.dotCenter.x - ringRadius, y: markerY - ringRadius,
+                width: ringRadius * 2, height: ringRadius * 2
+            )
+            NSColor.systemRed.setStroke()
+            let ring = NSBezierPath(ovalIn: ringRect)
+            ring.lineWidth = 1.5
+            ring.stroke()
+            let tick = NSBezierPath()
+            tick.move(to: NSPoint(x: x + cap.dotCenter.x - ringRadius - 6, y: markerY))
+            tick.line(to: NSPoint(x: x + cap.dotCenter.x - ringRadius + 4, y: markerY))
+            tick.move(to: NSPoint(x: x + cap.dotCenter.x, y: markerY - ringRadius - 6))
+            tick.line(to: NSPoint(x: x + cap.dotCenter.x, y: markerY - ringRadius + 4))
+            tick.lineWidth = 1.5
+            tick.stroke()
+
+            let delta = cap.dotCenter.x - cap.textCenterX
+            let text = "\(cap.title)\n" +
+                "面板宽度=\(Int(panelWidth))px（蓝线=左右边界）内容列左边距=32px\n" +
+                "文字中心x=\(String(format: "%.1f", cap.textCenterX))px（绿虚线，\(cap.textCenterLabel)）\n" +
+                "三点中心=(\(String(format: "%.1f", cap.dotCenter.x)), \(String(format: "%.1f", cap.dotCenter.y)))px（橙虚线/红点）\n" +
+                "Δx(点-文字中心)=\(String(format: "%.1f", delta))px\n" +
+                "\(cap.notes)"
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 11),
+                .foregroundColor: NSColor.white
+            ]
+            NSAttributedString(string: text, attributes: attrs).draw(at: NSPoint(x: x + 4, y: 4))
+
+            x += panelWidth + gap
+        }
+        canvas.unlockFocus()
+
+        guard let tiff = canvas.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let data = rep.representation(using: .png, properties: [:]) else {
+            XCTFail("could not encode annotated comparison PNG")
+            return
+        }
+        try? FileManager.default.createDirectory(
+            atPath: (path as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        do {
+            try data.write(to: URL(fileURLWithPath: path))
+        } catch {
+            XCTFail("could not write \(path): \(error)")
+        }
+    }
+
+    /// Reference measurement: where a NORMAL active line's text sits horizontally, from a fresh,
+    /// independent surface (row 1, "line 1", configured directly as current — no scenario state
+    /// involved). Used as the shared "current line text centre" reference line in both panels.
+    @MainActor
+    private func measureNormalActiveLineTextCenterX(rows: [LayerBackedLyricRow], panelWidth: CGFloat) -> CGFloat {
+        let refSurface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 600))
+        host(refSurface, NSSize(width: panelWidth, height: 600))
+        let refMC = MusicController(preview: true)
+        refMC.duration = 60
+        refMC.isPlaying = true
+        refSurface.debugSkipDedupe = true
+        refMC.syncPlaybackClock(to: 13.0, playing: true)
+        refSurface.configure(config(rows: rows, current: 1, mc: refMC, width: panelWidth))
+        refSurface.layoutSubtreeIfNeeded()
+        for _ in 0..<10 {
+            refSurface.debugTick(displayInterval: 1.0 / 60.0)
+        }
+        let center = refSurface.debugRowView(forIndex: 1)?.debugMainTextLayerCenter(in: refSurface.layer!) ?? .zero
+        refSurface.stopAnimations()
+        return center.x
+    }
+
+    @MainActor
+    func test_defect3_annotatedPositionComparison_normalVsSeekBack() {
+        let rows = preludeSongRows()
+        let panelWidth: CGFloat = 360
+        let cropHeight: CGFloat = 480
+        let referenceTextCenterX = measureNormalActiveLineTextCenterX(rows: rows, panelWidth: panelWidth)
+        // NOTE: mainTextLayer's FRAME spans the full available content column width
+        // (rowWidth - 32pt leading - 32pt trailing) regardless of how much of it the actual
+        // glyphs fill — CATextLayer.alignmentMode is .left, so the glyphs themselves start at
+        // x=32 and extend only as far as the text needs. This measurement is therefore the
+        // CONTENT COLUMN's horizontal centre (≈ panel centre here, since the insets are
+        // symmetric), not the visual centre of the rendered glyphs — the more useful reference
+        // for "does this row's salient content land where any other row's content column does",
+        // which is the comparison defect 3 is actually about.
+        let referenceTextCenterLabel = "行1内容列中心（非字形视觉中心，见下方脚注）"
+
+        func capture(title: String, notes: String, driveClock: (
+            _ surface: NativeLyricsSurfaceView, _ mc: MusicController,
+            _ tick: (TimeInterval, Int) -> Void
+        ) -> Void) -> AnnotatedPanelCapture {
+            let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 600))
+            host(surface, NSSize(width: panelWidth, height: 600))
+            let mc = MusicController(preview: true)
+            mc.duration = 60
+            mc.isPlaying = true
+            surface.debugSkipDedupe = true
+            var wall: CFTimeInterval = 9_000
+            var date = Date(timeIntervalSinceReferenceDate: 700_500_000)
+            surface.debugNowOverride = { wall }
+            mc.debugPlaybackClockDateProvider = { date }
+
+            func tick(_ t: TimeInterval, _ ticks: Int) {
+                mc.syncPlaybackClock(to: t, playing: true, at: date)
+                let current = min(max(0, NativeLyricsTimelinePolicy.liveDisplayIndex(at: t, rows: rows, fallback: 0)), max(0, rows.count - 1))
+                surface.configure(config(rows: rows, current: current, mc: mc, width: panelWidth))
+                surface.layoutSubtreeIfNeeded()
+                for _ in 0..<ticks {
+                    wall += 1.0 / 60.0
+                    date = date.addingTimeInterval(1.0 / 60.0)
+                    mc.syncPlaybackClock(to: t, playing: true, at: date)
+                    surface.debugTick(displayInterval: 1.0 / 60.0)
+                }
+            }
+            driveClock(surface, mc, tick)
+
+            let preludeRowView = surface.debugRowView(forIndex: 0)
+            print("[Defect3-diagram] \(title): rowMounted=\(preludeRowView != nil) " +
+                  "dotHidden=\(String(describing: preludeRowView?.debugPreludeDotContainerHidden)) " +
+                  "dotOpacity=\(String(describing: preludeRowView?.debugPreludeDotContainerOpacity)) " +
+                  "rowOpacity=\(String(describing: preludeRowView?.debugRowLayerOpacity))")
+            let cgImage = renderSurfaceCGImage(surface)!
+            let dotCenter = preludeRowView?.debugDotContainerCenter(in: surface.layer!) ?? .zero
+
+            surface.debugNowOverride = nil
+            mc.debugPlaybackClockDateProvider = nil
+
+            return AnnotatedPanelCapture(
+                title: title, image: cgImage, panelWidth: panelWidth, cropHeight: cropHeight,
+                dotCenter: dotCenter, textCenterX: referenceTextCenterX,
+                textCenterLabel: referenceTextCenterLabel, notes: notes
+            )
+        }
+
+        let normalCapture = capture(
+            title: "A. 正常播放到前奏",
+            notes: "从未深入歌曲，第一次到达前奏窗口（t=0.2s，无历史状态污染）"
+        ) { surface, mc, tick in
+            tick(0.2, 30)
+        }
+
+        let seekBackCapture = capture(
+            title: "B. seek 回前奏（深播放后）",
+            notes: "先播到 t=33s（第5句），再 seek 回 t≈0.8s（前奏窗口内）"
+        ) { surface, mc, tick in
+            for t: TimeInterval in [0.2, 13.0, 18.0, 23.0, 28.0, 33.0] { tick(t, 6) }
+            mc.registerSeek()
+            for t: TimeInterval in [0.3, 0.5, 0.8] { tick(t, 6) }
+            for _ in 0..<60 {
+                tick(0.8, 1)
+            }
+        }
+
+        print("[Defect3-diagram] A (normal): dotCenter=\(normalCapture.dotCenter) textCenterX=\(normalCapture.textCenterX)")
+        print("[Defect3-diagram] B (seek-back): dotCenter=\(seekBackCapture.dotCenter) textCenterX=\(seekBackCapture.textCenterX)")
+
+        composeAnnotatedComparison(
+            [normalCapture, seekBackCapture],
+            to: "\(Self.outDir)/defect3-position-comparison.png"
+        )
+    }
 }
