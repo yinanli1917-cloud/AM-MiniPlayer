@@ -779,6 +779,43 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(stripped[0].text, "First real lyric line here")
     }
 
+    /// Gap 2 (2026-09-11): a title-separator header that sits AFTER a long
+    /// instrumental intro (>5s) must still be stripped as metadata — the
+    /// gate is POSITION (before the first real lyric), not wall-clock time.
+    /// Real-world shape: "周杰伦 - 晴天" style header landing at 12s.
+    func testStripMetadataLines_titleCardAfterLongIntroIsStripped() {
+        let lines = [
+            LyricLine(text: "", startTime: 0.0, endTime: 6.0),
+            LyricLine(text: "周杰伦 - 晴天", startTime: 12.0, endTime: 14.0),
+            LyricLine(text: "故事的小黄花", startTime: 15.0, endTime: 19.0),
+            LyricLine(text: "从出生那年就飘着", startTime: 19.0, endTime: 23.0),
+        ]
+        let stripped = parser.stripMetadataLines(lines)
+
+        XCTAssertEqual(stripped.map(\.text), [
+            "故事的小黄花",
+            "从出生那年就飘着"
+        ], "Header after a long intro must be stripped by position, not survive because it's past 5s")
+    }
+
+    /// Negative case: once a real lyric line has been kept, a later line that
+    /// happens to contain " - " is genuine lyric content, not a header, and
+    /// must survive untouched.
+    func testStripMetadataLines_midSongDashLineIsNotStripped() {
+        let lines = [
+            LyricLine(text: "first real lyric line", startTime: 10.0, endTime: 14.0),
+            LyricLine(text: "hold on - baby don't you cry", startTime: 40.0, endTime: 44.0),
+            LyricLine(text: "one more real lyric", startTime: 46.0, endTime: 50.0),
+        ]
+        let stripped = parser.stripMetadataLines(lines)
+
+        XCTAssertEqual(stripped.map(\.text), [
+            "first real lyric line",
+            "hold on - baby don't you cry",
+            "one more real lyric"
+        ], "A genuine mid-song lyric containing ' - ' must not be stripped as a title header")
+    }
+
     func testStripMetadataLines_openingTitleAndArtistCards() {
         let lines = [
             LyricLine(text: "We'Ve Only Just Begun", startTime: 2.4, endTime: 2.8),
