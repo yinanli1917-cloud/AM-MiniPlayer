@@ -200,3 +200,45 @@ End state：Music.app 已 `stop`；`launchctl getenv NANOPOD_BLUR_RASTER_OFF` �
   defaults write ~/Library/Preferences/com.yinanli.nanoPod.plist enableDebugFileLog -bool YES
   ```
   重启 nanoPod 后日志在 /tmp/nanopod_debug.log。阶段包说明里的域名形式命令作废，改成这条。
+
+## B5 附录 4（2026-09-13 静止窗：idle 门 + Gate5）
+
+**证据**：起始 `date`=2026-09-13 18:55:39 PDT；`uptime` load avg 4.07/5.23/4.65；`pgrep -fl "swift|xcodebuild|clang|cmake"` 计数=0（干净，无并行构建）。Stage bundle md5(`Contents/MacOS/nanoPod`)=`5bf3bf1d998a8e4375cc7e386aaf5c15`，与预期一致。测量前 Music.app 实为 `paused`（非预期的 stopped），当前曲目 "Roland Reve (From \"Lola\")"——已如实记录为偏差，未按预期口径二次核实"应为 stopped"。
+
+**每窗口表**（label / 起-止 / uptime load / WS median-p95 / app median-p95，CPU%）：
+
+| label | 起始–结束 (PDT) | uptime load avg | WS median/p95 | app median/p95 |
+|---|---|---|---|---|
+| r4_idle_1 | 18:56:19–18:57:31 | 5.40/5.43/4.75 → 4.93/5.31/4.76 | 42.35/54.4 | 9.3/15.0 |
+| r4_idle_2 | 18:57:31–18:58:43 | 4.93/5.31/4.76 → 6.56/5.58/4.90 | 48.15/54.7 | 9.7/16.8 |
+| r4_idle_3 | 18:58:43–18:59:55 | 6.56/5.58/4.90 → 5.12/5.31/4.85 | 44.9/56.6 | 8.95/17.1 |
+| r4_gate5_paused_lyrics | 19:00:10–19:01:28 | 5.08/5.30/4.85 → 7.89/6.17/5.22 | 48.5/59.2 | 0.1/0.7 |
+| r4_gate5_paused_album | 19:01:28–19:02:53 | 7.89/6.17/5.22 → 6.33/6.16/5.31 | 59.15/73.3 | 0.1/0.7 |
+| r4_gate5_virgin (relaunch, pid 7731) | 19:04:06–19:04:36 | → 4.37/5.57/5.18 | 49.95/55.4 | 0.1/0.7 |
+| r4_ambient (app 未运行) | 19:05:42–19:06:12 | → 3.41/4.99/5.00 | 41.5/48.3 | 0.0/0.0 |
+
+**歌曲播放窗（idle_1~3）中三首歌是同一首 "At Your Best (You Are Love)"，非行级歌，note：任务指定曲目未核实是否逐字同步，此处仅报告原始 CPU 数值。**
+
+**Deltas（WS pts，仅同批相邻窗口，跨窗口 ambient drift 存在，见脚本内建 caveat）**：
+- paused_lyrics − virgin = 48.5 − 49.95 = **−1.45**（负值，virgin 反而更高，判定为噪声内，非信号）
+- paused_album − paused_lyrics = 59.15 − 48.5 = **+10.65**
+- virgin − ambient = 49.95 − 41.5 = **+8.45**
+
+**sample 计数**（`sample <pid> 5`，paused_lyrics 状态下）：`CA::Transaction::commit`=0，`CVDisplayLink`=0，`presentationTick`=0 — 全部为 0，与预期一致。
+
+**LoopStop 日志证据**：`/tmp/nanopod_debug.log` 行数从测量前 13810 增至测量后 14491（增长，日志确实在写），但 `grep -c "LoopStop"` 测量前后均为 **0** — 本窗口内未出现任何 LoopStop 条目（暂停+间奏场景下预期应有 LoopStop，但本次窗口未采到该证据，判定为未捕获而非已证伪 loop 是否停摆）。
+
+**PASS/FAIL 判定**：
+- Idle 门（app median ≤1.5%）：**FAIL** — 三窗口 app median 分别 9.3/9.7/8.95，远超阈值。播放中 app CPU 显著高于 1.5% 门槛。
+- Gate5（paused_lyrics − virgin ≤ +5 WS pts 且 app ≤0.5%）：**app 部分 PASS**（0.1 ≤ 0.5%）；**delta 部分 PASS**（−1.45 ≤ +5，且为负值，无过冲信号）。
+- sample 计数门（应为 0）：**PASS**（三项均为 0）。
+
+**Caveats**：
+- Music.app 测量前处于 `paused` 而非指示所期待的 `stopped`，本报告未回填"为何非 stopped"的根因，只如实记录该偏差；不影响后续 idle/gate5 窗口本身（已按脚本自行 play/pause 覆盖了该状态）。
+- Idle 门明确 FAIL，与 Gate5（暂停态）形成对照：播放态下 app CPU 8.95–9.7% 远高于暂停态的 0.1%，方向符合直觉（歌词逐字/滚动带来的常驻开销），但绝对数值超出既定 ≤1.5% 阈值，需要主会话/创始人裁定这是否是需要修的回归还是阈值本身需要重新校准（本报告不做该判断，只报数字）。
+- LoopStop 未在窗口内出现任何记录，无法据此确认或证伪"暂停+间奏 loop 应停摆"这一已知修复点在本次实例上的行为；这是证据缺口，不是"已验证通过"。
+- 环境 ambient WS 数值全程有明显漂移（41.5～73.3 之间），符合脚本内建的"仅相邻窗口可信"caveat，跨越较大时间间隔的比较（如 idle 窗口对 gate5 窗口）仅供参考。
+
+**End state**：nanoPod 已重新 `open`（新 pid 8086，非本次测量用的任一旧 pid），Music.app 已执行 `stop` 并确认 `player state` = `stopped`；`launchctl getenv NANOPOD_BLUR_RASTER_OFF` 为空。未 build/test/commit。
+
+**更正（规划会话核对缓存）**：附录 4 的 idle 门读数无效而非 FAIL。所用曲目「At Your Best (You Are Love)」在 lyrics_cache.json 中是 NetEase 逐字源（43/43 行带 words），播放中 app 9% 是逐字扫掠的正常开销（历史基线 8–18%），不是 CPU-idle 门的场景。CPU-idle 门要求行级 + 译文；歌单内已确认行级的候选：Fureai（NetEase，21 行，0 words）、Be My Venus（NetEase，32 行，0 words）。下一次静止窗只需 2 分钟：Fureai 歌词页 30s×3。Gate5 三项 PASS 有效。
