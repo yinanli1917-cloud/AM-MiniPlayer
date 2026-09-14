@@ -625,7 +625,16 @@ public struct LyricsView: View {
                 lineAdvanceTimerTargetPlaybackTime = nil
                 translationPreflightTask?.cancel()
                 translationPreflightTask = nil
-                translationSessionConfigAny = nil
+                // 缺陷1修复（2026-09-14）：这里曾经把 translationSessionConfigAny
+                // 清空，导致 TranslationTaskHostView 的 .translationTask 被拆除。
+                // 但 TranslationTaskHostView 本身跟页面无关，一直挂在视图树里
+                // （829行 .background），A5 的设计意图就是"一个 session 撑全程，
+                // 换歌不重建"——离开歌词页把它清空，直接违反这个意图：回到歌词页
+                // 没有任何地方会重建它，此后不管换多少首歌，翻译请求都 yield 到
+                // 一个没有活跃消费者的 stream 上，永久失效直到用户手动切一次语言
+                // 或翻译开关。不再清空，session 跟着 songID/语言/开关变化才重建
+                // （见下面 newPage == .lyrics 分支 + onChange(translationLanguage/
+                // showTranslation) 三处既有触发点）。
                 lineMotionFrameCaptureActive = false
                 pendingLineMotionCapture = nil
                 latestLineMotionFrames.removeAll()
@@ -639,6 +648,14 @@ public struct LyricsView: View {
                 updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
                 scheduleNextLineAdvanceTimer()
                 startLineMotionSamplingWindow(duration: lyricLineMotionPageSwitchSampleDuration)
+                // 缺陷1修复：首次进入歌词页（session 还从未建立过，比如启动后
+                // 默认停在封面页、翻译开关此前一直没被切换过）在这里兜底建一次。
+                // session 一旦建立，上面的分支不再清空它，之后换页不需要重复
+                // 触发；updateTranslationSessionConfig 内部按配置是否真的变化
+                // 短路，重复调用无副作用。
+                if #available(macOS 15.0, *) {
+                    scheduleTranslationSessionConfigUpdate(after: lyricPageSwitchTranslationDeferDuration)
+                }
             }
         }
         // Initial mount and track changes.
