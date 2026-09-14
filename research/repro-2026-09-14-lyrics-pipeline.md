@@ -219,6 +219,86 @@ NetEase/QQ 的候选池本身随时间波动（How Sweet 和 Supernatural 各自
    `LyricsServiceRealTranslationSessionReuseTests.swift` 已经用临时文件规避了
    同样的问题，可以作为以后修那个文件时的参照写法。
 
+## 附：缺陷2/3 修法方案准备（不动手，只分析）
+
+结论先行：coordinator 判断成立——**评分对"大段空档/从中段起录"的候选惩罚太软，不是设计如此，是覆盖门失守**。下面是具体位置、真实数字、和一个不写歌曲特例的收紧方向。
+
+### 现有 coverage/gap 惩罚的位置与计算
+
+两层，互相独立，没有互相印证：
+
+**第一层：`LyricsScorer.calculateScore`**（`Sources/MusicMiniPlayerCore/Services/Lyrics/LyricsScorer.swift`）
+
+| 分量 | 代码位置 | 公式 |
+|---|---|---|
+| 5. 覆盖率 | 110-115行 | `coverageRatio = min((lastLyricEnd - firstLyricStart) / duration, 1.0)`；`score += coverageRatio * 8`。**只看首尾跨度，不管中间是否有洞**——只要开头接近0、结尾接近时长，中间挖掉一大段也能拿满8分。 |
+| 5b. 尾部空档惩罚 | 117-133行 | `allowedTailGap = max(140.0, duration * (duration>=360 ? 0.55 : 0.40))`；超出才罚，`score -= 35 + excess*300`（excess是超出比例）——**唯一存在，且是按比例算的**惩罚。 |
+| 6. 内部空档惩罚 | 136-144行 | `gapThreshold = max(45, duration * 0.15)`；`if maxGap > gapThreshold { score -= 20 }`——**只有这一条是二值判断**：46秒的洞和150秒的洞罚分完全一样，都是-20。 |
+
+**没有对称的"头部空档惩罚"**——5b 只用 `duration - lastLyricStart`（尾部），没有任何分量用 `firstLyricStart - 0`（头部）算惩罚。一个从95秒才起录、缺了整个前奏和第一段主歌的候选，只要跨度覆盖到结尾，覆盖率分量照样拿满分。
+
+**第二层：`LyricsResultSelection.hasSevereTimelineMismatch`**（`Sources/MusicMiniPlayerCore/Services/Lyrics/LyricsResultSelection.swift` 442-518行），在 `selectBestResultUnmemoized` 里对已经算过分的候选做二次门禁：
+
+- 头部检查（477-482行）：`firstStartLimit = min(90.0, max(45.0, duration*0.30))`，超过就拒——**但有 `isExactLongIntro` 豁免**（470-476行）：`titleMatched && durationDiff<2s && score>=45 && lines>=12 && 非目录标记行 && tailGap<=max(65,duration*0.20) && maxInternalGap<=max(55,duration*0.16)`，命中就当"正常长前奏"放行，不当截断处理。Plastic Love 26行版本 score=91.8、26行，如果它的实际 `firstRealStart` 落在长前奏豁免窗口内（`longIntroLimit=min(115,max(firstStartLimit,duration*0.34))`≈89秒），会被这条豁免直接放过——**这条豁免本意是保护真正的长前奏歌曲，但没有办法区分"这是真前奏"还是"转写从中段开始、缺了前面"，两者对它来说长得一样**。
+- 内部空档检查（512-514行）：`if result.score < 30, maxInternalGap > min(120, max(90, duration*0.30)) { return true }`——**门槛是 `score < 30`**。Supernatural 的 NetEase 候选评分 68.3，远高于30，这条检查从未被评估过；事实上任何能通过前面 admission floor 进入 synced 候选池的结果基本都不会低于30分，这条检查对已经"及格"的候选形同虚设。
+
+### 两首歌的真实分数与惩罚项
+
+**Supernatural（NetEase候选，191s，63.2秒内部空档）**：用 `swift run LyricsVerifier check "Supernatural" "NewJeans" 191 --dump` 拿到的真实时间戳/文本/译文，原样构造 `LyricLine` 数组后直接调用真实 `LyricsScorer.shared.calculateScore(...)`（非估算，代码路径全程跑通，输出与手工按公式复算的分解完全对上）：
+
+| 分量 | 数值 |
+|---|---|
+| 1 逐字同步 | 0（行级） |
+| 2 质量分析 | 30（满分） |
+| 3 行数(30行) | 15（满分，封顶） |
+| 4 时长匹配 | 15（满分，lyricsDuration=191与目标完全一致） |
+| 5 覆盖率 | **8（满分，coverageRatio=1.0——63秒的洞对这个分量完全不可见）** |
+| 5b 尾部空档 | 0（tailGap仅9.4s，远低于140s门槛） |
+| **6 内部空档** | **-20（maxGap=63.2s > 45s门槛，flat罚分，不管是刚过45s还是过了一倍）** |
+| 8 翻译加成 | 15 |
+| 10 真实性 | 15 |
+| 11 来源加成(NetEase) | 8 |
+| **合计** | 86（本次重建值；verifier 实跑该候选最终报的是68.3分，两者对不上的部分大概率是重建时端点时间/逐字标记等细节与真实候选有出入，但覆盖率=满分、内部空档=flat -20 这两项是逐行套用真实代码得到，可信） |
+
+**Plastic Love（NetEase错配候选，262s，真实日志数字，非重建）**：production log 记录 `score=91.8, 26行, firstReal="私のことを決して本気で愛さないで"`（歌曲中段的一句副歌，不是开头）。这个候选的精确 `firstRealStart`/`tailGap`/`maxInternalGap` 已经拿不到了——磁盘缓存被5秒后的回填结果覆盖，日志也只打了汇总行没有逐行 dump。能确认的是：91.8分是个很高的分，说明现有覆盖率/空档惩罚**要么没触发，要么被 `isExactLongIntro` 豁免放过**——两种可能都指向同一个结构性缺口：评分/门禁都没有一个独立于"是不是真前奏"判断之外的、专门盯"从非零时刻起录"的惩罚。
+
+### 泛化收紧方案（不写歌曲特例）
+
+方向：把"是否超过门槛"的二值判断换成"超过门槛多少"的连续比例惩罚，跟 5b 尾部空档惩罚已经在用的写法保持一致，而不是新发明一套逻辑。
+
+1. **内部空档惩罚改比例制**（`LyricsScorer` 第6条）：
+   ```
+   let gapThreshold = max(45, duration * 0.15)
+   if maxGap > gapThreshold {
+       let excessRatio = (maxGap - gapThreshold) / duration
+       score -= 20 + min(40, excessRatio * 200)   // 系数待定，需要用82+100两套数据标定
+   }
+   ```
+   46秒的洞和150秒的洞不再同罚。
+
+2. **新增对称的头部空档惩罚**（`LyricsScorer`，仿5b写在覆盖率分量旁边）：
+   ```
+   let headGap = firstLyricStart  // 首句相对0秒的偏移
+   let allowedHeadGap = max(90.0, duration * 0.30)  // 参考 selectBest 现有 firstStartLimit 的量级
+   if headGap > allowedHeadGap {
+       let excess = (headGap - allowedHeadGap) / duration
+       score -= 25 + excess * 250
+   }
+   ```
+   不需要新概念，直接照抄5b尾部空档的形状，只是换成头部。
+
+3. **`hasSevereTimelineMismatch` 内部空档检查去掉 `score < 30` 门槛**，改成用空档比例本身做判断（比如 `maxInternalGap(result.lyrics) > max(90, duration*0.25)` 不再前置 score 条件），避免两层惩罚各说各话——评分层已经打了分、选择层却因为分数够高而完全不检查同一件事。
+
+4. `isExactLongIntro` 豁免保留，但只用来豁免"确实前奏长但中间/尾部都紧密"的候选（它现有的 `tailGap`/`maxInternalGap` 子条件已经在做这件事），新加的头部空档惩罚不应该被这条豁免完全抵消——两者需要一起标定，不能只调一个。
+
+### 对 82 条回归 + 100 首基准的影响估计
+
+**没有实现代码、没有跑这两套**，以下是方向性推理，不是实测数字：
+
+- 影响面圈定：只有"候选已经通过 admission floor、但内部空档 > 45s 或首句偏移 > ~90s"的用例会被动到——这类候选本来就是"凑合能用但有瑕疵"的档位，不动主流干净匹配。
+- 风险方向：**收紧可能误伤真正的长前奏/长间奏曲目**（CLAUDE.md 记录过的 K-pop 舞曲间奏、纯音乐长引子类用例就是这个形状），如果比例系数定太狠，可能把现在能播的候选打到 admission floor 以下，导致这首歌从"有瑕疵但能看"退化成"无歌词"——净收益方向不确定，必须靠实测判断,不能纸面拍板。
+- 建议流程：方案定案后先在 82 条 + 100 首两套上分别跑一次 baseline（当前代码）和实现后的版本做 A/B，比对 pass/fail 差集，尤其关注 baseline pass 但新版本 fail 的用例——这些就是需要人工核实"是真的该罚"还是"系数太狠误伤"的候选。这一步不能省，纸面估计不能替代。
+
 ## 复现用命令记录
 
 ```bash
