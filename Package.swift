@@ -12,6 +12,9 @@ let package = Package(
         .executable(
             name: "MusicMiniPlayer",
             targets: ["MusicMiniPlayer"]),
+        .executable(
+            name: "MusicMiniPlayerFull",
+            targets: ["MusicMiniPlayerFull"]),
         .library(
             name: "MusicMiniPlayerCore",
             targets: ["MusicMiniPlayerCore"]),
@@ -59,6 +62,24 @@ let package = Package(
                 "Info.plist",
                 "MusicMiniPlayer.entitlements"
             ],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Sources/MusicMiniPlayerApp/Info.plist"
+                ])
+            ]
+        ),
+        .target(
+            name: "NanoPodFullEdition",
+            dependencies: ["MusicMiniPlayerCore"],
+            path: "Sources/NanoPodFullEdition"
+        ),
+        .executableTarget(
+            name: "MusicMiniPlayerFull",
+            dependencies: ["MusicMiniPlayerAppKit", "NanoPodFullEdition"],
+            path: "Sources/MusicMiniPlayerFullApp",
             linkerSettings: [
                 .unsafeFlags([
                     "-Xlinker", "-sectcreate",
