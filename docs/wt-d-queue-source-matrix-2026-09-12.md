@@ -90,3 +90,77 @@ currentTrack.name: lastError = (nil)
 - Accessibility：Music.app 主窗口 AX 树里有 `AXCheckBox description="playing next"`（工具栏切换）；点开后 AX 树从 1826 个元素增至 2827 个，新增一个 AXTable（1245 行/格），Playing Next 列表确实暴露。代价：①需要辅助功能授权（沙盒 app 可被授予，但要用户去系统设置手动开）；②必须 Music 主窗口存在且面板处于打开状态（会改用户的 Music 界面）；③本次用 AppleScript 枚举整棵树耗时超过 3 分钟（AX C API 会快得多，但仍是 UI 抓取，随 Music 版本随时失效）。结论：纯净版（App Store）不可行；完整版技术上可行但脆弱，属 UI 抓取。
 - MediaRemote adapter（ungive/mediaremote-adapter）：只暴露 now-playing 元数据与播放命令，README 明确无队列；实现靠 Apple 签名的 /usr/bin/perl 加载私有框架绕过 15.4 的限制，与「不用私有 API」规矩冲突。
 - 分布式通知 `com.apple.Music.playerInfo`：切随机/循环时会发（本机 ObjC 监听实测，四次切换四次通知），但 userInfo 只有曲目元数据键（Artist/Album/Name/PersistentID/Player State/Total Time 等），没有 Shuffle/Repeat 键，也没有队列信息。
+
+## 第四轮 2026-09-13：AXUIElement C API 读 Playing Next（完整版 spike）
+
+工具：`research/spikes/ax-playing-next/{main.swift,axspike}`，独立编译，未碰 Package.swift/Sources/。测试曲库：Piano Chronicle（218首，非随机）。
+
+### a. 定位 Table + 读取耗时 —— 判定：**有条件可用（条件：面板须处于打开态，且身份识别用行数启发式，非稳固路径）**
+- 路径：`AXUIElementCreateApplication(pid) → kAXMainWindowAttribute → 深度优先找 AXCheckBox(description含"playing next") → AXPress → 新增一个 AXTable`。开关前主窗口 AX 树里没有该 AXTable，开关后出现且 `kAXRowsAttribute` 行数=302（含1条 "History" 分组头行，不是曲目，读取端需按角色/文本过滤）。
+- 识别方式目前是"行数最多的 AXTable"启发式（对比开关前后 table 集合的差集更稳，本轮用行数堆更简单但脆弱，几个曲目的库该值会很小甚至反超库表）。
+- 行数（`kAXRowsAttribute` 数组长度，不取内容）：3 次热跑 0.6/1.6/0.7ms（冷跑同量级 0.6ms）——可视为免费。
+- 用 `AXUIElementCopyAttributeValues` 按区间读前20行标题+艺人（每行内 `axFindAll` 找 AXStaticText，深度6）：5 次独立冷跑（不同进程）963/1090/1252/1145/1027ms；同进程3次热跑1016/1026/1645ms——**耗时几乎不随冷热变化，每行约50ms**，20行接近1秒，这个量级对"实时读队列"是硬伤。
+
+### b. 不激活 Music 能否操作与读取 —— 判定：**可用（AXPress 不偷焦点）；(1)未测；(2)(3)(4) 见下**
+- AXPress 在 checkbox 上全程未让 Music 变为前台进程（`frontmost` 全程停在发起测试的进程/TextEdit），确认"后台操作"成立。
+- (1) 另一个 Space：未测——本沙盒环境无法可靠切 Space 做对照，跳过，原因是 AppleScript 无法确定性地把窗口钉到指定 Space 再验证。
+- (2) 遮挡：`open -a TextEdit`，用 TextEdit 自身 `set bounds of window 1` 覆盖 Music 窗口约 2/3 区域（System Events 版 `set position/size` 在本机对 TextEdit 报 -1719，换用应用自带 `bounds` 属性绕过）；全程 frontmost=TextEdit，读前5行 220~233ms（与非遮挡同量级）。**判定：可用**。
+- (3) 最小化：`tell application "Music" to set collapsed of window 1 to true`（Music 字典里真实属性名是 `collapsed` 不是 `miniaturized`）与 `System Events...set miniaturized...to true` 均**未生效**：前者无报错但 `collapsed` 读回仍 false，后者报 `-10006 Can't set miniaturized of UI element to any`。**判定：不可用（条件：本机/本版本 Music.app 窗口无法被 AppleScript 最小化，需要真实点击红绿灯或 Dock 手势，二者都要 UI 交互而非纯后台脚本）**——未能构造出"最小化态"这个前提，因此该态下的可读性本身也**未测**。
+- (4) 窗口关闭态：`tell application "Music" to close window 1` 成功（frontmost 全程未变），关闭后 `mainWindow` 拿不到（AX 主窗口属性消失），读表返回 "no window"。`reopen` 恢复窗口且未抢焦点。**判定：不可用（关闭态下 AX 树无窗口可读，是预期行为不是 bug）**。
+
+### c. AXObserver 实时通知 —— 判定：**不可用**
+- 在 table 和 window 两层各订阅 `kAXRowCountChangedNotification`/`kAXValueChangedNotification`/`kAXSelectedRowsChangedNotification`，`AXObserverAddNotification` 全部返回 `err=0`（订阅成功），`CFRunLoopAddSource` 接入 `.defaultMode`。
+- 触发：t=3s 发 `next track`，t=10s 发 `shuffle enabled` 取反（均记录 osascript 发出时间戳）。20秒观测窗口内**零次回调**，三种通知一次都没触发。
+- 结论：换歌、切随机都不会让这张 AXTable 发出可订阅的 AX 通知（大概率因为面板处于折叠/非可见状态、或 Music 这张表压根不发这些通知）——**实时监听不可行，只能轮询**，轮询成本见 a 项（~50ms/行）。
+
+### d. 随机态下预测 vs 实际 —— 判定：**不可用（结果不一致，证伪队列预测能力）**
+- 打开 shuffle 后立即读表前5行（未重新走"关闭再打开面板"刷新路径），预测为 Pale Jay 的3首+Loaded Honey 1首；随后 `next track` ×3（2秒间隔）实际得到 `Dekalog VI, Pt. 1` → `Easy Walker` → `Sundays (Just Piano Version)`，与预测**完全不吻合**，且实际曲目分布不在预测的 Pale Jay 专辑内。
+- 与 09-12 第三轮笔记一致的根因：面板内容是"存储顺序"快照，AXTable 不会随 shuffle 切换重新洗牌顺序；必须每次都强制关闭再重新打开面板才能拿到当前一批候选，且即便如此也无法保证与 Music 内部真实随机指针一致（这次连打开后立即读都对不上，说明面板本身的随机重排时机也不可控）。
+
+### e. 权限 —— 判定：**可用**
+- `AXIsProcessTrustedWithOptions(prompt:false)` = `true`（spike 独立二进制，已被此前手动授权过一次）。`prompt:true` 会弹一次系统授权框（未重新触发，沿用已有授权）。非沙盒 spike 二进制不需要任何 entitlement 声明；App Store 沙盒版若要用同一套 API 需要在 `com.apple.security.temp-exception` 或直接使用可被沙盒接受的辅助功能授权流程（超出本次 spike 范围）。
+
+### 结论（写给 WT-E）
+四项里三项（a 计时、b 后台可读性、e 权限）证明"不激活也能读"的核心假设成立，但 c（无实时通知，只能轮询）+ d（shuffle 下预测失真）+ b.3（无法程序化最小化验证）三条都是硬缺口：`AXPlayingNextQueueReader.readPlayingNext(limit:)` 技术上可实现，但其 `AsyncStream<Void>` 变更通知拿不到 AX 原生事件，只能自己起一个轮询 Timer（每次 ~1s/20行，代价不小，需要限流到"面板打开时才轮询"）；shuffle 态下这个 reader 给出的"upcoming"必须标注为不可信/仅供参考，不能当作真实下一首预测。
+
+重建/运行命令：
+```bash
+cd /Users/yinanli/Documents/MusicMiniPlayer/.claude/worktrees/exciting-mclean-ccb7e0
+swiftc -O -framework ApplicationServices -framework AppKit research/spikes/ax-playing-next/*.swift -o research/spikes/ax-playing-next/axspike
+./research/spikes/ax-playing-next/axspike permission
+./research/spikes/ax-playing-next/axspike find-table
+./research/spikes/ax-playing-next/axspike read-rows 20
+./research/spikes/ax-playing-next/axspike window-state <occlude|minimize|close|reopen>
+./research/spikes/ax-playing-next/axspike observe
+./research/spikes/ax-playing-next/axspike shuffle-check
+```
+
+### 第四轮补测（同日）
+
+1. 行号地图 —— 判定：**可用**
+   - 302 行全部 role=AXRow，用 `kAXChildrenAttribute` 一次+子元素 value/title 拼字符串导出到 `research/spikes/ax-playing-next/rowmap.txt`。两个分组头都是纯文本单字段行（无 `—`/`|` 分隔符），据此定位：**行 0 = "History"**（历史分组头），**行 201 = "Continue Playing"**（不是文档假设的 "Playing Next"/"接下来播放"/"Up Next"，是 Music.app 这版本实际用的字符串，识别逻辑需要把这个词也算进去）。历史行 = 1..200 共 200 行；接下来播放行 = 202..301 共 100 行。
+
+2. 随机开关正确性 —— 判定：**可用（条件：开关后等 2 秒结算，不重开面板）**
+   - 开 shuffle 后等 2s（不重开面板）读头行后前 8 行，随后 `next track` ×3（2s 间隔），三次实际当前曲目**全部命中**预测集合且顺序一致（this is what love is → Opus → Musique Strand 2）。
+   - 开关前后 2s 对照头行后前 8 行：8 行**全部不同**，证明表内容确实随 shuffle 切换即时重排，不需要关闭重开面板。
+   - 关→开→关：两次"关"状态读到的前 8 行**完全一致**（8/8 same=true），说明关闭态顺序是确定性的（大概率是曲库/专辑顺序），可重复。
+   - 与第四轮 d 项结论相反：d 项在**未等待**、未过 2s 结算时读取，读到的是过渡态脏数据；补测证明只要等 2s 结算，随机预测是准的。
+
+3. 最快单行读取 —— 判定：**可用**
+   - fast path（`kAXChildrenAttribute` 读一次 + 子元素 value/title，无 depth-6 递归搜索）：20 行 3 次热跑 1.7/1.5/1.7ms，约 **0.08ms/行**。
+   - `AXUIElementCopyMultipleAttributeValues`（每行 cell 子元素一次拿 value+title）：3 次热跑 1.4/1.2/1.3ms，约 **0.065ms/行**，是三种读法里最快的。
+   - `kAXVisibleRowsAttribute`：面板实际可见行数=15（非全部302），读取 7.2ms，约 0.48ms/行，比全表 fast path 慢但仍远快于 a 项旧测的 ~50ms/行。
+   - 结论：a 项旧测"每行约50ms"的耗时几乎全部来自 `axFindAll` 的 depth-6 递归遍历本身，不是 AX IPC 调用开销；换成"只读一层子节点"或批量属性调用后，单行成本降到亚毫秒级，"实时读队列"这条路径技术上是可用的。
+
+4. AX 方式最小化 —— 判定：**不可用**
+   - 直接对 window 元素调用 `AXUIElementSetAttributeValue(win, kAXMinimizedAttribute, kCFBooleanTrue)`，返回 `err=0`（调用本身成功），但立即读回 `kAXMinimizedAttribute` 仍是 `false`——跟第四轮用 AppleScript/System Events 设置失败是同一现象，换成"正牌" AX C API 直接调用也无法让 Music 窗口真正进入最小化态。因为窗口实际没有最小化，"最小化态下能否读表"这个前提依旧没有被构造出来（本次读表成功是因为窗口根本没最小化，不能算作该态下的验证）。
+
+5. Observer 通知复测 —— 判定：**有条件可用（条件：只看 `kAXRowCountChangedNotification` / `kAXUIElementDestroyedNotification`，屏蔽 `kAXValueChangedNotification` 噪声）**
+   - 在 WINDOW + APPLICATION 两级订阅 `kAXLayoutChangedNotification`/`kAXCreatedNotification`/`kAXUIElementDestroyedNotification`/`kAXValueChangedNotification`/`kAXRowCountChangedNotification`/`kAXFocusedUIElementChangedNotification`，TABLE 级订阅 `kAXRowCountChangedNotification`/`kAXSelectedRowsChangedNotification`，25s 窗口内 t=3 next track、t=10 切 shuffle、t=17 next track。
+   - **确实触发**：`kAXValueChangedNotification` 几乎每 0.3~0.4s 连续触发（大概率是播放进度条/时间控件在跳，噪声源，不能拿来当队列变化信号）；`kAXRowCountChangedNotification` 与 `kAXUIElementDestroyedNotification` 在三次触发点附近各精确触发一次，相对操作时间戳延迟约 0.45~0.51s（三次分别 ~0.45s / ~0.50s / ~0.51s），延迟稳定。
+   - **未触发**：`kAXCreatedNotification`、`kAXLayoutChangedNotification`、`kAXFocusedUIElementChangedNotification`、`kAXSelectedRowsChangedNotification` 全程零次；另做"先关闭面板再重开"的对照（10s 窗口，t=3 按 checkbox 重开），`kAXCreatedNotification` 依然 0 次回调。
+   - 与第四轮 c 项"零回调、不可行只能轮询"结论相反：只要把订阅范围扩到 WINDOW/APPLICATION 两级并只筛 `RowCountChanged`+`UIElementDestroyed` 这两个事件，是能拿到"队列变了"的实时信号的，只是延迟约0.5s，且必须自己过滤掉 ValueChanged 的高频噪声。
+
+### 结论（写给 WT-E，本轮修订）
+
+补测把第四轮四个薄弱点里的三个从"不可用/证伪"翻成了"可用/有条件可用"：读取速度用一层子节点（非 depth-6 递归）读法把单行成本从 ~50ms 压到 ~0.08ms（多属性批量调用 ~0.065ms 最快）；随机态预测只要等 2s 结算不重开面板即可准确匹配连续三次 next track，且开关瞬间表内容确认会随之重排；observer 只要多订阅 WINDOW/APPLICATION 级并专盯 `kAXRowCountChangedNotification`/`kAXUIElementDestroyedNotification`（屏蔽 `kAXValueChangedNotification` 噪声），能拿到约0.5s延迟的真实变更信号，不必退化成纯轮询。仍然不可用的只剩一项：AX 直接设置 `kAXMinimizedAttribute` 依旧调用"成功"但不生效，最小化态本身构造不出来，该态下的可读性仍未验证。分组头行号也已钉死：History=行0，Playing Next 分组头实际文本是 "Continue Playing"（行201），不是本轮之前假设的 "Playing Next"/接下来播放/Up Next 字面量，任何按文本匹配头行的实现都要把这个词加进去。综合看，`AXPlayingNextQueueReader` 的可行性比第四轮判断的更乐观：轮询代价可以做到极低（亚毫秒级/行），且有一个约0.5s延迟的事件驱动信号可用于减少轮询频率；唯一没解决的是最小化态、以及仍需在更多曲库/更长时间上复核 observer 延迟与漏报率再定案。
