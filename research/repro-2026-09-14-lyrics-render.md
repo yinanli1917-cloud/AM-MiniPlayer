@@ -415,3 +415,62 @@ PNG（折线图，直接画 `debugModelY` 原始追踪数据,不经过 CALayer �
 ——但视觉截图这块留了一个没解开的疑点，如实报告，不掩盖。
 
 **这是复现，不是修复**：本节到此为止，没有改任何生产代码。
+
+---
+
+## 缺陷「逐字歌某行突然整行全亮，随后回到逐字」—— 未能复现，给出埋点方案
+
+创始人今天再次确认这个现象存在。上一轮 WT-B 用 7 首逐字歌锁步驱全部切行，
+`debugLastWholeLineHighlight` 标志位全程 0 次为真（见
+`research/references/nanopod-defects-2026-09-12-spec.md`），没能复现。本轮按协调方指示，
+在 3 之后专门试了"行复用/回收"这条此前没试过的路径，外加真 display-link 抖动、长停滞后
+追赶的变体。
+
+### 复现尝试
+
+`debugLastWholeLineHighlight`（`NativeLyricsRowView.swift:1449-1452`）为真的精确条件：
+当前行**应该**走逐字扫掠（`expectsPerRunSweep`，即 `hasSyllableSync`），但
+`applyActiveMainPhase` 里 `updatePerRunSweepMask` 返回 `applied=false`（尽管
+`geometryReady` 已经是 true），同时亮层没被隐藏、确实在画——也就是退化成了 v2.8 那种
+"整行渐变遮罩"而不是逐字遮罩。这精确对应"看起来整行一起亮"的症状。
+
+针对性设计：60 行歌词，单行短语（"hey now"）和会在窄面板换行成 3 行的长句
+（"every single word you ever said to me still echoes down this empty hallway
+tonight"）交替排列——制造行视图从池里复用时，前后两次内容几何形状差异最大的场景。
+20 次远距离 seek（`radius=14`,跳跃幅度 >28 保证彻底逐出复用池)反复横跳在这两种几何
+之间，强迫视图池不断把一种几何的视图直接复用成另一种。每次 seek 后：
+- 采样点选在行**中段**（不是行首瞬间——那时亮层本来就因 progress≤0.001 被隐藏,不会
+  触发这个标志位,不管有没有复用问题）；
+- 12 个不均匀间隔的子帧（1/30s~1/60s 抖动,模拟真实 display-link 不是严格等距的可能性）；
+- 每个子帧扫描 seek 目标行 **及其前后各 2 行**（不只是目标行本身——万一是被复用挤出去的
+  邻居行出问题）。
+
+### 结果：未复现
+
+0 次 `debugLastWholeLineHighlight=true`。这条"行复用"路径这次也没能触发。跟 WT-B 的
+7 首歌 0 次结论一致——本轮又排除了一个可能路径（复用+抖动组合），但仍然不能说"没有
+这个 bug"，只能说这次没抓到。
+
+### 埋点方案（按创始人要求，穷尽后给出）
+
+不需要新建——**已经有一套现成的、符合要求的埋点在代码里**：`NativeLyricsMaskTrace`
+（`NativeLyricsLayerSupport.swift:214-261`，2026-08-27 落的）。逐帧调用点就在
+`debugLastWholeLineHighlight` 计算的同一处（`NativeLyricsRowView.swift:1453-1460`），
+两者共享同一次判断——只要真机上真的翻了一次 `wholeLineHighlight=true`，这套埋点结构上
+保证能记到，不依赖我这边有没有复现出触发条件：
+
+- **只在状态变化时写一行**（`key = "\(rowID)|\(wordIndex)|\(wholeLineHighlight)|\(perRunSweep)"`
+  跟上一条比对，没变就不写），不会把日常使用写成几百 MB。
+- 写到 `/tmp/nanopod_mask_trace.jsonl`，JSONL 格式，每行一个事件：
+  `{"event":"mask_state","row":"...","word":N,"wholeLineHighlight":true/false,"perRunSweep":true/false,"expected":0.xxx,"applied":0.xxx}`。
+- 默认不武装：需要 `NANOPOD_MASK_TRACE=1` 环境变量，或者是 `LOCAL_DEVELOPER_BUILD`
+  才会写。生产 release 默认零 I/O。
+
+**使用方法**：创始人日常用的时候，用 `NANOPOD_MASK_TRACE=1 open nanoPod.app`（或等效的
+带环境变量启动方式）跑一遍，下次真的看到"某行突然整行亮一下又回去"，直接去
+`/tmp/nanopod_mask_trace.jsonl` 翻最后几行——`wholeLineHighlight` 从 `false` 翻到
+`true` 再翻回 `false` 的那几行,连着 `row`/`word`/`expected`/`applied` 数字，就是这次
+真实发生时的第一手证据,比我在 headless 里瞎猜条件要可靠。我这边没有改这套埋点的代码
+（本来就在),只是确认了它接的是正确的判断点、默认关闭不会拖累性能。
+
+**这是复现尝试 + 埋点确认，不是修复**：本节没有改任何生产代码。

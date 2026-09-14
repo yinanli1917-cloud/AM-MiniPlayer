@@ -1148,4 +1148,134 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
         )
         try? data.write(to: URL(fileURLWithPath: path))
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - "逐字歌某行突然整行全亮，随后回到逐字"
+    //
+    // Coordinator (2026-09-14): founder re-confirmed this today. WT-B's prior lockstep-driven
+    // 7-song full-transition sweep found ZERO occurrences (debugLastWholeLineHighlight never
+    // true — see research/references/nanopod-defects-2026-09-12-spec.md). Remaining suspects,
+    // per coordinator: real display-link jitter, row view reuse/recycle mid-scroll, catch-up
+    // after a long stall — ESPECIALLY row reuse: does a row pulled from the pool carry residual
+    // tile/mask state that can read as whole-line-bright for a frame.
+    //
+    // debugLastWholeLineHighlight (NativeLyricsRowView.swift:1449-1452) is TRUE exactly when:
+    // the active line IS syllable-synced (expectsPerRunSweep) AND applyActiveMainPhase's
+    // per-run-sweep application FAILED (appliedPerRunSweep == false, i.e. updatePerRunSweepMask
+    // returned empty lines despite geometryReady == true) AND the bright overlay is actually
+    // visible — i.e. the row fell back to the v2.8-style WHOLE-LINE gradient mask instead of the
+    // per-glyph one. This test targets exactly the reuse path: two syllable-synced lines with
+    // very different geometry (single-line vs 3-line-wrapped) assigned far apart in row index,
+    // FAST distant seeks force the row view pool to recycle a view from one line's geometry
+    // directly into the other's, and debugLastWholeLineHighlight is checked on the very FIRST
+    // tick after each such reuse.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    private func syllableWords(_ text: String, start: TimeInterval, wordDuration: TimeInterval) -> (LyricLine, TimeInterval) {
+        let tokens = text.split(separator: " ").map(String.init)
+        var words: [LyricWord] = []
+        var t = start
+        for (i, tok) in tokens.enumerated() {
+            let w = i == tokens.count - 1 ? tok : tok + " "
+            words.append(LyricWord(word: w, startTime: t, endTime: t + wordDuration))
+            t += wordDuration
+        }
+        return (LyricLine(text: text, startTime: start, endTime: t, words: words), t)
+    }
+
+    /// Alternates a SHORT single-line phrase with a LONG phrase that wraps to 3 lines at the test
+    /// width — maximum geometry mismatch between what a recycled row's layers were last
+    /// configured for and what they're about to show.
+    private func reuseStressRows(count: Int) -> [LayerBackedLyricRow] {
+        var rows: [LayerBackedLyricRow] = []
+        var start: TimeInterval = 0
+        for i in 0..<count {
+            let (line, end): (LyricLine, TimeInterval)
+            if i % 2 == 0 {
+                (line, end) = syllableWords("hey now", start: start, wordDuration: 0.6)
+            } else {
+                (line, end) = syllableWords(
+                    "every single word you ever said to me still echoes down this empty hallway tonight",
+                    start: start, wordDuration: 0.35
+                )
+            }
+            rows.append(row(for: line, index: i))
+            start = end + 0.4
+        }
+        return rows
+    }
+
+    @MainActor
+    func test_wholeLineFlash_rowReuseAcrossMismatchedGeometry_fastDistantSeeks() {
+        let rows = reuseStressRows(count: 60)
+        let panelWidth: CGFloat = 220 // narrow — forces the long phrase to wrap 3 lines
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 500))
+        host(surface, NSSize(width: panelWidth, height: 500))
+        let mc = MusicController(preview: true)
+        mc.duration = 400
+        mc.isPlaying = true
+        surface.debugSkipDedupe = true
+        var wall: CFTimeInterval = 30_000
+        var date = Date(timeIntervalSinceReferenceDate: 702_000_000)
+        surface.debugNowOverride = { wall }
+        mc.debugPlaybackClockDateProvider = { date }
+        defer {
+            surface.debugNowOverride = nil
+            mc.debugPlaybackClockDateProvider = nil
+        }
+
+        var flashEvents: [(seekTo: Int, tickAfterSeek: Int, rowIndex: Int)] = []
+        // Sequence of INDEX targets, deliberately jumping far apart every time (radius=14 means a
+        // jump of >28 fully evicts the previous window from the reuse pool's live set) so views
+        // constantly recycle between the two very different geometries.
+        let targets = [0, 45, 3, 50, 6, 55, 1, 40, 8, 58, 2, 47, 5, 52, 0, 44, 9, 59, 4, 48]
+
+        for seekIdx in targets {
+            mc.registerSeek()
+            let line = rows[seekIdx].displayLine.line
+            // Sample MID-line (not right at onset, where the bright overlay is still hidden
+            // below the 0.001 progress floor regardless of any reuse effect) so the per-run
+            // sweep mask is definitely expected to be visibly active.
+            let t = line.startTime + (line.endTime - line.startTime) * 0.5
+            // Irregular sub-frame spacing (simulates real display-link jitter instead of a
+            // perfectly uniform 1/60s clock) — 12 sub-ticks per seek, varying interval.
+            let jitterIntervals: [TimeInterval] = [
+                1.0 / 60, 1.0 / 45, 1.0 / 60, 1.0 / 30, 1.0 / 60,
+                1.0 / 55, 1.0 / 60, 1.0 / 40, 1.0 / 60, 1.0 / 60, 1.0 / 50, 1.0 / 60
+            ]
+            for (subTick, interval) in jitterIntervals.enumerated() {
+                mc.syncPlaybackClock(to: t, playing: true, at: date)
+                surface.configure(config(rows: rows, current: seekIdx, mc: mc, width: panelWidth))
+                surface.layoutSubtreeIfNeeded()
+                wall += interval
+                date = date.addingTimeInterval(interval)
+                surface.debugTick(displayInterval: interval)
+                // Scan every MOUNTED row, not just the seek target — a mismatched-geometry
+                // reuse artifact could show on a NEIGHBOUR that was just recycled too.
+                for idx in max(0, seekIdx - 2)...min(rows.count - 1, seekIdx + 2) {
+                    if let rv = surface.debugRowView(forIndex: idx), rv.debugLastWholeLineHighlight {
+                        flashEvents.append((seekTo: seekIdx, tickAfterSeek: subTick, rowIndex: idx))
+                    }
+                }
+            }
+        }
+
+        print("[Symptom4] drove \(targets.count) fast distant seeks across mismatched-geometry rows, " +
+              "found \(flashEvents.count) whole-line-highlight flashes")
+        for e in flashEvents.prefix(20) {
+            print("[Symptom4] FLASH at row \(e.rowIndex), tick \(e.tickAfterSeek) after seeking there")
+        }
+
+        if flashEvents.isEmpty {
+            print("[Symptom4] NOT REPRODUCED under fast-distant-seek row-reuse conditions in this " +
+                  "fixture (60 rows, 220pt width, single-line/3-line-wrap alternation, 20 far-apart " +
+                  "seeks, 12 jittered sub-ticks each, mid-line sampling, ±2 neighbour rows scanned). " +
+                  "Matches WT-B's own 7-song zero-occurrence finding — this session adds one more " +
+                  "condition tried (row reuse specifically, with jitter) without success, still not " +
+                  "a proof of absence.")
+        }
+        // Deliberately NOT an XCTAssertEqual(0, ...) failure either way — this is exploratory
+        // reproduction, not a regression guard. A future occurrence should be added as a proper
+        // fixture + assertion once its exact trigger is known.
+    }
 }
