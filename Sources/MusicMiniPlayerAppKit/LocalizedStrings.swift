@@ -78,6 +78,26 @@ enum L10n {
         "musicKitOpen":         ("Open Settings", "打开设置"),
         "shortcuts":            ("Keyboard Shortcuts", "快捷键"),
         "shortcutsFooter":      ("Shortcuts are global and work from any app. Unbound by default.", "快捷键全局生效，在任何 App 下都能触发；默认未绑定。"),
+        // ── 引导页 (C6) ──
+        "onboarding.welcome.title":     ("Welcome to nanoPod", "欢迎使用 nanoPod"),
+        "onboarding.welcome.body":      ("A menu bar mini player for Apple Music.", "一个常驻菜单栏的 Apple Music 迷你播放器。"),
+        "onboarding.feature.menubar":   ("Lives in the menu bar", "常驻菜单栏"),
+        "onboarding.feature.lyrics":    ("Synced lyrics with translation", "同步歌词，支持翻译"),
+        "onboarding.feature.edgehide":  ("Hides to the screen edge, peeks on hover", "可贴边隐藏，悬停即可探出"),
+        "onboarding.feature.shortcuts": ("Global keyboard shortcuts", "全局快捷键"),
+        "onboarding.auth.title":        ("Grant Access", "授权访问"),
+        "onboarding.auth.body":         ("nanoPod needs two permissions to work fully.", "nanoPod 需要以下两项权限才能正常工作。"),
+        "onboarding.auth.automation":       ("Music.app Automation", "Music.app 自动化"),
+        "onboarding.auth.automationDesc":   ("Lets nanoPod read playback state and control Music.app", "让 nanoPod 读取播放状态并控制 Music.app"),
+        "onboarding.auth.request":      ("Grant Access", "授权"),
+        "onboarding.auth.authorized":   ("Authorized", "已授权"),
+        "onboarding.auth.denied":       ("Denied", "已拒绝"),
+        "onboarding.auth.notDetermined": ("Not Determined", "未决定"),
+        "onboarding.done.title":        ("All Set", "设置完成"),
+        "onboarding.done.body":         ("You're ready to go. You can revisit these settings anytime.", "一切就绪。这些设置随时可以在设置窗口里重新调整。"),
+        "onboarding.next":              ("Next", "下一步"),
+        "onboarding.back":              ("Back", "上一步"),
+        "onboarding.finish":            ("Get Started", "开始使用"),
     ]
 }
 

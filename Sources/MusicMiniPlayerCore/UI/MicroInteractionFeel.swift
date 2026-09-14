@@ -1,5 +1,8 @@
 import Foundation
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Runtime A/B registry for micro-interaction feel channels (buttons, hover
 /// capsules, progress-bar hover, window present/dismiss). Modelled exactly on
@@ -13,6 +16,13 @@ import SwiftUI
 /// - progressHover: `.tuned` (default) vs `.legacy`
 /// - shuffleRepeat: `.critical` (default) vs `.legacy055`
 /// - windowPresent: `.fade` (default) vs `.hardcut`
+/// - artworkContrast: `.tuned` (default) vs `.legacy` — C5 light-artwork
+///   contrast for the fluid backdrop (roadmap C5). Params are a SEPARATE
+///   live-tunable registry (not a fixed arm): `nanopod://debug/feel/artworkContrast/<value>`
+///   where `<value>` is one of `tuned` / `legacy` / `reset` (arm switch) OR
+///   `<paramName>=<number>` (e.g. `artworkContrastDarken=0.4`) to override one
+///   token at runtime for on-screen tuning. Unknown param names or
+///   non-numeric values are ignored — never crash the URL handler.
 public enum MicroInteractionFeel {
     public static let hoverCapsuleDefaultsKey = "nanoPodFeelHoverCapsule"
     public static let pressScaleDefaultsKey = "nanoPodFeelPressScale"
@@ -22,6 +32,9 @@ public enum MicroInteractionFeel {
     public static let edgeMorphDefaultsKey = "nanoPodFeelEdgeMorph"
     public static let settingsTabDefaultsKey = "nanoPodFeelSettingsTab"
     public static let settingsToggleDefaultsKey = "nanoPodFeelSettingsToggle"
+    public static let pageSwitchDefaultsKey = "nanoPodFeelPageSwitch"
+    public static let artworkContrastDefaultsKey = "nanoPodFeelArtworkContrast"
+    public static let artworkContrastParamsDefaultsKey = "nanoPodArtworkContrastParams"
 
     public enum HoverCapsuleMode: String, CaseIterable {
         case capsule = "capsule"
@@ -111,6 +124,108 @@ public enum MicroInteractionFeel {
         }
     }
 
+    /// C2 三页切换三时钟：`.split`（默认，geometry/content/material 分拆）vs
+    /// `.single`（今天的行为——单一 `.spring(response:0.25, dampingFraction:0.9)`
+    /// 字节级不变）。
+    public enum PageSwitchMode: String, CaseIterable {
+        case split = "split"
+        case single = "single"
+
+        public static func resolve(from raw: String?) -> PageSwitchMode {
+            guard let raw else { return .split }
+            return PageSwitchMode(rawValue: raw.lowercased()) ?? .split
+        }
+    }
+
+    /// C5 light-artwork contrast arm (roadmap C5): `.tuned` (default, blur +
+    /// darken + saturation applied to the fluid backdrop when the sampled
+    /// artwork is bright) vs `.legacy` (today's `FluidGradientBackground`
+    /// pipeline, byte-identical — no darken overlay, fixed blur radius 58).
+    public enum ArtworkContrastMode: String, CaseIterable {
+        case tuned = "tuned"
+        case legacy = "legacy"
+
+        public static func resolve(from raw: String?) -> ArtworkContrastMode {
+            guard let raw else { return .tuned }
+            return ArtworkContrastMode(rawValue: raw.lowercased()) ?? .tuned
+        }
+    }
+
+    /// Live-tunable tokens for the `.tuned` artwork-contrast arm. All fields
+    /// have shipping defaults (Tokens.artworkContrast*) and can be overridden
+    /// one at a time at runtime via `nanopod://debug/feel/artworkContrast/<name>=<value>`
+    /// without restarting the app, so the founder can dial them in on-screen.
+    public struct ArtworkContrastParams: Equatable {
+        public var blurRadius: Double
+        public var darken: Double
+        public var brightnessThreshold: Double
+        public var saturation: Double
+        public var darkenRamp: Double
+
+        public static let `default` = ArtworkContrastParams(
+            blurRadius: Tokens.artworkContrastBlurRadius,
+            darken: Tokens.artworkContrastDarken,
+            brightnessThreshold: Tokens.artworkContrastBrightnessThreshold,
+            saturation: Tokens.artworkContrastSaturation,
+            darkenRamp: Tokens.artworkContrastDarkenRamp
+        )
+
+        /// Field name → keypath used by both the URL parser and the
+        /// UserDefaults dictionary round-trip, so the two never drift.
+        fileprivate static let fieldKeys: [String: WritableKeyPath<ArtworkContrastParams, Double>] = [
+            "artworkcontrastblurradius": \.blurRadius,
+            "artworkcontrastdarken": \.darken,
+            "artworkcontrastbrightnessthreshold": \.brightnessThreshold,
+            "artworkcontrastsaturation": \.saturation,
+            "artworkcontrastdarkenramp": \.darkenRamp,
+        ]
+
+        public func asDictionary() -> [String: Double] {
+            [
+                "blurRadius": blurRadius,
+                "darken": darken,
+                "brightnessThreshold": brightnessThreshold,
+                "saturation": saturation,
+                "darkenRamp": darkenRamp,
+            ]
+        }
+
+        public static func fromDictionary(_ dict: [String: Double]?) -> ArtworkContrastParams {
+            guard let dict else { return .default }
+            var params = ArtworkContrastParams.default
+            if let v = dict["blurRadius"] { params.blurRadius = v }
+            if let v = dict["darken"] { params.darken = v }
+            if let v = dict["brightnessThreshold"] { params.brightnessThreshold = v }
+            if let v = dict["saturation"] { params.saturation = v }
+            if let v = dict["darkenRamp"] { params.darkenRamp = v }
+            return params
+        }
+    }
+
+    #if DEBUG
+    nonisolated(unsafe) public static var testingArtworkContrast: ArtworkContrastMode?
+    nonisolated(unsafe) public static var testingArtworkContrastParams: ArtworkContrastParams?
+    #endif
+
+    public static var artworkContrast: ArtworkContrastMode {
+        #if DEBUG
+        if let testingArtworkContrast { return testingArtworkContrast }
+        if isRunningTests { return .tuned }
+        #endif
+        return ArtworkContrastMode.resolve(
+            from: UserDefaults.standard.string(forKey: artworkContrastDefaultsKey)
+        )
+    }
+
+    public static var artworkContrastParams: ArtworkContrastParams {
+        #if DEBUG
+        if let testingArtworkContrastParams { return testingArtworkContrastParams }
+        if isRunningTests { return .default }
+        #endif
+        let dict = UserDefaults.standard.dictionary(forKey: artworkContrastParamsDefaultsKey) as? [String: Double]
+        return ArtworkContrastParams.fromDictionary(dict)
+    }
+
     #if DEBUG
     nonisolated(unsafe) public static var testingHoverCapsule: HoverCapsuleMode?
     nonisolated(unsafe) public static var testingPressScale: PressScaleMode?
@@ -120,6 +235,7 @@ public enum MicroInteractionFeel {
     nonisolated(unsafe) public static var testingEdgeMorph: EdgeMorphMode?
     nonisolated(unsafe) public static var testingSettingsTab: SettingsTabMode?
     nonisolated(unsafe) public static var testingSettingsToggle: SettingsToggleMode?
+    nonisolated(unsafe) public static var testingPageSwitch: PageSwitchMode?
 
     public static func resetTestingOverrides() {
         testingHoverCapsule = nil
@@ -130,6 +246,9 @@ public enum MicroInteractionFeel {
         testingEdgeMorph = nil
         testingSettingsTab = nil
         testingSettingsToggle = nil
+        testingPageSwitch = nil
+        testingArtworkContrast = nil
+        testingArtworkContrastParams = nil
     }
     #endif
 
@@ -213,6 +332,16 @@ public enum MicroInteractionFeel {
         )
     }
 
+    public static var pageSwitch: PageSwitchMode {
+        #if DEBUG
+        if let testingPageSwitch { return testingPageSwitch }
+        if isRunningTests { return .split }
+        #endif
+        return PageSwitchMode.resolve(
+            from: UserDefaults.standard.string(forKey: pageSwitchDefaultsKey)
+        )
+    }
+
     private static var isRunningTests: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
@@ -250,9 +379,34 @@ public enum MicroInteractionFeel {
         case "settingstoggle":
             UserDefaults.standard.set(SettingsToggleMode.resolve(from: value).rawValue, forKey: settingsToggleDefaultsKey)
             return true
+        case "pageswitch":
+            UserDefaults.standard.set(PageSwitchMode.resolve(from: value).rawValue, forKey: pageSwitchDefaultsKey)
+            return true
+        case "artworkcontrast":
+            return applyArtworkContrast(value)
         default:
             return false
         }
+    }
+
+    /// `value` is one of `tuned` / `legacy` (arm switch, resets params) or
+    /// `<paramName>=<number>` (one live token override). Unknown param name
+    /// or non-numeric value is ignored — never crash the URL handler.
+    private static func applyArtworkContrast(_ value: String) -> Bool {
+        if value == "tuned" || value == "legacy" {
+            UserDefaults.standard.set(ArtworkContrastMode.resolve(from: value).rawValue, forKey: artworkContrastDefaultsKey)
+            return true
+        }
+        let parts = value.split(separator: "=", maxSplits: 1)
+        guard parts.count == 2,
+              let keyPath = ArtworkContrastParams.fieldKeys[String(parts[0])],
+              let number = Double(parts[1]) else {
+            return false
+        }
+        var params = artworkContrastParams
+        params[keyPath: keyPath] = number
+        UserDefaults.standard.set(params.asDictionary(), forKey: artworkContrastParamsDefaultsKey)
+        return true
     }
 
     public static func reset() {
@@ -264,6 +418,9 @@ public enum MicroInteractionFeel {
         UserDefaults.standard.removeObject(forKey: edgeMorphDefaultsKey)
         UserDefaults.standard.removeObject(forKey: settingsTabDefaultsKey)
         UserDefaults.standard.removeObject(forKey: settingsToggleDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: pageSwitchDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: artworkContrastDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: artworkContrastParamsDefaultsKey)
         #if DEBUG
         resetTestingOverrides()
         #endif
@@ -300,7 +457,83 @@ public enum MicroInteractionFeel {
         public static let settingsTabReducedMotionDuration: TimeInterval = 0.12
         public static let settingsToggleBumpScale: Double = 1.03
         public static let settingsToggleBumpResponse: Double = 0.18
+
+        // C2 page-switch three-clock scheduler (mirrors edgeMorph's pattern).
+        // geometry: matchedGeometryEffect hero move + page offset.
+        // content: incoming page's textual/control opacity (lags geometry slightly).
+        // material: PanelBackdrop/page-overlay material crossfade — where the page
+        // itself carries no independent material surface, this clock drives the
+        // whole-page opacity crossfade that plays that role instead.
+        public static let pageGeometryDuration: TimeInterval = 0.14
+        public static let pageContentLag: TimeInterval = 0.04
+        public static let pageContentDuration: TimeInterval = 0.16
+        public static let pageMaterialDuration: TimeInterval = 0.31
+
+        // C5 light-artwork contrast (roadmap C5) — shipping defaults for
+        // MicroInteractionFeel.ArtworkContrastParams.default.
+        public static let artworkContrastBlurRadius: Double = 40
+        public static let artworkContrastDarken: Double = 0.28
+        public static let artworkContrastBrightnessThreshold: Double = 0.62
+        public static let artworkContrastSaturation: Double = 1.25
+        public static let artworkContrastDarkenRamp: Double = 0.15
+        /// Reduce Transparency scrim: fixed, no blur, solid enough to read
+        /// text over any artwork (accessibility floor, not tunable).
+        public static let artworkContrastReduceTransparencyDarken: Double = 0.35
+        public static let artworkContrastDarkenAnimationDuration: TimeInterval = 0.31
     }
+}
+
+/// C5 pure decision model: given the sampled artwork brightness and the
+/// current tunable params, resolve the three visual outputs the fluid
+/// backdrop applies. No SwiftUI, no I/O — a plain function so
+/// `ArtworkContrastFeelTests` can pin the table without touching a view.
+///
+/// Below `brightnessThreshold` darken is 0 (dark/mid artwork already reads
+/// fine against the default backdrop). From the threshold it ramps LINEARLY
+/// to `params.darken` over a width of `params.darkenRamp` so the scrim fades
+/// in — never a hard step. Saturation and blur are constant regardless of
+/// brightness (the contrast fix is about legibility, not restyling every
+/// artwork).
+public enum ArtworkContrastPolicy {
+    public struct Resolution: Equatable {
+        public let darkenOpacity: Double
+        public let saturation: Double
+        public let blurRadius: Double
+    }
+
+    public static func resolve(
+        brightness: Double,
+        params: MicroInteractionFeel.ArtworkContrastParams,
+        reduceTransparency: Bool
+    ) -> Resolution {
+        if reduceTransparency {
+            return Resolution(
+                darkenOpacity: MicroInteractionFeel.Tokens.artworkContrastReduceTransparencyDarken,
+                saturation: params.saturation,
+                blurRadius: 0
+            )
+        }
+
+        let clampedBrightness = min(max(brightness, 0), 1)
+        let threshold = params.brightnessThreshold
+        let ramp = max(params.darkenRamp, 0.0001) // guard divide-by-zero from a bad override
+        let progress = min(max((clampedBrightness - threshold) / ramp, 0), 1)
+        let darken = min(max(params.darken, 0), 1) * progress
+
+        return Resolution(
+            darkenOpacity: darken,
+            saturation: params.saturation,
+            blurRadius: max(params.blurRadius, 0)
+        )
+    }
+
+    #if canImport(AppKit)
+    /// System-level Reduce Transparency signal — reused verbatim by the
+    /// backdrop view so tests can inject the boolean instead.
+    public static var systemReduceTransparency: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+    }
+    #endif
 }
 
 /// C4 设置页 Tab 切换转场的纯决策函数，从 `SettingsWindowView` 拆出以便无 UI 测试。

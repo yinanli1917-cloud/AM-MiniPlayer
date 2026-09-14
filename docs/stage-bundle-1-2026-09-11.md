@@ -30,8 +30,9 @@
   ```
 - 运行时埋点 ActiveBrightness（B3 亮度封顶）与 LineGaps（B1 行距）：release 包默认不写日志，先执行下面这条并重启 nanoPod，日志在 `/tmp/nanopod_debug.log`，grep `ActiveBrightness` / `LineGaps`。每次切行最多两行、每次滚动手势两行。
   ```bash
-  defaults write com.yinanli.nanoPod enableDebugFileLog -bool YES
+  defaults write ~/Library/Preferences/com.yinanli.nanoPod.plist enableDebugFileLog -bool YES
   ```
+  （09-12 更正：这台机器上 nanoPod 曾以沙盒运行过，`defaults write com.yinanli.nanoPod …` 域名形式会被 cfprefsd 静默重定向进 ~/Library/Containers/com.yinanli.nanoPod/ 的容器 plist，现在的非沙盒 app 读不到；必须写显式路径。WT-B 已替创始人写入，当前实例已在落盘。）
 
 **WT-E 播放源抽象**：无可见变化。
 

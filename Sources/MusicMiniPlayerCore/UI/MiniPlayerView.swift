@@ -1,4 +1,5 @@
 import SwiftUI
+import QuartzCore
 
 // Use the system SwiftUI transition to avoid the disappearing icon bug.
 // PlayerPage lives in MusicController so the floating window and menu bar stay in sync.
@@ -86,34 +87,39 @@ public struct MiniPlayerView: View {
                 }
 
                 // Playlist stays mounted to support matchedGeometryEffect.
+                // C2 三时钟：PlaylistView 内部文字/控件不可拆分（归属 WT-D，不改），
+                // 其整页 opacity crossfade 就充当「material」层的角色。
                 PlaylistView(currentPage: $musicController.currentPage, animationNamespace: animation, selectedTab: $playlistSelectedTab, showControls: $showControls, isHovering: $isHovering, showOverlayContent: $showOverlayContent, effectArtwork: effectArtwork)
                     .opacity(musicController.currentPage == .playlist ? 1 : 0)
                     .zIndex(musicController.currentPage == .playlist ? 1 : 0)
                     .allowsHitTesting(musicController.currentPage == .playlist)
-                    .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
+                    .animation(pageSwitchAnimations.material, value: musicController.currentPage)
 
-                // Album stays mounted to support matchedGeometryEffect.
+                // Album stays mounted to support matchedGeometryEffect. It only
+                // hosts the hero placeholder, so it rides the geometry clock.
                 albumPageContent(geometry: geometry)
                     .opacity(musicController.currentPage == .album ? 1 : 0)
                     .zIndex(musicController.currentPage == .album ? 1 : 0)
                     .allowsHitTesting(musicController.currentPage == .album)
-                    .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
+                    .animation(pageSwitchAnimations.geometry, value: musicController.currentPage)
 
-                // Floating artwork: one clear hero image moved through matchedGeometryEffect.
+                // Floating artwork: one clear hero image moved through matchedGeometryEffect — geometry clock.
                 if let artwork = musicController.currentArtwork {
                     floatingArtwork(artwork: artwork, effectArtwork: effectArtwork ?? artwork, geometry: geometry)
                         .zIndex(musicController.currentPage == .album ? 50 : 1)
-                        .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
+                        .animation(pageSwitchAnimations.geometry, value: musicController.currentPage)
                         .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
                         .accessibilityHidden(true)
                 }
 
-                // Album text and masks stay above floating artwork and fade for smooth transitions.
+                // Album text and masks stay above floating artwork — this IS the
+                // page's textual/control content, so it rides the content clock
+                // (lagging geometry slightly per the three-clock plan).
                 albumOverlayContent(geometry: geometry)
                     .zIndex(101)
                     .opacity(musicController.currentPage == .album ? 1 : 0)
                     .allowsHitTesting(musicController.currentPage == .album)
-                    .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
+                    .animation(pageSwitchAnimations.content, value: musicController.currentPage)
                     .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
 
 
@@ -250,6 +256,7 @@ public struct MiniPlayerView: View {
         }
         // Keep hover state coherent when returning to the album page.
         .onChange(of: musicController.currentPage) { oldPage, newPage in
+            logPageSwitch(from: oldPage, to: newPage)
             // 从歌单/歌词页切换到专辑页时，强制同步 hover 状态
             if newPage == .playlist {
                 hoverLocked = false
@@ -279,6 +286,20 @@ public struct MiniPlayerView: View {
                 }
             }
         }
+    }
+
+    // C2 三时钟：geometry(hero) / content(文案控件) / material(整页crossfade)
+    // 三个独立 Animation，由 MicroInteractionFeel.pageSwitch 臂选择（`.split`
+    // 默认三时钟拆分；`.single` 与今天字节级一致，仍是同一个
+    // `.spring(response: 0.25, dampingFraction: 0.9)`）。
+    private var pageSwitchAnimations: (geometry: Animation, content: Animation, material: Animation) {
+        PageSwitchClockScheduler.animations(arm: MicroInteractionFeel.pageSwitch, reduceMotion: reduceMotion)
+    }
+
+    private func logPageSwitch(from: PlayerPage, to: PlayerPage) {
+        let arm = MicroInteractionFeel.pageSwitch
+        let plan = PageSwitchClockScheduler.plan(reduceMotion: reduceMotion)
+        DebugLogger.log("PageSwitch", "t=\(CACurrentMediaTime()) arm=\(arm.rawValue) from=\(from) to=\(to) geometry=\(plan.geometryDuration) contentLag=\(plan.contentLag) material=\(plan.materialDuration)")
     }
 
     private func syncArtworkLuminance() {
