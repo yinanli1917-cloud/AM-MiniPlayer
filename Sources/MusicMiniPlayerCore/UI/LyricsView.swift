@@ -61,7 +61,17 @@ private let lyricLineMotionCaptureMissEventInterval: TimeInterval = 3.0
 private let lyricLineLayoutSettleDuration: TimeInterval = 0.65
 private let lyricInitialRenderVisibleRange = 4
 private let lyricSteadyRenderVisibleRange = 6
-private let lyricPageSwitchTranslationDeferDuration: TimeInterval = 0.55
+// A5 (2026-09): was 0.55s — an artificial floor on every translation request,
+// stacked on top of the (now memoized, see TranslationAvailabilityMemo) system
+// availability check. The generation-counter debounce in
+// scheduleTranslationSessionConfigUpdate already
+// coalesces bursts from the several onChange sites that call it (track
+// change, translationLanguage change, showTranslation toggle, translation
+// trigger) — a burst within this window collapses to the LAST call because
+// each call bumps `translationConfigGeneration` and only the latest
+// `asyncAfter` survives the generation check. 50ms is enough to absorb that
+// burst without reading as a perceptible delay.
+private let lyricPageSwitchTranslationDeferDuration: TimeInterval = 0.05
 private let lyricMinimumGeneratedSegmentDuration: TimeInterval = 1.65
 private let lyricContentLeadingInset: CGFloat = 32
 private let lyricContentTrailingInset: CGFloat = 32
@@ -523,7 +533,6 @@ public struct LyricsView: View {
     @State private var lastRendererModeEventSignature: String?
     // Translation state.
     @State private var translationSessionConfigAny: Any?
-    @State private var localTranslationTrigger: Int = 0
     @State private var translationConfigGeneration = 0
     @State private var translationPreflightTask: Task<Void, Never>?
 
@@ -759,9 +768,14 @@ public struct LyricsView: View {
                 scheduleTranslationSessionConfigUpdate(after: lyricPageSwitchTranslationDeferDuration)
             }
         }
-        .onChange(of: lyricsService.translationRequestTrigger) { _, newValue in
+        .onChange(of: lyricsService.translationRequestTrigger) { _, _ in
             if #available(macOS 15.0, *) {
-                scheduleTranslationRequest(after: lyricPageSwitchTranslationDeferDuration, trigger: newValue)
+                // Coalescing now lives in LyricsService.requestTranslation()
+                // (TranslationRequestCoalescer, fake-clock tested) instead of
+                // a view-level generation-counter defer — the request is
+                // enqueued onto the live translation session's request
+                // stream, not used to rebuild the session/host.
+                lyricsService.requestTranslation()
             }
         }
         .onChange(of: lyricsService.isTranslating) { _, _ in
@@ -814,8 +828,7 @@ public struct LyricsView: View {
         }
         .background(TranslationTaskHostView(
             translationSessionConfigAny: translationSessionConfigAny,
-            lyricsService: lyricsService,
-            translationTrigger: localTranslationTrigger
+            lyricsService: lyricsService
         ))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1932,22 +1945,35 @@ public struct LyricsView: View {
 
     // MARK: - Translation
 
-    private func updateTranslationSessionConfig(trigger: Int? = nil) {
+    // A5 part 1: the host below now keeps ONE TranslationSession alive across
+    // songs — `translationTask` only tears the session down when THIS config
+    // value actually changes (source/target language pair), never on a plain
+    // "please translate now" request. So `updateTranslationSessionConfig`
+    // only needs to run when the language pair might have changed; per-song
+    // translation requests go straight to `lyricsService.requestTranslation()`
+    // (see the `translationRequestTrigger` onChange above), which enqueues
+    // onto the live session's request stream instead of rebuilding it.
+    private func updateTranslationSessionConfig() {
         if #available(macOS 15.0, *) {
             let generation = translationConfigGeneration
             translationPreflightTask?.cancel()
             // No interim nil: tearing the config down before the preflight
             // resolved restarted the translationTask twice per update.
-            DebugLogger.log("LyricsView", "🈺 translation config update gen=\(generation) trigger=\(trigger.map(String.init) ?? "-")")
+            DebugLogger.log("LyricsView", "🈺 translation config update gen=\(generation)")
             translationPreflightTask = Task { @MainActor in
                 guard currentPage == .lyrics, lyricsService.showTranslation else { return }
                 guard let config = await lyricsService.silentSystemTranslationConfiguration() else { return }
                 guard !Task.isCancelled, translationConfigGeneration == generation else { return }
 
-                translationSessionConfigAny = config
-                if let trigger {
-                    localTranslationTrigger = trigger
+                let configChanged = (translationSessionConfigAny as? TranslationSession.Configuration) != config
+                if configChanged {
+                    // The OLD session's queue must never serve the NEW
+                    // session/language — drop anything buffered before the
+                    // swap so a stale request can't publish onto the wrong
+                    // config's translations.
+                    lyricsService.resetTranslationRequestStream()
                 }
+                translationSessionConfigAny = config
             }
         }
     }
@@ -1959,16 +1985,6 @@ public struct LyricsView: View {
             guard translationConfigGeneration == generation else { return }
             guard currentPage == .lyrics, lyricsService.showTranslation else { return }
             updateTranslationSessionConfig()
-        }
-    }
-
-    private func scheduleTranslationRequest(after delay: TimeInterval, trigger: Int) {
-        translationConfigGeneration += 1
-        let generation = translationConfigGeneration
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            guard translationConfigGeneration == generation else { return }
-            guard currentPage == .lyrics, lyricsService.showTranslation else { return }
-            updateTranslationSessionConfig(trigger: trigger)
         }
     }
 
@@ -2644,22 +2660,25 @@ public struct LyricsView: View {
 
 // MARK: - TranslationTaskHostView (macOS 15.0+)
 // Zero-size INVISIBLE host for the system translation session. It must never
-// wrap visible content: `.id(trigger)` recreates this host on every requested
-// translation pass, and when the old modifier wrapped the whole lyrics body,
-// each trigger/config bump tore down and rebuilt everything on screen — the
-// multi-flash during lyrics + translation load-in.
+// wrap visible content — that was true before A5 too. A5 part 1 removes the
+// `.id(trigger)` that used to sit here: recreating this host's identity on
+// EVERY requested translation pass tore down the TranslationSession (and
+// paid the framework's model warm-up) per request, not per language change.
+// Now `translationTask` reacts only to `activeConfig` (the source/target
+// language pair) changing; the action closure starts one long-lived loop
+// (`serveTranslationRequests`) that keeps consuming "please translate now"
+// signals for as long as the session stays valid, so the SECOND song in the
+// same language reuses the already-warmed session.
 
 struct TranslationTaskHostView: View {
     var translationSessionConfigAny: Any?
     let lyricsService: LyricsService
-    let translationTrigger: Int
 
     var body: some View {
         if #available(macOS 15.0, *) {
             TranslationTaskHostCore(
                 configAny: translationSessionConfigAny,
-                lyricsService: lyricsService,
-                trigger: translationTrigger
+                lyricsService: lyricsService
             )
             .frame(width: 0, height: 0)
             .allowsHitTesting(false)
@@ -2672,16 +2691,19 @@ struct TranslationTaskHostView: View {
 private struct TranslationTaskHostCore: View {
     let configAny: Any?
     let lyricsService: LyricsService
-    let trigger: Int
 
     var body: some View {
         Color.clear
             .translationTask(activeConfig, action: { session in
-                guard lyricsService.showTranslation,
-                      !lyricsService.lyrics.isEmpty else { return }
-                await lyricsService.performSystemTranslation(session: session)
+                // No outer showTranslation/lyrics gate here: this closure
+                // only restarts when `activeConfig` (the language pair)
+                // changes, so a one-time gate evaluated at start would stay
+                // stuck if the user toggles showTranslation off then back on
+                // without the language changing — serveTranslationRequests
+                // must loop unconditionally; performSystemTranslation
+                // re-checks showTranslation/lyrics on every request already.
+                await lyricsService.serveTranslationRequests(with: session)
             })
-            .id(trigger)
     }
 
     private var activeConfig: TranslationSession.Configuration {

@@ -138,6 +138,18 @@ public class LyricsService: ObservableObject {
     }
 
     @Published public var translationRequestTrigger: Int = 0
+    /// A5 part 2: pure coalescer (fake-clock testable, see
+    /// TranslationRequestCoalescerTests) replacing LyricsView's inline
+    /// generation-counter debounce for translation *requests* specifically.
+    /// Config (language-pair) changes still debounce via
+    /// scheduleTranslationSessionConfigUpdate in LyricsView — this only
+    /// coalesces the "please translate now" signal.
+    @MainActor
+    private lazy var translationRequestCoalescer = TranslationRequestCoalescer(delay: 0.05)
+    private var translationRequestContinuation: AsyncStream<Void>.Continuation?
+    private lazy var translationRequestStream: AsyncStream<Void> = AsyncStream { [weak self] continuation in
+        self?.translationRequestContinuation = continuation
+    }
     @Published public var isTranslating: Bool = false
     @Published public var translationFailed: Bool = false
     @Published public private(set) var canTranslate: Bool = false
@@ -317,6 +329,11 @@ public class LyricsService: ObservableObject {
     private let parser = LyricsParser.shared
     private let scorer = LyricsScorer.shared
     private let metadataResolver = MetadataResolver.shared
+    /// Persists ML-translated lines across sessions/process restarts, keyed
+    /// by (song identity, target language, content fingerprint). See
+    /// Services/TranslationDiskCache.swift. `internal` (not private) so
+    /// tests can inject a temp-file instance via `debugTranslationDiskCache`.
+    var translationDiskCache = TranslationDiskCache(fileURL: TranslationDiskCache.defaultURL())
 
     // ========================================================================
     // MARK: - Cache
@@ -776,6 +793,12 @@ public class LyricsService: ObservableObject {
         // search — drop the session verdict before anything can answer from it.
         if forceRefresh {
             missMemo.clear(forKey: Self.missMemoKey(forSongID: songID))
+            // A metadata miss recorded within the last 24h (commit 6cef712's
+            // negative-evidence rows) must not short-circuit a user-initiated
+            // retry the way it legitimately short-circuits a cold-start replay.
+            MetadataResolver.shared.diskCache.clearNegatives(
+                title: title, artist: artist, duration: duration, album: album
+            )
         }
 
         // Memo HIT point: a song whose confirmed no-lyrics terminal this
@@ -1021,6 +1044,10 @@ public class LyricsService: ObservableObject {
             )
         }
         let foregroundFetchSeconds = Date().timeIntervalSince(foregroundStartedAt)
+        // A4 backfill census (2026-09-11): one JSONL line per song fetch;
+        // identity keyed on songID + this fetch's own start time so a
+        // re-fetch of the same song gets its own line.
+        let censusFetchID = "\(songID)#\(foregroundStartedAt.timeIntervalSince1970)"
 
         // Select the best result; keep the full result so auto-scroll can use parse-time kind.
         let bestResult = fetcher.selectBestResult(from: results, songDuration: duration)
@@ -1062,6 +1089,20 @@ public class LyricsService: ObservableObject {
                 await MainActor.run {
                     self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, verdict: .instrumental)
                 }
+                recordLyricsBackfillCensus(
+                    fetchID: censusFetchID,
+                    title: title,
+                    artist: artist,
+                    duration: duration,
+                    foregroundOutcome: .instrumental,
+                    foregroundFetchSeconds: foregroundFetchSeconds,
+                    foregroundSource: nil,
+                    backfillLaunched: false,
+                    backfillOutcome: .none,
+                    backfillMs: nil,
+                    backfillSource: nil,
+                    kind: LyricsKind.instrumental.rawValue
+                )
                 return
             }
 
@@ -1084,6 +1125,20 @@ public class LyricsService: ObservableObject {
                 await MainActor.run {
                     self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, verdict: .networkUnreachable)
                 }
+                recordLyricsBackfillCensus(
+                    fetchID: censusFetchID,
+                    title: title,
+                    artist: artist,
+                    duration: duration,
+                    foregroundOutcome: .unreachable,
+                    foregroundFetchSeconds: foregroundFetchSeconds,
+                    foregroundSource: nil,
+                    backfillLaunched: false,
+                    backfillOutcome: .none,
+                    backfillMs: nil,
+                    backfillSource: nil,
+                    kind: nil
+                )
                 return
             }
 
@@ -1094,13 +1149,22 @@ public class LyricsService: ObservableObject {
                 album: album,
                 songID: songID,
                 foregroundFetchSeconds: foregroundFetchSeconds,
-                foregroundResultCount: results.count
+                foregroundResultCount: results.count,
+                censusFetchID: censusFetchID,
+                censusForegroundOutcome: .miss,
+                censusForegroundSource: nil,
+                censusForegroundStartedAt: foregroundStartedAt,
+                censusKind: nil
             )
             return
         }
 
-        await applyFetchedLyricsIfCurrent(bestResult, title: title, artist: artist, duration: duration, songID: songID, album: album)
+        let applyVerdict = await applyFetchedLyricsIfCurrent(bestResult, title: title, artist: artist, duration: duration, songID: songID, album: album)
         let foregroundHasWordLevel = bestResult.lyrics.contains { $0.hasSyllableSync }
+        let censusForegroundOutcome = LyricsBackfillCensus.classifyForegroundHitOutcome(
+            kind: bestResult.kind,
+            hasWordLevel: foregroundHasWordLevel
+        )
         if Self.shouldLaunchAuthoritativeBackfill(
             hasForegroundResult: true,
             kind: bestResult.kind,
@@ -1113,9 +1177,62 @@ public class LyricsService: ObservableObject {
                 album: album,
                 songID: songID,
                 foregroundFetchSeconds: foregroundFetchSeconds,
-                foregroundResultCount: results.count
+                foregroundResultCount: results.count,
+                censusFetchID: censusFetchID,
+                censusForegroundOutcome: censusForegroundOutcome,
+                censusForegroundSource: bestResult.source.rawValue,
+                censusForegroundStartedAt: foregroundStartedAt,
+                censusKind: bestResult.kind.rawValue
             )
+        } else {
+            // No backfill launched — this fetch settles right here.
+            recordLyricsBackfillCensus(
+                fetchID: censusFetchID,
+                title: title,
+                artist: artist,
+                duration: duration,
+                foregroundOutcome: censusForegroundOutcome,
+                foregroundFetchSeconds: foregroundFetchSeconds,
+                foregroundSource: bestResult.source.rawValue,
+                backfillLaunched: false,
+                backfillOutcome: .none,
+                backfillMs: nil,
+                backfillSource: nil,
+                kind: bestResult.kind.rawValue
+            )
+            _ = applyVerdict // foreground-only settle: apply outcome already reflected on screen
         }
+    }
+
+    /// Builds and writes one A4 backfill-census record (see LyricsBackfillCensus.swift).
+    private func recordLyricsBackfillCensus(
+        fetchID: String,
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        foregroundOutcome: LyricsBackfillCensus.ForegroundOutcome,
+        foregroundFetchSeconds: TimeInterval,
+        foregroundSource: String?,
+        backfillLaunched: Bool,
+        backfillOutcome: LyricsBackfillCensus.BackfillOutcome,
+        backfillMs: Int?,
+        backfillSource: String?,
+        kind: String?
+    ) {
+        let record = LyricsBackfillCensus.Record(
+            title: title,
+            artist: artist,
+            duration: duration,
+            foregroundOutcome: foregroundOutcome,
+            foregroundMs: Int((foregroundFetchSeconds * 1000).rounded()),
+            foregroundSource: foregroundSource,
+            backfillLaunched: backfillLaunched,
+            backfillOutcome: backfillOutcome,
+            backfillMs: backfillMs,
+            backfillSource: backfillSource,
+            kind: kind
+        )
+        LyricsBackfillCensusWriter.shared.record(record, fetchID: fetchID)
     }
 
     static func shouldApplyNoLyricsMiss(currentSongID: String?, missSongID: String, hasDisplayedLyrics: Bool) -> Bool {
@@ -1365,11 +1482,32 @@ public class LyricsService: ObservableObject {
         album: String,
         songID: String,
         foregroundFetchSeconds: TimeInterval,
-        foregroundResultCount: Int
+        foregroundResultCount: Int,
+        censusFetchID: String,
+        censusForegroundOutcome: LyricsBackfillCensus.ForegroundOutcome,
+        censusForegroundSource: String?,
+        censusForegroundStartedAt: Date,
+        censusKind: String?
     ) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            guard self.currentSongID == songID else { return }
+            guard self.currentSongID == songID else {
+                self.recordLyricsBackfillCensus(
+                    fetchID: censusFetchID,
+                    title: title,
+                    artist: artist,
+                    duration: duration,
+                    foregroundOutcome: censusForegroundOutcome,
+                    foregroundFetchSeconds: foregroundFetchSeconds,
+                    foregroundSource: censusForegroundSource,
+                    backfillLaunched: true,
+                    backfillOutcome: .cancelled,
+                    backfillMs: Int((Date().timeIntervalSince(censusForegroundStartedAt) * 1000).rounded()),
+                    backfillSource: nil,
+                    kind: censusKind
+                )
+                return
+            }
             // Deep-search phase: only the plain searching spinner may be
             // relabeled — content already on screen (unsynced foreground
             // result, provisional cache) survives the backfill untouched
@@ -1393,9 +1531,33 @@ public class LyricsService: ObservableObject {
                 foregroundResultCount: foregroundResultCount
             )
 
+            // Elapsed-since-fetch-start, for the census's `backfillMs`.
+            let censusElapsedMs: () -> Int = {
+                Int((Date().timeIntervalSince(censusForegroundStartedAt) * 1000).rounded())
+            }
+            let recordCensusSettle: (LyricsBackfillCensus.BackfillOutcome, String?) -> Void = { [weak self] outcome, backfillSource in
+                self?.recordLyricsBackfillCensus(
+                    fetchID: censusFetchID,
+                    title: title,
+                    artist: artist,
+                    duration: duration,
+                    foregroundOutcome: censusForegroundOutcome,
+                    foregroundFetchSeconds: foregroundFetchSeconds,
+                    foregroundSource: censusForegroundSource,
+                    backfillLaunched: true,
+                    backfillOutcome: outcome,
+                    backfillMs: censusElapsedMs(),
+                    backfillSource: backfillSource,
+                    kind: censusKind
+                )
+            }
+
             let task = Task.detached(priority: .utility) { [weak self] in
                 guard let self else { return }
-                guard await self.isCurrentBackfill(generation: generation, songID: songID) else { return }
+                guard await self.isCurrentBackfill(generation: generation, songID: songID) else {
+                    recordCensusSettle(.cancelled, nil)
+                    return
+                }
 
                 // Detached tasks do NOT inherit task-locals — bind a fresh
                 // ledger here so the backfill's persistence quorum and its
@@ -1410,7 +1572,10 @@ public class LyricsService: ObservableObject {
                         album: album
                     )
                 }) else {
-                    guard await self.isCurrentBackfill(generation: generation, songID: songID) else { return }
+                    guard await self.isCurrentBackfill(generation: generation, songID: songID) else {
+                        recordCensusSettle(.cancelled, nil)
+                        return
+                    }
                     // Same honesty rule as the foreground: a miss with zero
                     // protocol responses and transport deaths is "the network
                     // died", not "the song has no lyrics".
@@ -1436,11 +1601,15 @@ public class LyricsService: ObservableObject {
                     await MainActor.run {
                         self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, verdict: verdict)
                     }
+                    recordCensusSettle(.miss, nil)
                     await self.clearBackfillIfCurrent(generation: generation)
                     return
                 }
 
-                guard await self.isCurrentBackfill(generation: generation, songID: songID) else { return }
+                guard await self.isCurrentBackfill(generation: generation, songID: songID) else {
+                    recordCensusSettle(.cancelled, nil)
+                    return
+                }
                 switch backfill {
                 case .lyrics(let backfilled):
                     self.recordDiagnosticsLyricsBackfillFinished(
@@ -1453,13 +1622,22 @@ public class LyricsService: ObservableObject {
                         score: backfilled.score,
                         lineCount: backfilled.lyrics.count
                     )
-                    await self.applyFetchedLyricsIfCurrent(
+                    let applyVerdict = await self.applyFetchedLyricsIfCurrent(
                         backfilled,
                         title: title,
                         artist: artist,
                         duration: duration,
                         songID: songID,
                         album: album
+                    )
+                    recordCensusSettle(
+                        LyricsBackfillCensus.classifyBackfillOutcome(
+                            launched: true,
+                            cancelled: false,
+                            fetchFoundLyrics: true,
+                            applyVerdict: applyVerdict
+                        ),
+                        backfilled.source.rawValue
                     )
                 case .instrumental:
                     self.recordDiagnosticsLyricsBackfillFinished(
@@ -1482,6 +1660,7 @@ public class LyricsService: ObservableObject {
                     await MainActor.run {
                         self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, verdict: .instrumental)
                     }
+                    recordCensusSettle(.miss, nil)
                 case .unavailable:
                     self.recordDiagnosticsLyricsBackfillFinished(
                         title: title,
@@ -1506,6 +1685,7 @@ public class LyricsService: ObservableObject {
                             verdict: .searchIncomplete
                         )
                     }
+                    recordCensusSettle(.miss, nil)
                 case .incomplete:
                     self.recordDiagnosticsLyricsBackfillFinished(
                         title: title,
@@ -1520,6 +1700,7 @@ public class LyricsService: ObservableObject {
                     await MainActor.run {
                         self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, verdict: .searchIncomplete)
                     }
+                    recordCensusSettle(.miss, nil)
                 }
                 await self.clearBackfillIfCurrent(generation: generation)
             }
@@ -1548,6 +1729,7 @@ public class LyricsService: ObservableObject {
         }
     }
 
+    @discardableResult
     private func applyFetchedLyricsIfCurrent(
         _ bestResult: LyricsFetcher.LyricsFetchResult,
         title: String,
@@ -1555,7 +1737,7 @@ public class LyricsService: ObservableObject {
         duration: TimeInterval,
         songID: String,
         album: String
-    ) async {
+    ) async -> LyricsBackfillCensus.ApplyVerdict {
         // Last-resort rescale: if best lyrics still overshoot, no source had the right version
         let aligned = fetcher.rescaleTimestamps(bestResult.lyrics, duration: duration)
 
@@ -1603,26 +1785,27 @@ public class LyricsService: ObservableObject {
         )
 
         // 🔑 Only apply to UI if this is still the current song
-        await MainActor.run {
+        return await MainActor.run { () -> LyricsBackfillCensus.ApplyVerdict in
             guard self.currentSongID == songID else {
                 DebugLogger.log("LyricsService", "⏭️ Cached but not current song, skipping apply: \(songID)")
-                return
+                return .notCurrent
             }
             // Quality-gated replace (founder 2026-08-27): P1 still blocks demotion
             // (逐字→逐行 oscillation), but line-level / unsynced on screen MUST
             // hot-switch when a later result is word-level.
             let incomingHasWordLevel = processed.lyrics.contains { $0.hasSyllableSync }
+            let displayedHadWordLevel = self.lyrics.contains { $0.hasSyllableSync }
             if !Self.shouldReplaceDisplayedLyrics(
                 displayState: self.displayState,
                 displayedIsEmpty: self.lyrics.isEmpty,
-                displayedHasWordLevel: self.lyrics.contains { $0.hasSyllableSync },
+                displayedHasWordLevel: displayedHadWordLevel,
                 displayedIsUnsynced: self.isUnsyncedLyrics,
                 incomingHasWordLevel: incomingHasWordLevel,
                 incomingIsUnsynced: isUnsynced,
                 incomingIsEmpty: processed.lyrics.isEmpty
             ) {
                 DebugLogger.log("LyricsService", "🧊 Display frozen for '\(songID)' — cached the result but not replacing shown lyrics (P1, not an upgrade)")
-                return
+                return .rejectedNoDemotion
             }
             applyLyrics(processed.lyrics,
                         firstRealLyricIndex: processed.firstRealLyricIndex,
@@ -1634,6 +1817,7 @@ public class LyricsService: ObservableObject {
                         stableSongID: Self.stableSongIdentity(title: title, artist: artist),
                         duration: duration,
                         album: album)
+            return .replaced(upgradedLineToWord: !displayedHadWordLevel && incomingHasWordLevel)
         }
     }
 
@@ -1740,6 +1924,18 @@ public class LyricsService: ObservableObject {
         return (
             hasSyllableSync: lyrics.contains { $0.hasSyllableSync },
             firstRealLineSHA256: firstReal.map { normalizedFirstRealLineSHA256($0.text) }
+        )
+    }
+
+    /// Content fingerprint for TranslationDiskCache: reuses the same
+    /// first-real-line SHA256 identity as `lyricsWorkloadIdentity` so a
+    /// persisted translation is only replayed onto lyric content it was
+    /// actually derived from (a source swap invalidates the row).
+    static func translationFingerprint(lyrics: [LyricLine], firstRealLyricIndex: Int) -> String {
+        let identity = lyricsWorkloadIdentity(lyrics: lyrics, firstRealLyricIndex: firstRealLyricIndex)
+        return TranslationDiskCache.fingerprint(
+            firstRealLineSHA256: identity.firstRealLineSHA256,
+            lineCount: lyrics.count
         )
     }
 
@@ -2045,7 +2241,11 @@ public class LyricsService: ObservableObject {
         let lyricsCountBeforeAwait = lyrics.count
         let targetLanguage = Locale.Language(identifier: targetLanguageID)
 
-        let status = await LanguageAvailability().status(from: sourceLanguage, to: targetLanguage)
+        // Memoized per (source, target) pair for the process lifetime — a
+        // per-song system availability check was audit fact (a)'s second
+        // artificial-delay source (~1 real system call per song even when
+        // the language pair never changes).
+        let status = await TranslationAvailabilityMemo.shared.status(from: sourceLanguage, to: targetLanguage)
         guard currentSongID == songIDBeforeAwait,
               translationLanguage == languageBeforeAwait,
               lyrics.count == lyricsCountBeforeAwait else {
@@ -2086,10 +2286,59 @@ public class LyricsService: ObservableObject {
         }
     }
 
-    /// Performs system translation from SwiftUI .translationTask().
+    /// Enqueues a "please translate now" request, coalescing bursts (track
+    /// change + language change + showTranslation toggle firing close
+    /// together) into a single delayed signal — same behavior as the old
+    /// LyricsView generation-counter, now via the pure, fake-clock-testable
+    /// `TranslationRequestCoalescer`. The signal is consumed by whichever
+    /// `serveTranslationRequests` loop is currently live, so it works
+    /// whether or not a TranslationSession has been created yet.
+    @MainActor
+    public func requestTranslation() {
+        translationRequestCoalescer.trigger { [weak self] in
+            self?.translationRequestContinuation?.yield(())
+        }
+    }
+
+    /// Discards any buffered-but-unconsumed request and hands out a fresh
+    /// stream. Call this when the translation session's configuration is
+    /// about to change (e.g. target language) so a request queued for the
+    /// OLD session/language can never be replayed onto the NEW one.
+    @MainActor
+    public func resetTranslationRequestStream() {
+        translationRequestContinuation?.finish()
+        translationRequestContinuation = nil
+        translationRequestStream = AsyncStream { [weak self] continuation in
+            self?.translationRequestContinuation = continuation
+        }
+    }
+
+    /// Consumes translation requests for as long as `session` (or the
+    /// injected fake in tests) stays valid — call once from the
+    /// `.translationTask` action closure. A single long-lived session serves
+    /// every request until SwiftUI invalidates it on a real config change,
+    /// so the SECOND song's translation reuses the already-warmed session
+    /// instead of paying model warm-up again (A5 part 1's fix removed the
+    /// artificial per-request delay; this removes the per-request session
+    /// rebuild). The loop exits cleanly when `resetTranslationRequestStream()`
+    /// finishes the stream, or when the caller's task is cancelled.
     @available(macOS 15.0, *)
     @MainActor
-    public func performSystemTranslation(session: TranslationSession) async {
+    public func serveTranslationRequests<Executor: LyricsTranslationExecuting>(with session: Executor) async {
+        for await _ in translationRequestStream {
+            if Task.isCancelled { return }
+            await performSystemTranslation(session: session)
+        }
+    }
+
+    /// Performs system translation from SwiftUI .translationTask().
+    /// Generic over `LyricsTranslationExecuting` (not the concrete
+    /// `TranslationSession`) so tests can inject a fake executor and assert
+    /// session/executor reuse across songs without needing a real on-device
+    /// translation model (see LyricsServiceTranslationSessionReuseTests).
+    @available(macOS 15.0, *)
+    @MainActor
+    public func performSystemTranslation<Executor: LyricsTranslationExecuting>(session: Executor) async {
         // Prevent duplicate translation work while a translation is already running.
         guard !isTranslating else { return }
         guard !lyrics.isEmpty, showTranslation, !isLoading else { return }
@@ -2147,26 +2396,79 @@ public class LyricsService: ObservableObject {
             "lyricsCount": String(lyricsCountBeforeAwait)
         ])
 
-        let textsToTranslate = eligibleIndices.map { lyrics[$0].text }
-        guard let translatedTexts = await TranslationService.translationTask(session, lyrics: textsToTranslate) else {
-            debugLogPublic("❌ Translation failed; preserving user preference for the next retry")
-            currentSongTranslationID = translationID
-            translationFailed = true
-            recordDiagnosticsSystemTranslationGap(
-                reason: "translation task failed",
-                translationLanguage: targetLanguageID
-            )
-            return
+        // ------------------------------------------------------------------
+        // Disk persistence: a persisted translation for this exact content
+        // (song identity + target language + content fingerprint) skips the
+        // ML translator entirely — same-session revisit AND a fresh process
+        // restart both reuse it. Lines the disk cache doesn't have still
+        // fall through to chunked ML translation below.
+        // ------------------------------------------------------------------
+        let songKey = songIDBeforeAwait ?? ""
+        let contentFingerprint = Self.translationFingerprint(lyrics: lyrics, firstRealLyricIndex: firstRealLyricIndex)
+        let diskHit = translationDiskCache.get(songKey: songKey, targetLanguage: targetLanguageID, fingerprint: contentFingerprint) ?? [:]
+
+        let cachedIndices = eligibleIndices.filter { diskHit[$0] != nil }
+        var filledLineCount = 0
+        if !cachedIndices.isEmpty {
+            let cachedTexts = cachedIndices.compactMap { diskHit[$0] }
+            if applyLateTranslationWriteback(
+                eligibleIndices: cachedIndices,
+                translatedTexts: cachedTexts,
+                expectedSongID: songIDBeforeAwait,
+                expectedLineCount: lyricsCountBeforeAwait
+            ) {
+                filledLineCount += cachedTexts.count
+                debugLogPublic("💾 [Translation] Reused \(cachedTexts.count) persisted lines, skipped ML translator")
+            }
         }
 
-        // 🔑 After await: song may have changed — verify before writing back
-        let filledLineCount = min(eligibleIndices.count, translatedTexts.count)
-        guard applyLateTranslationWriteback(
-            eligibleIndices: eligibleIndices,
-            translatedTexts: translatedTexts,
-            expectedSongID: songIDBeforeAwait,
-            expectedLineCount: lyricsCountBeforeAwait
-        ) else {
+        let remainingIndices = eligibleIndices.filter { diskHit[$0] == nil }
+
+        if remainingIndices.isEmpty {
+            // Everything came from disk — no ML call, no chunking needed.
+        } else {
+            let textsToTranslate = remainingIndices.map { lyrics[$0].text }
+            var anyChunkLanded = false
+            await ChunkedTranslationRunner.run(
+                lines: textsToTranslate,
+                executor: session
+            ) { [weak self] chunkResult in
+                guard let self else { return }
+                // chunkResult keys are indices into `textsToTranslate`; map back
+                // to original lyrics-array indices via `remainingIndices`.
+                let orderedLocalIndices = chunkResult.keys.sorted()
+                let chunkLyricsIndices = orderedLocalIndices.map { remainingIndices[$0] }
+                let chunkTexts = orderedLocalIndices.map { chunkResult[$0]! }
+                guard self.applyLateTranslationWriteback(
+                    eligibleIndices: chunkLyricsIndices,
+                    translatedTexts: chunkTexts,
+                    expectedSongID: songIDBeforeAwait,
+                    expectedLineCount: lyricsCountBeforeAwait
+                ) else { return }
+                anyChunkLanded = true
+                filledLineCount += chunkTexts.count
+                var toPersist: [Int: String] = [:]
+                for (idx, text) in zip(chunkLyricsIndices, chunkTexts) { toPersist[idx] = text }
+                self.translationDiskCache.set(
+                    songKey: songKey,
+                    targetLanguage: targetLanguageID,
+                    fingerprint: contentFingerprint,
+                    lines: toPersist
+                )
+            }
+            if !anyChunkLanded && cachedIndices.isEmpty {
+                debugLogPublic("❌ Translation failed; preserving user preference for the next retry")
+                currentSongTranslationID = translationID
+                translationFailed = true
+                recordDiagnosticsSystemTranslationGap(
+                    reason: "translation task failed",
+                    translationLanguage: targetLanguageID
+                )
+                return
+            }
+        }
+
+        guard currentSongID == songIDBeforeAwait, lyrics.count == lyricsCountBeforeAwait else {
             debugLogPublic("⚠️ Song changed during translation, discarding results")
             return
         }
@@ -2206,7 +2508,7 @@ public class LyricsService: ObservableObject {
                 )
             }
         }
-        debugLogPublic("✅ Translation completed: \(translatedTexts.count) lines")
+        debugLogPublic("✅ Translation completed: \(filledLineCount) lines")
     }
 
     // ========================================================================

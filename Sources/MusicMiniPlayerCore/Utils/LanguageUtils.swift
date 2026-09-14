@@ -663,10 +663,57 @@ public extension LanguageUtils {
     /// Keys a title contributes to the Japanese-reading comparison lane:
     /// its reading(s) when it carries CJK, its folded Latin form otherwise.
     /// A CJK side with no usable reading contributes nothing (fail closed).
+    /// A non-CJK side also contributes its katakana-loanword approximation
+    /// (see `englishLoanwordReadingKey`) so an English title like "Lemon"
+    /// can corroborate a katakana candidate ("レモン") that has no relation
+    /// to the input's own Mandarin/Japanese romaji spelling.
     private static func readingLaneKeys(_ strippedTitle: String) -> [String] {
-        containsCJK(strippedTitle)
-            ? japaneseReadingKeys(strippedTitle)
-            : [romajiComparisonKey(strippedTitle)]
+        guard !containsCJK(strippedTitle) else {
+            return japaneseReadingKeys(strippedTitle)
+        }
+        var keys = [romajiComparisonKey(strippedTitle)]
+        let loanwordKey = englishLoanwordReadingKey(strippedTitle)
+        if !loanwordKey.isEmpty, !keys.contains(loanwordKey) {
+            keys.append(loanwordKey)
+        }
+        return keys
+    }
+
+    /// Katakana-loanword reading lane: an English/romaji title has no
+    /// Japanese "reading" of its own — `CFStringTokenizer` only reads text
+    /// that is already CJK. To corroborate a katakana candidate (an
+    /// imported loanword, e.g. "Lemon" ⇄ "レモン") we approximate the
+    /// katakana spelling Japanese would assign to the English word, then
+    /// fold it through the SAME `japaneseReadingKey` pipeline used for
+    /// genuine CJK candidates so both sides land in one comparable key space.
+    ///
+    /// The approximation is two real transliteration rules, not a word list:
+    /// 1. The unstressed English agent-noun suffix "-er"/"-or"/"-ar" is
+    ///    conventionally rendered as a long vowel in Japanese loanwords
+    ///    ("computer" → コンピューター, "dancer" → ダンサー), not literally
+    ///    "-aru"/"-oru" — so it is rewritten to "a" + chōonpu (ー) first.
+    /// 2. `CFStringTransform` with the ICU "Latin-Katakana" transliterator
+    ///    (Apple's public romaji→katakana engine) supplies everything
+    ///    else — consonant handling (e.g. l/r merging) and syllable shape
+    ///    are ICU's, not hand-rolled per word.
+    /// Fails closed (returns "") when the transliteration yields no CJK.
+    static func englishLoanwordReadingKey(_ text: String) -> String {
+        let cacheKey = ("loanword:" + text) as NSString
+        if let cached = japaneseReadingCache.object(forKey: cacheKey) { return cached as String }
+        var respelled = text.lowercased()
+        respelled = respelled.replacingOccurrences(
+            of: #"(er|or|ar)$"#, with: "aー", options: .regularExpression
+        )
+        let mutableString = NSMutableString(string: respelled)
+        CFStringTransform(mutableString, nil, "Latin-Katakana" as CFString, false)
+        let katakana = mutableString as String
+        guard containsCJK(katakana) else {
+            japaneseReadingCache.setObject("" as NSString, forKey: cacheKey)
+            return ""
+        }
+        let key = japaneseReadingKey(katakana)
+        japaneseReadingCache.setObject(key as NSString, forKey: cacheKey)
+        return key
     }
 
     /// 0...1 score for one pair of Latin transliterations: exact match,

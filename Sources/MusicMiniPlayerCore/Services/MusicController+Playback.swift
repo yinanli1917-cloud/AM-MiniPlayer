@@ -415,6 +415,16 @@ extension MusicController {
         /// (radio stations and Apple Music streaming URLs raise "Can't get current
         /// playlist" here — this is a source limitation, not a bug to special-case).
         case noCurrentPlaylist
+        /// `currentPlaylist` resolved to an UNRESOLVED SBObject proxy — Apple Music
+        /// catalog content not in the library (URL tracks/albums/radio). ScriptingBridge
+        /// does not surface this as nil or an exception on the `value(forKey:)` call
+        /// itself: the proxy object comes back live, `lastError` stays nil, but reading
+        /// `.name` on it silently yields nil and `.tracks.count` is 0 (verified via
+        /// direct ObjC probe against Music.app, see
+        /// docs/wt-d-queue-source-matrix-2026-09-12.md). Carries the current track's
+        /// `kind` string (e.g. "URL track") when it could be read, for a source-specific
+        /// empty-state message; falls back to `.noCurrentPlaylist` when kind is unknown.
+        case noCurrentPlaylistForTrackClass(String)
         /// No `currentTrack` could be read (nothing is playing, or the app just quit).
         case noCurrentTrack
         /// Music.app is not running.
@@ -428,6 +438,24 @@ extension MusicController {
         case timedOut
     }
 
+    /// Pure decision: given what was read off the (possibly unresolved)
+    /// `currentPlaylist` proxy object, decide the fetch outcome. A non-nil
+    /// `playlistName` means the proxy actually resolved (library playlist,
+    /// subscription playlist) — even a real, empty playlist (`trackCount == 0`)
+    /// is a genuine empty queue, not "unavailable". A nil `playlistName` means
+    /// the proxy never resolved; route to the track-class-specific reason when
+    /// the track's `kind` was readable, otherwise the generic `.noCurrentPlaylist`.
+    /// No ScriptingBridge — safe to unit test directly.
+    static func classifyPlaylistProxy(playlistName: String?, trackCount: Int, currentTrackKind: String?) -> QueueFetchOutcome {
+        guard let playlistName else {
+            if let currentTrackKind, !currentTrackKind.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return .noCurrentPlaylistForTrackClass(currentTrackKind)
+            }
+            return .noCurrentPlaylist
+        }
+        return .success(playlistName: playlistName)
+    }
+
     /// Pure decision: how should the fetch outcome be reported to the UI?
     /// No ScriptingBridge, no side effects — safe to unit test directly.
     static func provenance(for outcome: QueueFetchOutcome) -> MusicQueueProvenance {
@@ -436,6 +464,8 @@ extension MusicController {
             return .playlistContextOnly(playlistName: playlistName)
         case .noCurrentPlaylist:
             return .unavailable(reason: .noPublicQueueObject)
+        case .noCurrentPlaylistForTrackClass(let trackClass):
+            return .unavailable(reason: .noCurrentPlaylistForTrackClass(trackClass))
         case .noCurrentTrack:
             return .unavailable(reason: .noCurrentTrack)
         case .appUnavailable:
@@ -455,7 +485,7 @@ extension MusicController {
     /// (rows must be left untouched; a slow read is not an empty queue).
     static func shouldClearQueueRows(for outcome: QueueFetchOutcome) -> Bool {
         switch outcome {
-        case .appUnavailable, .noCurrentTrack, .noCurrentPlaylist:
+        case .appUnavailable, .noCurrentTrack, .noCurrentPlaylist, .noCurrentPlaylistForTrackClass:
             return true
         case .success, .timedOut:
             return false
@@ -594,9 +624,22 @@ extension MusicController {
                 outcome = .noCurrentPlaylist
                 return
             }
-            outcome = .success(playlistName: playlist.value(forKey: "name") as? String)
 
+            // 🔑 `currentPlaylist` resolving to a non-nil NSObject/SBElementArray is
+            // NOT proof the playlist is real: Apple Music catalog content (URL tracks
+            // not in the library) resolves it to an UNRESOLVED SBObject proxy — no
+            // exception, `lastError` stays nil, but `.name` silently reads back nil and
+            // `.tracks.count` is 0 (docs/wt-d-queue-source-matrix-2026-09-12.md). Classify
+            // by the proxy's actual readable state instead of trusting the guard above.
+            let playlistName = playlist.value(forKey: "name") as? String
+            let currentTrackKind = currentTrack.value(forKey: "kind") as? String
             let trackCount = tracks.count
+            outcome = Self.classifyPlaylistProxy(playlistName: playlistName, trackCount: trackCount, currentTrackKind: currentTrackKind)
+            DebugLogger.log("Playback", "🔍 [getUpNextTracksFromApp] outcome=\(outcome) playlistName=\(playlistName ?? "nil") kind=\(currentTrackKind ?? "nil") trackCount=\(trackCount)")
+            guard case .success = outcome else {
+                debugPrint("⚠️ [getUpNextTracksFromApp] Unresolved currentPlaylist proxy (name=nil, kind=\(currentTrackKind ?? "nil"))\n")
+                return
+            }
             let currentName = currentTrack.value(forKey: "name") as? String ?? "Unknown"
             let currentIndex = ((currentTrack.value(forKey: "index") as? Int) ?? 0) - 1
             debugPrint("🎵 [getUpNextTracksFromApp] currentTrack: \(currentName) (ID: \(currentID.prefix(8))...), playlist has \(trackCount) tracks, index=\(currentIndex)\n")

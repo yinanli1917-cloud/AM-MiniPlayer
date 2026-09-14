@@ -532,10 +532,17 @@ extension LyricsFetcher {
         let inputHasCJK = LanguageUtils.containsCJK(cleanedInput)
         let resultHasCJK = LanguageUtils.containsCJK(cleanedResult)
         guard inputHasCJK != resultHasCJK else { return false }
-        let romajiKey = LanguageUtils.romajiComparisonKey(inputHasCJK ? compactResult : compactInput)
+        let romanizedTitle = inputHasCJK ? compactResult : compactInput
+        let romajiKey = LanguageUtils.romajiComparisonKey(romanizedTitle)
         guard romajiKey.count >= 4 else { return false }  // same identity floor as the pinyin door
         let cjkTitle = inputHasCJK ? cleanedInput : cleanedResult
-        return LanguageUtils.japaneseReadingKeys(cjkTitle).contains(romajiKey)
+        let readingKeys = LanguageUtils.japaneseReadingKeys(cjkTitle)
+        if readingKeys.contains(romajiKey) { return true }
+        // Katakana loanwords ("Lemon" ⇄ "レモン") have no Mandarin/Japanese
+        // romaji relation to their own reading — corroborate via the
+        // katakana-loanword approximation lane instead.
+        let loanwordKey = LanguageUtils.englishLoanwordReadingKey(romanizedTitle)
+        return !loanwordKey.isEmpty && readingKeys.contains(loanwordKey)
     }
 
     // ────────────────────────────────────────────────────────────────────
