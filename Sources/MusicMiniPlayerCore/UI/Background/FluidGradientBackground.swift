@@ -14,6 +14,16 @@ public struct FluidGradientBackground: View {
     @State private var displayedArtwork: NSImage?
     @State private var artworkVisible = false
     @State private var tone = ArtworkBackgroundToneMap.neutral
+    // C5 (roadmap C5, "浅色封面对比度"): resolved ONCE per artwork change in
+    // updateTone(), not per frame — same cadence as `tone` above. This is a
+    // plain (Double, Double, Double) decision, not a resident CIFilter on a
+    // live layer (CLAUDE.md ban): it only feeds the existing declarative
+    // `.blur`/`.saturation` SwiftUI modifiers and a Color.black overlay,
+    // exactly like `tone` already does for brightness/contrast today.
+    @State private var contrastResolution = ArtworkContrastPolicy.resolve(
+        brightness: 0.5, params: .default, reduceTransparency: false
+    )
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     private static let crossfade = Animation.easeInOut(duration: 0.6)
 
@@ -47,8 +57,8 @@ public struct FluidGradientBackground: View {
                                        offsetX: size.width * 0.25, offsetY: size.height * 0.2,
                                        rotation: -0.35)
                         }
-                        .blur(radius: 58)
-                        .saturation(tone.textureSaturation)
+                        .blur(radius: legacyArtworkContrast ? 58 : contrastResolution.blurRadius)
+                        .saturation(legacyArtworkContrast ? tone.textureSaturation : contrastResolution.saturation)
                         .contrast(tone.textureContrast)
                         .brightness(tone.textureBrightness)
 
@@ -58,6 +68,15 @@ public struct FluidGradientBackground: View {
 
                         Color.black
                             .opacity(tone.shadeOpacity)
+
+                        // C5: extra readability scrim for bright artwork, on top of
+                        // the existing shade layer above. `.legacy` arm renders
+                        // nothing so the byte-identical pipeline is unchanged.
+                        if !legacyArtworkContrast {
+                            Color.black
+                                .opacity(contrastResolution.darkenOpacity)
+                                .animation(.smooth(duration: MicroInteractionFeel.Tokens.artworkContrastDarkenAnimationDuration), value: contrastResolution.darkenOpacity)
+                        }
                     }
                     // Distinct identity per artwork: a REPLACEMENT crossfades old → new
                     // (insertion transition). REMOVAL (artwork → nil) deliberately does NOT
@@ -116,12 +135,25 @@ public struct FluidGradientBackground: View {
             .position(x: containerSize.width / 2 + offsetX, y: containerSize.height / 2 + offsetY)
     }
 
+    private var legacyArtworkContrast: Bool {
+        MicroInteractionFeel.artworkContrast == .legacy
+    }
+
     private func updateTone() {
         guard let artwork else {
             tone = .neutral
+            contrastResolution = ArtworkContrastPolicy.resolve(
+                brightness: 0.5, params: .default, reduceTransparency: reduceTransparency
+            )
             return
         }
-        tone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
+        let metrics = artwork.artworkVisualMetrics()
+        tone = ArtworkBackgroundToneMap.forMetrics(metrics)
+        contrastResolution = ArtworkContrastPolicy.resolve(
+            brightness: metrics.averageLuminance,
+            params: MicroInteractionFeel.artworkContrastParams,
+            reduceTransparency: reduceTransparency
+        )
     }
 }
 
