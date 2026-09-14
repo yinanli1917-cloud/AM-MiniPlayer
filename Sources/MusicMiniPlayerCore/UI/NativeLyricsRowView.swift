@@ -551,6 +551,43 @@ final class NativeLyricsRowView: NSView {
         }
     }
 
+    /// Repro instrumentation (defect 1, emphasis words, 2026-09-14 founder report). Unlike the
+    /// non-emphasis word cascade (`debugMainWordGlyphPairs`, fixed by ce19929/applyFloatingHiddenBase),
+    /// `applyMainWordFloatGlyphLayers` SKIPS emphasis-order runs entirely (`where
+    /// !emphasisOrders.contains(run.order)`) and `floatingOrders` never includes them either — so
+    /// the emphasis word's own glyph range is never hidden out of the whole-line dim base. Reports
+    /// each emphasis glyph layer's applied Y/scale, index-aligned to `emphasisGlyphLayers`.
+    var debugEmphasisGlyphLayerPositions: [(appliedPositionY: CGFloat, appliedScale: CGFloat, isHidden: Bool)] {
+        emphasisGlyphLayers.map { layer in
+            let t = layer.affineTransform()
+            return (layer.position.y, sqrt(t.a * t.a + t.c * t.c), layer.isHidden)
+        }
+    }
+
+    /// True when `mainTextLayer.string` (the whole-line dim base) has BLANKED the character range
+    /// belonging to word `order` — i.e. something subtracted it the way `applyFloatingHiddenBase`
+    /// subtracts an ordinary floating word. `nil` when the layer has no attributed string or the
+    /// order is out of range. Character offset is derived the same way
+    /// `NativeLyricsHiddenTextMask.ranges` locates a word's range: sequential concatenation of
+    /// `plan.wordRuns[i].text`.
+    func debugMainTextLayerIsWordHidden(order: Int, plan: NativeLyricsTextRenderPlan) -> Bool? {
+        guard let attributed = mainTextLayer.string as? NSAttributedString else { return nil }
+        guard plan.wordRuns.indices.contains(order) else { return nil }
+        var location = 0
+        for (index, run) in plan.wordRuns.enumerated() {
+            let length = (run.text as NSString).length
+            if index == order {
+                guard location < attributed.length else { return nil }
+                guard let color = attributed.attribute(.foregroundColor, at: location, effectiveRange: nil) as? NSColor else {
+                    return nil
+                }
+                return color.alphaComponent < 0.01
+            }
+            location += length
+        }
+        return nil
+    }
+
     var debugDimCompensationActive: Bool { mainDimCompensationActive }
 
     /// True when the hover background is actually painted for this row. Tests assert it clears once
@@ -597,6 +634,14 @@ final class NativeLyricsRowView: NSView {
     var debugPreludeDotCenterYInSuperview: CGFloat {
         frame.minY + dotContainerLayer.position.y
     }
+
+    /// Repro instrumentation (defect 3, 2026-09-14 founder report: prelude dots parked at the
+    /// panel's top-left instead of centred like the active line). Mirrors the Y accessor above —
+    /// the dot cluster's centre X in the ROW's own coordinate space, so a test can compare it
+    /// against the row's content leading inset / width without guessing at CALayer internals.
+    var debugPreludeDotCenterX: CGFloat { dotContainerLayer.position.x }
+    var debugPreludeDotContainerHidden: Bool { dotContainerLayer.isHidden }
+    var debugPreludeDotContainerOpacity: Float { dotContainerLayer.opacity }
     #endif
 
     // Available to both the unit tests (DEBUG) and the in-app brightness diagnostic
