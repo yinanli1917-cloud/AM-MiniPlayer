@@ -68,6 +68,13 @@ public struct MiniPlayerView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityHidden(true)
 
+                // C1 贴边形变 pill (research/c1-edge-morph-design-2026-09-12.md §3):
+                // same ZStack level as PanelBackdrop/WindowDraggableView, above
+                // the backdrop so the pill's glass renders over it, below the
+                // page content (zIndex left at default 0, pages set 0/1 above).
+                EdgeMorphHost()
+                    .zIndex(2)
+
                 // Pages are stacked so matchedGeometryEffect can move a single artwork image.
 
                 // Lyrics is the only page with frame-driven word rendering. Keep it
