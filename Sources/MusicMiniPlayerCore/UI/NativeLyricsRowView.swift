@@ -591,6 +591,35 @@ final class NativeLyricsRowView: NSView {
         return nil
     }
 
+    /// Same check as `debugMainTextLayerIsWordHidden` but against `mainBrightTextLayer` — the
+    /// sweep/karaoke overlay layer that `emphasisGlyphLayers` are mounted onto as sublayers
+    /// (`mainEmphasisLayer` parents into it). 2026-09-15 repro: unlike `mainTextLayer` (fixed
+    /// 2026-09-14, `applyFloatingHiddenBase`), NOTHING ever hides an emphasis word's glyph range
+    /// in `mainBrightTextLayer.string` while `geometryReady == true` (the normal, majority-of-
+    /// playback-time path) — `applyHiddenEmphasisText` (the one function that hides BOTH layers)
+    /// only runs when `managesContainerText` (`!geometryReady`) is true. `mainPerRunSweepMaskLayer`
+    /// reveals `mainBrightTextLayer`'s own text for that word once the sweep wavefront passes it,
+    /// at the word's static rest position — simultaneously with the floating/scaled/glowing
+    /// `emphasisGlyphLayers` copy on top. This accessor exists to make that gap directly
+    /// observable from tests, not to change any rendering behavior.
+    func debugMainBrightTextLayerIsWordHidden(order: Int, plan: NativeLyricsTextRenderPlan) -> Bool? {
+        guard let attributed = mainBrightTextLayer.string as? NSAttributedString else { return nil }
+        guard plan.wordRuns.indices.contains(order) else { return nil }
+        var location = 0
+        for (index, run) in plan.wordRuns.enumerated() {
+            let length = (run.text as NSString).length
+            if index == order {
+                guard location < attributed.length else { return nil }
+                guard let color = attributed.attribute(.foregroundColor, at: location, effectiveRange: nil) as? NSColor else {
+                    return nil
+                }
+                return color.alphaComponent < 0.01
+            }
+            location += length
+        }
+        return nil
+    }
+
     var debugDimCompensationActive: Bool { mainDimCompensationActive }
 
     /// True when the hover background is actually painted for this row. Tests assert it clears once
