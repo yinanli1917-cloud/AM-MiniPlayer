@@ -241,6 +241,13 @@ public class MusicController: ObservableObject {
     /// Playlist-row artwork tiers (memory → disk → merged network fetch).
     @MainActor lazy var rowArtworkStore: RowArtworkStore = makeRowArtworkStore()
 
+    /// Bounds how many playlist rows resolve artwork concurrently (2026-09-15
+    /// artwork-storm fix — see RowArtworkFetchPolicy.swift).
+    let rowArtworkFetchGate = RowArtworkFetchGate()
+
+    /// Session-scoped backoff memo for row artwork terminal failures.
+    let rowArtworkNegativeCache = RowArtworkNegativeCache()
+
     /// Estimate NSImage memory cost for NSCache (RGBA, 4 bytes/pixel)
     static func imageCacheCost(_ image: NSImage) -> Int {
         let rep = image.representations.first

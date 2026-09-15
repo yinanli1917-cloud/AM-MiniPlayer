@@ -1,1 +1,1 @@
-version=0.29 build_time=2026-09-15T06:43:40Z git=2e72a71 release_sha256=bfec1c8d4804a538335c58da4af75135e779fa429f1dc457f11324125ea1e899 auto_update=disabled edition=pure
+version=0.29 build_time=2026-09-15T08:54:40Z git=16606cb release_sha256=9f2d501b4fb927c6a4a7d17ab09c511b407c0239d57d0d5ea4ff09904196d47f auto_update=disabled edition=pure
