@@ -660,3 +660,47 @@ PNG（三张并排）：`research/repro-2026-09-14-lyrics-render/prelude-three-e
 
 **这是复现，不是修复**：新增的 `debugBeginManualScroll(frozenAt:)` 是纯只读复现工具
 （`LyricsLayerRendererView.swift`，`#if DEBUG` 块内），本节没有改任何生产行为。
+
+---
+
+## 缺陷「逐字歌整行全亮」续（2026-09-14，创始人要求换真实时钟方法）—— 准备工作完成，真实时钟复现尚未开始
+
+创始人补充：播一首节奏快一点的逐字歌基本都能复现，他 09-12 的录屏里就有实锤
+（Symptom 2，大橋純子那首，f1053 整行首帧即亮、随后 2.9s 恒亮无梯度）。锁步复现（本文件
+`test_wholeLineFlash_rowReuseAcrossMismatchedGeometry_fastDistantSeeks`，以及此前 WT-B
+的 7 首歌全切行扫描）0 次命中，说明锁步这套方法本身丢失了真实运行时的某个条件——要求
+换成**不用锁步**、真实 CVDisplayLink + 真实墙钟 + 连续 1x 播放钟，播满 60-120s 真实时长，
+逐帧写 JSONL，用大橋純子那首和缓存里最快的 3 首逐字歌。
+
+### 已完成：从真实缓存里找到全部 4 首目标歌
+
+`~/Library/Application Support/nanoPod/lyrics_cache.json`（216 条缓存,3.2MB）+
+`metadata_cache.json`（title/artist 映射,不同哈希空间,靠歌词内容首行文本交叉核对）：
+
+| 歌曲 | 缓存 hash（lyrics_cache.json） | 行数 | 总音节数 | 平均音节时长 | 备注 |
+|---|---|---|---|---|---|
+| 大橋純子「水玉模様の傘」 | `4ac42fd65a7f7f7dbcb7cac717cfceb9c79548627476d05eb62660b78204eacf`（同内容还有 2 个重复哈希：`91419f15...`、`dbf4a989...`） | 23 | — | ~0.5-0.6s/字 | 创始人指名的那首,`kind=synced`,逐字（每假名/汉字一条 word),225s,与录屏描述的"23 行 YRC 逐字"吻合 |
+| 最快 #1「How's about your company this evenin'」 | `c0c6f4a109d7a3fa5f5b3a9d7a0b05804b717ddd6412a1bd180ef78f0398d0f7`（另有 2 个重复哈希） | 85 | 449 | **0.406s** | 357s,全库最快 |
+| 最快 #2「生份的 遥远的歹势细腻」 | `2e9d901f619400b35ffb8af96914a419b6334812329bde244755ca32d5bdef1f`（另有 2 个重复哈希） | 39 | 310 | 0.430s | 闽南语/国语 |
+| 最快 #3「仍然记得个一次 风里相依」 | `9e95e15c0d104cbfffda520dbd5af4a8e4180ee2d9c16f9e3db8351e833d7c8b`（另有 1 个重复哈希） | 27 | 236 | 0.446s | 中文 |
+
+（"另有 N 个重复哈希"是同一份歌词内容在缓存里存了多份——不同解析路径/时间点写入的，
+内容一致，用哪个都行。)
+
+### 尚未做：真实 CVDisplayLink + 墙钟复现
+
+这条方法论上跟本次会话其余所有测试都不同——此前全部测试用 `debugNowOverride`/
+`debugTick` 锁步驱动（确定性、但正是创始人怀疑"丢条件"的那套方法)；这次要求**不设**
+`debugNowOverride`（surface 自己的 `CVDisplayLink` 用真实 `CACurrentMediaTime()`）、
+播放钟按真实 1x 速率连续推进（不是逐帧跳），整首播 60-120 秒真实挂钟时间，期间每帧
+采样 `debugLastWholeLineHighlight`/亮暗 tile 计数/每行 sweep progress 写 JSONL。
+
+没有在本轮做的原因：这是一套全新的测试方法（真实定时器/真实后台线程回调,需要处理
+XCTest 主线程与 CVDisplayLink 回调线程之间的状态读取,还要对 4 首歌各跑 60-120 秒
+真实时间,即 4-8 分钟纯等待)，独立于本轮已完成的三个修复和已复现的三点路径不一致问题；
+草率在本轮末尾赶工容易做出一个有竞态/误判的复现工具，产出不可靠的"复现"结论——这类
+真实时序 bug 的方法论本身就是创始人这次要验证的东西，值得单独认真做一次，不该压缩在
+已经很长的这轮末尾。
+
+**建议**：作为下一轮的第一件事单独做，方法已经定好（真实 4 首歌哈希、真实 CVDisplayLink
+不设 override、JSONL 逐帧），不需要再花时间调研，可以直接动手搭建。
