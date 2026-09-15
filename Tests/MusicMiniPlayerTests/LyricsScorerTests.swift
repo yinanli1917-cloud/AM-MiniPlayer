@@ -466,15 +466,56 @@ final class LyricsScorerTests: XCTestCase {
         // component 4's ratio brackets) by a few points on its own — that's
         // unrelated to this fix. What this test actually guards: an 8s
         // intro (well under the 90s/78.6s threshold) must not ALSO eat the
-        // new head-gap penalty (minimum -25 once it fires), so the total
+        // new head-gap penalty (minimum -15 once it fires), so the total
         // gap must stay well below that floor.
         let lines = makeLyricsWithHeadOffset(count: 40, duration: 262, headStart: 8)
         let withNormalIntro = scorer.calculateScore(lines, source: .netEase, duration: 262, translationEnabled: false)
         let noIntro = makeLyricsWithHeadOffset(count: 40, duration: 262, headStart: 0)
         let withoutIntro = scorer.calculateScore(noIntro, source: .netEase, duration: 262, translationEnabled: false)
         XCTAssertLessThan(
-            withoutIntro - withNormalIntro, 20,
-            "an 8s intro must not trip the new head-gap penalty (minimum -25 once triggered) — only the pre-existing duration-match granularity should separate these two scores"
+            withoutIntro - withNormalIntro, 12,
+            "an 8s intro must not trip the new head-gap penalty (minimum -15 once triggered) — only the pre-existing duration-match granularity should separate these two scores"
+        )
+    }
+
+    /// 2026-09-14 fix (founder-approved task 5): LyricsVerifier's `check`
+    /// resolves the full foreground+backfill pipeline in one shot, so it
+    /// cannot demonstrate the real app's separate <=3s foreground-only
+    /// admission window where the founder actually saw the wrong 26-line
+    /// candidate. This fixture is built from the real production log
+    /// (research/repro-2026-09-14-lyrics-pipeline.md 缺陷3): eill "Plastic
+    /// Love" (262s), a NetEase candidate cached 2026-09-14 20:54:53 local
+    /// with score=91.8 (OLD formula), 26 lines, firstReal text "私のことを
+    /// 決して本気で愛さないで" — a mid-song chorus line, NOT the true
+    /// opening. That exact line's real timestamp (95.2s) comes from the
+    /// CORRECT candidate's own `--dump` (same session, tool-verified: `[16]
+    /// 95.2s 私のことを決して本気で愛さないで`) — the wrong candidate is
+    /// gone from the live source pool as of this fix (a fresh fetch now
+    /// resolves directly to the correct 37-line candidate), so its
+    /// timestamps are NOT independently recoverable; this fixture
+    /// reconstructs an equivalent candidate (26 lines starting at the same
+    /// 95.2s, evenly spaced to near the track's end) rather than fabricating
+    /// unrelated numbers.
+    func testPlasticLoveWrongMidSongCandidate_scoresBelowCorrectCandidate() {
+        let duration = 262.0
+        let wrongCandidate = (0..<26).map { i -> LyricLine in
+            let start = 95.2 + Double(i) * 6.144
+            return LyricLine(text: "wrong candidate line \(i)", startTime: start, endTime: start + 5.0)
+        }
+        let wrongScore = scorer.calculateScore(wrongCandidate, source: .netEase, duration: duration, translationEnabled: false)
+
+        // The correct candidate: 37 real lines from 31.5s (真实开头 "突然の
+        // キスや") to 238.6s, matching `swift run LyricsVerifier check
+        // "Plastic Love" "eill" 262 --dump` in this same repro session.
+        let correctCandidate = (0..<37).map { i -> LyricLine in
+            let start = 31.5 + Double(i) * 5.6
+            return LyricLine(text: "correct candidate line \(i)", startTime: start, endTime: start + 5.0)
+        }
+        let correctScore = scorer.calculateScore(correctCandidate, source: .netEase, duration: duration, translationEnabled: false)
+
+        XCTAssertLessThan(
+            wrongScore, correctScore - 20,
+            "the wrong mid-song candidate (starts 95.2s in, missing the true intro) must score well below the correct full-coverage candidate — before this fix, coverage only measured head-to-tail span so a mid-song start could still claim full coverage credit (real log: this exact candidate scored 91.8 under the old formula)"
         )
     }
 
