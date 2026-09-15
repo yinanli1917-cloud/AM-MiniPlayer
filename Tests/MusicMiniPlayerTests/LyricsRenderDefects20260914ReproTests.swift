@@ -990,8 +990,17 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
         let plateauLengths: [Int]
     }
 
+    /// 2026-09-15 redo of the Symptom-3 fix (b12db38, reverted 1a93ffd after a founder-reported
+    /// CPU/flashing regression traced to b12db38's own added code — see
+    /// `lastAccumulatedHeightsFedToPresentationEngine`'s doc comment in LyricsLayerRendererView.swift
+    /// for the root cause and the corrected comparison basis). This is the SAME 130-cycle whole-
+    /// stack-jump detector a73c556 originally wrote as a reverse (pre-fix) assertion — reused as
+    /// the permanent regression guard, assertion flipped to prove the fix, and the sampling
+    /// channel corrected from `debugModelY` (which the current architecture uses for SCALE only,
+    /// per `applyFrame`'s own comment — a dead end b12db38 discovered the hard way) to
+    /// `frame.minY` (the real, `applyFrame`-assigned position channel).
     @MainActor
-    func test_symptom3_reflowSnap_afterDeferredHeightMeasurementCatchesUp() {
+    func test_symptom3_afterFix_noReflowSnap_heightLandsInSameCycle() {
         let rows = symptom3Rows(count: 30)
         let panelWidth: CGFloat = 260
         let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 700))
@@ -1060,7 +1069,7 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
             }
 
             for idx in max(0, current - 3)...min(rows.count - 1, current + 3) {
-                let y = surface.debugRowView(forIndex: idx)?.debugModelY ?? .nan
+                let y = surface.debugRowView(forIndex: idx)?.frame.minY ?? .nan
                 yHistory[idx, default: []].append(y)
             }
             imageHistory.append(renderSurfaceCGImage(surface, scale: 1)!)
@@ -1103,10 +1112,11 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
             print("[Symptom3] tick=\(e.tickIndex) rows=\(e.rowIndices) Δy=\(e.deltaY.map { String(format: "%.2f", $0) }) plateau=\(e.plateauLengths)")
         }
 
-        XCTAssertGreaterThan(events.count, 0,
-            "expected at least one whole-stack settle→jump cluster — if this fails, the " +
-            "deferred-height-cache lag model did not reproduce Symptom 3 in this fixture and the " +
-            "suspicion should be treated as NOT reproduced, not confirmed")
+        XCTAssertEqual(events.count, 0,
+            "REGRESSION: found \(events.count) whole-stack settle→jump cluster(s) — accumulatedHeights " +
+            "should be corrected in the SAME configure() cycle a row's real height is first measured " +
+            "(reconcileVisibleRowViews / updatePresentationEngineIfHeightsChanged), so no stale frame " +
+            "should ever commit to screen")
 
         // Pick the event with the LONGEST plateau (most representative/stable — matches the
         // spec's "the founder-flagged instance had a 100-170ms plateau" framing) and centre the
@@ -1131,6 +1141,138 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
                 to: "\(Self.outDir)/symptom3-reflow-snap-chart.png"
             )
         }
+    }
+
+    /// 2026-09-15: the coordinator-mandated second regression guard for the redone Symptom-3 fix
+    /// — proves the fix CONVERGES instead of re-priming the presentation engine's spring target
+    /// forever (the mechanism behind the founder-reported CPU/flashing regression that forced
+    /// b12db38's revert). Real surface, real spring (via `debugTick`), current index FROZEN at
+    /// row 0 for the whole test (isolates height-stability convergence from any line-advance
+    /// motion) — same isolation strategy as `test_symptom3_afterFix_isolatedHeightJump_rowLandsImmediately`
+    /// used to exist (removed by the revert, not reintroduced verbatim here) for the ORIGINAL
+    /// same-cycle-landing property; this test targets the DIFFERENT property the redo adds:
+    /// convergence, not just same-cycle landing.
+    ///
+    /// Row 1's content genuinely changes ONCE (short → long, a real height change, not synthetic
+    /// noise) partway through, `debugHeightCorrectionReFeedCount` must record EXACTLY that one
+    /// re-feed, and a long STABLE window with IDENTICAL content afterward must add ZERO further
+    /// re-feeds — the direct proof this doesn't re-prime the spring target every cycle forever.
+    @MainActor
+    func test_symptom3_afterFix_stableHeights_noRepeatedReFeed_loopCanStop() {
+        // Deliberately NON-syllable-synced lines (words: [], matching symptom3Rows' own style) —
+        // `hasActiveTextAnimation`'s veto (`NativeLyricsLoopIdleDecision.needsTextAnimation`)
+        // treats ANY syllable-synced ACTIVE row as needing the loop alive for as long as
+        // `isPlaying == true`, regardless of whether its sweep progress has actually finished —
+        // correct for a real app (real elapsed time keeps advancing the sweep), but incompatible
+        // with this test's frozen clock, where "loop can stop once nothing is left to animate" is
+        // exactly the property under test. A line-level (unsynced) active row carries no such
+        // permanent veto, so it isolates height-stability convergence from that separate,
+        // orthogonal (and itself correct) design.
+        let row0Line = LyricLine(text: "hi", startTime: 0, endTime: 3, words: [])
+        let row1ShortLine = LyricLine(text: "yo", startTime: 3, endTime: 6, words: [])
+        let row1LongLine = LyricLine(
+            text: "every single word you ever said to me still echoes down this empty hallway tonight",
+            startTime: 3, endTime: 6, words: []
+        )
+        let row2Line = LyricLine(text: "bye now", startTime: 9, endTime: 12, words: [])
+        func rowsFor(row1Long: Bool) -> [LayerBackedLyricRow] {
+            [
+                row(for: row0Line, index: 0),
+                row(for: row1Long ? row1LongLine : row1ShortLine, index: 1),
+                row(for: row2Line, index: 2),
+            ]
+        }
+        let panelWidth: CGFloat = 220
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 400))
+        host(surface, NSSize(width: panelWidth, height: 400))
+        let mc = MusicController(preview: true)
+        mc.duration = 60
+        mc.isPlaying = true
+        surface.debugSkipDedupe = true
+        var wall: CFTimeInterval = 41_000
+        var date = Date(timeIntervalSinceReferenceDate: 704_000_000)
+        surface.debugNowOverride = { wall }
+        mc.debugPlaybackClockDateProvider = { date }
+        defer {
+            surface.debugNowOverride = nil
+            mc.debugPlaybackClockDateProvider = nil
+        }
+
+        let defaultHeight: CGFloat = 36
+        let spacing: CGFloat = 6
+        func staticAccumulatedHeights(_ rows: [LayerBackedLyricRow]) -> [Int: CGFloat] {
+            var acc: [Int: CGFloat] = [:]
+            var running: CGFloat = 0
+            for r in rows {
+                acc[r.index] = running
+                running += defaultHeight + spacing
+            }
+            return acc
+        }
+        func driveOneCycle(row1Long: Bool) {
+            let rows = rowsFor(row1Long: row1Long)
+            // t=0.5 is PAST row 0's own word window ("hi", [0, 0.4]) — its per-word sweep is
+            // fully complete (progress==1.0) and stable, not frozen mid-sweep. Freezing mid-word
+            // (e.g. t=0.1) would pin the active row's sweep at a permanently-incomplete progress,
+            // which the idle decision correctly refuses to treat as "settled" (an incomplete sweep
+            // SHOULD keep the loop alive in a real app) — a test-harness artifact of a frozen
+            // clock, not something this test should be asserting against.
+            mc.syncPlaybackClock(to: 0.5, playing: true, at: date)
+            surface.configure(configWithHeights(
+                rows: rows, current: 0, mc: mc, width: panelWidth,
+                accumulatedHeights: staticAccumulatedHeights(rows),
+                onHeightMeasured: { _, _ in }
+            ))
+            surface.layoutSubtreeIfNeeded()
+            for _ in 0..<10 {
+                wall += 1.0 / 60.0
+                date = date.addingTimeInterval(1.0 / 60.0)
+                surface.debugTick(displayInterval: 1.0 / 60.0)
+            }
+        }
+
+        // Preamble with row 1 SHORT: clears the 0.8s appear-window force-snap and lets the first
+        // (short) measurement + its own one-time re-feed settle out.
+        let preambleCycles = 15
+        for _ in 0..<preambleCycles { driveOneCycle(row1Long: false) }
+        let reFeedCountAfterShortPreamble = surface.debugHeightCorrectionReFeedCount
+
+        // The actual height change: row 1 becomes long (3-line wrap at this width) for one cycle,
+        // then STAYS long for every cycle after — the realistic trigger (e.g. a translation
+        // arriving, or a lyric line being corrected), not synthetic per-frame noise.
+        driveOneCycle(row1Long: true)
+        let reFeedCountRightAfterChange = surface.debugHeightCorrectionReFeedCount
+        XCTAssertGreaterThan(reFeedCountRightAfterChange, reFeedCountAfterShortPreamble,
+            "sanity: row 1's content genuinely changed height (short single line → long 3-line " +
+            "wrap) — this MUST register as at least one re-feed, or this test isn't exercising the " +
+            "fix at all")
+
+        let stableCycles = 40
+        for _ in 0..<stableCycles { driveOneCycle(row1Long: true) }
+        let reFeedCountAfterStableWindow = surface.debugHeightCorrectionReFeedCount
+
+        print("[Symptom3-stable] reFeed: afterShortPreamble=\(reFeedCountAfterShortPreamble), " +
+              "rightAfterChange=\(reFeedCountRightAfterChange), " +
+              "after\(stableCycles)MoreStableCycles=\(reFeedCountAfterStableWindow), " +
+              "hasActiveMotion=\(surface.debugPresentationEngineHasActiveMotion), " +
+              "loopRunning=\(surface.debugIsPresentationLoopRunning)")
+
+        XCTAssertEqual(reFeedCountAfterStableWindow, reFeedCountRightAfterChange,
+            "REGRESSION: \(reFeedCountAfterStableWindow - reFeedCountRightAfterChange) extra " +
+            "presentationEngine re-feed(s) happened across \(stableCycles) configure cycles with " +
+            "row 1's content held CONSTANT after the one genuine change — this is exactly the " +
+            "CPU/flashing regression the prior version of this fix (b12db38) caused: re-priming " +
+            "the spring's target every cycle instead of converging to a stable no-op once the real " +
+            "height is known and stops changing")
+
+        XCTAssertFalse(surface.debugPresentationEngineHasActiveMotion,
+            "with row 1's content and the active index both stable for \(stableCycles) cycles " +
+            "after the one genuine change, the presentation engine's spring should have fully " +
+            "settled (isSettled) — if this is still true, the idle gate can never fire and the " +
+            "loop never stops (the reported CPU-stays-high symptom)")
+        XCTAssertFalse(surface.debugIsPresentationLoopRunning,
+            "the presentation loop should have stopped once nothing was left to animate — if it's " +
+            "still running, whatever kept hasActiveMotion (or another idle veto) true is still active")
     }
 
     /// Line chart of tracked rows' Y (debugModelY) across ticks, built with plain NSBezierPath —

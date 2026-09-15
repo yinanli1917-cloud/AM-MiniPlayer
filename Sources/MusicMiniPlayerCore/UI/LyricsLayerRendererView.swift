@@ -245,6 +245,27 @@ final class NativeLyricsSurfaceView: NSView {
     nonisolated(unsafe) private let displayLinkScheduler = NativeLyricsDisplayLinkScheduler()
     private var rowTapHandlers: [Int: () -> Void] = [:]
     private var measuredHeightsByIndex: [Int: CGFloat] = [:]
+    /// The `accumulatedHeights` most recently fed to `presentationEngine.update(...)`, from
+    /// EITHER call site (`configure()`'s always-runs call, or the same-cycle height correction in
+    /// `reconcileVisibleRowViews`) — see `updatePresentationEngine(...)`. `nil` means "never fed",
+    /// which forces the very first update through.
+    ///
+    /// 2026-09-15 (redo of b12db38, reverted 1a93ffd after a founder-reported CPU/flashing
+    /// regression): this is deliberately NOT compared against the externally-supplied
+    /// `configuration.accumulatedHeights` (SwiftUI/LyricsView's own height cache). That external
+    /// value structurally can never be guaranteed to bit-match the renderer's own
+    /// `measuredHeightsByIndex`-derived recomputation — they are two independently-measured,
+    /// independently-rounded pipelines (one direct `NSView` measurement here, one routed through
+    /// two `DispatchQueue.main.async` hops and LyricsView's own cache) that have no reason to ever
+    /// converge to the identical `CGFloat` values. Comparing against it made
+    /// "did heights actually change" read true on effectively every reconcile, re-priming the
+    /// presentation spring's target every cycle — the spring never reached `isSettled`, so
+    /// `presentationEngine.hasActiveMotion` stayed permanently true and defeated the idle gate
+    /// (CPU stayed high, no genuine pixel movement was pending). Comparing against a value we
+    /// ourselves fed last time is an exact-equality check between two computations of the SAME
+    /// pipeline (`measuredHeightsByIndex`) when nothing has actually changed, so it converges to
+    /// `false` and stays there once the row heights are known.
+    private var lastAccumulatedHeightsFedToPresentationEngine: [Int: CGFloat]?
     private var displayLink: CVDisplayLink?
     private var lastPresentationTick: CFTimeInterval?
     #if LOCAL_DEVELOPER_BUILD
@@ -326,6 +347,14 @@ final class NativeLyricsSurfaceView: NSView {
     var debugVisualStateCount: Int { visualStates.count }
     var debugReusePoolCount: Int { rowViewReusePool.count }
     var debugIsPresentationLoopRunning: Bool { displayLink != nil }
+    var debugPresentationEngineHasActiveMotion: Bool { presentationEngine.hasActiveMotion }
+    /// Counts actual re-feeds of `presentationEngine.update(...)` from the same-cycle height
+    /// correction (`updatePresentationEngineIfHeightsChanged`) ONLY — not the unconditional
+    /// top-of-configure() feed, which is expected to fire every reaching cycle regardless of
+    /// height. A stable count across N configure cycles with unchanged row heights is the direct
+    /// proof the 2026-09-15 fix converges instead of re-priming the spring forever (the CPU/
+    /// flashing regression the prior version of this fix caused).
+    private(set) var debugHeightCorrectionReFeedCount = 0
     /// A/B seam: when true, visualCurrentIndex binds the visual demotion to the SEMANTIC line index
     /// (pre-1e1ffbf), instead of the scroll wave's per-row targetIndex (current). Headless-only.
     static var debugForceSemanticVisualIndex = false
@@ -935,7 +964,7 @@ final class NativeLyricsSurfaceView: NSView {
         consumeDirectSnapRequestIfNeeded(runtimeConfiguration)
         recordConfigureEventIfNeeded(configuration: runtimeConfiguration)
         let snapMode = frameSnapMode(for: runtimeConfiguration)
-        presentationEngine.update(
+        feedPresentationEngine(
             LyricsPresentationEngineConfiguration(
                 currentIndex: runtimeConfiguration.effectiveCurrentIndex,
                 scrollTargetIndex: runtimeConfiguration.effectiveScrollTargetIndex,
@@ -1067,6 +1096,67 @@ final class NativeLyricsSurfaceView: NSView {
     }
     #endif
 
+    /// Unconditional feed: calls `presentationEngine.update(...)` exactly as before (every
+    /// configure() cycle that reaches this point — index/hotGroups/mode changes on every line
+    /// advance, not just height changes) and records what `accumulatedHeights` it fed, so a LATER
+    /// gated call in the same or a subsequent cycle (`updatePresentationEngineIfHeightsChanged`)
+    /// has an accurate "what did we last actually tell the engine" baseline. This must stay
+    /// UNCONDITIONAL — gating it on heights would break every ordinary line-advance whenever row
+    /// heights happen to be stable (the overwhelming majority of the time, once first measured).
+    private func feedPresentationEngine(
+        _ configuration: LyricsPresentationEngineConfiguration,
+        onTargetsChanged: @escaping () -> Void
+    ) {
+        presentationEngine.update(configuration, onTargetsChanged: onTargetsChanged)
+        lastAccumulatedHeightsFedToPresentationEngine = configuration.accumulatedHeights
+    }
+
+    /// Same-cycle height correction (2026-09-15 redo of b12db38, reverted in 1a93ffd after a
+    /// founder-reported CPU/flashing regression — see `lastAccumulatedHeightsFedToPresentationEngine`'s
+    /// doc comment for the root cause). Re-feeds the engine with FRESHLY-recomputed
+    /// `accumulatedHeights` ONLY when they differ from what was last actually fed — comparing
+    /// against our own last-fed value (not the externally-supplied, structurally-never-guaranteed-
+    /// to-match `configuration.accumulatedHeights`) so this converges to a no-op once a row's real
+    /// height is known and stops changing, instead of re-priming the spring's target — and
+    /// therefore keeping `presentationEngine.hasActiveMotion` true — every single cycle forever.
+    /// Returns whether it actually re-fed the engine (for callers that want to know).
+    @discardableResult
+    private func updatePresentationEngineIfHeightsChanged(
+        runtimeConfiguration: LyricsLayerRendererConfiguration,
+        refreshedAccumulatedHeights: [Int: CGFloat]
+    ) -> Bool {
+        guard refreshedAccumulatedHeights != lastAccumulatedHeightsFedToPresentationEngine else {
+            return false
+        }
+        #if DEBUG
+        debugHeightCorrectionReFeedCount += 1
+        #endif
+        let refreshedSnapMode = frameSnapMode(for: runtimeConfiguration)
+        feedPresentationEngine(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: runtimeConfiguration.effectiveCurrentIndex,
+                scrollTargetIndex: runtimeConfiguration.effectiveScrollTargetIndex,
+                hotActiveIndices: runtimeConfiguration.nativeHotActiveIndices,
+                bufferedActiveIndices: runtimeConfiguration.nativeBufferedActiveIndices,
+                isManualScrolling: runtimeConfiguration.effectiveIsManualScrolling,
+                renderedIndices: runtimeConfiguration.renderedIndices,
+                anchorY: runtimeConfiguration.anchorY,
+                accumulatedHeights: refreshedAccumulatedHeights,
+                lineInterval: runtimeConfiguration.lineInterval,
+                hasSyllableSync: runtimeConfiguration.hasSyllableSync,
+                isInterludeActive: runtimeConfiguration.interludeAfterIndex != nil,
+                trackContext: runtimeConfiguration.trackContext,
+                isWaveTimelineDiagnosticsEnabled: runtimeConfiguration.isWaveTimelineDiagnosticsEnabled
+                    || DiagnosticsService.shared.isLyricWaveTimelineEnabled,
+                playbackMode: refreshedSnapMode.playbackMode
+            ),
+            onTargetsChanged: { [weak self] in
+                self?.startPresentationLoop()
+            }
+        )
+        return true
+    }
+
     @discardableResult
     private func reconcileVisibleRowViews(
         runtimeConfiguration: LyricsLayerRendererConfiguration,
@@ -1152,6 +1242,33 @@ final class NativeLyricsSurfaceView: NSView {
                 }
                 _ = updateContentIfNeeded(view: view, row: row, configuration: rowTextConfiguration)
             }
+            // Symptom-3 fix (2026-09-14, redone 2026-09-15 after a founder-reported CPU/flashing
+            // regression forced a revert — see `lastAccumulatedHeightsFedToPresentationEngine`'s
+            // doc comment for the root cause of that regression and why the comparison basis
+            // changed). The content loop just above can measure a row's REAL height for the first
+            // time this cycle (`updateContentIfNeeded` → `measuredHeightsByIndex`), but
+            // `runtimeConfiguration.accumulatedHeights` was computed once in `runtimeConfiguration(from:)`
+            // before that loop ran, so it still reflects the OLD/placeholder height for that row —
+            // every row below it would be positioned via a stale offset this whole frame, until the
+            // EXTERNAL SwiftUI height cache (two `DispatchQueue.main.async` hops away) eventually
+            // catches up on a LATER cycle and produces a correcting jump (the reported "settle then
+            // synchronized snap"). Recompute `accumulatedHeights` HERE from the now-fresh
+            // `measuredHeightsByIndex` so this frame's positioning is already correct — but only
+            // re-feed the presentation engine's spring target when that recomputed value actually
+            // differs from what we last fed it (not from the structurally-lagging external cache),
+            // so this is a one-time correction per genuine height change, not a perpetual re-prime.
+            let refreshedAccumulatedHeights = NativeLyricsHeightAccumulator.accumulatedHeights(
+                renderedIndices: runtimeConfiguration.renderedIndices,
+                configuredAccumulatedHeights: runtimeConfiguration.accumulatedHeights,
+                measuredHeights: measuredHeightsByIndex,
+                interludeAfterIndex: runtimeConfiguration.interludeAfterIndex
+            )
+            var runtimeConfiguration = runtimeConfiguration
+            runtimeConfiguration.accumulatedHeights = refreshedAccumulatedHeights
+            updatePresentationEngineIfHeightsChanged(
+                runtimeConfiguration: runtimeConfiguration,
+                refreshedAccumulatedHeights: refreshedAccumulatedHeights
+            )
             let renderSnapshot = nativeFrameRenderSnapshot(
                 rows: visibleRows,
                 configuration: runtimeConfiguration,
