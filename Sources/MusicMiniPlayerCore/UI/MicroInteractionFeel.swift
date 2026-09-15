@@ -311,7 +311,7 @@ public enum MicroInteractionFeel {
     public static var edgeMorph: EdgeMorphMode {
         #if DEBUG
         if let testingEdgeMorph { return testingEdgeMorph }
-        if isRunningTests { return .morph }
+        if isRunningTests { return .v0 }
         #endif
         return EdgeMorphMode.resolve(
             from: UserDefaults.standard.string(forKey: edgeMorphDefaultsKey)
@@ -321,7 +321,7 @@ public enum MicroInteractionFeel {
     public static var settingsTab: SettingsTabMode {
         #if DEBUG
         if let testingSettingsTab { return testingSettingsTab }
-        if isRunningTests { return .custom }
+        if isRunningTests { return .system }
         #endif
         return SettingsTabMode.resolve(
             from: UserDefaults.standard.string(forKey: settingsTabDefaultsKey)

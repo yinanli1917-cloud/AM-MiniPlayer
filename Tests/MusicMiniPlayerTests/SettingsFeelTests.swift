@@ -137,7 +137,7 @@ final class SettingsFeelTests: XCTestCase {
         MicroInteractionFeel.testingSettingsTab = .system
         XCTAssertEqual(MicroInteractionFeel.settingsTab, .system)
         MicroInteractionFeel.testingSettingsTab = nil
-        XCTAssertEqual(MicroInteractionFeel.settingsTab, .custom) // isRunningTests default
+        XCTAssertEqual(MicroInteractionFeel.settingsTab, .system) // isRunningTests default（09-14 撤回 custom 后）
     }
 
     func test_settingsToggle_testingOverride_takesPrecedence() {

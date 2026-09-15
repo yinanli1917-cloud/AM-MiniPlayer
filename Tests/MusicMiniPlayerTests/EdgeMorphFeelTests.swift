@@ -54,11 +54,11 @@ final class EdgeMorphFeelTests: XCTestCase {
         XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.edgeMorphDefaultsKey))
     }
 
-    func test_apply_unknownValue_clampsToMorphInDefaults() {
+    func test_apply_unknownValue_clampsToV0InDefaults() {
         _ = MicroInteractionFeel.apply(channel: "edgemorph", value: "bogus")
         XCTAssertEqual(
             UserDefaults.standard.string(forKey: MicroInteractionFeel.edgeMorphDefaultsKey),
-            MicroInteractionFeel.EdgeMorphMode.morph.rawValue
+            MicroInteractionFeel.EdgeMorphMode.v0.rawValue
         )
         MicroInteractionFeel.reset()
     }
