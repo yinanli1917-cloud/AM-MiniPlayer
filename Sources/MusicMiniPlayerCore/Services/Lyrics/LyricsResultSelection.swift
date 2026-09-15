@@ -673,6 +673,45 @@ extension LyricsFetcher {
             || result.nativeAliasMatched
     }
 
+    /// True when this candidate's OWN timeline has a real hole — a head
+    /// offset, tail gap, or internal gap past the same thresholds
+    /// `LyricsScorer.calculateScore` components 5b/5c/6 already penalize.
+    /// 2026-09-14 (缺陷2/3 fix follow-up): the "human-curated source
+    /// preferred" ±12 tolerance below exists for general source-quality
+    /// preference (NetEase/QQ curation over a bare library fallback) — it
+    /// must not also paper over a candidate that's demonstrably missing
+    /// content. This mirrors the scorer's own gap math so the two
+    /// mechanisms never disagree about "does this candidate have a hole" —
+    /// it does not re-derive or duplicate the scoring itself, only the
+    /// yes/no gap test.
+    private func hasTimelineIntegrityPenalty(_ result: LyricsFetchResult, songDuration: TimeInterval) -> Bool {
+        guard songDuration > 0, !result.lyrics.isEmpty else { return false }
+        let lastLyricEnd = result.lyrics.last?.endTime ?? 0
+        let firstLyricStart = result.lyrics.first?.startTime ?? 0
+        let lastLyricStart = result.lyrics.last?.startTime ?? lastLyricEnd
+
+        // Mirrors LyricsScorer 5b.
+        let tailGap = songDuration - lastLyricStart
+        let instrumentalOutroRatio = songDuration >= 360 ? 0.55 : 0.40
+        let allowedTailGap = max(140.0, songDuration * instrumentalOutroRatio)
+        if tailGap > allowedTailGap { return true }
+
+        // Mirrors LyricsScorer 5c.
+        let allowedHeadGap = max(90.0, songDuration * 0.30)
+        if firstLyricStart > allowedHeadGap { return true }
+
+        // Mirrors LyricsScorer 6.
+        if result.lyrics.count >= 5 {
+            var maxGap: Double = 0
+            for i in 1..<result.lyrics.count {
+                maxGap = max(maxGap, result.lyrics[i].startTime - result.lyrics[i - 1].startTime)
+            }
+            let gapThreshold = max(45, songDuration * 0.15)
+            if maxGap > gapThreshold { return true }
+        }
+        return false
+    }
+
     // MARK: - Memoized Scorer Facts (per-result, pure)
 
     /// Memoized `scorer.isLikelyRomaji` — pure unicode-scalar analysis of
@@ -726,11 +765,20 @@ extension LyricsFetcher {
             }
 
             if isLibraryFallbackSourceName(top.source),
-               let curated = workingPool.first(where: {
-                   isPreferredHumanCuratedSource($0.source)
-                       && $0.kind == .synced
-                       && $0.score + 12 >= top.score
-                       && hasComparableCatalogEvidence($0)
+               let curated = workingPool.first(where: { candidate in
+                   guard isPreferredHumanCuratedSource(candidate.source)
+                       && candidate.kind == .synced
+                       && hasComparableCatalogEvidence(candidate)
+                   else { return false }
+                   // 2026-09-14: the ±12 tolerance is a quality PREFERENCE,
+                   // not a license to prefer a source with a real timeline
+                   // hole over a more complete fallback. A candidate with a
+                   // nonzero coverage/gap/head-offset penalty must clear the
+                   // fallback's raw score instead — no tolerance band.
+                   if hasTimelineIntegrityPenalty(candidate, songDuration: songDuration) {
+                       return candidate.score >= top.score
+                   }
+                   return candidate.score + 12 >= top.score
                }) {
                 DebugLogger.log("🏆 Human-curated source preferred: \(curated.source) (\(String(format: "%.1f", curated.score))) over library fallback \(top.source) (\(String(format: "%.1f", top.score)))")
                 return curated
