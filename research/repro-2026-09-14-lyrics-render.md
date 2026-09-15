@@ -704,3 +704,102 @@ XCTest 主线程与 CVDisplayLink 回调线程之间的状态读取,还要对 4 
 
 **建议**：作为下一轮的第一件事单独做，方法已经定好（真实 4 首歌哈希、真实 CVDisplayLink
 不设 override、JSONL 逐帧），不需要再花时间调研，可以直接动手搭建。
+
+---
+
+## 协调者三问 + C 路径修复（2026-09-14 第二轮）
+
+### 0. Symptom 3 根因修复：已做，提交号是 b12db38（漏报，非漏做）
+
+上一次汇报的三个哈希列表里漏掉了这一条，实际代码在这之前就已经落地并验证过：
+`test_symptom3_afterFix_noReflowSnap_heightLandsInSameCycle`（`Tests/MusicMiniPlayerTests/
+LyricsRenderDefects20260914ReproTests.swift:1104`）本来就是 130 周期、events.count==0 的
+反向断言（`XCTAssertEqual(events.count, 0, ...)`，第 1226 行），提交 b12db38 就已经把这个
+测试从红改绿。本轮重新单独确认：working tree 干净（无未提交改动），HEAD 状态下该测试单跑
+仍是绿的。不需要补做，只是我上次汇总哈希时漏列了这一条，特此更正。
+
+### 1. fca3ef2（三点水平居中）是否多余：不多余，冷启动本来就是错的
+
+在 fca3ef2 的父提交 b12db38（即没有居中修复的状态，等价于 c66cff1 在三点定位上的行为，
+因为中间的 Symptom3/强调词修复都不碰三点定位代码）上，重新跑
+`test_defect3_annotatedPositionComparison_normalVsSeekBack` 这条真实测试（未改任何代码，
+纯粹切到旧提交跑已有测试），控制台原始输出：
+
+```
+[Defect3-diagram] A (normal): dotCenter=(50.0, 377.0) textCenterX=180.0
+[Defect3-diagram] B (seek-back): dotCenter=(50.0, 377.0) textCenterX=180.0
+```
+
+"A (normal)" 就是冷启动场景（"从未深入歌曲，第一次到达前奏窗口"）——冷启动的三点中心 X
+是 **50.0**，不是 180.0，和"seek 回前奏"场景完全一样，都是左边距（Δx=-130）。也就是说
+创始人记忆中"冷启动是对的"这一点，指的应该是三点存在、在动这些其它维度，不是水平居中——
+横向居中这一项冷启动此前也是错的，fca3ef2 修的是真问题，不是多余改动，保留。
+
+### 2. 【已修复】C 路径（手动滚回前奏）根因 + 修复 + 验证
+
+**根因**（直接读代码 + 加临时探针确认，非推测）：三条路径的 index 解析实际上完全一致——
+A/B/C 的 `semanticIndex`/`scrollTargetIndex` 打印出来都是 0/0，不存在"分裂"。真正分裂的
+是**相位时钟**（phase clock，驱动三点淡入淡出、逐字扫掠这些"随时间变化"的动画数值）：
+
+- `synchronizeNativeSemanticIndex`（`LyricsLayerRendererView.swift`）在任何非 natural 播放
+  模式（explicit seek / tap / **手动滚动** 等）下，都会把 `nativeRenderClock`（相位时钟）
+  重置为 `musicController.lyricRenderTime()`——即"真实播放进度"。
+- 对explicit seek 这完全正确：seek 本身就是让真实播放进度跳到新位置，相位时钟跟着跳
+  是对的。
+- 对手动滚动是错的：手动滚动时真实播放没有停（音乐还在 t=33s 继续播），只是**显示**冻结
+  到了用户滚到的那一行（比如前奏行，它自己的 `[startTime, preludeEndTime]` 窗口早就是
+  t=0~2s 左右，远早于 t=33s）。相位时钟被设成真实的 t=33s 后，三点的淡出计算
+  （`NativeLyricsDotPhasePlan.make` 里 `currentTime >= endTime → fadeOutProgress=1`）
+  认定"这一行的三点窗口早就结束了"，于是整体透明度算成 0——三点消失，不是因为 index 错，
+  是因为算三点动画用的"现在几点"这个输入本身就是错的参照系。
+
+**修复**：`LyricsLayerRendererView.swift`
+- 新增 `lastManualScrollPhaseAnchorIndex` 记录相位时钟上一次是为哪个冻结行锚定的。
+- `nativePhaseClock` 闭包：手动滚动冻结期间不再跟踪真实播放钟，只读已锚定的
+  `nativeRenderClock`（原来的实现会在下一次读取时用 `max(previous, raw)` 把手动滚动的
+  锚定值立刻冲回真实播放钟——这是根因的第二层，本身也修了）。
+- `synchronizeNativeSemanticIndex` 非 natural 分支：手动滚动**首次**冻结到某一行时，把
+  相位时钟锚定到**那一行自己的 startTime**（等价于"刚 seek 到这一行"），而不是真实播放
+  时间；同一行持续冻结期间复用已锚定的值，不会每帧重新归零；explicit seek / tap /
+  reduced motion / initial layout 这些其它非 natural 场景完全不受影响，仍然用真实播放钟
+  （对它们是对的）。
+
+这样手动滚回前奏和 seek 回前奏、冷启动走的是**同一条相位锚定逻辑**——即创始人要求的
+"同一套呈现入口"，不是给手动滚动单独打一个 fallback 补丁。
+
+**验证**（`test_threePreludeEntryPaths_coldStart_seekBack_manualScrollBack`，真实测试跑出）：
+
+| 路径 | 三点隐藏 | 三点透明度 | 三点中心 X | semanticIndex | scrollTargetIndex |
+|---|---|---|---|---|---|
+| A 冷启动 | 否 | 1.0 | 180.0 | 0 | 0 |
+| B seek 回前奏 | 否 | 1.0 | 180.0 | 0 | 0 |
+| C 手动滚回前奏（修复前） | **是** | **0.0** | 171.0 | 0 | 0 |
+| C 手动滚回前奏（修复后） | 否 | 1.0 | 171.0 | 0 | 0 |
+
+三点隐藏/透明度已经和 A/B 完全一致。
+
+**两个仍未处理的残余差异，未动，专门标出等裁决**（都不是这次改的代码引入的，是修复前
+就已经存在的、和三点本身无关的另一套设计）：
+
+1. **行 opacity**：C 路径读数是 0.6，不是要求的 1.0。查到这是 `NativeLyricsVisualTarget`
+   里一条 2026-07-12 就有的既有设计——手动滚动期间（不管冻结到哪一行，也不管是不是当前
+   播放行）**所有**行统一淡到 0.6、缩到 0.95（代码注释原话："Manual scroll lifts it to
+   the all-clear 0.6 tier so the hot row reads like its neighbours"），用来在"正在滚动
+   浏览"时给一个统一的视觉提示，不是针对前奏行或三点的特殊处理，也不是这次两个 bug
+   （强调词重影、三点位置/路径不一致）引入的。真要让 C 路径行 opacity 也读 1.0，等于
+   改掉这条已有的、独立的手动滚动视觉设计，我没有擅自动——需要你确认这条 0.6 设计本身
+   是否也要改，还是只要求"当前冻结到的这一行"破例保持 1.0（后者是一个新的、有意的
+   例外规则，需要专门设计，不是顺手就能做的小改动）。
+2. **三点中心 X**：C 路径是 171.0，不是 180.0。这也是上面同一个 0.6/0.95 手动滚动设计
+   的连带效果：手动滚动时每一行的整层都会缩放到 0.95，而缩放是绕着行自身的 anchorPoint
+   做的，不是绕内容列中心——180 × 0.95 = 171.0，数字对得上，说明这不是三点定位公式本身
+   的问题（`layoutDotContainer` 的 `frame.midX` 公式没变），是手动滚动统一缩放这条已有
+   设计在坐标换算上的副作用，同样对所有行一视同仁，不只是前奏行/三点。
+
+三联图（A/B/C 侧边对比，含隐藏/透明度/行 Y/semantic/scrollTarget 标注）已重新生成：
+`research/repro-2026-09-14-lyrics-render/prelude-three-entry-paths.png`
+
+**测试与构建**：`LyricsRenderDefects20260914ReproTests` 全量 13/13 绿；`NativeLyrics` 前缀
+全量 264 个测试，4 个失败，和 fca3ef2 提交时已确认的 `NativeLyricsRenderChurnTests` 里同一
+个预先已知失败（`test_previousLineDoesNotFadeBeforeItStartsMovingAcrossHandoff`）完全一致，
+不是这次改动引入的新回归；`swift build -c release --product MusicMiniPlayer` 通过。

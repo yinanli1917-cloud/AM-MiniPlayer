@@ -298,6 +298,11 @@ final class NativeLyricsSurfaceView: NSView {
     // poll jitter is held at this peak so amllState never re-derives an earlier (brighter) hot set; an
     // explicit seek or a beyond-threshold backward jump follows it. nil until the first frame inits it.
     private var nativeRenderClock: TimeInterval?
+    // 2026-09-14 founder (message B): which display index the phase clock was last anchored to
+    // while manual-scroll-frozen. Lets synchronizeNativeSemanticIndex tell "just landed on this
+    // row via manual scroll" (re-anchor once) apart from "still parked on the same row" (let the
+    // clock free-run) — see the fix note at its call site.
+    private var lastManualScrollPhaseAnchorIndex: Int?
     private var pausedSemanticLocked = false
     private var lastObservedSeekGeneration: Int = 0
     private var lastTextPhaseUpdateAt: CFTimeInterval?
@@ -1385,9 +1390,23 @@ final class NativeLyricsSurfaceView: NSView {
         // fresh, never-backward time. A backward step beyond the resync tolerance is a real
         // discontinuity and is followed; synchronize itself re-anchors on explicit seeks below.
         let musicController = configuration.musicController
+        // 2026-09-14 founder (message B): while manual-scroll frozen, the phase clock must NOT
+        // track real playback time — real playback keeps advancing wherever the song actually is
+        // while the display freezes on a row the user scrolled to. Feeding that real (unrelated)
+        // time into the frozen row's phase math is what produced scenario C's "dots read as long
+        // since finished" bug (root-caused via NativeLyricsDotPhasePlan.make's fadeOutProgress
+        // hitting 1 once currentTime >= the prelude row's own endTime, which real playback time
+        // routinely is once the song has moved on). Hold the clock at whatever
+        // synchronizeNativeSemanticIndex anchors it to below instead of tracking raw forward —
+        // captured once here (matching the `musicController` capture just above) since this
+        // closure cannot read the `inout configuration` it is being installed on.
+        let isManualScrollFrozen = configuration.effectiveIsManualScrolling
         configuration.nativePhaseClock = { [weak self] in
+            guard let self else { return musicController.lyricRenderTime() }
+            if isManualScrollFrozen {
+                return self.nativeRenderClock ?? musicController.lyricRenderTime()
+            }
             let raw = musicController.lyricRenderTime()
-            guard let self else { return raw }
             let held = NativeLyricsSeekClassifier.monotonicTime(
                 previous: self.nativeRenderClock ?? raw,
                 rawTime: raw,
@@ -1400,8 +1419,32 @@ final class NativeLyricsSurfaceView: NSView {
         guard configuration.playbackMode == .natural else {
             let snapIndex = configuration.effectiveCurrentIndex
             // A snap (seek / tap / direct snap) is a deliberate discontinuity: reset the monotonic
-            // clock to the snapped time so natural playback resumes without holding against a stale peak.
-            let snapTime = configuration.musicController.lyricRenderTime()
+            // clock to the snapped time so natural playback resumes without holding against a stale
+            // peak.
+            //
+            // Manual scroll is the ONE snap reason where "the snapped time" must NOT be
+            // `musicController.lyricRenderTime()` (see the phase-clock note above for why).
+            // Anchor to the FROZEN row's own start time instead — the same reference an explicit
+            // seek TO that row would use, making manual-scroll-back use the identical presentation
+            // entry point as seek/cold-start rather than a separate fallback (founder: "让
+            // seek/滚回前奏与冷启动走同一套呈现入口"). Re-anchor only on the FIRST cycle a given
+            // frozen index becomes active (`lastManualScrollPhaseAnchorIndex` tracks that); on
+            // later cycles reuse the already-anchored clock unchanged so it does not keep resetting
+            // to the same startTime every configure() call. Every other snap reason (explicit seek,
+            // tap-to-line, reduced motion, initial layout) is unaffected and keeps using real
+            // playback time, which IS accurate for them.
+            let isFreshManualScrollLanding = isManualScrollFrozen
+                && lastManualScrollPhaseAnchorIndex != snapIndex
+            let snapTime: TimeInterval
+            if isFreshManualScrollLanding,
+               let anchorRow = configuration.rows.first(where: { $0.index == snapIndex }) {
+                snapTime = anchorRow.displayLine.line.startTime
+            } else if isManualScrollFrozen, let heldClock = nativeRenderClock {
+                snapTime = heldClock
+            } else {
+                snapTime = configuration.musicController.lyricRenderTime()
+            }
+            lastManualScrollPhaseAnchorIndex = isManualScrollFrozen ? snapIndex : nil
             nativeRenderClock = snapTime
             nativeSemanticCurrentIndex = snapIndex
             nativeTimelineState = NativeLyricsTimelinePolicy.AMLLState(
