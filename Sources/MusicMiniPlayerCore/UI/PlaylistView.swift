@@ -141,7 +141,7 @@ public struct PlaylistView: View {
                                 title: PlaylistL10n.localized("history"),
                                 headerHeight: headerHeight
                             ) {
-                                if musicController.playbackHistory.isEmpty {
+                                if displayedPlaybackHistory.isEmpty {
                                     emptyStateText(PlaylistL10n.localized("noRecentTracks"))
                                 } else {
                                     // Real playback history nanoPod itself observed (founder
@@ -149,7 +149,16 @@ public struct PlaylistView: View {
                                     // legacy `recentTracks` (Apple Music account "recently
                                     // played", kept fetching but no longer read by this
                                     // section — WT-E still calls the public API for it).
-                                    ForEach(musicController.playbackHistory) { entry in
+                                    // 2026-09-15: the currently PLAYING track is filtered out
+                                    // of this display list (`displayedPlaybackHistory`) — it
+                                    // already has its own row on the Now Playing card; History
+                                    // is "what played before," and showing it here a second
+                                    // time was also what kept its waveform symbolEffect row
+                                    // mounted (and animating at 60fps) the instant playback
+                                    // started, even off the Playlist page. The STORE still
+                                    // records every confirmed track change unfiltered — this
+                                    // filter is display-layer only.
+                                    ForEach(displayedPlaybackHistory) { entry in
                                         PlaylistItemRowCompact(
                                             track: (
                                                 title: entry.title,
@@ -370,6 +379,22 @@ public struct PlaylistView: View {
             .foregroundStyle(.white.opacity(0.5))
             .padding(.horizontal, 12)
             .padding(.vertical, 20)
+    }
+
+    /// History section's display list: `playbackHistory` with the CURRENTLY
+    /// PLAYING track filtered out (2026-09-15 CPU-regression fix, part 2 —
+    /// see the call site and `isActiveForContinuousAnimation` above for why).
+    /// `PlaybackHistoryStore` still records every confirmed track change
+    /// unfiltered — `MusicController.clearPlaybackHistory()`/persistence are
+    /// untouched; this is a pure display-layer filter. Guarded to non-empty
+    /// `currentPersistentID` only: a radio/URL track's persistentID is "" like
+    /// several PAST radio entries can also be, so blindly matching "" == ""
+    /// would hide unrelated history rows, not just the current one.
+    private var displayedPlaybackHistory: [PlaybackHistoryEntry] {
+        PlaybackHistoryDisplayPolicy.displayed(
+            history: musicController.playbackHistory,
+            currentPersistentID: musicController.currentPersistentID
+        )
     }
 
     /// Founder ruling 2026-09-13: whether the Up Next section may render at all.
@@ -758,6 +783,27 @@ struct PlaylistItemRowCompact: View {
         track.persistentID == musicController.currentPersistentID
     }
 
+    /// 2026-09-15 CPU-regression fix (WT-D plan H postmortem, part 2 — real
+    /// sample evidence): the waveform icon's `.symbolEffect(.variableColor.
+    /// iterative, isActive:)` is a genuinely continuous 60fps animation
+    /// (`-[RBLayer display]` every frame on the main thread). PlaylistView
+    /// never leaves the view tree (banned-patterns.md), so before plan H this
+    /// was harmless — `recentTracks`/`upNextTracks` never included the
+    /// CURRENTLY PLAYING track (History showed only earlier tracks, Up Next
+    /// only later ones), so `isCurrentTrack` was never true for any mounted
+    /// row and the animation never started. Once History started showing real
+    /// playback history (its most recent entry IS the track that just started
+    /// playing), the row for the current track mounts with `isCurrentTrack ==
+    /// true` immediately — including while the Playlist page is not visible
+    /// (Lyrics/Album pages showing) — and the animation ran 60fps in the
+    /// background indefinitely. Generalized gate: ANY continuous animation in
+    /// a playlist row must also require the Playlist page to be on screen —
+    /// same `currentPage` visibility signal as the row-artwork-storm fix
+    /// (`RowArtworkVisibilityPolicy.shouldFetch`).
+    private var isActiveForContinuousAnimation: Bool {
+        PlaylistRowContinuousAnimationPolicy.isActive(isPlaying: musicController.isPlaying, currentPage: currentPage)
+    }
+
     // D1: this row's own jump-to-tap feedback — shows while the tap is in
     // flight, clears on resolve/failure/timeout (all decided by the container).
     private var isPendingJump: Bool {
@@ -827,7 +873,7 @@ struct PlaylistItemRowCompact: View {
                     Image(systemName: "waveform")
                         .font(.system(size: 11))
                         .foregroundStyle(Color(red: 0.99, green: 0.24, blue: 0.27))
-                        .symbolEffect(.variableColor.iterative, isActive: musicController.isPlaying)
+                        .symbolEffect(.variableColor.iterative, isActive: isActiveForContinuousAnimation)
                         .padding(.trailing, 8)
                 } else if isHovering {
                     Image(systemName: "play.fill")
