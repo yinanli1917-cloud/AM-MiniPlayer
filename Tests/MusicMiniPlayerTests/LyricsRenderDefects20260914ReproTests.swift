@@ -755,6 +755,60 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
         )
     }
 
+    /// Coordinator (2026-09-14): "检查 CJK/长句换行行的居中基准是否一致" — the dot centring
+    /// fix uses `frame.midX` of the row's CONTENT COLUMN, which per `layout()`
+    /// (NativeLyricsRowView.swift) always spans the full available width
+    /// (rowWidth - leading - trailing inset) REGARDLESS of the actual text/glyphs it holds — so
+    /// the centring basis is a pure function of panel width, independent of language or wrap
+    /// count by construction. This test verifies that empirically across a short English line, a
+    /// long line that wraps to 3 lines, and a CJK line that wraps to 2 lines — the prelude dots'
+    /// centre X must be IDENTICAL across all three (and equal the plain content-column centre),
+    /// even though their mainTextLayer content differs completely.
+    @MainActor
+    func test_dotCentering_consistentAcrossShortLongAndCJKWrappedContent() {
+        let panelWidth: CGFloat = 220
+        let contentColumnCenterX = nativeLyricContentLeadingInset
+            + (panelWidth - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset) / 2
+
+        func dotCenterX(for text: String) -> CGFloat {
+            let line = LyricLine(text: text, startTime: 0, endTime: 12, words: [])
+            let preludeRow = LayerBackedLyricRow(
+                id: "prelude", index: 0,
+                displayLine: DisplayLyricLine(id: "prelude", sourceIndex: 0, segmentIndex: 0, segmentCount: 1, line: line),
+                sourceLine: line, isPrelude: true, preludeEndTime: 12, interlude: nil
+            )
+            let view = NativeLyricsRowView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 96))
+            host(view, NSSize(width: panelWidth, height: 96))
+            let mc = MusicController(preview: true)
+            mc.isPlaying = true
+            mc.duration = 240
+            mc.syncPlaybackClock(to: 0.2, playing: true)
+            let cfg = config(rows: [preludeRow], current: 0, mc: mc, width: panelWidth)
+            view.configure(row: preludeRow, configuration: cfg)
+            view.frame = NSRect(x: 0, y: 0, width: panelWidth, height: view.measuredHeight(width: panelWidth))
+            view.layoutSubtreeIfNeeded()
+            return view.debugDotContainerCenter(in: view.layer!).x
+        }
+
+        let shortEN = dotCenterX(for: "…") // prelude marker itself — degenerate/short case
+        let longEN = dotCenterX(for: "every single word you ever said to me still echoes down this hallway")
+        let cjk = dotCenterX(for: "想走出你控制的领域就从今晚开始整个世界为我而转动")
+
+        print("[DotCentering] contentColumnCenterX=\(contentColumnCenterX) short=\(shortEN) longEN=\(longEN) cjk=\(cjk)")
+
+        XCTAssertEqual(shortEN, contentColumnCenterX, accuracy: 0.01)
+        XCTAssertEqual(longEN, contentColumnCenterX, accuracy: 0.01,
+            "dot centre must match the content-column centre even for a row whose LAST configured " +
+            "content was a long, 3-line-wrapping phrase")
+        XCTAssertEqual(cjk, contentColumnCenterX, accuracy: 0.01,
+            "dot centre must match the content-column centre even for a row whose LAST configured " +
+            "content was a wrapped CJK phrase")
+        XCTAssertEqual(shortEN, longEN, accuracy: 0.01)
+        XCTAssertEqual(longEN, cjk, accuracy: 0.01,
+            "the centring basis itself must be IDENTICAL across short/long/CJK content — it does " +
+            "not shift with language or wrap count")
+    }
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - Symptom 3: whole-stack reflow snap after a settle plateau
     //

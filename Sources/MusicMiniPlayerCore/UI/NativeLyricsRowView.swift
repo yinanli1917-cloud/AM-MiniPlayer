@@ -2824,7 +2824,15 @@ final class NativeLyricsRowView: NSView {
         let totalWidth = dotSize * CGFloat(dotLayers.count) + spacing * CGFloat(max(0, dotLayers.count - 1))
         var x: CGFloat = 0
         dotContainerLayer.bounds = CGRect(x: 0, y: 0, width: totalWidth, height: dotSize)
-        dotContainerLayer.position = CGPoint(x: frame.minX + totalWidth / 2, y: frame.midY)
+        // 2026-09-14 founder: 三点要像当前行文字一样横向居中，不是贴左边距摆。`frame` is the
+        // row's CONTENT COLUMN (left inset..trailing inset, the same box mainTextLayer's frame
+        // spans) — centre the dot cluster in that column, exactly the same formula
+        // updateSurfaceInterludeDots (LyricsLayerRendererView.swift) uses for the interlude
+        // overlay dots, so both dot presentations share one centring rule. This does not touch
+        // vertical anchoring (still `frame.midY`, unrelated to interludeAnchorAdvance) and is not
+        // a per-role shim — it is the SAME formula for every row's salient content, just applied
+        // to a cluster of dots instead of a text run.
+        dotContainerLayer.position = CGPoint(x: frame.midX, y: frame.midY)
         for dot in dotLayers {
             dot.bounds = CGRect(x: 0, y: 0, width: dotSize, height: dotSize)
             dot.position = CGPoint(x: x + dotSize / 2, y: dotSize / 2)
