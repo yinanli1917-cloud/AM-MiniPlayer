@@ -724,17 +724,12 @@ final class NativeLyricsSurfaceView: NSView {
             + NativeLyricsHeightAccumulator.interludeGapHeight / 2 - NativeLyricsDotPhasePlan.baseDotSize / 2
         surfaceInterludeOverlay.frame = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height)
         let dotSize = NativeLyricsDotPhasePlan.baseDotSize
-        // 2026-09-14 founder: dots centre in the CONTENT COLUMN, same rule as
-        // NativeLyricsRowView.layoutDotContainer (the prelude row dots) — not the left inset.
-        // The content column is [leading inset, rowWidth - trailing inset], the same box a row's
-        // own text layer spans.
-        let contentColumnWidth = max(1, configuration.rowWidth - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset)
-        let containerCenterX = nativeLyricContentLeadingInset + contentColumnWidth / 2
+        let containerX = nativeLyricContentLeadingInset
         // The container bounds and per-dot positions are STATIC (set once in setupSurfaceInterludeDots),
         // so they can never collapse here. Only the group's screen position (Y travels with the gap),
         // opacity, scale and blur are dynamic.
         surfaceInterludeDotContainer.position = CGPoint(
-            x: containerCenterX,
+            x: containerX + surfaceInterludeDotContainer.bounds.width / 2,
             y: y + dotSize / 2
         )
         let currentTime = configuration.phaseRenderTime()

@@ -80,51 +80,7 @@ PNG（`layer.render(in:)` 直出，几何真实，模糊滤镜在 headless 下�
 
 ---
 
-## 缺陷 2 / 3：seek 回到前奏窗口后，三点动画位置错位 —— 部分复现；**三点水平居中已修复（创始人批准）**
-
-**修复状态更新（2026-09-14）**：创始人批准三点水平居中——像当前行文字一样居中，不是
-贴左边距摆。已实施，与 seek 分裂那半（缺陷2的"完全不出现"）无关，那半仍未复现、
-未修，保留在下方"未复现清单"里。
-
-### 修法（已实施）
-
-`NativeLyricsRowView.layoutDotContainer`（前奏行）和
-`LyricsLayerRendererView.updateSurfaceInterludeDots`（间奏浮层）两处的水平定位公式
-都从"贴左边距摆"（`frame.minX + totalWidth/2`，只看三点簇自己的宽度）改成"内容列
-居中"（`frame.midX`，即 `内容列左边距 + 内容列宽度/2`）——跟任何一行文字所在的
-`mainTextLayer.frame`（`layout()` 里恒等于整个内容列宽度，不管实际文字多长）用的是
-同一个盒子、同一个居中点。两处改的是同一条公式，不是各写一遍。垂直锚定
-（`interludeAnchorAdvance` 那套、`frame.midY`）完全没动。不是 per-role shim——是把"三点"
-当成任何一行的"显著内容"，套用跟文字行完全一样的居中规则。
-
-### 验证
-
-用同一套标注对照图方法重新出图：`defect3-position-comparison.png`（同一张图，覆盖
-修复前版本）——两个场景（正常播放到前奏 / seek 回前奏）的三点中心 x 都变成 180.0px，
-跟内容列中心 x（180.0px）完全重合，**Δx = 0.0px**（修复前 −130.0px）。
-
-CJK/长句换行行的居中基准是否一致——新增
-`test_dotCentering_consistentAcrossShortLongAndCJKWrappedContent`：同一个前奏行分别配置成
-短句「…」、会换行成 3 行的长英文句、会换行成 2 行的中文句，三点中心 x 在三种内容下
-**完全相同**（110.0px，等于内容列中心）。这是公式本身的性质——`frame.midX` 只由
-`rowWidth`/左右边距决定，从不看实际文字/字形，所以天然对语言、换行数不敏感，不需要
-额外的"按语言特判"。
-
-| 检查项 | 修复前 | 修复后 |
-|---|---|---|
-| 三点中心 x（两个场景） | 50.0px | **180.0px** |
-| 内容列中心 x | 180.0px | 180.0px |
-| Δx | −130.0px | **0.0px** |
-| 短句/长英文/CJK 三种内容的居中基准 | 未测 | 三者一致，均 110.0px（220pt 面板） |
-| `NativeLyricsInterludeDotsTests`（既有） | — | 绿 |
-| `test_defect3_annotatedPositionComparison_normalVsSeekBack` | — | 绿 |
-| `test_dotCentering_consistentAcrossShortLongAndCJKWrappedContent` | — | 绿 |
-| `LyricsRenderDefects20260914ReproTests`（全部 10 个） | — | 10/10 绿 |
-| `swift test --filter NativeLyrics`（264 个） | — | 260 绿 / 4 红（同一批预存失败，与本次无关） |
-| `swift build -c release --product MusicMiniPlayer` | — | 通过 |
-
-**仍未复现、未修**：缺陷2（seek 回前奏后三点"完全不出现"）——见上方"未能端到端复现"
-一节，保留在未复现清单里，本次没有再尝试。
+## 缺陷 2 / 3：seek 回到前奏窗口后，三点动画位置错位 —— 部分复现
 
 创始人报了两个现象：(2) 播放中 seek 回歌曲开头，前奏三点没出现；(3) 三点出现时左对齐
 在左上角，不是像当前行那样居中。深挖后发现这两个现象共享同一处代码缺陷，但证据强度不同。
