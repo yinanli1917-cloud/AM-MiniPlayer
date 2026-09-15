@@ -803,3 +803,97 @@ A/B/C 的 `semanticIndex`/`scrollTargetIndex` 打印出来都是 0/0，不存在
 全量 264 个测试，4 个失败，和 fca3ef2 提交时已确认的 `NativeLyricsRenderChurnTests` 里同一
 个预先已知失败（`test_previousLineDoesNotFadeBeforeItStartsMovingAcrossHandoff`）完全一致，
 不是这次改动引入的新回归；`swift build -c release --product MusicMiniPlayer` 通过。
+
+---
+
+## 整行全亮真实时钟复现（2026-09-14 第二轮，message A）——仍未复现，附精确定位下一步
+
+### 方法：真 CVDisplayLink + 真墙钟，不用锁步
+
+新增 `Tests/MusicMiniPlayerTests/LyricsWholeLineFlashRealTimeTests.swift`。核心区别于本轮之前
+所有测试：**完全不设** `surface.debugNowOverride`、**不设** `mc.debugPlaybackClockDateProvider`、
+**不调用** `debugTick`——surface 自己的真实 `CVDisplayLink` 全程真实运行（按 macOS 显示刷新率
+真实回调 `presentationTick`），`MusicController.lyricRenderTime()` 落到真实 `Date()`
+（`MusicController.swift:495-503`：`elapsed = date.timeIntervalSince(playbackClockBaseDate)`，
+`date` 默认就是 `Date()`）——也就是真实的、连续推进的 1x 播放钟，不是逐帧跳变。
+
+歌词数据来自真实生产缓存文件 `~/Library/Application Support/nanoPod/lyrics_cache.json`（本轮
+第一部分已定位的 4 首歌哈希，见上文"选歌准备"章节），运行时直接读取解析，不是编造 fixture。
+
+### 第一轮：4 首歌各 60 秒真实播放，0 次全亮
+
+| 歌曲 | 真实采样帧数 | 全亮帧数 | 实际覆盖到的行 | JSONL |
+|---|---|---|---|---|
+| 大橋純子「水玉模様の傘」 | 1200（20Hz×60s） | 0 | 行 0→4（前 36s 进度） | wholeline-flash-realtime-oohashi-mizutama.jsonl |
+| How's about your company | 1200 | 0 | 行 0→3 | wholeline-flash-realtime-fastest1-hows-about.jsonl |
+| 生份的 遥远的歹势细腻 | 1200 | 0 | 行 0→4 | wholeline-flash-realtime-fastest2-shengfende.jsonl |
+| 仍然记得个一次 风里相依 | 1200 | 0 | 行 0→7 | wholeline-flash-realtime-fastest3-rengranjide.jsonl |
+
+抽查确认这不是空跑/测试失效：`perRunSweep` 全程为 `true`（真的在走逐字扫掠这条被怀疑的代码
+路径），每次切行瞬间 `applied` 都从接近 0 开始爬升，`applied` 与 `expected` 在全部 4800 个采样
+点上逐一相等（Δ=0.0000）——测量链路本身工作正常，不是"没测到"，是"测到的这段时间窗口内没有
+复现"。
+
+**这一轮的真实局限、如实报告**：60 秒真实时长对 357 秒的 85 行歌（or 225 秒的 23 行歌）只能
+覆盖开头 3-8 行，远不是全曲——"0 次"只能代表"这几行没有"，不能代表"这首歌没有"。
+
+### 第二轮：直接读真实缓存时间轴数据，定位"相邻行零间隔"最可能触发点，针对性复现
+
+与其对 4 首歌各播满整首（357s 最长的一首单独就要 6 分钟真实时间），先直接检查真实缓存里的
+逐行时间戳本身，验证假设①的前提条件（"相邻行时间重叠或间隔接近零"）是否真的存在：
+
+| 歌曲 | 总行数 | 相邻行间隔 <0.05s 的次数 | 占比 |
+|---|---|---|---|
+| How's about your company | 85 | **25** | 30% |
+| 大橋純子「水玉模様の傘」 | 23 | 8（其中一处恰好 0.0s） | 35% |
+| 生份的 遥远的歹势细腻 | 39 | 1 | 3% |
+| 仍然记得个一次 风里相依 | 27 | 0 | 0% |
+
+假设①的前提条件确凿存在，而且在最快那首歌（How's about your company）里相当常见（近三分之一
+的行与行之间几乎无缝衔接）。附带发现一处数据异常（与本次 bug 无关，单独记录不深追）：
+大橋純子那首第 15 行文本是"And there's a love for yo..."——纯英文，混在全日文的 YRC 歌词里，
+且这一"行"跨度长达 39 秒（127.02s→166.36s），疑似匹配/合并环节窜入了别的来源文本，值得未来
+单独排查，但和整行全亮无关，本轮不追。
+
+**针对性真实时钟复现**：不再从 t=0 起播满全曲，而是把播放钟种到间隔异常点前几秒（种子点本身
+仍然是真实 `Date()` 起算，只是起始锚点不同，推进方式没有任何变化），真实播放穿过那个具体的
+切行瞬间：
+
+| 目标切行 | 种子起点 | 真实时长 | 采样率 | 结果 |
+|---|---|---|---|---|
+| fastest1 行8→9（间隔≈0.03s，t≈77.16s） | t=60s | 22s | 50Hz | 0 次全亮，`applied`=0.037 起爬，与 `expected` 完全相等 |
+| oohashi 行15→16（间隔=0.0s，t=166.36s） | t=160s | 15s | 50Hz | 0 次全亮，`applied`=0.004 起爬，与 `expected` 完全相等 |
+
+两次都确认真实命中了目标切行（打印的行号跳变时间点和缓存时间戳吻合），仍然 0 次全亮。
+
+### 结论：仍未复现——但缩小了范围，明确了下一步该测什么
+
+真实 CVDisplayLink（不是假定时器）+ 真实墙钟连续推进（不是逐帧跳变）+ 真实缓存数据里挑出的
+"相邻行零间隔"最高嫌疑切行——这三样都做到了，仍然复现不了。这次测试**排除**的原因：不是
+CVDisplayLink 定时精度问题，不是播放钟离散跳变问题，也不是"零间隔切行"这个条件单独就够。
+
+**测试没有覆盖到的一层**：这次用的仍是 `MusicController(preview: true)` 的合成播放钟——干净的
+`Date()` 线性插值，没有真实 ScriptingBridge 轮询那种"慢读延迟 + 偶发回退 + 插值纠正"的抖动。
+仓库里已有 `PlaybackClockTrustTests`/`interpolateTime` 这类专门处理"轮询回退 0.5s 内允许倒退
+纠正"的逻辑——假设①原文本来就包含"或 clock-trust/interpolation fallback 把 progress 瞬间推到
+≥1"这一支，这次的合成钟从未走过那条修正分支。这是当前复现方法唯一还没排除的差异，是最值得
+往下查的方向。
+
+**已经顺带产品化，无需再做**：创始人在 message A 里说的"如果这次真实时钟仍未复现，把这套
+按帧 JSONL 方法产品化进 NativeLyricsMaskTrace 本身"——这件事本轮 Step 3（协调者上一轮批准的
+埋点开关）已经做了，不是新工作：`NativeLyricsMaskTrace.record(...)` 现在每次调用都会传入
+`wholeLineHighlight` 这个字段（`NativeLyricsRowView.swift` 的 `updatePlaybackPhase` 里，
+`maskTraceWholeLineHighlight` 计算方式和这次测试用的 `debugLastWholeLineHighlight` 完全一致），
+并且已经能在 release 构建里通过 `defaults write <bundle-id> NanoPodMaskTraceEnabled -bool YES`
+开启，落盘到 `/tmp/nanopod_mask_trace.jsonl`——创始人在真实用 App 听歌时如果再撞到那次录屏里的
+现象，开这个开关就能自动留证，不需要额外开发。
+
+**建议下一步**（不在本轮做，列在这里等裁决）：用真实 `MusicController`（真实 ScriptingBridge
+轮询，不是 `preview: true`）对着这几首歌做同样的真实时钟复现，或者更直接——请创始人开启
+`NanoPodMaskTraceEnabled` 后正常用 App 听这几首快歌，下次撞见就有 `/tmp/nanopod_mask_trace.jsonl`
+现成证据，不需要再猜。
+
+**测试**：`LyricsWholeLineFlashRealTimeTests` 全部 6 个方法通过（4 首整曲 60s + 2 个针对性
+窗口），真实运行总耗时约 5.5 分钟；证据文件：
+`research/repro-2026-09-14-lyrics-render/wholeline-flash-realtime-*.jsonl`（6 个文件，共 6645
+行采样数据）。这条按"先复现报我再修"停在这里，没有做任何修复尝试。
