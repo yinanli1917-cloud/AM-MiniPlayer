@@ -30,6 +30,15 @@ struct SectionOffsetKey: PreferenceKey {
 public struct PlaylistView: View {
     @EnvironmentObject var musicController: MusicController
 
+    #if DEBUG
+    /// Counts real SwiftUI `body` invocations. Not read anywhere in production —
+    /// exists so PlaylistViewRenderChurnTests can measure re-render frequency
+    /// deterministically (a real NSWindow-hosted headless probe) instead of
+    /// guessing from static reading. See the 2026-09-15 CPU-regression fix at
+    /// the Up Next section below (WT-D plan H postmortem) for why this exists.
+    public static var debugBodyEvalCount = 0
+    #endif
+
     // ═══════════════════════════════════════════
     // MARK: - Bindings（与 MiniPlayerView 同步）
     // ═══════════════════════════════════════════
@@ -103,6 +112,9 @@ public struct PlaylistView: View {
     // MARK: - Body
     // ═══════════════════════════════════════════════════════════════════════════════
     public var body: some View {
+        #if DEBUG
+        let _ = Self.debugBodyEvalCount += 1
+        #endif
         GeometryReader { geometry in
             let artSize = min(geometry.size.width * artSizeRatio, artSizeMax)
             let rowArtSize = min(geometry.size.width * 0.12, 40.0)
@@ -129,7 +141,7 @@ public struct PlaylistView: View {
                                 title: PlaylistL10n.localized("history"),
                                 headerHeight: headerHeight
                             ) {
-                                if musicController.playbackHistory.isEmpty {
+                                if displayedPlaybackHistory.isEmpty {
                                     emptyStateText(PlaylistL10n.localized("noRecentTracks"))
                                 } else {
                                     // Real playback history nanoPod itself observed (founder
@@ -137,7 +149,16 @@ public struct PlaylistView: View {
                                     // legacy `recentTracks` (Apple Music account "recently
                                     // played", kept fetching but no longer read by this
                                     // section — WT-E still calls the public API for it).
-                                    ForEach(musicController.playbackHistory) { entry in
+                                    // 2026-09-15: the currently PLAYING track is filtered out
+                                    // of this display list (`displayedPlaybackHistory`) — it
+                                    // already has its own row on the Now Playing card; History
+                                    // is "what played before," and showing it here a second
+                                    // time was also what kept its waveform symbolEffect row
+                                    // mounted (and animating at 60fps) the instant playback
+                                    // started, even off the Playlist page. The STORE still
+                                    // records every confirmed track change unfiltered — this
+                                    // filter is display-layer only.
+                                    ForEach(displayedPlaybackHistory) { entry in
                                         PlaylistItemRowCompact(
                                             track: (
                                                 title: entry.title,
@@ -175,14 +196,33 @@ public struct PlaylistView: View {
                             // ═══════════════════════════════════════════
                             // Founder ruling 2026-09-13: Up Next renders ONLY when it is
                             // provably exact (library playlist context + shuffle off);
-                            // otherwise the whole section is hidden and a single fixed
-                            // caption explains why — no flicker between the two.
-                            if upNextVisibility == .shown {
-                                PlaylistSection(
-                                    sectionID: "upNext",
-                                    title: PlaylistL10n.localized("upNext"),
-                                    headerHeight: headerHeight
-                                ) {
+                            // otherwise the section shows a single fixed caption instead of
+                            // its track list — no flicker between the two.
+                            //
+                            // 2026-09-15 CPU-regression fix (WT-D plan H postmortem): the
+                            // shown/hidden branch used to switch OUTSIDE PlaylistSection
+                            // (`if ... { PlaylistSection(...) } else { caption }`), so every
+                            // time `upNextVisibility` merely re-evaluated to the SAME value —
+                            // which happens on every unrelated MusicController @Published
+                            // write, since @EnvironmentObject invalidates this whole body
+                            // regardless of which property changed (headless-proven: 20
+                            // redundant writes -> 20 body re-evaluations, identical before
+                            // and after this gate existed) — SwiftUI saw two structurally
+                            // different view types and tore down/rebuilt PlaylistSection's
+                            // GeometryReader/.preference sticky-header plumbing every time
+                            // (the same "destroyed/recreated" trap banned-patterns.md already
+                            // documents for conditional ScrollView rendering). Keeping
+                            // PlaylistSection itself unconditional and branching only its
+                            // CONTENT (same shape as the History section just above) keeps
+                            // that plumbing's identity stable across re-renders regardless of
+                            // how often body re-runs.
+                            PlaylistSection(
+                                sectionID: "upNext",
+                                title: PlaylistL10n.localized("upNext"),
+                                headerHeight: headerHeight,
+                                showsHeader: upNextVisibility == .shown
+                            ) {
+                                if upNextVisibility == .shown {
                                     if musicController.upNextTracks.isEmpty {
                                         emptyStateText(PlaylistL10n.localized(
                                             UpNextEmptyState.messageKey(
@@ -202,11 +242,11 @@ public struct PlaylistView: View {
                                             )
                                         }
                                     }
+                                } else {
+                                    upNextHiddenCaption
                                 }
-                                .id("upNextSection")
-                            } else {
-                                upNextHiddenCaption
                             }
+                            .id("upNextSection")
 
                             // 底部留白
                             Spacer().frame(height: 120)
@@ -339,6 +379,22 @@ public struct PlaylistView: View {
             .foregroundStyle(.white.opacity(0.5))
             .padding(.horizontal, 12)
             .padding(.vertical, 20)
+    }
+
+    /// History section's display list: `playbackHistory` with the CURRENTLY
+    /// PLAYING track filtered out (2026-09-15 CPU-regression fix, part 2 —
+    /// see the call site and `isActiveForContinuousAnimation` above for why).
+    /// `PlaybackHistoryStore` still records every confirmed track change
+    /// unfiltered — `MusicController.clearPlaybackHistory()`/persistence are
+    /// untouched; this is a pure display-layer filter. Guarded to non-empty
+    /// `currentPersistentID` only: a radio/URL track's persistentID is "" like
+    /// several PAST radio entries can also be, so blindly matching "" == ""
+    /// would hide unrelated history rows, not just the current one.
+    private var displayedPlaybackHistory: [PlaybackHistoryEntry] {
+        PlaybackHistoryDisplayPolicy.displayed(
+            history: musicController.playbackHistory,
+            currentPersistentID: musicController.currentPersistentID
+        )
     }
 
     /// Founder ruling 2026-09-13: whether the Up Next section may render at all.
@@ -558,7 +614,8 @@ public struct PlaylistView: View {
             return "History"
         }
 
-        if PlaylistStickyHeaderPolicy.shouldShow(minY: upNextMinY, maxY: upNextMaxY, headerHeight: headerHeight) {
+        if upNextVisibility == .shown,
+           PlaylistStickyHeaderPolicy.shouldShow(minY: upNextMinY, maxY: upNextMaxY, headerHeight: headerHeight) {
             return "Up Next"
         }
 
@@ -625,18 +682,28 @@ struct PlaylistSection<Content: View>: View {
     let sectionID: String
     let title: String
     let headerHeight: CGFloat
+    /// False renders this section with NO inline header row (no title, no
+    /// height reservation for one) while keeping the section's own identity —
+    /// and its sticky-header GeometryReader/.preference plumbing — unchanged.
+    /// Used by the Up Next section's hidden/caption state (see call site):
+    /// the caption stands in for the WHOLE section including its title, but
+    /// must not force SwiftUI to tear down and rebuild the section itself
+    /// just because the title visibility flipped.
+    var showsHeader: Bool = true
     @ViewBuilder let content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header（在 section 内部，滚出视口后由全局 overlay 接管）
-            Text(title)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6)
-                .frame(height: headerHeight)
+            if showsHeader {
+                Text(title)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+                    .frame(height: headerHeight)
+            }
 
             // 内容
             content
@@ -716,6 +783,27 @@ struct PlaylistItemRowCompact: View {
         track.persistentID == musicController.currentPersistentID
     }
 
+    /// 2026-09-15 CPU-regression fix (WT-D plan H postmortem, part 2 — real
+    /// sample evidence): the waveform icon's `.symbolEffect(.variableColor.
+    /// iterative, isActive:)` is a genuinely continuous 60fps animation
+    /// (`-[RBLayer display]` every frame on the main thread). PlaylistView
+    /// never leaves the view tree (banned-patterns.md), so before plan H this
+    /// was harmless — `recentTracks`/`upNextTracks` never included the
+    /// CURRENTLY PLAYING track (History showed only earlier tracks, Up Next
+    /// only later ones), so `isCurrentTrack` was never true for any mounted
+    /// row and the animation never started. Once History started showing real
+    /// playback history (its most recent entry IS the track that just started
+    /// playing), the row for the current track mounts with `isCurrentTrack ==
+    /// true` immediately — including while the Playlist page is not visible
+    /// (Lyrics/Album pages showing) — and the animation ran 60fps in the
+    /// background indefinitely. Generalized gate: ANY continuous animation in
+    /// a playlist row must also require the Playlist page to be on screen —
+    /// same `currentPage` visibility signal as the row-artwork-storm fix
+    /// (`RowArtworkVisibilityPolicy.shouldFetch`).
+    private var isActiveForContinuousAnimation: Bool {
+        PlaylistRowContinuousAnimationPolicy.isActive(isPlaying: musicController.isPlaying, currentPage: currentPage)
+    }
+
     // D1: this row's own jump-to-tap feedback — shows while the tap is in
     // flight, clears on resolve/failure/timeout (all decided by the container).
     private var isPendingJump: Bool {
@@ -785,7 +873,7 @@ struct PlaylistItemRowCompact: View {
                     Image(systemName: "waveform")
                         .font(.system(size: 11))
                         .foregroundStyle(Color(red: 0.99, green: 0.24, blue: 0.27))
-                        .symbolEffect(.variableColor.iterative, isActive: musicController.isPlaying)
+                        .symbolEffect(.variableColor.iterative, isActive: isActiveForContinuousAnimation)
                         .padding(.trailing, 8)
                 } else if isHovering {
                     Image(systemName: "play.fill")
