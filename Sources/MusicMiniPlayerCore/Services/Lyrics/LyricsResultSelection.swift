@@ -512,8 +512,12 @@ extension LyricsFetcher {
            tailGap > min(180.0, max(120.0, songDuration * 0.45)) {
             return true
         }
-        if result.score < 30,
-           maxInternalGap(result.lyrics) > min(120.0, max(90.0, songDuration * 0.30)) {
+        // 2026-09-14: this used to require `result.score < 30` — dead for
+        // anything that already cleared basic synced admission (Supernatural's
+        // NetEase candidate scored 68.3 with a 63.2s internal gap and never
+        // reached this check). The gap size itself is the signal; a
+        // high-scoring candidate isn't exempt from having an actual hole.
+        if maxInternalGap(result.lyrics) > min(120.0, max(90.0, songDuration * 0.30)) {
             return true
         }
         let instrumentalOutroRatio = songDuration >= 360 ? 0.55 : 0.40

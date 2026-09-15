@@ -902,6 +902,70 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertEqual(selected?.source, .genius)
     }
 
+    /// 2026-09-14 fix: `hasSevereTimelineMismatch`'s internal-gap rejection
+    /// used to require `result.score < 30` — dead for anything that already
+    /// cleared basic synced admission (Supernatural's real NetEase candidate
+    /// scored 68.3 with a 63.2s hole and never reached this check). A
+    /// synced candidate scoring well above 30 with a huge internal hole
+    /// (missing over a third of a 300s song) must now be rejected here too,
+    /// falling back to a plain-text source instead of being shown as-is.
+    func testHighScoringCandidateWithHugeInternalGapIsRejected() {
+        let fetcher = LyricsFetcher.shared
+        // Deliberately keeps the TAIL gap small (last line ends near
+        // songDuration) so this exercises ONLY the internal-gap check —
+        // hasSevereTimelineMismatch's final unconditional fallback
+        // (`tailGap > max(140, duration*ratio)`) would otherwise also
+        // reject a candidate whose last line trails far behind, which is a
+        // different, pre-existing check this test isn't about.
+        let firstHalf = (0..<5).map { i -> LyricLine in
+            let start = 5.0 + Double(i) * 4.0
+            return LyricLine(text: "first half line \(i)", startTime: start, endTime: start + 3.5)
+        }
+        // ~105s hole here (last firstHalf line starts at 21) — songDuration
+        // 300's threshold is min(120, max(90, 300*0.30)) = 90s, well past it.
+        let secondHalf = (0..<7).map { i -> LyricLine in
+            let start = 126.0 + Double(i) * 26.0
+            return LyricLine(text: "second half line \(i)", startTime: start, endTime: start + 15.0)
+        }
+        let gappy = LyricsFetcher.LyricsFetchResult(
+            lyrics: firstHalf + secondHalf,
+            source: .netEase,
+            score: 50,
+            kind: .synced
+            // titleMatched defaults to true, matchedDurationDiff defaults to
+            // nil — deliberately NOT claiming exact-catalog/long-intro
+            // evidence, so only the internal-gap check is exercised.
+        )
+        // Two unsynced fallbacks (mirroring
+        // testSevereTailGapFallsBackToStaticConsensusWhenSyncedIsMistimed's
+        // shape) so a rejected `gappy` has somewhere concrete to fall back
+        // to — this test's claim is specifically "gappy must not win",
+        // not "exactly one unsynced fallback is enough to be chosen".
+        let plainA = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeCompleteStaticLyrics(prefix: "fallback A"),
+            source: .genius,
+            score: 15,
+            kind: .unsynced
+        )
+        let plainB = LyricsFetcher.LyricsFetchResult(
+            lyrics: plainA.lyrics,
+            source: .lyricsOvh,
+            score: 13,
+            kind: .unsynced
+        )
+
+        let selected = fetcher.selectBestResult(from: [gappy, plainA, plainB], songDuration: 300)
+
+        XCTAssertNotEqual(
+            selected?.source, .netEase,
+            "a 50-score synced candidate with a 105s internal hole must never win — before this fix the score<30 guard exempted anything that already cleared basic admission"
+        )
+        XCTAssertEqual(
+            selected?.source, .genius,
+            "falls back to the higher-scoring plain-text source once the gappy synced candidate is rejected"
+        )
+    }
+
     func testLateFirstVocalTimelineIsRejected() {
         let fetcher = LyricsFetcher.shared
         let lateSynced = LyricsFetcher.LyricsFetchResult(

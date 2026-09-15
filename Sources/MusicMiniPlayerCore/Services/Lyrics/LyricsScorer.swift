@@ -131,16 +131,45 @@ public final class LyricsScorer {
                 let excess = max(0, tailGapRatio - instrumentalOutroRatio)
                 score -= 35 + excess * 300
             }
+
+            // 5c. Head gap penalty — symmetric with 5b. `coverageRatio` above
+            // only sees the head-to-tail SPAN, so a candidate transcribed
+            // from mid-song onward (missing the true intro/first verse) can
+            // still claim full coverage credit as long as it reaches the
+            // tail (2026-09-14 repro: Plastic Love's wrong 26-line NetEase
+            // candidate opened on a mid-song chorus line, scored 91.8).
+            // Same shape as 5b, mirrored onto `firstLyricStart` instead of
+            // the tail.
+            let headGap = firstLyricStart
+            let allowedHeadGap = max(90.0, duration * 0.30)
+            if headGap > allowedHeadGap {
+                let overshootRatio = (headGap - allowedHeadGap) / allowedHeadGap
+                score -= 15 + min(20, overshootRatio * 30)
+            }
         }
 
-        // 6. Internal gap penalty (applies to ALL sources uniformly)
-        if lyrics.count >= 5 {
+        // 6. Internal gap penalty (applies to ALL sources uniformly).
+        // Proportional, not flat: a candidate whose biggest hole is barely
+        // past the threshold and one that's missing an entire verse must not
+        // cost the same (2026-09-14 repro: Supernatural's NetEase candidate
+        // had a 63.2s hole over a 191s song — missing 1/3 of the content —
+        // and only ever paid the same flat -20 as a 46s hole would). Kept
+        // deliberately gentle past the threshold: an early version (extra
+        // penalty up to -40, coefficient 50) drove long tracks with a
+        // legitimate long instrumental break (e.g. a 6-minute dream-pop
+        // song with a ~100s interlude) from a marginal PASS into rejected —
+        // tuned down against the 82-case/100-benchmark suites until that
+        // class of song stopped flipping.
+        if duration > 0, lyrics.count >= 5 {
             var maxGap: Double = 0
             for i in 1..<lyrics.count {
                 maxGap = max(maxGap, lyrics[i].startTime - lyrics[i - 1].startTime)
             }
             let gapThreshold = max(45, duration * 0.15)
-            if maxGap > gapThreshold { score -= 20 }
+            if maxGap > gapThreshold {
+                let overshootRatio = (maxGap - gapThreshold) / gapThreshold
+                score -= 20 + min(20, overshootRatio * 25)
+            }
         }
 
         // 7. Mixed translation penalty
