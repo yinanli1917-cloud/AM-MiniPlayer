@@ -551,6 +551,46 @@ final class NativeLyricsRowView: NSView {
         }
     }
 
+    /// Repro/regression instrumentation (defect 1, emphasis words, 2026-09-14 founder report).
+    /// `applyMainWordFloatGlyphLayers` still SKIPS emphasis-order runs entirely (`where
+    /// !emphasisOrders.contains(run.order)`) — emphasis words render exclusively through
+    /// `emphasisGlyphLayers` — but as of the 2026-09-14 fix `floatingOrders` (fed to
+    /// `applyFloatingHiddenBase`) DOES include an emphasis word's order while its animation is
+    /// actively displacing it (liftY/floatY nonzero or scale != 1), so the whole-line dim base is
+    /// blanked for it the same way an ordinary floating word is. Reports each emphasis glyph
+    /// layer's applied Y/scale, index-aligned to `emphasisGlyphLayers`, for tests to compare
+    /// against the (now correctly hidden) dim-base rest position.
+    var debugEmphasisGlyphLayerPositions: [(appliedPositionY: CGFloat, appliedScale: CGFloat, isHidden: Bool)] {
+        emphasisGlyphLayers.map { layer in
+            let t = layer.affineTransform()
+            return (layer.position.y, sqrt(t.a * t.a + t.c * t.c), layer.isHidden)
+        }
+    }
+
+    /// True when `mainTextLayer.string` (the whole-line dim base) has BLANKED the character range
+    /// belonging to word `order` — i.e. something subtracted it the way `applyFloatingHiddenBase`
+    /// subtracts an ordinary floating word. `nil` when the layer has no attributed string or the
+    /// order is out of range. Character offset is derived the same way
+    /// `NativeLyricsHiddenTextMask.ranges` locates a word's range: sequential concatenation of
+    /// `plan.wordRuns[i].text`.
+    func debugMainTextLayerIsWordHidden(order: Int, plan: NativeLyricsTextRenderPlan) -> Bool? {
+        guard let attributed = mainTextLayer.string as? NSAttributedString else { return nil }
+        guard plan.wordRuns.indices.contains(order) else { return nil }
+        var location = 0
+        for (index, run) in plan.wordRuns.enumerated() {
+            let length = (run.text as NSString).length
+            if index == order {
+                guard location < attributed.length else { return nil }
+                guard let color = attributed.attribute(.foregroundColor, at: location, effectiveRange: nil) as? NSColor else {
+                    return nil
+                }
+                return color.alphaComponent < 0.01
+            }
+            location += length
+        }
+        return nil
+    }
+
     var debugDimCompensationActive: Bool { mainDimCompensationActive }
 
     /// True when the hover background is actually painted for this row. Tests assert it clears once
@@ -596,6 +636,31 @@ final class NativeLyricsRowView: NSView {
 
     var debugPreludeDotCenterYInSuperview: CGFloat {
         frame.minY + dotContainerLayer.position.y
+    }
+
+    /// Repro instrumentation (defect 3, 2026-09-14 founder report: prelude dots parked at the
+    /// panel's top-left instead of centred like the active line). Mirrors the Y accessor above —
+    /// the dot cluster's centre X in the ROW's own coordinate space, so a test can compare it
+    /// against the row's content leading inset / width without guessing at CALayer internals.
+    var debugPreludeDotCenterX: CGFloat { dotContainerLayer.position.x }
+    var debugPreludeDotContainerHidden: Bool { dotContainerLayer.isHidden }
+    var debugPreludeDotContainerOpacity: Float { dotContainerLayer.opacity }
+
+    /// Cross-hierarchy position readback for annotated diagrams (defect 3, 2026-09-14). Walks
+    /// the REAL CALayer tree (`CALayer.convert(_:to:)`, which correctly folds in any ancestor
+    /// `setAffineTransform` — e.g. the row's own `positioningTransform` — unlike hand-adding
+    /// `frame.minX/minY`) so the returned point matches exactly where `CALayer.render(in:)` would
+    /// actually paint the dots, in `targetLayer`'s coordinate space (pass the hosting surface's
+    /// own `.layer` to get surface-space coordinates for a full-panel screenshot annotation).
+    func debugDotContainerCenter(in targetLayer: CALayer) -> CGPoint {
+        dotContainerLayer.superlayer?.convert(dotContainerLayer.position, to: targetLayer) ?? .zero
+    }
+
+    /// Same cross-hierarchy conversion for the main (dim) text layer's own centre — used as the
+    /// "current line's text horizontal centre" reference line in the defect-3 diagram.
+    func debugMainTextLayerCenter(in targetLayer: CALayer) -> CGPoint {
+        let localCenter = CGPoint(x: mainTextLayer.frame.midX, y: mainTextLayer.frame.midY)
+        return mainTextLayer.superlayer?.convert(localCenter, to: targetLayer) ?? .zero
     }
     #endif
 
@@ -1385,15 +1450,28 @@ final class NativeLyricsRowView: NSView {
                 && !appliedMainProgress.appliedPerRunSweep
                 && !mainBrightTextLayer.isHidden
                 && mainBrightTextLayer.string != nil
+            #endif
+            // 2026-09-14: NativeLyricsMaskTrace now also arms via a UserDefaults switch (the
+            // founder cannot pass an environment variable when launching from Finder), so this
+            // call must run in EVERY build configuration, not just DEBUG/LOCAL_DEVELOPER_BUILD —
+            // the trace itself still defaults to off (checked inside `record`, zero I/O when
+            // disarmed). Recomputes the same two values locally instead of reading the
+            // DEBUG-only stored properties above, which don't exist in a plain release build.
+            let maskTraceWordIndex = expectsPerRunSweep
+                ? (plan.wordRuns.lastIndex(where: { $0.startTime <= renderTime }) ?? 0)
+                : -1
+            let maskTraceWholeLineHighlight = expectsPerRunSweep
+                && !appliedMainProgress.appliedPerRunSweep
+                && !mainBrightTextLayer.isHidden
+                && mainBrightTextLayer.string != nil
             NativeLyricsMaskTrace.record(
                 rowID: row.displayLine.id,
-                wordIndex: debugLastActiveWordIndex,
-                wholeLineHighlight: debugLastWholeLineHighlight,
+                wordIndex: maskTraceWordIndex,
+                wholeLineHighlight: maskTraceWholeLineHighlight,
                 perRunSweep: appliedMainProgress.appliedPerRunSweep,
                 expected: plan.mainSweepProgress,
                 applied: appliedMainProgress.progress
             )
-            #endif
             let expectsNoLineLevelMainSweep = !expectsPerRunSweep
             let appliesLineLevelMainSweep = expectsNoLineLevelMainSweep
                 && mainBrightTextLayer.string != nil
@@ -1553,9 +1631,25 @@ final class NativeLyricsRowView: NSView {
         // started) is left alone: it coincides exactly with the whole-line glyph already, so
         // there is nothing to hide and no tile needed (also keeps the activation-instant
         // layout tests, which sample at floatY == 0, unaffected).
+        //
+        // 2026-09-14 founder report: the SAME double image on emphasis words ("WHAT IT'S ALL
+        // ABOU[T]") — applyEmphasisGlyphLayers draws a separate scale/lift/glow glyph for
+        // emphasis-order words, but this set used to unconditionally EXCLUDE emphasisOrders, so
+        // an emphasis word's whole-line dim-base copy was NEVER hidden while it animated. Extend
+        // the same "hide only while actually displaced" rule to emphasis words: liftY/floatY
+        // nonzero or scale != 1 means the emphasis animation is currently moving the glyph away
+        // from its rest position, so the base copy must be blanked exactly like a floating
+        // ordinary word. amount == 0 (outside the emphasis window) leaves the word coincident
+        // with the base, matching the existing floatY == 0 exemption above.
         let floatingOrders: Set<Int> = keepWholeLineDim
             ? Set(plan.wordRuns.enumerated().compactMap { order, run in
-                  (!emphasisOrders.contains(order) && run.baseFloatY != 0) ? order : nil
+                  if emphasisOrders.contains(order) {
+                      let isActiveEmphasis = run.emphasis.liftY != 0
+                          || run.emphasis.floatY != 0
+                          || run.emphasis.scale != 1
+                      return isActiveEmphasis ? order : nil
+                  }
+                  return run.baseFloatY != 0 ? order : nil
               })
             : []
         if geometryReady {
@@ -2255,11 +2349,14 @@ final class NativeLyricsRowView: NSView {
 
     /// Sweep-ghost fix: keeps `mainTextLayer` as the ONE laid-out whole-line string (so wrap-line
     /// height/tracking never change on activation — the 08-27 constraint pinned by
-    /// NativeLyricsActiveLineSpacingTests) while making the glyph ranges of currently-floating,
-    /// non-emphasis words transparent in it. Those words' visible dim ink then comes ONLY from the
-    /// per-glyph dim tile in `applyMainWordFloatGlyphLayers`, floated by the SAME floatY as the
-    /// bright tile — eliminating the second, unfloated copy underneath (the reported double image
-    /// on swept CJK glyphs). Gated by a signature so this only rewrites the string when the set of
+    /// NativeLyricsActiveLineSpacingTests) while making the glyph ranges of currently-displaced
+    /// words transparent in it — ordinary words floating by `baseFloatY`, AND (as of 2026-09-14)
+    /// emphasis words whose scale/lift/float animation is actively moving them. Those words'
+    /// visible dim ink then comes ONLY from the per-glyph dim tile in
+    /// `applyMainWordFloatGlyphLayers` (ordinary words) or the emphasis glyph layer in
+    /// `applyEmphasisGlyphLayers` (emphasis words) — eliminating the second, undisplaced copy
+    /// underneath (the reported double image, both on swept CJK glyphs and on emphasized English
+    /// words like "about"). Gated by a signature so this only rewrites the string when the set of
     /// floating words actually changes (once per word boundary), not every frame.
     private func applyFloatingHiddenBase(
         plan: NativeLyricsTextRenderPlan,
@@ -2740,7 +2837,15 @@ final class NativeLyricsRowView: NSView {
         let totalWidth = dotSize * CGFloat(dotLayers.count) + spacing * CGFloat(max(0, dotLayers.count - 1))
         var x: CGFloat = 0
         dotContainerLayer.bounds = CGRect(x: 0, y: 0, width: totalWidth, height: dotSize)
-        dotContainerLayer.position = CGPoint(x: frame.minX + totalWidth / 2, y: frame.midY)
+        // 2026-09-14 founder: 三点要像当前行文字一样横向居中，不是贴左边距摆。`frame` is the
+        // row's CONTENT COLUMN (left inset..trailing inset, the same box mainTextLayer's frame
+        // spans) — centre the dot cluster in that column, exactly the same formula
+        // updateSurfaceInterludeDots (LyricsLayerRendererView.swift) uses for the interlude
+        // overlay dots, so both dot presentations share one centring rule. This does not touch
+        // vertical anchoring (still `frame.midY`, unrelated to interludeAnchorAdvance) and is not
+        // a per-role shim — it is the SAME formula for every row's salient content, just applied
+        // to a cluster of dots instead of a text run.
+        dotContainerLayer.position = CGPoint(x: frame.midX, y: frame.midY)
         for dot in dotLayers {
             dot.bounds = CGRect(x: 0, y: 0, width: dotSize, height: dotSize)
             dot.position = CGPoint(x: x + dotSize / 2, y: dotSize / 2)

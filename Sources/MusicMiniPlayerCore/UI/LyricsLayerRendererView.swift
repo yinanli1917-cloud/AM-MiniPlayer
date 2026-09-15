@@ -298,6 +298,11 @@ final class NativeLyricsSurfaceView: NSView {
     // poll jitter is held at this peak so amllState never re-derives an earlier (brighter) hot set; an
     // explicit seek or a beyond-threshold backward jump follows it. nil until the first frame inits it.
     private var nativeRenderClock: TimeInterval?
+    // 2026-09-14 founder (message B): which display index the phase clock was last anchored to
+    // while manual-scroll-frozen. Lets synchronizeNativeSemanticIndex tell "just landed on this
+    // row via manual scroll" (re-anchor once) apart from "still parked on the same row" (let the
+    // clock free-run) — see the fix note at its call site.
+    private var lastManualScrollPhaseAnchorIndex: Int?
     private var pausedSemanticLocked = false
     private var lastObservedSeekGeneration: Int = 0
     private var lastTextPhaseUpdateAt: CFTimeInterval?
@@ -329,6 +334,17 @@ final class NativeLyricsSurfaceView: NSView {
     func debugBeginManualScroll() {
         guard let configuration else { return }
         beginNativeManualScrollIfNeeded(configuration: runtimeConfiguration(from: configuration))
+    }
+    /// Repro seam (2026-09-14, founder: "手动滚动回到开头" as a THIRD prelude-entry path,
+    /// distinct from an explicit seek). Freezes manual-scroll state at an ARBITRARY index
+    /// (bypassing the need to fabricate real trackpad/wheel NSEvents, which the codebase already
+    /// treats as unfakeable headlessly) so a test can simulate "the user scrolled all the way back
+    /// to the prelude row" without touching the playback clock at all — manual scroll's frozen
+    /// index short-circuits BEFORE the semantic/amllState index resolution
+    /// (`effectiveCurrentIndex`), which is the structural difference from an explicit seek.
+    func debugBeginManualScroll(frozenAt index: Int) {
+        guard !manualScrollState.isActive else { return }
+        manualScrollState.begin(frozenDisplayIndex: index)
     }
     var debugManualScrollActive: Bool { manualScrollState.isActive }
     #endif
@@ -708,12 +724,17 @@ final class NativeLyricsSurfaceView: NSView {
             + NativeLyricsHeightAccumulator.interludeGapHeight / 2 - NativeLyricsDotPhasePlan.baseDotSize / 2
         surfaceInterludeOverlay.frame = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height)
         let dotSize = NativeLyricsDotPhasePlan.baseDotSize
-        let containerX = nativeLyricContentLeadingInset
+        // 2026-09-14 founder: dots centre in the CONTENT COLUMN, same rule as
+        // NativeLyricsRowView.layoutDotContainer (the prelude row dots) — not the left inset.
+        // The content column is [leading inset, rowWidth - trailing inset], the same box a row's
+        // own text layer spans.
+        let contentColumnWidth = max(1, configuration.rowWidth - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset)
+        let containerCenterX = nativeLyricContentLeadingInset + contentColumnWidth / 2
         // The container bounds and per-dot positions are STATIC (set once in setupSurfaceInterludeDots),
         // so they can never collapse here. Only the group's screen position (Y travels with the gap),
         // opacity, scale and blur are dynamic.
         surfaceInterludeDotContainer.position = CGPoint(
-            x: containerX + surfaceInterludeDotContainer.bounds.width / 2,
+            x: containerCenterX,
             y: y + dotSize / 2
         )
         let currentTime = configuration.phaseRenderTime()
@@ -1136,6 +1157,69 @@ final class NativeLyricsSurfaceView: NSView {
                 }
                 _ = updateContentIfNeeded(view: view, row: row, configuration: rowTextConfiguration)
             }
+            // Symptom-3 fix (2026-09-14, founder-reported "滚动后整叠歌词位置再跳几像素" —
+            // repro: research/repro-2026-09-14-lyrics-render.md, Symptom 3 section). The content
+            // loop just above can measure a row's REAL height for the first time this cycle
+            // (updateContentIfNeeded → measuredHeightsByIndex), but `runtimeConfiguration.accumulatedHeights`
+            // was already computed once in `runtimeConfiguration(from:)` BEFORE that loop ran, so
+            // it still reflects the OLD/placeholder height for that row — every row below it would
+            // be positioned via a stale offset for this whole frame, until the EXTERNAL SwiftUI
+            // height cache (LyricsView.cache.lineHeights, itself behind two DispatchQueue.main.async
+            // hops via onHeightMeasured → scheduleHeightCacheUpdate) eventually catches up on a
+            // LATER configure() cycle and produces a correcting jump — the reported "settle then
+            // synchronized +1..+6px snap". Recompute accumulatedHeights HERE, in the SAME cycle,
+            // from the now-fresh measuredHeightsByIndex (the renderer's own already-correct
+            // per-row measurements — NativeLyricsHeightAccumulator.rowHeight prefers them outright
+            // over anything externally supplied), so the position this frame's applyFrame below
+            // actually uses is already correct: no stale frame is ever committed to screen, so
+            // there is nothing to visibly snap away from. This is a single O(visible rows)
+            // dictionary rebuild, gated the same way the rest of this function already is (only
+            // on an actual configure() cycle, never per presentation-loop tick) — not a per-frame
+            // full relayout (the scroll.lastVelocity trap).
+            let refreshedAccumulatedHeights = NativeLyricsHeightAccumulator.accumulatedHeights(
+                renderedIndices: runtimeConfiguration.renderedIndices,
+                configuredAccumulatedHeights: runtimeConfiguration.accumulatedHeights,
+                measuredHeights: measuredHeightsByIndex,
+                interludeAfterIndex: runtimeConfiguration.interludeAfterIndex
+            )
+            var runtimeConfiguration = runtimeConfiguration
+            let heightsActuallyChanged = refreshedAccumulatedHeights != runtimeConfiguration.accumulatedHeights
+            runtimeConfiguration.accumulatedHeights = refreshedAccumulatedHeights
+            // In NATURAL (non-snap) mode, nativeFrameRenderSnapshot prefers the presentation
+            // ENGINE's own spring state (`presentationEngine.presentation(for:).y`) over snapY —
+            // and that spring's TARGET was set by the `presentationEngine.update(...)` call in
+            // `configure(_:)`, which ran BEFORE this cycle's content-measurement loop, using the
+            // SAME stale accumulatedHeights this block just corrected. Re-issuing the update here
+            // with the refreshed heights (only when they actually changed, to avoid churn) makes
+            // the engine's target correct THIS frame too — otherwise this fix would only reach
+            // snapY's direct fallback path (used when the engine has no entry yet / snap mode),
+            // and the spring-driven common case would still land one cycle late.
+            if heightsActuallyChanged {
+                let refreshedSnapMode = frameSnapMode(for: runtimeConfiguration)
+                presentationEngine.update(
+                    LyricsPresentationEngineConfiguration(
+                        currentIndex: runtimeConfiguration.effectiveCurrentIndex,
+                        scrollTargetIndex: runtimeConfiguration.effectiveScrollTargetIndex,
+                        hotActiveIndices: runtimeConfiguration.nativeHotActiveIndices,
+                        bufferedActiveIndices: runtimeConfiguration.nativeBufferedActiveIndices,
+                        isManualScrolling: runtimeConfiguration.effectiveIsManualScrolling,
+                        renderedIndices: runtimeConfiguration.renderedIndices,
+                        anchorY: runtimeConfiguration.anchorY,
+                        accumulatedHeights: runtimeConfiguration.accumulatedHeights,
+                        lineInterval: runtimeConfiguration.lineInterval,
+                        hasSyllableSync: runtimeConfiguration.hasSyllableSync,
+                        isInterludeActive: runtimeConfiguration.interludeAfterIndex != nil,
+                        trackContext: runtimeConfiguration.trackContext,
+                        isWaveTimelineDiagnosticsEnabled: runtimeConfiguration.isWaveTimelineDiagnosticsEnabled
+                            || DiagnosticsService.shared.isLyricWaveTimelineEnabled,
+                        playbackMode: refreshedSnapMode.playbackMode
+                    ),
+                    onTargetsChanged: { [weak self] in
+                        self?.startPresentationLoop()
+                    }
+                )
+            }
+
             let renderSnapshot = nativeFrameRenderSnapshot(
                 rows: visibleRows,
                 configuration: runtimeConfiguration,
@@ -1306,9 +1390,23 @@ final class NativeLyricsSurfaceView: NSView {
         // fresh, never-backward time. A backward step beyond the resync tolerance is a real
         // discontinuity and is followed; synchronize itself re-anchors on explicit seeks below.
         let musicController = configuration.musicController
+        // 2026-09-14 founder (message B): while manual-scroll frozen, the phase clock must NOT
+        // track real playback time — real playback keeps advancing wherever the song actually is
+        // while the display freezes on a row the user scrolled to. Feeding that real (unrelated)
+        // time into the frozen row's phase math is what produced scenario C's "dots read as long
+        // since finished" bug (root-caused via NativeLyricsDotPhasePlan.make's fadeOutProgress
+        // hitting 1 once currentTime >= the prelude row's own endTime, which real playback time
+        // routinely is once the song has moved on). Hold the clock at whatever
+        // synchronizeNativeSemanticIndex anchors it to below instead of tracking raw forward —
+        // captured once here (matching the `musicController` capture just above) since this
+        // closure cannot read the `inout configuration` it is being installed on.
+        let isManualScrollFrozen = configuration.effectiveIsManualScrolling
         configuration.nativePhaseClock = { [weak self] in
+            guard let self else { return musicController.lyricRenderTime() }
+            if isManualScrollFrozen {
+                return self.nativeRenderClock ?? musicController.lyricRenderTime()
+            }
             let raw = musicController.lyricRenderTime()
-            guard let self else { return raw }
             let held = NativeLyricsSeekClassifier.monotonicTime(
                 previous: self.nativeRenderClock ?? raw,
                 rawTime: raw,
@@ -1321,8 +1419,32 @@ final class NativeLyricsSurfaceView: NSView {
         guard configuration.playbackMode == .natural else {
             let snapIndex = configuration.effectiveCurrentIndex
             // A snap (seek / tap / direct snap) is a deliberate discontinuity: reset the monotonic
-            // clock to the snapped time so natural playback resumes without holding against a stale peak.
-            let snapTime = configuration.musicController.lyricRenderTime()
+            // clock to the snapped time so natural playback resumes without holding against a stale
+            // peak.
+            //
+            // Manual scroll is the ONE snap reason where "the snapped time" must NOT be
+            // `musicController.lyricRenderTime()` (see the phase-clock note above for why).
+            // Anchor to the FROZEN row's own start time instead — the same reference an explicit
+            // seek TO that row would use, making manual-scroll-back use the identical presentation
+            // entry point as seek/cold-start rather than a separate fallback (founder: "让
+            // seek/滚回前奏与冷启动走同一套呈现入口"). Re-anchor only on the FIRST cycle a given
+            // frozen index becomes active (`lastManualScrollPhaseAnchorIndex` tracks that); on
+            // later cycles reuse the already-anchored clock unchanged so it does not keep resetting
+            // to the same startTime every configure() call. Every other snap reason (explicit seek,
+            // tap-to-line, reduced motion, initial layout) is unaffected and keeps using real
+            // playback time, which IS accurate for them.
+            let isFreshManualScrollLanding = isManualScrollFrozen
+                && lastManualScrollPhaseAnchorIndex != snapIndex
+            let snapTime: TimeInterval
+            if isFreshManualScrollLanding,
+               let anchorRow = configuration.rows.first(where: { $0.index == snapIndex }) {
+                snapTime = anchorRow.displayLine.line.startTime
+            } else if isManualScrollFrozen, let heldClock = nativeRenderClock {
+                snapTime = heldClock
+            } else {
+                snapTime = configuration.musicController.lyricRenderTime()
+            }
+            lastManualScrollPhaseAnchorIndex = isManualScrollFrozen ? snapIndex : nil
             nativeRenderClock = snapTime
             nativeSemanticCurrentIndex = snapIndex
             nativeTimelineState = NativeLyricsTimelinePolicy.AMLLState(

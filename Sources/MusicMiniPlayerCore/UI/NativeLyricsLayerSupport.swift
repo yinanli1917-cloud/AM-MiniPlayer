@@ -208,12 +208,39 @@ private extension CGImage {
     }()
 }
 
-/// DEBUG mask-state probe (founder 2026-08-27). Records only on transitions so a
-/// daily session cannot balloon. Armed when `NANOPOD_MASK_TRACE=1` or under
-/// LOCAL_DEVELOPER_BUILD. Production default: no I/O.
+/// Mask-state probe (founder 2026-08-27; UserDefaults switch added 2026-09-14). Records only on
+/// transitions so a daily session cannot balloon. Armed by any of:
+///   - `NANOPOD_MASK_TRACE=1` environment variable (DEBUG / LOCAL_DEVELOPER_BUILD only — a
+///     terminal-launched dev build can set this)
+///   - `LOCAL_DEVELOPER_BUILD` compile flag
+///   - the `NanoPodMaskTraceEnabled` UserDefaults key (checked in EVERY build configuration,
+///     including plain release) — added because launching the app from Finder cannot pass an
+///     environment variable, so the founder needs a way to arm this without a terminal:
+///     `defaults write <bundle-id> NanoPodMaskTraceEnabled -bool YES`, then relaunch.
+/// Default (no env var, not a dev build, UserDefaults key absent/false): zero I/O, the guard
+/// returns before any file access — the same production-default guarantee as before, just
+/// reachable by one more path. Output path unchanged: /tmp/nanopod_mask_trace.jsonl.
 enum NativeLyricsMaskTrace {
+    /// UserDefaults key the founder can set from a plist/`defaults write` without a terminal
+    /// environment variable. Public so Settings/diagnostics UI could someday expose a toggle.
+    static let userDefaultsKey = "NanoPodMaskTraceEnabled"
+
     private static let lock = NSLock()
     private static var lastKey: String = ""
+
+    private static var isArmed: Bool {
+        if UserDefaults.standard.bool(forKey: userDefaultsKey) { return true }
+        #if DEBUG || LOCAL_DEVELOPER_BUILD
+        if ProcessInfo.processInfo.environment["NANOPOD_MASK_TRACE"] == "1" { return true }
+        #if LOCAL_DEVELOPER_BUILD
+        return true
+        #else
+        return false
+        #endif
+        #else
+        return false
+        #endif
+    }
 
     static func record(
         rowID: String,
@@ -223,14 +250,7 @@ enum NativeLyricsMaskTrace {
         expected: CGFloat,
         applied: CGFloat
     ) {
-        #if DEBUG || LOCAL_DEVELOPER_BUILD
-        let armed = ProcessInfo.processInfo.environment["NANOPOD_MASK_TRACE"] == "1"
-        #if LOCAL_DEVELOPER_BUILD
-        let localBuild = true
-        #else
-        let localBuild = false
-        #endif
-        guard armed || localBuild else { return }
+        guard isArmed else { return }
         let key = "\(rowID)|\(wordIndex)|\(wholeLineHighlight)|\(perRunSweep)"
         lock.lock()
         let changed = key != lastKey
@@ -254,8 +274,5 @@ enum NativeLyricsMaskTrace {
         if let data = line.data(using: .utf8) {
             try? handle.write(contentsOf: data)
         }
-        #else
-        _ = (rowID, wordIndex, wholeLineHighlight, perRunSweep, expected, applied)
-        #endif
     }
 }
