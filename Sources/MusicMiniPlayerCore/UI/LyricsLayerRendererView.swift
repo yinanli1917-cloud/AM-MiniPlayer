@@ -1152,69 +1152,6 @@ final class NativeLyricsSurfaceView: NSView {
                 }
                 _ = updateContentIfNeeded(view: view, row: row, configuration: rowTextConfiguration)
             }
-            // Symptom-3 fix (2026-09-14, founder-reported "滚动后整叠歌词位置再跳几像素" —
-            // repro: research/repro-2026-09-14-lyrics-render.md, Symptom 3 section). The content
-            // loop just above can measure a row's REAL height for the first time this cycle
-            // (updateContentIfNeeded → measuredHeightsByIndex), but `runtimeConfiguration.accumulatedHeights`
-            // was already computed once in `runtimeConfiguration(from:)` BEFORE that loop ran, so
-            // it still reflects the OLD/placeholder height for that row — every row below it would
-            // be positioned via a stale offset for this whole frame, until the EXTERNAL SwiftUI
-            // height cache (LyricsView.cache.lineHeights, itself behind two DispatchQueue.main.async
-            // hops via onHeightMeasured → scheduleHeightCacheUpdate) eventually catches up on a
-            // LATER configure() cycle and produces a correcting jump — the reported "settle then
-            // synchronized +1..+6px snap". Recompute accumulatedHeights HERE, in the SAME cycle,
-            // from the now-fresh measuredHeightsByIndex (the renderer's own already-correct
-            // per-row measurements — NativeLyricsHeightAccumulator.rowHeight prefers them outright
-            // over anything externally supplied), so the position this frame's applyFrame below
-            // actually uses is already correct: no stale frame is ever committed to screen, so
-            // there is nothing to visibly snap away from. This is a single O(visible rows)
-            // dictionary rebuild, gated the same way the rest of this function already is (only
-            // on an actual configure() cycle, never per presentation-loop tick) — not a per-frame
-            // full relayout (the scroll.lastVelocity trap).
-            let refreshedAccumulatedHeights = NativeLyricsHeightAccumulator.accumulatedHeights(
-                renderedIndices: runtimeConfiguration.renderedIndices,
-                configuredAccumulatedHeights: runtimeConfiguration.accumulatedHeights,
-                measuredHeights: measuredHeightsByIndex,
-                interludeAfterIndex: runtimeConfiguration.interludeAfterIndex
-            )
-            var runtimeConfiguration = runtimeConfiguration
-            let heightsActuallyChanged = refreshedAccumulatedHeights != runtimeConfiguration.accumulatedHeights
-            runtimeConfiguration.accumulatedHeights = refreshedAccumulatedHeights
-            // In NATURAL (non-snap) mode, nativeFrameRenderSnapshot prefers the presentation
-            // ENGINE's own spring state (`presentationEngine.presentation(for:).y`) over snapY —
-            // and that spring's TARGET was set by the `presentationEngine.update(...)` call in
-            // `configure(_:)`, which ran BEFORE this cycle's content-measurement loop, using the
-            // SAME stale accumulatedHeights this block just corrected. Re-issuing the update here
-            // with the refreshed heights (only when they actually changed, to avoid churn) makes
-            // the engine's target correct THIS frame too — otherwise this fix would only reach
-            // snapY's direct fallback path (used when the engine has no entry yet / snap mode),
-            // and the spring-driven common case would still land one cycle late.
-            if heightsActuallyChanged {
-                let refreshedSnapMode = frameSnapMode(for: runtimeConfiguration)
-                presentationEngine.update(
-                    LyricsPresentationEngineConfiguration(
-                        currentIndex: runtimeConfiguration.effectiveCurrentIndex,
-                        scrollTargetIndex: runtimeConfiguration.effectiveScrollTargetIndex,
-                        hotActiveIndices: runtimeConfiguration.nativeHotActiveIndices,
-                        bufferedActiveIndices: runtimeConfiguration.nativeBufferedActiveIndices,
-                        isManualScrolling: runtimeConfiguration.effectiveIsManualScrolling,
-                        renderedIndices: runtimeConfiguration.renderedIndices,
-                        anchorY: runtimeConfiguration.anchorY,
-                        accumulatedHeights: runtimeConfiguration.accumulatedHeights,
-                        lineInterval: runtimeConfiguration.lineInterval,
-                        hasSyllableSync: runtimeConfiguration.hasSyllableSync,
-                        isInterludeActive: runtimeConfiguration.interludeAfterIndex != nil,
-                        trackContext: runtimeConfiguration.trackContext,
-                        isWaveTimelineDiagnosticsEnabled: runtimeConfiguration.isWaveTimelineDiagnosticsEnabled
-                            || DiagnosticsService.shared.isLyricWaveTimelineEnabled,
-                        playbackMode: refreshedSnapMode.playbackMode
-                    ),
-                    onTargetsChanged: { [weak self] in
-                        self?.startPresentationLoop()
-                    }
-                )
-            }
-
             let renderSnapshot = nativeFrameRenderSnapshot(
                 rows: visibleRows,
                 configuration: runtimeConfiguration,
