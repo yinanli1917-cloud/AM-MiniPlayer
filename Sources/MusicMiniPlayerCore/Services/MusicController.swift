@@ -867,7 +867,7 @@ public class MusicController: ObservableObject {
             // Queue hash scans touch Music.app's playlist through SB. Normal
             // updates come from notifications and track-change refreshes.
             self.queueCheckTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
-                self?.checkQueueHashAndRefresh()
+                self?.checkQueueHashAndRefresh(reason: "timer:30s")
             }
             RunLoop.main.add(self.queueCheckTimer!, forMode: .common)
 
@@ -981,8 +981,14 @@ public class MusicController: ObservableObject {
     // MARK: - Queue Sync (Two-Layer Detection)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    private func checkQueueHashAndRefresh() {
+    /// `reason` is diagnostic-only (repro instrumentation for the 2026-09-14
+    /// repeated-fetch investigation — see research/nanopod_debug_*.log) and
+    /// never affects control flow: it identifies which trigger (30s timer vs
+    /// a DistributedNotification) asked for this hash check, so a log replay
+    /// can tell a legitimate queue change from a spurious self-sustaining loop.
+    private func checkQueueHashAndRefresh(reason: String) {
         guard !isPreview else { return }
+        DebugLogger.log("QueuePreload", "checkQueueHashAndRefresh reason=\(reason)")
 
         scriptingBridgeQueue.async { [weak self] in
             guard let self = self, let app = self.queueApp, app.isRunning else { return }
@@ -997,6 +1003,7 @@ public class MusicController: ObservableObject {
                 }
                 if hash != self.lastQueueHash {
                     debugPrint("🔄 [checkQueueHash] Queue changed: \(self.lastQueueHash) -> \(hash)\n")
+                    DebugLogger.log("QueuePreload", "checkQueueHash CHANGED reason=\(reason) '\(self.lastQueueHash)' -> '\(hash)' -> fetchUpNextQueue()")
                     self.lastQueueHash = hash
                     self.fetchUpNextQueue()
                 }
@@ -1029,8 +1036,9 @@ public class MusicController: ObservableObject {
 
     @objc private func queueMayHaveChanged(_ notification: Notification) {
         guard Date().timeIntervalSince(lastPollTime) >= 1.0 else { return }
+        DebugLogger.log("QueuePreload", "queueMayHaveChanged notification=\(notification.name.rawValue)")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.checkQueueHashAndRefresh()
+            self?.checkQueueHashAndRefresh(reason: "notification:\(notification.name.rawValue)")
         }
     }
 

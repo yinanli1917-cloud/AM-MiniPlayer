@@ -1045,6 +1045,7 @@ public class LyricsService: ObservableObject {
         // from different fetches can never mix.
         let networkLedger = NetworkOutcomeLedger()
         let foregroundStartedAt = Date()
+        DebugLogger.log("LyricsFetch", "fetchAllSources caller=foreground songID='\(songID)' album='\(album)' dur=\(duration)")
         let results = await NetworkOutcomeLedger.$current.withValue(networkLedger) {
             await fetcher.fetchAllSources(
                 title: title,
@@ -2657,6 +2658,20 @@ public class LyricsService: ObservableObject {
     /// on the same actor as fetchLyrics, which owns the cancel side.
     @MainActor
     public func preloadNextSongs(tracks: [(title: String, artist: String, duration: TimeInterval, album: String)]) {
+        // Diagnostic input table (repro instrumentation for the 2026-09-14
+        // repeated-fetch investigation): every candidate's computed songID and
+        // whether it already hit the lyrics cache, so a log replay can tell
+        // whether the currently-playing song keeps resurfacing here and, if
+        // so, whether its songID matches what the foreground path cached
+        // (album normalization mismatch would explain an endless cache miss).
+        var diagInputSummaries: [String] = []
+        for t in tracks.prefix(4) {
+            let sid = Self.songIdentity(title: t.title, artist: t.artist, duration: t.duration, album: t.album)
+            let cached = lyricsCache.object(forKey: sid as NSString) != nil
+            diagInputSummaries.append("[\(t.title)|album='\(t.album)'|dur=\(t.duration)|songID='\(sid)'|cached=\(cached)]")
+        }
+        DebugLogger.log("LyricsFetch", "preloadNextSongs input=\(tracks.count) currentSongID='\(currentSongID ?? "nil")' candidates=\(diagInputSummaries)")
+
         let candidates = tracks
             .prefix(4)
             .filter { !$0.title.isEmpty && $0.title != kNotPlayingSentinel }
@@ -2689,6 +2704,8 @@ public class LyricsService: ObservableObject {
                     album: track.album
                 )
                 if self.lyricsCache.object(forKey: songID as NSString) != nil { continue }
+
+                DebugLogger.log("LyricsFetch", "fetchAllSources caller=preload songID='\(songID)' album='\(track.album)' dur=\(track.duration) currentSongID='\(self.currentSongID ?? "nil")'")
 
                 // Per-track ledger: preload writes the same 24h availability
                 // verdicts as the foreground, so it needs the same transport-

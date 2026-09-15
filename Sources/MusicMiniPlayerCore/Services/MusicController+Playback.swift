@@ -582,6 +582,7 @@ extension MusicController {
             self.lastQueueFetchCompletedAt = Date()
             self.lastQueueFetchCompletedGeneration = requestQueueGeneration
             self.logger.info("✅ Fetched \(tracks.count) up next tracks via ScriptingBridge")
+            DebugLogger.log("QueuePreload", "fetchUpNextViaBridge outcome=\(outcome) didChange=\(didChange) currentTrack='\(self.currentTrackTitle)' tracks=\(tracks.map { "\($0.title)|album='\($0.album)'|dur=\($0.duration)" })")
             if didChange {
                 self.preloadNearbyAssets(from: tracks)
             }
@@ -730,6 +731,7 @@ extension MusicController {
                     await MainActor.run {
                         let didChange = self.applyRecentTracksIfChanged(tracks)
                         self.logger.info("✅ Fetched \(tracks.count) recent tracks via Apple Music API")
+                        DebugLogger.log("QueuePreload", "fetchRecentHistoryViaAppleMusicAPI didChange=\(didChange) currentTrack='\(self.currentTrackTitle)' tracks=\(tracks.map { "\($0.title)|album='\($0.album)'|dur=\($0.duration)" })")
                         if didChange {
                             self.preloadNearbyAssets(from: tracks)
                         }
@@ -764,6 +766,7 @@ extension MusicController {
             DispatchQueue.main.async {
                 let didChange = self.applyRecentTracksIfChanged(tracks)
                 self.logger.info("✅ Fetched \(tracks.count) recent tracks via ScriptingBridge")
+                DebugLogger.log("QueuePreload", "fetchRecentHistoryViaScriptingBridge didChange=\(didChange) currentTrack='\(self.currentTrackTitle)' tracks=\(tracks.map { "\($0.title)|album='\($0.album)'|dur=\($0.duration)" })")
                 if didChange {
                     self.preloadNearbyAssets(from: tracks)
                 }
@@ -922,6 +925,8 @@ extension MusicController {
 
         guard !validTracks.isEmpty else { return }
 
+        DebugLogger.log("QueuePreload", "preloadNearbyAssets scheduled currentTrack='\(currentTrackTitle)' validTracks=\(validTracks.map { "\($0.title)|album='\($0.album)'|dur=\($0.duration)" })")
+
         os_signpost(.event, log: performanceLog, name: "PreloadNearbyScheduled", "count=%{public}d", validTracks.count)
         assetPreloadTask?.cancel()
         let generation = artworkFetchGeneration
@@ -946,6 +951,7 @@ extension MusicController {
                         }
                     )
                 } else {
+                    DebugLogger.log("QueuePreload", "preloadNextSongs SKIPPED (native lyrics renderer active on lyrics page) currentTrack='\(self.currentTrackTitle)'")
                     os_signpost(
                         .event,
                         log: self.performanceLog,
