@@ -149,9 +149,11 @@ public enum MicroInteractionFeel {
         case tuned = "tuned"
         case legacy = "legacy"
 
+        // 2026-09-14 创始人「只修 bug 不加新功能」：C5 对比度臂默认回到 legacy，
+        // 只能经 nanopod://debug/feel/artworkContrast/tuned 显式开启。
         public static func resolve(from raw: String?) -> ArtworkContrastMode {
-            guard let raw else { return .tuned }
-            return ArtworkContrastMode(rawValue: raw.lowercased()) ?? .tuned
+            guard let raw else { return .legacy }
+            return ArtworkContrastMode(rawValue: raw.lowercased()) ?? .legacy
         }
     }
 

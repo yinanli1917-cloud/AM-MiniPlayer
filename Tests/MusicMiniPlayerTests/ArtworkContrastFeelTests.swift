@@ -122,11 +122,11 @@ final class ArtworkContrastFeelTests: XCTestCase {
     // MARK: - Channel resolve (arm switch)
 
     func test_channelResolve_nilFallsBackToTuned() {
-        XCTAssertEqual(MicroInteractionFeel.ArtworkContrastMode.resolve(from: nil), .tuned)
+        XCTAssertEqual(MicroInteractionFeel.ArtworkContrastMode.resolve(from: nil), .legacy)
     }
 
     func test_channelResolve_unknownFallsBackToTuned() {
-        XCTAssertEqual(MicroInteractionFeel.ArtworkContrastMode.resolve(from: "garbage"), .tuned)
+        XCTAssertEqual(MicroInteractionFeel.ArtworkContrastMode.resolve(from: "garbage"), .legacy)
     }
 
     func test_channelResolve_legacyRecognized() {
