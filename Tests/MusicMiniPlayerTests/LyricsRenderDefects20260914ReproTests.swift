@@ -305,6 +305,60 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Defect 1b (2026-09-15) investigation: the founder still sees the ghost on real
+    // device after the 2026-09-14 fix. First hypothesis tried — that `mainBrightTextLayer` (the
+    // sweep/karaoke overlay, which `emphasisGlyphLayers` mount onto as sublayers) still paints an
+    // unhidden static copy of the emphasis word once the sweep wavefront reveals it — is FALSIFIED
+    // by this test: in the shipping default arm (`NativeLyricsFeelParity.sweepPathMode == .v28`,
+    // confirmed via the founder's own device UserDefaults — no `nanoPodFeelSweep` override is set
+    // on his container plist, so it resolves to the `.v28` default), `applyActiveMainPhase`
+    // (NativeLyricsRowView.swift, geometryReady branch) unconditionally nils
+    // `mainBrightTextLayer.string` once geometry is ready (`if mainBrightTextLayer.string != nil {
+    // mainBrightTextLayer.string = nil }`) — the v2.8 Canvas model paints the sung/bright text
+    // exclusively via PER-GLYPH tiles (`applyMainWordFloatGlyphLayers` for ordinary words,
+    // `emphasisGlyphLayers` for emphasis words), never via the whole-line string. So there is no
+    // second ink source on THIS layer in the production default path — this assertion documents
+    // that finding (nil, not a hidden-vs-unhidden attributed string) so the next investigator
+    // doesn't re-try this same falsified hypothesis.
+    //
+    // The more promising lead (from git archaeology, not yet verified here): `applyEmphasisGlyph`
+    // (NativeLyricsRowView.swift, ~line 2681) sets `layer.shadowColor/.shadowOpacity/.shadowRadius`
+    // whenever `expected.glowOpacity > 0` — a real CALayer shadow/glow halo around the emphasis
+    // glyph, traced back to `ef280b5`/`48c2747` (2026-05-30) via `4bbbc66` (2026-07-06). No test in
+    // this suite (or `NativeLyricsSweepGhostTests`/`NativeLyricsEmphasisPartitionTests`) asserts
+    // anything about `shadowOpacity`/`shadowRadius` — only geometry (Δy). `CALayer.render(in:)`
+    // (used by this file's `renderPNG` helper) does not reliably reproduce shadow compositing the
+    // way the real WindowServer render server does (the same class of blind spot
+    // banned-patterns.md documents for CIFilter blur), so this is NOT verifiable headlessly with
+    // the tools in this file — it needs either a real on-device layer/shadow dump or the
+    // founder's own eyes on a real English word-level-synced song.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    @MainActor
+    func test_emphasisWord_midSweep_brightLayerAlreadyNil_notASecondGhostSource() {
+        let currentTime: TimeInterval = 11.8 + 1.32
+        let result = driveEmphasisWord(currentTime: currentTime)
+
+        XCTAssertEqual(result.dimBaseHidden, true,
+            "sanity: this must be the SAME steady-state shot the fixed dim-base test uses")
+
+        let brightHidden = result.view.debugMainBrightTextLayerIsWordHidden(
+            order: 3,
+            plan: NativeLyricsTextRenderPlan.make(configuration: .init(
+                line: emphasisLine(), currentTime: currentTime, isActive: true
+            ))
+        )
+        print("[Defect1b] t=\(currentTime) dimBaseHidden=\(String(describing: result.dimBaseHidden)) " +
+              "brightBaseHidden=\(String(describing: brightHidden)) (nil == mainBrightTextLayer.string " +
+              "is nil, i.e. no text painted there at all in the shipping v28 arm)")
+
+        XCTAssertNil(brightHidden,
+            "FALSIFIED HYPOTHESIS, kept as a documented negative result: mainBrightTextLayer paints " +
+            "NOTHING (string == nil) in the shipping default arm once geometry is ready — it is NOT " +
+            "a second ghost source. If this ever starts reading non-nil, the sweepPathMode default " +
+            "or the geometryReady branch changed — re-investigate before assuming a fix landed.")
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - Defect 2 / 3: prelude row never becomes "current" on a backward seek
     //
     // NativeLyricsTimelinePolicy.liveDisplayIndex and .amllState both filter prelude rows out of
