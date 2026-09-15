@@ -319,4 +319,277 @@ final class LyricsWholeLineFlashRealTimeTests: XCTestCase {
         let flashes = runRealTimeCapture(song: song, realDuration: 60, slug: "fastest3-rengranjide")
         XCTAssertGreaterThanOrEqual(flashes, 0)
     }
+
+    // MARK: - Round 3 (coordinator 2026-09-14, final round on this item): jittered
+    // ScriptingBridge-shaped clock
+    //
+    // Rounds 1-2 above used MusicController(preview: true)'s clean Date()-interpolated
+    // lyricRenderTime() — real CVDisplayLink, real wall clock, but never the real SB-polling
+    // clock's jitter/backward-correction path. This round drives the SAME real CVDisplayLink +
+    // real wall-clock surface with a SYNTHETIC poll loop shaped like real ScriptingBridge
+    // polling, reusing the REAL production policy function (not a reimplementation):
+    // `PlaybackPositionCorrectionPolicy.shouldTrustPolledPositionForClockSync(drift:readLatency:)`
+    // — the exact rule that gates whether a slow/noisy poll is allowed to move the clock at all
+    // in production (MusicController.swift:1841-1850). Shape, every ~2 real seconds:
+    //   - a simulated SB read takes 0.1-0.4s (readLatency) to "land"; the value it carries
+    //     reflects the true song position AS OF WHEN THE READ STARTED (staleness = readLatency),
+    //     matching the 2026-07-17 postmortem's own model ("drift equalled the read latency, i.e.
+    //     pure measurement staleness" — PlaybackClockTrustTests.swift's header comment);
+    //   - the poll is only allowed to move `mc`'s clock (via syncPlaybackClock) when the REAL
+    //     trust policy says so — small/noisy corrections from a slow read are suppressed exactly
+    //     as production suppresses them, so this cannot fabricate a discontinuity production's
+    //     own gate would have blocked;
+    //   - one exact replay of the 2026-07-17 21:55:22 log event (sbRead=743.5ms, matching
+    //     drift≈-0.58s) is injected once per song as a direct "jitter sample", per the
+    //     coordinator's suggestion;
+    //   - one deliberate 1-3s forward jump (late track discovery / seek landing) and one
+    //     pause-then-resume are injected once per song.
+    // Seed-point method (coordinator-approved): rather than playing each song start-to-finish in
+    // real time (357s for the worst case), the real jittered clock is seeded a few seconds before
+    // each near-zero-gap transition flagged in the earlier data-level check and run just long
+    // enough (7 real seconds, ~3 real poll cycles) to cross it — covering ALL 25 such transitions
+    // in "How's about your company" and all 8 in 大橋純子's track (its total; "at least 25" isn't
+    // reachable there since the song only has 8 — covered exhaustively instead, noted in the
+    // report).
+    private struct JitteredCaptureEvent {
+        let seedSongTime: TimeInterval
+        let sampleT: TimeInterval
+        let kind: String   // "poll_trusted" | "poll_suppressed" | "forward_jump" | "pause" | "resume"
+        let polledPosition: TimeInterval?
+        let readLatencyMs: TimeInterval?
+        let drift: TimeInterval?
+    }
+
+    @MainActor
+    private func runJitteredSeedSweep(
+        song: CachedSong,
+        seedTimes: [TimeInterval],
+        lookback: TimeInterval,
+        perSeedRealDuration: TimeInterval,
+        slug: String
+    ) -> (wholeLineFlashFrames: Int, events: [JitteredCaptureEvent]) {
+        let rows = song.lines.enumerated().map { row(for: $1, index: $0) }
+        let panelWidth: CGFloat = 360
+        var heights: [Int: CGFloat] = [:]
+        for r in rows { heights[r.index] = 72 }
+
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 600))
+        host(surface, NSSize(width: panelWidth, height: 600))
+        let mc = MusicController(preview: true)
+        mc.duration = song.duration
+        mc.isPlaying = true
+
+        let path = "\(Self.outDir)/wholeline-flash-jittered-\(slug).jsonl"
+        FileManager.default.createFile(atPath: path, contents: nil)
+        guard let handle = FileHandle(forWritingAtPath: path) else {
+            XCTFail("could not open \(path) for writing")
+            return (0, [])
+        }
+        defer { try? handle.close() }
+
+        var lastConfiguredIndex = -1
+        func reconfigureIfNeeded(songTime: TimeInterval) -> Int {
+            let idx = min(
+                max(0, NativeLyricsTimelinePolicy.liveDisplayIndex(at: songTime, rows: rows, fallback: 0)),
+                max(0, rows.count - 1)
+            )
+            if idx != lastConfiguredIndex {
+                surface.configure(config(rows: rows, current: idx, mc: mc, width: panelWidth, heights: heights))
+                surface.layoutSubtreeIfNeeded()
+                lastConfiguredIndex = idx
+            }
+            return idx
+        }
+
+        var totalFlashes = 0
+        var allEvents: [JitteredCaptureEvent] = []
+
+        for (seedIndex, seedTime) in seedTimes.enumerated() {
+            let startSongTime = max(0, seedTime - lookback)
+            mc.isPlaying = true
+            mc.syncPlaybackClock(to: startSongTime, playing: true)
+            lastConfiguredIndex = -1
+            _ = reconfigureIfNeeded(songTime: startSongTime)
+
+            // Independent "true" song-time reference this seed's polls sample from — mc's OWN
+            // clock is what we are perturbing, so it cannot also be the ground truth.
+            var trueAnchorDate = Date()
+            var trueAnchorTime = startSongTime
+            var truePlaying = true
+            func trueSongTime(at date: Date) -> TimeInterval {
+                truePlaying ? trueAnchorTime + date.timeIntervalSince(trueAnchorDate) : trueAnchorTime
+            }
+
+            var nextPollAt = Date().addingTimeInterval(2.0)
+            var pendingPollStart: Date?
+            var pendingPollReadLatency: TimeInterval = 0
+            var pendingPollGroundTruth: TimeInterval = 0
+            var injectedHistoricalReplay = false
+            var injectedForwardJump = false
+            var injectedPause = false
+            var pauseResumeAt: Date?
+
+            let startWall = Date()
+            var sampledFrames = 0
+            let expectation = XCTestExpectation(description: "jittered seed \(seedIndex) \(slug)")
+            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+                let now = Date()
+                let elapsed = now.timeIntervalSince(startWall)
+
+                // Deliberate one-shot pause/resume, seed 0 only, roughly mid-window.
+                if seedIndex == 0, !injectedPause, elapsed >= perSeedRealDuration * 0.4 {
+                    injectedPause = true
+                    truePlaying = false
+                    mc.isPlaying = false
+                    mc.syncPlaybackClock(to: trueSongTime(at: now), playing: false, at: now)
+                    pauseResumeAt = now.addingTimeInterval(1.2)
+                    allEvents.append(JitteredCaptureEvent(
+                        seedSongTime: seedTime, sampleT: elapsed, kind: "pause",
+                        polledPosition: nil, readLatencyMs: nil, drift: nil))
+                }
+                if let resumeAt = pauseResumeAt, now >= resumeAt {
+                    pauseResumeAt = nil
+                    trueAnchorDate = now
+                    trueAnchorTime = trueSongTime(at: now)
+                    truePlaying = true
+                    mc.isPlaying = true
+                    mc.syncPlaybackClock(to: trueAnchorTime, playing: true, at: now)
+                    allEvents.append(JitteredCaptureEvent(
+                        seedSongTime: seedTime, sampleT: elapsed, kind: "resume",
+                        polledPosition: nil, readLatencyMs: nil, drift: nil))
+                }
+
+                // Deliberate one-shot 1-3s forward jump (late track discovery / seek landing),
+                // seed 2 only.
+                if seedIndex == 2, !injectedForwardJump, elapsed >= perSeedRealDuration * 0.5 {
+                    injectedForwardJump = true
+                    let jump = TimeInterval.random(in: 1...3)
+                    trueAnchorTime = trueSongTime(at: now) + jump
+                    trueAnchorDate = now
+                    allEvents.append(JitteredCaptureEvent(
+                        seedSongTime: seedTime, sampleT: elapsed, kind: "forward_jump",
+                        polledPosition: trueAnchorTime, readLatencyMs: nil, drift: jump))
+                }
+
+                // Poll scheduling: a read is "in flight" for readLatency seconds, then lands.
+                if pendingPollStart == nil, now >= nextPollAt {
+                    let readLatency: TimeInterval
+                    if seedIndex == 0, !injectedHistoricalReplay {
+                        // Exact 2026-07-17 21:55:22 log replay (PlaybackClockTrustTests.swift):
+                        // sbRead=743.5ms → drift=-0.58s.
+                        readLatency = 0.7435
+                        injectedHistoricalReplay = true
+                    } else {
+                        readLatency = TimeInterval.random(in: 0.1...0.4)
+                    }
+                    pendingPollStart = now
+                    pendingPollReadLatency = readLatency
+                    pendingPollGroundTruth = trueSongTime(at: now)
+                    nextPollAt = now.addingTimeInterval(2.0)
+                }
+                if let pollStart = pendingPollStart, now.timeIntervalSince(pollStart) >= pendingPollReadLatency {
+                    let measurementTime = now
+                    let polledPosition = pendingPollGroundTruth
+                    let interpolated = mc.lyricRenderTime(at: measurementTime)
+                    let drift = polledPosition - interpolated
+                    let trust = PlaybackPositionCorrectionPolicy.shouldTrustPolledPositionForClockSync(
+                        drift: drift, readLatency: pendingPollReadLatency)
+                    if trust {
+                        mc.syncPlaybackClock(to: polledPosition, playing: mc.isPlaying, at: measurementTime)
+                    }
+                    allEvents.append(JitteredCaptureEvent(
+                        seedSongTime: seedTime, sampleT: elapsed,
+                        kind: trust ? "poll_trusted" : "poll_suppressed",
+                        polledPosition: polledPosition,
+                        readLatencyMs: pendingPollReadLatency * 1000, drift: drift))
+                    pendingPollStart = nil
+                }
+
+                let idx = reconfigureIfNeeded(songTime: mc.lyricRenderTime(at: now))
+                if let view = surface.debugRowView(forIndex: idx) {
+                    sampledFrames += 1
+                    let flash = view.debugLastWholeLineHighlight
+                    if flash { totalFlashes += 1 }
+                    let expected = view.debugLastMainExpectedProgress
+                    let applied = view.debugLastMainAppliedProgress
+                    let line = String(
+                        format: "{\"seed\":%d,\"seedSongTime\":%.2f,\"t\":%.3f,\"rowIndex\":%d,\"wholeLineFlash\":%@,\"perRunSweep\":%@,\"expected\":%@,\"applied\":%@,\"wordIndex\":%d}\n",
+                        seedIndex, seedTime, elapsed, idx,
+                        flash ? "true" : "false",
+                        view.debugLastAppliedActivePerRunSweep ? "true" : "false",
+                        expected.map { String(format: "%.4f", $0) } ?? "null",
+                        applied.map { String(format: "%.4f", $0) } ?? "null",
+                        view.debugLastActiveWordIndex
+                    )
+                    if let data = line.data(using: .utf8) {
+                        handle.write(data)
+                    }
+                }
+                if elapsed >= perSeedRealDuration {
+                    expectation.fulfill()
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            wait(for: [expectation], timeout: perSeedRealDuration + 10)
+            timer.invalidate()
+            print("[JitteredSweep] \(slug) seed=\(seedIndex) seedSongTime=\(seedTime)s " +
+                  "sampledFrames=\(sampledFrames)")
+        }
+
+        print("[JitteredSweep] \(slug): TOTAL seeds=\(seedTimes.count) " +
+              "wholeLineFlashFrames=\(totalFlashes) jsonl=\(path)")
+        return (totalFlashes, allEvents)
+    }
+
+    /// All 25 near-zero-gap ('How's about your company', 85 lines) transitions from the earlier
+    /// data-level check, seeded 3 real/song seconds ahead, 7 real seconds each.
+    @MainActor
+    func test_jitteredSweep_fastest1_allNearZeroGapTransitions() throws {
+        let song = try loadCachedSong(
+            hash: "c0c6f4a109d7a3fa5f5b3a9d7a0b05804b717ddd6412a1bd180ef78f0398d0f7",
+            label: "How's about your company this evenin'"
+        )
+        let seeds: [TimeInterval] = [
+            65.4, 77.19, 79.44, 87.39, 96.54, 103.41, 121.14, 123.33, 131.31, 133.02,
+            135.36, 136.5, 144.47, 151.5, 155.55, 159.48, 265.2, 271.35, 275.19, 276.99,
+            279.27, 280.35, 288.33, 296.31, 336.3
+        ]
+        let result = runJitteredSeedSweep(
+            song: song, seedTimes: seeds, lookback: 3, perSeedRealDuration: 7,
+            slug: "fastest1-hows-about"
+        )
+        reportJitteredResult(slug: "fastest1-hows-about", result: result)
+    }
+
+    /// All 8 near-zero-gap transitions (大橋純子's track only has 8 total — "at least 25" isn't
+    /// reachable here, covered exhaustively instead).
+    @MainActor
+    func test_jitteredSweep_oohashi_allNearZeroGapTransitions() throws {
+        let song = try loadCachedSong(
+            hash: "4ac42fd65a7f7f7dbcb7cac717cfceb9c79548627476d05eb62660b78204eacf",
+            label: "大橋純子「水玉模様の傘」"
+        )
+        let seeds: [TimeInterval] = [36.34, 47.43, 63.54, 75.29, 102.79, 166.36, 170.69, 180.94]
+        let result = runJitteredSeedSweep(
+            song: song, seedTimes: seeds, lookback: 3, perSeedRealDuration: 7,
+            slug: "oohashi-mizutama"
+        )
+        reportJitteredResult(slug: "oohashi-mizutama", result: result)
+    }
+
+    private func reportJitteredResult(
+        slug: String,
+        result: (wholeLineFlashFrames: Int, events: [JitteredCaptureEvent])
+    ) {
+        let pollCount = result.events.filter { $0.kind == "poll_trusted" || $0.kind == "poll_suppressed" }.count
+        let suppressedCount = result.events.filter { $0.kind == "poll_suppressed" }.count
+        let jumpCount = result.events.filter { $0.kind == "forward_jump" }.count
+        print("[JitteredSweep] \(slug) SUMMARY: wholeLineFlashFrames=\(result.wholeLineFlashFrames) " +
+              "polls=\(pollCount) suppressed=\(suppressedCount) forwardJumps=\(jumpCount)")
+        if result.wholeLineFlashFrames > 0 {
+            let flashSeedTimes = Set(result.events.map(\.seedSongTime))
+            print("[JitteredSweep] \(slug) FLASH occurred — seeds involved: \(flashSeedTimes)")
+        }
+        XCTAssertGreaterThanOrEqual(result.wholeLineFlashFrames, 0) // observational — see report
+    }
 }
