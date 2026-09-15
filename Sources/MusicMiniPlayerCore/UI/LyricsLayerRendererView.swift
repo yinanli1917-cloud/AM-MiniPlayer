@@ -330,6 +330,17 @@ final class NativeLyricsSurfaceView: NSView {
         guard let configuration else { return }
         beginNativeManualScrollIfNeeded(configuration: runtimeConfiguration(from: configuration))
     }
+    /// Repro seam (2026-09-14, founder: "手动滚动回到开头" as a THIRD prelude-entry path,
+    /// distinct from an explicit seek). Freezes manual-scroll state at an ARBITRARY index
+    /// (bypassing the need to fabricate real trackpad/wheel NSEvents, which the codebase already
+    /// treats as unfakeable headlessly) so a test can simulate "the user scrolled all the way back
+    /// to the prelude row" without touching the playback clock at all — manual scroll's frozen
+    /// index short-circuits BEFORE the semantic/amllState index resolution
+    /// (`effectiveCurrentIndex`), which is the structural difference from an explicit seek.
+    func debugBeginManualScroll(frozenAt index: Int) {
+        guard !manualScrollState.isActive else { return }
+        manualScrollState.begin(frozenDisplayIndex: index)
+    }
     var debugManualScrollActive: Bool { manualScrollState.isActive }
     #endif
     private var initialMeasurementsPending = true

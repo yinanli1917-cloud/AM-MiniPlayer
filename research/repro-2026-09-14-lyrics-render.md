@@ -597,3 +597,66 @@ UserDefaults 键后驱动一次真实的逐字行 `updatePlaybackPhase`，确认
 12/12 绿；`swift test --filter NativeLyrics`（264 个）260 绿 / 4 红（同一批预存失败）；
 `swift build -c release --product MusicMiniPlayer` 通过（确认 release 配置下也能正确编译
 并触达这条新武装路径）。
+
+---
+
+## 三点缺陷澄清：三条进入前奏的路径不一致（2026-09-14，创始人澄清后重新复现）—— 已复现，未修
+
+创始人纠正了我对"三点缺陷"的理解：**不是"三点一直贴左"**（那条已经在上面修完，Δx=0）。
+真实现象是——歌曲刚开始时三点是对的（居中、有动画）；**手动滚动回到开头**或**点击从头播放
+（seek 到 0）**之后，三点要么不出现，要么位置/状态跟最开始不一样。也就是说，**同一个前奏行，
+走了不一致的三条入口路径**。
+
+### 复现方法
+
+真实 `NativeLyricsSurfaceView`，同一套 6 行歌（前奏+5句），三种进入方式：
+
+- **A. 冷启动**：全新 surface，直接跳到前奏窗口（t=0.2s），从未播放过其他内容。
+- **B. seek 回前奏**：先播到 t=33s（第5句），再显式 seek 回 t≈0.5s（前奏窗口内）。
+- **C. 手动滚回前奏**：播到 t=33s（第5句，播放钟继续停在这里，不 seek），然后模拟用户
+  手动滚动——新增一个复现专用的调试接口
+  `NativeLyricsSurfaceView.debugBeginManualScroll(frozenAt:)`（真实滚轮 NSEvent 没法在
+  headless 里伪造，项目里已有的 `debugBeginManualScroll()` 只能冻结在"当前"位置，办不到
+  "滚到指定行"，所以加了这个参数化版本，只是让测试能冻结到任意行，不改变任何生产行为）
+  把滚动状态冻结在行 0。
+
+### 结果：A、B 一致，C 不一致
+
+| | A. 冷启动 | B. seek 回前奏 | C. 手动滚回前奏 |
+|---|---|---|---|
+| 三点是否隐藏 | `false`（显示） | `false`（显示） | **`true`（隐藏）** |
+| 三点不透明度 | 1.0 | 1.0 | **0.0** |
+| 三点中心 x | 180.0px | 180.0px | **171.0px**（偏离内容列中心 180px，Δ9px） |
+| 三点是否在动画（连续两帧透明度变化） | 否（采样窗内本来就稳定，非负面信号） | 否 | 否 |
+| 整行本身的 opacity（`debugRowLayerOpacity`） | 1.0 | 1.0 | **0.6** |
+| 行的屏幕 Y（`frame.minY`） | 200.0 | 200.0 | 200.0（一致，Y 没问题） |
+| `semanticIndex` | 0 | 0 | 0 |
+| `scrollTargetIndex` | 0 | 0 | 0 |
+
+**A 和 B（冷启动、seek）读数完全一致**——跟我在"缺陷 2/3"一节里用production-accurate
+fallback 复现出的结论一致：只要 `semanticIndex`/`scrollTargetIndex` 都正确解到 0，
+前奏行就会正确显示、居中。**C（手动滚动）明显不同**：整行 opacity 只有 0.6（不是激活行该有
+的 1.0）、三点整体隐藏（opacity 0）、三点位置也有 9px 偏差——即使 `semanticIndex`/
+`scrollTargetIndex` 两个数字本身都显示 0（看起来"对"），行的视觉状态和三点动画机制根本没有
+被正确驱动。
+
+PNG（三张并排）：`research/repro-2026-09-14-lyrics-render/prelude-three-entry-paths.png`
+（红圈十字标始终标出三点的几何中心，不管当时是否可见——C 图里能看到标记明显偏离面板
+中心参考线，且当时 dots 处于隐藏状态）。
+
+### 目前查到的机制线索（未完全坐实，未修）
+
+`shouldDriveTextPhase`（决定是否调用 `updatePlaybackPhase`，从而驱动三点动画/亮度）的
+判断条件是 `row.index == effectiveTextActiveIndex == effectiveCurrentIndex`。手动滚动时
+`effectiveCurrentIndex` 正确优先读 `nativeManualScrollSnapshot?.frozenDisplayIndex`（=0，
+我验证过这个字段本身没错）。但驱动"整行是否算作 hot/active"的**是另一条独立通路**——
+`nativeHotActiveIndices`/`nativeBufferedActiveIndices`，这两个集合由
+`synchronizeNativeSemanticIndex`（根据 `amllState`/播放时钟算出"谁在唱"）填充，我还没有
+确认这条通路在**手动滚动激活时是否也读了冻结索引，还是仍然按原始播放时钟计算**——如果
+是后者，效果会正是我测到的样子：手动滚到前奏时，`hotGroups` 依然是 `{5}`（因为音乐还在
+第5句），行 0 永远拿不到"当前行"该有的 1.0 opacity 和三点驱动，即使 `effectiveCurrentIndex`
+本身正确显示 0。这是一个有依据、但还没有用代码直接验证到底的假设——按创始人"先复现报我
+再修"的规矩，如实标注为"未完全坐实"，不当成已确认的根因。
+
+**这是复现，不是修复**：新增的 `debugBeginManualScroll(frozenAt:)` 是纯只读复现工具
+（`LyricsLayerRendererView.swift`，`#if DEBUG` 块内），本节没有改任何生产行为。

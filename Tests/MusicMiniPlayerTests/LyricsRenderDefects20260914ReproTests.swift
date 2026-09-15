@@ -1559,4 +1559,180 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
         // reproduction, not a regression guard. A future occurrence should be added as a proper
         // fixture + assertion once its exact trigger is known.
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Three prelude-entry paths: cold start / seek-back / manual-scroll-back
+    //
+    // Founder (2026-09-14) clarified the exact symptom: the dots ARE correct at cold start
+    // (centred, animating). The bug is that "manually scrolling back to the start" OR "tapping
+    // restart (seek to 0)" produce a DIFFERENT presentation — missing, or present but not
+    // centred/not matching cold start. So the bug is a PATH INCONSISTENCY (three entry routes
+    // into the prelude, not all landing on the same renderer state), not "dots are always
+    // left-anchored" (already fixed separately, prior commit).
+    //
+    // Per project memory (lyrics_dots_interlude_saga.md, 85 days old, re-verified against current
+    // code before relying on it): same-TRACK state (visualStates/presentationEngine/
+    // measuredHeightsByIndex/nativeSemanticCurrentIndex) is wiped ONLY on an actual track change
+    // (isSameTrackIdentity == false) — a same-track seek back to the prelude carries over
+    // mid-song state. An explicit seek DOES appear to force `.directSnap(.seek)` in current code
+    // (a mechanism that either didn't exist 85 days ago or was the fix for that note's "仍未做"
+    // item), which should bypass the 60pt/tick natural-mode crawl the note flagged — but the
+    // ALREADY-CONFIRMED scrollToIndex/semanticIndex divergence (this file, defect 2/3 section)
+    // means even a forced snap can target the WRONG row. Manual scroll is a STRUCTURALLY
+    // SEPARATE path: `effectiveCurrentIndex` prioritizes the manual-scroll frozen index BEFORE
+    // ever consulting amllState/semanticIndex at all (LyricsPresentationModels.swift), so it
+    // cannot inherit the same bug through the same mechanism — if it also produces a wrong result,
+    // the cause must be different (state carried over from mid-song scrolling, not index
+    // resolution).
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    private struct PreludeEntryCapture {
+        let title: String
+        let image: CGImage
+        let dotHidden: Bool?
+        let dotOpacity: Float?
+        let dotCenterX: CGFloat
+        let dotCenterY: CGFloat
+        let rowFrameMinY: CGFloat
+        let dotAnimating: Bool
+        let semanticIndex: Int?
+        let scrollTargetIndex: Int?
+    }
+
+    @MainActor
+    func test_threePreludeEntryPaths_coldStart_seekBack_manualScrollBack() {
+        let rows = preludeSongRows()
+        let panelWidth: CGFloat = 360
+
+        func newSurface() -> (NativeLyricsSurfaceView, MusicController, () -> CFTimeInterval, () -> Date) {
+            let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 600))
+            host(surface, NSSize(width: panelWidth, height: 600))
+            let mc = MusicController(preview: true)
+            mc.duration = 60
+            mc.isPlaying = true
+            surface.debugSkipDedupe = true
+            var wall: CFTimeInterval = 50_000
+            var date = Date(timeIntervalSinceReferenceDate: 704_000_000)
+            surface.debugNowOverride = { wall }
+            mc.debugPlaybackClockDateProvider = { date }
+            func advance() {
+                wall += 1.0 / 60.0
+                date = date.addingTimeInterval(1.0 / 60.0)
+            }
+            func tick(_ t: TimeInterval, current: Int, ticks: Int = 20) {
+                mc.syncPlaybackClock(to: t, playing: true, at: date)
+                surface.configure(config(rows: rows, current: current, mc: mc, width: panelWidth))
+                surface.layoutSubtreeIfNeeded()
+                for _ in 0..<ticks {
+                    advance()
+                    mc.syncPlaybackClock(to: t, playing: true, at: date)
+                    surface.debugTick(displayInterval: 1.0 / 60.0)
+                }
+            }
+            // Stash helpers on the surface via closures captured below instead of returning a
+            // tuple of functions — simplify by returning what call sites need directly.
+            _ = tick // silence unused warning path; used via local capture in each scenario below
+            return (surface, mc, { wall }, { date })
+        }
+
+        func capture(title: String, drive: (NativeLyricsSurfaceView, MusicController) -> Void) -> PreludeEntryCapture {
+            let (surface, mc, _, _) = newSurface()
+            drive(surface, mc)
+            let preludeView = surface.debugRowView(forIndex: 0)
+            let dotCenter = preludeView?.debugDotContainerCenter(in: surface.layer!) ?? .zero
+            let opacityBefore = preludeView?.debugPreludeDotContainerOpacity
+            surface.debugTick(displayInterval: 1.0 / 60.0)
+            let opacityAfter = preludeView?.debugPreludeDotContainerOpacity
+            let animating = (opacityBefore != nil && opacityAfter != nil) ? (abs(opacityBefore! - opacityAfter!) > 0.001) : false
+            print("[PreludePaths-diag] \(title): rowMounted=\(preludeView != nil) " +
+                  "rowOpacity=\(String(describing: preludeView?.debugRowLayerOpacity)) " +
+                  "manualScrollActive=\(surface.debugManualScrollActive)")
+            let image = renderSurfaceCGImage(surface)!
+            let result = PreludeEntryCapture(
+                title: title, image: image,
+                dotHidden: preludeView?.debugPreludeDotContainerHidden,
+                dotOpacity: preludeView?.debugPreludeDotContainerOpacity,
+                dotCenterX: dotCenter.x, dotCenterY: dotCenter.y,
+                rowFrameMinY: preludeView?.frame.minY ?? .nan,
+                dotAnimating: animating,
+                semanticIndex: surface.debugNativeSemanticIndex,
+                scrollTargetIndex: surface.debugNativeScrollTargetIndex
+            )
+            surface.debugNowOverride = nil
+            mc.debugPlaybackClockDateProvider = nil
+            return result
+        }
+
+        // A. Cold start: fresh surface, straight to the prelude window, never played anything else.
+        let coldStart = capture(title: "A. 冷启动") { surface, mc in
+            mc.syncPlaybackClock(to: 0.2, playing: true)
+            surface.configure(config(rows: rows, current: 0, mc: mc, width: panelWidth))
+            surface.layoutSubtreeIfNeeded()
+            for _ in 0..<20 { surface.debugTick(displayInterval: 1.0 / 60.0) }
+        }
+
+        // B. Seek-back: play to t=33 (row 5), then an explicit seek back to t=0.5 (prelude window).
+        let seekBack = capture(title: "B. seek 回前奏（播到 t=33 后 seek 到 t≈0.5）") { surface, mc in
+            for t: TimeInterval in [0.2, 13.0, 18.0, 23.0, 28.0, 33.0] {
+                mc.syncPlaybackClock(to: t, playing: true)
+                let current = min(max(0, NativeLyricsTimelinePolicy.liveDisplayIndex(at: t, rows: rows, fallback: 0)), max(0, rows.count - 1))
+                surface.configure(config(rows: rows, current: current, mc: mc, width: panelWidth))
+                surface.layoutSubtreeIfNeeded()
+                for _ in 0..<6 { surface.debugTick(displayInterval: 1.0 / 60.0) }
+            }
+            mc.registerSeek()
+            for t: TimeInterval in [0.3, 0.5] {
+                mc.syncPlaybackClock(to: t, playing: true)
+                let current = min(max(0, NativeLyricsTimelinePolicy.liveDisplayIndex(at: t, rows: rows, fallback: 0)), max(0, rows.count - 1))
+                surface.configure(config(rows: rows, current: current, mc: mc, width: panelWidth))
+                surface.layoutSubtreeIfNeeded()
+                for _ in 0..<6 { surface.debugTick(displayInterval: 1.0 / 60.0) }
+            }
+            for _ in 0..<40 { surface.debugTick(displayInterval: 1.0 / 60.0) }
+        }
+
+        // C. Manual-scroll-back: play to t=33 (row 5, playback clock keeps running there, NOT
+        // seeking), then the user grabs the scroll and drags all the way back to the prelude row
+        // — a structurally separate path (frozen index, no amllState/seek classification at all).
+        let manualScrollBack = capture(title: "C. 手动滚回前奏（播到 t=33，滚动冻结到行0）") { surface, mc in
+            for t: TimeInterval in [0.2, 13.0, 18.0, 23.0, 28.0, 33.0] {
+                mc.syncPlaybackClock(to: t, playing: true)
+                let current = min(max(0, NativeLyricsTimelinePolicy.liveDisplayIndex(at: t, rows: rows, fallback: 0)), max(0, rows.count - 1))
+                surface.configure(config(rows: rows, current: current, mc: mc, width: panelWidth))
+                surface.layoutSubtreeIfNeeded()
+                for _ in 0..<6 { surface.debugTick(displayInterval: 1.0 / 60.0) }
+            }
+            surface.debugBeginManualScroll(frozenAt: 0)
+            // Playback clock keeps advancing at t=33 in the background — manual scroll is
+            // supposed to override this entirely while active.
+            mc.syncPlaybackClock(to: 33.0, playing: true)
+            surface.configure(config(rows: rows, current: 5, mc: mc, width: panelWidth))
+            surface.layoutSubtreeIfNeeded()
+            for _ in 0..<40 { surface.debugTick(displayInterval: 1.0 / 60.0) }
+        }
+
+        for cap in [coldStart, seekBack, manualScrollBack] {
+            print("[PreludePaths] \(cap.title): dotHidden=\(String(describing: cap.dotHidden)) " +
+                  "dotOpacity=\(String(describing: cap.dotOpacity)) dotAnimating=\(cap.dotAnimating) " +
+                  "dotCenter=(\(cap.dotCenterX), \(cap.dotCenterY)) rowFrameMinY=\(cap.rowFrameMinY) " +
+                  "semanticIndex=\(String(describing: cap.semanticIndex)) " +
+                  "scrollTargetIndex=\(String(describing: cap.scrollTargetIndex))")
+        }
+
+        // Compose the three side-by-side, reusing the existing annotated-comparison renderer —
+        // no text-centre reference line is meaningful here (all three should show the SAME
+        // prelude row), so pass the dot centre itself as a no-op "reference" and rely on the
+        // printed numbers + raw screenshots for the actual comparison.
+        let captures = [coldStart, seekBack, manualScrollBack].map { cap in
+            AnnotatedPanelCapture(
+                title: cap.title, image: cap.image, panelWidth: panelWidth, cropHeight: 460,
+                dotCenter: CGPoint(x: cap.dotCenterX, y: cap.dotCenterY), textCenterX: 180,
+                textCenterLabel: "面板水平中心（仅供参考标尺，不是本图重点）",
+                notes: "dotHidden=\(String(describing: cap.dotHidden)) dotAnimating=\(cap.dotAnimating) " +
+                    "rowY=\(String(format: "%.1f", cap.rowFrameMinY)) " +
+                    "semantic=\(String(describing: cap.semanticIndex)) scrollTarget=\(String(describing: cap.scrollTargetIndex))"
+            )
+        }
+        composeAnnotatedComparison(captures, to: "\(Self.outDir)/prelude-three-entry-paths.png")
+    }
 }
