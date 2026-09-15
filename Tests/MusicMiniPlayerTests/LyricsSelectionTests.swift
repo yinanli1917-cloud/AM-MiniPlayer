@@ -390,15 +390,23 @@ final class LyricsSelectionTests: XCTestCase {
 
     func testComparableHumanCuratedSyncedSourceBeatsLibraryFallback() {
         let fetcher = LyricsFetcher.shared
+        // Spread across most of the 178s duration (startingAt:gap: overload)
+        // — NOT the tight 0-20s fixture this test used before the 2026-09-14
+        // timeline-integrity fix: 6 lines packed into 20s of a 178s song
+        // has a genuine ~158s tail gap by the same rule that now (correctly)
+        // strips the human-curated tolerance from a candidate with a real
+        // hole. This test is about the tolerance mechanism itself, not gaps,
+        // so the fixture must actually cover the song.
+        let sharedLyrics = makeLines([
+            "I'm like some kind of Supernova",
+            "Watch out",
+            "Look at me go",
+            "Have some fun",
+            "We're going on",
+            "New stars are born"
+        ], startingAt: 5, gap: 28)
         let libraryFallback = LyricsFetcher.LyricsFetchResult(
-            lyrics: makeLines([
-                "I'm like some kind of Supernova",
-                "Watch out",
-                "Look at me go",
-                "Have some fun",
-                "We're going on",
-                "New stars are born"
-            ]),
+            lyrics: sharedLyrics,
             source: .lrclibSearch,
             score: 77,
             kind: .synced,
@@ -406,14 +414,7 @@ final class LyricsSelectionTests: XCTestCase {
             matchedDurationDiff: 0.2
         )
         let humanCurated = LyricsFetcher.LyricsFetchResult(
-            lyrics: makeLines([
-                "I'm like some kind of Supernova",
-                "Watch out",
-                "Look at me go",
-                "Have some fun",
-                "We're going on",
-                "New stars are born"
-            ]),
+            lyrics: sharedLyrics,
             source: .netEase,
             score: 68,
             kind: .synced,
@@ -900,6 +901,148 @@ final class LyricsSelectionTests: XCTestCase {
 
         XCTAssertEqual(selected?.kind, .unsynced)
         XCTAssertEqual(selected?.source, .genius)
+    }
+
+    /// 2026-09-14 fix: `hasSevereTimelineMismatch`'s internal-gap rejection
+    /// used to require `result.score < 30` — dead for anything that already
+    /// cleared basic synced admission (Supernatural's real NetEase candidate
+    /// scored 68.3 with a 63.2s hole and never reached this check). A
+    /// synced candidate scoring well above 30 with a huge internal hole
+    /// (missing over a third of a 300s song) must now be rejected here too,
+    /// falling back to a plain-text source instead of being shown as-is.
+    func testHighScoringCandidateWithHugeInternalGapIsRejected() {
+        let fetcher = LyricsFetcher.shared
+        // Deliberately keeps the TAIL gap small (last line ends near
+        // songDuration) so this exercises ONLY the internal-gap check —
+        // hasSevereTimelineMismatch's final unconditional fallback
+        // (`tailGap > max(140, duration*ratio)`) would otherwise also
+        // reject a candidate whose last line trails far behind, which is a
+        // different, pre-existing check this test isn't about.
+        let firstHalf = (0..<5).map { i -> LyricLine in
+            let start = 5.0 + Double(i) * 4.0
+            return LyricLine(text: "first half line \(i)", startTime: start, endTime: start + 3.5)
+        }
+        // ~105s hole here (last firstHalf line starts at 21) — songDuration
+        // 300's threshold is min(120, max(90, 300*0.30)) = 90s, well past it.
+        let secondHalf = (0..<7).map { i -> LyricLine in
+            let start = 126.0 + Double(i) * 26.0
+            return LyricLine(text: "second half line \(i)", startTime: start, endTime: start + 15.0)
+        }
+        let gappy = LyricsFetcher.LyricsFetchResult(
+            lyrics: firstHalf + secondHalf,
+            source: .netEase,
+            score: 50,
+            kind: .synced
+            // titleMatched defaults to true, matchedDurationDiff defaults to
+            // nil — deliberately NOT claiming exact-catalog/long-intro
+            // evidence, so only the internal-gap check is exercised.
+        )
+        // Two unsynced fallbacks (mirroring
+        // testSevereTailGapFallsBackToStaticConsensusWhenSyncedIsMistimed's
+        // shape) so a rejected `gappy` has somewhere concrete to fall back
+        // to — this test's claim is specifically "gappy must not win",
+        // not "exactly one unsynced fallback is enough to be chosen".
+        let plainA = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeCompleteStaticLyrics(prefix: "fallback A"),
+            source: .genius,
+            score: 15,
+            kind: .unsynced
+        )
+        let plainB = LyricsFetcher.LyricsFetchResult(
+            lyrics: plainA.lyrics,
+            source: .lyricsOvh,
+            score: 13,
+            kind: .unsynced
+        )
+
+        let selected = fetcher.selectBestResult(from: [gappy, plainA, plainB], songDuration: 300)
+
+        XCTAssertNotEqual(
+            selected?.source, .netEase,
+            "a 50-score synced candidate with a 105s internal hole must never win — before this fix the score<30 guard exempted anything that already cleared basic admission"
+        )
+        XCTAssertEqual(
+            selected?.source, .genius,
+            "falls back to the higher-scoring plain-text source once the gappy synced candidate is rejected"
+        )
+    }
+
+    /// 2026-09-14 fix (founder-approved, follow-up to the coverage/gap
+    /// penalty tuning): the "human-curated source preferred" ±12 tolerance
+    /// exists for general quality preference (NetEase/QQ curation over a
+    /// bare library fallback), not to paper over a candidate that's
+    /// demonstrably missing content. Mirrors Supernatural's real shape:
+    /// NetEase (curated) 58.1 with a real 63.2s internal hole vs LRCLIB
+    /// (fallback) 67.7 with full coverage — NetEase is within the old
+    /// 12-point tolerance (58.1+12=70.1 >= 67.7) but must now lose because
+    /// it carries a real gap.
+    func testCuratedSourceWithRealGapLosesToleranceOverFallback() {
+        let fetcher = LyricsFetcher.shared
+        // NetEase: 29 lines, one ~63s hole (mirrors Supernatural exactly).
+        let netEaseFirstHalf = (0..<15).map { i -> LyricLine in
+            let start = 8.0 + Double(i) * 4.5
+            return LyricLine(text: "netease first half \(i)", startTime: start, endTime: start + 3.5)
+        }
+        let netEaseSecondHalf = (0..<14).map { i -> LyricLine in
+            let start = 134.2 + Double(i) * 3.0
+            return LyricLine(text: "netease second half \(i)", startTime: start, endTime: start + 2.5)
+        }
+        let netEaseCurated = LyricsFetcher.LyricsFetchResult(
+            lyrics: netEaseFirstHalf + netEaseSecondHalf,
+            source: .netEase,
+            score: 58.1,
+            kind: .synced
+        )
+        // LRCLIB: 36 lines, full coverage, no hole.
+        let lrclibFallback = LyricsFetcher.LyricsFetchResult(
+            lyrics: (0..<36).map { i -> LyricLine in
+                let start = 8.0 + Double(i) * 4.8
+                return LyricLine(text: "lrclib line \(i)", startTime: start, endTime: start + 4.0)
+            },
+            source: .lrclib,
+            score: 67.7,
+            kind: .synced
+        )
+
+        let selected = fetcher.selectReliable([netEaseCurated, lrclibFallback], songDuration: 191)
+
+        XCTAssertEqual(
+            selected?.source, .lrclib,
+            "NetEase (58.1, real 63s hole) is within the old ±12 tolerance of LRCLIB (67.7) but must lose now that it carries a timeline-integrity penalty — before this fix NetEase would have won on tolerance alone"
+        )
+    }
+
+    /// Companion to the test above: when the curated candidate has NO gap,
+    /// the ±12 tolerance must still work exactly as before — this fix only
+    /// removes the tolerance for candidates with a real hole, it does not
+    /// remove the general quality-preference mechanism.
+    func testCuratedSourceWithoutGapKeepsToleranceOverFallback() {
+        let fetcher = LyricsFetcher.shared
+        let netEaseCurated = LyricsFetcher.LyricsFetchResult(
+            lyrics: (0..<29).map { i -> LyricLine in
+                let start = 8.0 + Double(i) * 6.0
+                return LyricLine(text: "netease line \(i)", startTime: start, endTime: start + 5.0)
+            },
+            source: .netEase,
+            score: 58.1,
+            kind: .synced
+        )
+        let lrclibFallback = LyricsFetcher.LyricsFetchResult(
+            lyrics: (0..<36).map { i -> LyricLine in
+                let start = 8.0 + Double(i) * 4.8
+                return LyricLine(text: "lrclib line \(i)", startTime: start, endTime: start + 4.0)
+            },
+            source: .lrclib,
+            score: 67.7,
+            kind: .synced
+        )
+
+        let selected = fetcher.selectReliable([netEaseCurated, lrclibFallback], songDuration: 191)
+
+        XCTAssertEqual(
+            selected?.source, .netEase,
+            "with no timeline-integrity penalty, the ±12 human-curated tolerance must still apply exactly as before this fix"
+        )
     }
 
     func testLateFirstVocalTimelineIsRejected() {

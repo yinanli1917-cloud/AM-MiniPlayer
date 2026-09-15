@@ -357,6 +357,169 @@ final class LyricsScorerTests: XCTestCase {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Internal/head gap penalties (2026-09-14 proportional fix)
+    //
+    // Supernatural (NewJeans): NetEase candidate had a 63.2s hole in a 191s
+    // song (missing a whole repeated verse) yet only ever paid the same
+    // flat -20 a 46s hole would. Plastic Love (eill): a wrong 26-line
+    // candidate opened on a mid-song chorus line (missing the true intro)
+    // and scored 91.8 — coverage only checks head-to-tail SPAN, so a
+    // late-starting candidate that still reaches the tail gets full credit.
+    // These tests build synthetic candidates with a controlled gap/offset —
+    // no song-specific fixtures — and pin that severity now scales the
+    // penalty instead of a single flat cutoff.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// Uniform lines covering [0, duration] except for ONE deliberately
+    /// widened gap right after `gapAfterIndex`.
+    private func makeLyricsWithInternalGap(
+        count: Int,
+        duration: TimeInterval,
+        gapAfterIndex: Int,
+        gapSeconds: TimeInterval
+    ) -> [LyricLine] {
+        let remaining = duration - gapSeconds
+        let interval = remaining / Double(count - 1)
+        var start: Double = 0
+        var lines: [LyricLine] = []
+        for i in 0..<count {
+            if i == gapAfterIndex + 1 { start += gapSeconds }
+            let end = min(start + interval, duration)
+            lines.append(LyricLine(text: "歌词第\(i)行内容，长度足够", startTime: start, endTime: end))
+            start = end
+        }
+        return lines
+    }
+
+    func testInternalGap_justOverThreshold_mildPenalty() {
+        // 191s song, threshold = max(45, 191*0.15) = 45. A 47s gap (just
+        // over) should stay close to the old flat -20, not jump to the cap.
+        let lines = makeLyricsWithInternalGap(count: 30, duration: 191, gapAfterIndex: 15, gapSeconds: 47)
+        let withGap = scorer.calculateScore(lines, source: .netEase, duration: 191, translationEnabled: false)
+        let noGapLines = makeLyricsWithInternalGap(count: 30, duration: 191, gapAfterIndex: 15, gapSeconds: 0)
+        let withoutGap = scorer.calculateScore(noGapLines, source: .netEase, duration: 191, translationEnabled: false)
+        let penalty = withoutGap - withGap
+        XCTAssertGreaterThan(penalty, 15, "a gap just past the threshold must still cost roughly the old -20")
+        XCTAssertLessThan(penalty, 30, "a gap just past the threshold must not already pay the large-overshoot penalty")
+    }
+
+    /// Supernatural's actual shape: 191s song, 63.2s hole (missing a verse).
+    /// Must be penalized MORE than a candidate whose gap barely clears the
+    /// threshold — proving the penalty scales, not flat.
+    func testInternalGap_largeOvershoot_penalizedMoreThanBoundaryGap() {
+        let boundaryLines = makeLyricsWithInternalGap(count: 30, duration: 191, gapAfterIndex: 15, gapSeconds: 46)
+        let boundaryScore = scorer.calculateScore(boundaryLines, source: .netEase, duration: 191, translationEnabled: false)
+
+        let largeLines = makeLyricsWithInternalGap(count: 30, duration: 191, gapAfterIndex: 15, gapSeconds: 63.2)
+        let largeScore = scorer.calculateScore(largeLines, source: .netEase, duration: 191, translationEnabled: false)
+
+        XCTAssertLessThan(
+            largeScore, boundaryScore,
+            "a 63.2s hole (missing a whole verse) must score below a 46s hole that barely crosses the threshold — the old flat -20 gave them the same penalty"
+        )
+    }
+
+    /// A candidate with NO internal gap at all must always beat an otherwise
+    /// identical one that has a large hole, regardless of source bonus.
+    func testInternalGap_fullCoverage_beatsLargeGapCandidate() {
+        let fullLines = makeLyricsWithInternalGap(count: 30, duration: 191, gapAfterIndex: 15, gapSeconds: 0)
+        let fullScore = scorer.calculateScore(fullLines, source: .netEase, duration: 191, translationEnabled: false)
+
+        let gapLines = makeLyricsWithInternalGap(count: 30, duration: 191, gapAfterIndex: 15, gapSeconds: 63.2)
+        let gapScore = scorer.calculateScore(gapLines, source: .netEase, duration: 191, translationEnabled: false)
+
+        XCTAssertGreaterThan(fullScore, gapScore, "full coverage must beat a candidate missing a third of the song")
+    }
+
+    /// Uniform lines covering [headStart, duration] — models a candidate
+    /// transcribed from `headStart` onward, missing everything before it.
+    private func makeLyricsWithHeadOffset(count: Int, duration: TimeInterval, headStart: TimeInterval) -> [LyricLine] {
+        let interval = (duration - headStart) / Double(count)
+        return (0..<count).map { i in
+            let start = headStart + Double(i) * interval
+            let end = start + interval
+            return LyricLine(text: "歌词第\(i)行内容，长度足够", startTime: start, endTime: end)
+        }
+    }
+
+    /// Plastic Love's actual shape: 262s song, candidate opens ~95s in
+    /// (missing the true intro + first verse) yet still reaches the tail.
+    func testHeadGap_missingIntro_penalizedRelativeToFullCoverage() {
+        let fullLines = makeLyricsWithHeadOffset(count: 40, duration: 262, headStart: 0)
+        let fullScore = scorer.calculateScore(fullLines, source: .netEase, duration: 262, translationEnabled: false)
+
+        let lateLines = makeLyricsWithHeadOffset(count: 40, duration: 262, headStart: 95)
+        let lateScore = scorer.calculateScore(lateLines, source: .netEase, duration: 262, translationEnabled: false)
+
+        XCTAssertLessThan(
+            lateScore, fullScore,
+            "a candidate missing the whole intro (starts 95s into a 262s song) must score below one that covers the full song — before this fix, coverage only measured head-to-tail SPAN so both could look equally 'complete'"
+        )
+    }
+
+    /// A normal few-second instrumental intro must NOT trip the head-gap
+    /// penalty — only a genuinely truncated candidate should be affected.
+    func testHeadGap_normalIntro_notPenalized() {
+        // Not an exact-equality check: shifting headStart away from 0 also
+        // shrinks (lastEnd - firstStart) relative to `duration`, which moves
+        // the PRE-EXISTING duration-match component (LyricsScorer.swift
+        // component 4's ratio brackets) by a few points on its own — that's
+        // unrelated to this fix. What this test actually guards: an 8s
+        // intro (well under the 90s/78.6s threshold) must not ALSO eat the
+        // new head-gap penalty (minimum -15 once it fires), so the total
+        // gap must stay well below that floor.
+        let lines = makeLyricsWithHeadOffset(count: 40, duration: 262, headStart: 8)
+        let withNormalIntro = scorer.calculateScore(lines, source: .netEase, duration: 262, translationEnabled: false)
+        let noIntro = makeLyricsWithHeadOffset(count: 40, duration: 262, headStart: 0)
+        let withoutIntro = scorer.calculateScore(noIntro, source: .netEase, duration: 262, translationEnabled: false)
+        XCTAssertLessThan(
+            withoutIntro - withNormalIntro, 12,
+            "an 8s intro must not trip the new head-gap penalty (minimum -15 once triggered) — only the pre-existing duration-match granularity should separate these two scores"
+        )
+    }
+
+    /// 2026-09-14 fix (founder-approved task 5): LyricsVerifier's `check`
+    /// resolves the full foreground+backfill pipeline in one shot, so it
+    /// cannot demonstrate the real app's separate <=3s foreground-only
+    /// admission window where the founder actually saw the wrong 26-line
+    /// candidate. This fixture is built from the real production log
+    /// (research/repro-2026-09-14-lyrics-pipeline.md 缺陷3): eill "Plastic
+    /// Love" (262s), a NetEase candidate cached 2026-09-14 20:54:53 local
+    /// with score=91.8 (OLD formula), 26 lines, firstReal text "私のことを
+    /// 決して本気で愛さないで" — a mid-song chorus line, NOT the true
+    /// opening. That exact line's real timestamp (95.2s) comes from the
+    /// CORRECT candidate's own `--dump` (same session, tool-verified: `[16]
+    /// 95.2s 私のことを決して本気で愛さないで`) — the wrong candidate is
+    /// gone from the live source pool as of this fix (a fresh fetch now
+    /// resolves directly to the correct 37-line candidate), so its
+    /// timestamps are NOT independently recoverable; this fixture
+    /// reconstructs an equivalent candidate (26 lines starting at the same
+    /// 95.2s, evenly spaced to near the track's end) rather than fabricating
+    /// unrelated numbers.
+    func testPlasticLoveWrongMidSongCandidate_scoresBelowCorrectCandidate() {
+        let duration = 262.0
+        let wrongCandidate = (0..<26).map { i -> LyricLine in
+            let start = 95.2 + Double(i) * 6.144
+            return LyricLine(text: "wrong candidate line \(i)", startTime: start, endTime: start + 5.0)
+        }
+        let wrongScore = scorer.calculateScore(wrongCandidate, source: .netEase, duration: duration, translationEnabled: false)
+
+        // The correct candidate: 37 real lines from 31.5s (真实开头 "突然の
+        // キスや") to 238.6s, matching `swift run LyricsVerifier check
+        // "Plastic Love" "eill" 262 --dump` in this same repro session.
+        let correctCandidate = (0..<37).map { i -> LyricLine in
+            let start = 31.5 + Double(i) * 5.6
+            return LyricLine(text: "correct candidate line \(i)", startTime: start, endTime: start + 5.0)
+        }
+        let correctScore = scorer.calculateScore(correctCandidate, source: .netEase, duration: duration, translationEnabled: false)
+
+        XCTAssertLessThan(
+            wrongScore, correctScore - 20,
+            "the wrong mid-song candidate (starts 95.2s in, missing the true intro) must score well below the correct full-coverage candidate — before this fix, coverage only measured head-to-tail span so a mid-song start could still claim full coverage credit (real log: this exact candidate scored 91.8 under the old formula)"
+        )
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - isLikelyRomaji false positive on Western languages
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

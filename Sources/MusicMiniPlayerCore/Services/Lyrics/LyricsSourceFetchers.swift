@@ -1311,16 +1311,24 @@ extension LyricsFetcher {
 
     func fetchFromAMLL(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
         emitSourceRequestE2E(.amll, phase: "fetch")
+        // 缺陷4排查埋点（2026-09-14）：AMLL 是唯一没有请求/命中/未命中/耗时日志的
+        // 源——排查"是否偏行级"时无法从日志区分"AMLL 真的没调用"还是"调用了没
+        // 结果"。只加日志，不改任何选源/评分逻辑。
+        let requestStart = Date()
+        func elapsedMs() -> Int { Int(Date().timeIntervalSince(requestStart) * 1000) }
+        DebugLogger.log("AMLL", "🔍 请求: '\(title)' by '\(artist)' (\(Int(duration))s)")
         // 尝试通过 Apple Music Track ID 直接获取
         if let trackId = await getAppleMusicTrackId(title: title, artist: artist, duration: duration),
            let lyrics = await fetchAMLLTTML(platform: "am-lyrics", filename: "\(trackId).ttml") {
             let score = scorer.calculateScore(lyrics, source: .amll, duration: duration, translationEnabled: translationEnabled)
+            DebugLogger.log("AMLL", "✅ 命中(AM trackId): \(lyrics.count)行 score=\(String(format: "%.1f", score)) [\(elapsedMs())ms]")
             return LyricsFetchResult(lyrics: lyrics, source: .amll, score: score, kind: .synced)
         }
 
         // 🔑 检查是否在冷却期内
         if let lastFail = amllIndexLoadFailed,
            Date().timeIntervalSince(lastFail) < amllIndexFailureCooldown {
+            DebugLogger.log("AMLL", "❌ 未命中: 索引加载冷却期内 [\(elapsedMs())ms]")
             return nil
         }
 
@@ -1328,9 +1336,13 @@ extension LyricsFetcher {
         // block playback. Warm it in the background and let other sources race.
         if amllIndex.isEmpty {
             Task { await loadAMLLIndex() }
+            DebugLogger.log("AMLL", "❌ 未命中: 索引未就绪，后台加载中 [\(elapsedMs())ms]")
             return nil
         }
-        guard !amllIndex.isEmpty else { return nil }
+        guard !amllIndex.isEmpty else {
+            DebugLogger.log("AMLL", "❌ 未命中: 索引为空 [\(elapsedMs())ms]")
+            return nil
+        }
 
         let titleLower = title.lowercased()
         let artistLower = artist.lowercased()
@@ -1363,13 +1375,18 @@ extension LyricsFetcher {
             }
         }
 
-        guard let match = bestMatch else { return nil }
+        guard let match = bestMatch else {
+            DebugLogger.log("AMLL", "❌ 未命中: 索引无匹配候选 [\(elapsedMs())ms]")
+            return nil
+        }
 
         if let lyrics = await fetchAMLLTTML(platform: match.entry.platform, filename: "\(match.entry.id).ttml") {
             let score = scorer.calculateScore(lyrics, source: .amll, duration: duration, translationEnabled: translationEnabled)
+            DebugLogger.log("AMLL", "✅ 命中(索引匹配): \(lyrics.count)行 score=\(String(format: "%.1f", score)) [\(elapsedMs())ms]")
             return LyricsFetchResult(lyrics: lyrics, source: .amll, score: score, kind: .synced)
         }
 
+        DebugLogger.log("AMLL", "❌ 未命中: TTML 抓取失败 [\(elapsedMs())ms]")
         return nil
     }
 
