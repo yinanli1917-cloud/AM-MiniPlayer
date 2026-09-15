@@ -1450,15 +1450,28 @@ final class NativeLyricsRowView: NSView {
                 && !appliedMainProgress.appliedPerRunSweep
                 && !mainBrightTextLayer.isHidden
                 && mainBrightTextLayer.string != nil
+            #endif
+            // 2026-09-14: NativeLyricsMaskTrace now also arms via a UserDefaults switch (the
+            // founder cannot pass an environment variable when launching from Finder), so this
+            // call must run in EVERY build configuration, not just DEBUG/LOCAL_DEVELOPER_BUILD —
+            // the trace itself still defaults to off (checked inside `record`, zero I/O when
+            // disarmed). Recomputes the same two values locally instead of reading the
+            // DEBUG-only stored properties above, which don't exist in a plain release build.
+            let maskTraceWordIndex = expectsPerRunSweep
+                ? (plan.wordRuns.lastIndex(where: { $0.startTime <= renderTime }) ?? 0)
+                : -1
+            let maskTraceWholeLineHighlight = expectsPerRunSweep
+                && !appliedMainProgress.appliedPerRunSweep
+                && !mainBrightTextLayer.isHidden
+                && mainBrightTextLayer.string != nil
             NativeLyricsMaskTrace.record(
                 rowID: row.displayLine.id,
-                wordIndex: debugLastActiveWordIndex,
-                wholeLineHighlight: debugLastWholeLineHighlight,
+                wordIndex: maskTraceWordIndex,
+                wholeLineHighlight: maskTraceWholeLineHighlight,
                 perRunSweep: appliedMainProgress.appliedPerRunSweep,
                 expected: plan.mainSweepProgress,
                 applied: appliedMainProgress.progress
             )
-            #endif
             let expectsNoLineLevelMainSweep = !expectsPerRunSweep
             let appliesLineLevelMainSweep = expectsNoLineLevelMainSweep
                 && mainBrightTextLayer.string != nil

@@ -574,3 +574,26 @@ tonight"）交替排列——制造行视图从池里复用时，前后两次内
 （本来就在),只是确认了它接的是正确的判断点、默认关闭不会拖累性能。
 
 **这是复现尝试 + 埋点确认，不是修复**：本节没有改任何生产代码。
+
+### UserDefaults 开关（2026-09-14，创始人批准，已实施）
+
+创始人指出：从 Finder 启动 app 没法传环境变量，`NANOPOD_MASK_TRACE=1` 这套用不上。
+补了第二个武装入口——`NanoPodMaskTraceEnabled` UserDefaults 键，**release 也生效**
+（原来整个 `NativeLyricsMaskTrace.record` 函数体和它在 `NativeLyricsRowView.swift`
+里的调用点都包在 `#if DEBUG || LOCAL_DEVELOPER_BUILD` 里，纯 release 编译后这段代码
+根本不存在——这次把调用点挪到编译条件外面，`wordIndex`/`wholeLineHighlight` 在外面
+重新用本地变量算一遍，不读 DEBUG-only 的 `debug*` 存储属性），默认关、零 I/O（挡在
+`UserDefaults.standard.bool(forKey:)` 判断之前，没到这一步不会碰文件），输出路径不变
+（`/tmp/nanopod_mask_trace.jsonl`）。
+
+**用法**：`defaults write <bundle-id> NanoPodMaskTraceEnabled -bool YES`，然后从 Finder
+正常打开 app，不用终端启动、不用环境变量。
+
+**验证**：`test_maskTraceUserDefaultsSwitch_armsTraceAndWritesExpectedLine`——设置这个
+UserDefaults 键后驱动一次真实的逐字行 `updatePlaybackPhase`，确认
+`/tmp/nanopod_mask_trace.jsonl` 真的被写入、格式正确；
+`test_maskTraceUserDefaultsSwitch_defaultOff_writesNothing`——不设置该键、没有环境变量时
+确认文件完全不被创建。两个测试都绿。`LyricsRenderDefects20260914ReproTests`（全部 12 个）
+12/12 绿；`swift test --filter NativeLyrics`（264 个）260 绿 / 4 红（同一批预存失败）；
+`swift build -c release --product MusicMiniPlayer` 通过（确认 release 配置下也能正确编译
+并触达这条新武装路径）。

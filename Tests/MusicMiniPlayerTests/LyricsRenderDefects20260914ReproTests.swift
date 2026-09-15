@@ -810,6 +810,100 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Whole-line-flash instrumentation: UserDefaults switch
+    //
+    // Coordinator (2026-09-14): NativeLyricsMaskTrace only armed via the NANOPOD_MASK_TRACE
+    // environment variable — but the founder launches the app from Finder, which cannot pass an
+    // environment variable. Added a `NanoPodMaskTraceEnabled` UserDefaults key that also arms it,
+    // checked in EVERY build configuration (including plain release, not just DEBUG/
+    // LOCAL_DEVELOPER_BUILD), default off, same output path. This test verifies the switch
+    // actually reaches the trace's file output — not just that the flag is read somewhere.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    private static let maskTraceOutputPath = "/tmp/nanopod_mask_trace.jsonl"
+
+    @MainActor
+    func test_maskTraceUserDefaultsSwitch_armsTraceAndWritesExpectedLine() {
+        try? FileManager.default.removeItem(atPath: Self.maskTraceOutputPath)
+        UserDefaults.standard.set(true, forKey: NativeLyricsMaskTrace.userDefaultsKey)
+        defer { UserDefaults.standard.removeObject(forKey: NativeLyricsMaskTrace.userDefaultsKey) }
+
+        // Any syllable-synced active line drives updatePlaybackPhase's mask-trace call site
+        // (NativeLyricsRowView.swift) regardless of whether wholeLineHighlight ends up true —
+        // the trace fires on every STATE TRANSITION, and the very first call for a fresh row is
+        // always a transition (from the empty "" sentinel).
+        let line = englishSyllableLine()
+        let target = row(for: line, index: 0)
+        let view = NativeLyricsRowView(frame: NSRect(x: 0, y: 0, width: 300, height: 96))
+        host(view, NSSize(width: 300, height: 96))
+        let mc = MusicController(preview: true)
+        mc.isPlaying = true
+        mc.duration = 240
+        mc.syncPlaybackClock(to: line.startTime + 0.3, playing: true)
+        let cfg = config(rows: [target], current: 0, mc: mc, width: 300)
+        view.configure(row: target, configuration: cfg)
+        view.frame = NSRect(x: 0, y: 0, width: 300, height: view.measuredHeight(width: 300))
+        view.layoutSubtreeIfNeeded()
+        _ = view.updatePlaybackPhase(configuration: cfg)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: Self.maskTraceOutputPath),
+            "arming via UserDefaults should have made NativeLyricsMaskTrace write its output file")
+        guard let data = FileManager.default.contents(atPath: Self.maskTraceOutputPath),
+              let text = String(data: data, encoding: .utf8), !text.isEmpty else {
+            XCTFail("mask trace output file is empty")
+            return
+        }
+        let firstLine = text.split(separator: "\n").first.map(String.init) ?? ""
+        print("[MaskTraceSwitch] wrote: \(firstLine)")
+        XCTAssertTrue(firstLine.contains("\"event\":\"mask_state\""))
+        XCTAssertTrue(firstLine.contains("\"row\":\"r0\""))
+
+        try? FileManager.default.removeItem(atPath: Self.maskTraceOutputPath)
+    }
+
+    @MainActor
+    func test_maskTraceUserDefaultsSwitch_defaultOff_writesNothing() throws {
+        try? FileManager.default.removeItem(atPath: Self.maskTraceOutputPath)
+        UserDefaults.standard.removeObject(forKey: NativeLyricsMaskTrace.userDefaultsKey)
+
+        let line = englishSyllableLine()
+        let target = row(for: line, index: 0)
+        let view = NativeLyricsRowView(frame: NSRect(x: 0, y: 0, width: 300, height: 96))
+        host(view, NSSize(width: 300, height: 96))
+        let mc = MusicController(preview: true)
+        mc.isPlaying = true
+        mc.duration = 240
+        mc.syncPlaybackClock(to: line.startTime + 0.3, playing: true)
+        let cfg = config(rows: [target], current: 0, mc: mc, width: 300)
+        view.configure(row: target, configuration: cfg)
+        view.frame = NSRect(x: 0, y: 0, width: 300, height: view.measuredHeight(width: 300))
+        view.layoutSubtreeIfNeeded()
+        _ = view.updatePlaybackPhase(configuration: cfg)
+
+        // Without LOCAL_DEVELOPER_BUILD/NANOPOD_MASK_TRACE/UserDefaults, nothing should be
+        // written — this test runs in a DEBUG test build, so NANOPOD_MASK_TRACE could still arm
+        // it if it happened to be set in the test runner's environment; skip in that case rather
+        // than produce a false failure unrelated to the UserDefaults switch under test.
+        guard ProcessInfo.processInfo.environment["NANOPOD_MASK_TRACE"] != "1" else {
+            throw XCTSkip("NANOPOD_MASK_TRACE is set in this environment; not meaningful for the default-off check")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: Self.maskTraceOutputPath),
+            "with the UserDefaults key unset and no env var, the trace must write nothing (zero I/O default)")
+    }
+
+    private func englishSyllableLine() -> LyricLine {
+        LyricLine(
+            text: "hello there world",
+            startTime: 10, endTime: 13,
+            words: [
+                LyricWord(word: "hello ", startTime: 10, endTime: 11),
+                LyricWord(word: "there ", startTime: 11, endTime: 12),
+                LyricWord(word: "world", startTime: 12, endTime: 13),
+            ]
+        )
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - Symptom 3: whole-stack reflow snap after a settle plateau
     //
     // research/references/nanopod-defects-2026-09-12-spec.md Symptom 3 (already on main): in a
