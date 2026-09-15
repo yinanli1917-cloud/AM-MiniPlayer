@@ -842,8 +842,118 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
         let plateauLengths: [Int]
     }
 
+    /// Minimal, ISOLATED verification: current index frozen at row 0 for the whole test (no
+    /// line-advance scrolling at all, so nothing from normal scroll motion can be mistaken for a
+    /// height-correction jump — see the honesty note in the report about the other test below).
+    /// Row 1 has a real measured height (~3-line wrap, well over 100pt) that differs sharply from
+    /// the 36pt placeholder the simulated EXTERNAL cache starts at. Row 2's Y depends entirely on
+    /// row 1's height. If the fix works, row 2's Y on the very FIRST tick already matches its
+    /// fully-settled value — there is no "stale tick" to observe at all.
     @MainActor
-    func test_symptom3_reflowSnap_afterDeferredHeightMeasurementCatchesUp() {
+    func test_symptom3_afterFix_isolatedHeightJump_rowLandsImmediately() {
+        // Row 1 starts SHORT (its estimate and real measurement agree — no gap to close yet),
+        // then at tick 5 its CONTENT genuinely changes to a long, 3-line-wrapping phrase (the
+        // realistic trigger: e.g. a translation arriving asynchronously, or a lyric line being
+        // replaced — LyricsLayerRendererView.updateContentIfNeeded only re-measures when
+        // `needsContentUpdate`, i.e. actual content changed, exactly this scenario). SAME row
+        // index/id (`row(for:index:)` derives the id from the index alone), so this is a content
+        // update to an EXISTING mounted row, not a remount.
+        let (row0Line, row0End) = syllableWords("hi", start: 0, wordDuration: 0.4)
+        let (row1ShortLine, row1End) = syllableWords("yo", start: row0End + 0.4, wordDuration: 0.4)
+        let (row1LongLine, _) = syllableWords(
+            "every single word you ever said to me still echoes down this empty hallway tonight",
+            start: row0End + 0.4, wordDuration: 0.35
+        )
+        let (row2Line, _) = syllableWords("bye now", start: row1End + 3.0, wordDuration: 0.4)
+        func rowsFor(row1Long: Bool) -> [LayerBackedLyricRow] {
+            [
+                row(for: row0Line, index: 0),
+                row(for: row1Long ? row1LongLine : row1ShortLine, index: 1),
+                row(for: row2Line, index: 2),
+            ]
+        }
+        let panelWidth: CGFloat = 220
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 400))
+        host(surface, NSSize(width: panelWidth, height: 400))
+        let mc = MusicController(preview: true)
+        mc.duration = 60
+        mc.isPlaying = true
+        surface.debugSkipDedupe = true
+        var wall: CFTimeInterval = 40_000
+        var date = Date(timeIntervalSinceReferenceDate: 703_000_000)
+        surface.debugNowOverride = { wall }
+        mc.debugPlaybackClockDateProvider = { date }
+        defer {
+            surface.debugNowOverride = nil
+            mc.debugPlaybackClockDateProvider = nil
+        }
+
+        let defaultHeight: CGFloat = 36
+        let spacing: CGFloat = 6
+        var externalHeightCache: [Int: CGFloat] = [:]
+        var pendingHeightUpdates: [(Int, CGFloat)] = []
+        func computeAccumulatedHeights(_ rows: [LayerBackedLyricRow]) -> [Int: CGFloat] {
+            var acc: [Int: CGFloat] = [:]
+            var running: CGFloat = 0
+            for r in rows {
+                acc[r.index] = running
+                running += (externalHeightCache[r.index] ?? defaultHeight) + spacing
+            }
+            return acc
+        }
+
+        var row2YHistory: [CGFloat] = []
+        let tickCount = 15
+        let swapTick = 5 // row 1's content changes short → long at this tick
+        for tickIndex in 0..<tickCount {
+            for (idx, h) in pendingHeightUpdates where abs((externalHeightCache[idx] ?? 0) - h) > 2.0 {
+                externalHeightCache[idx] = h
+            }
+            pendingHeightUpdates.removeAll()
+
+            // current is FROZEN at row 0 — the only thing changing across ticks is (a) the
+            // deferred external-cache drain above and (b) row 1's content at swapTick — isolating
+            // the height-timing mechanism from scroll.
+            let rows = rowsFor(row1Long: tickIndex >= swapTick)
+            mc.syncPlaybackClock(to: 0.1, playing: true, at: date)
+            let acc = computeAccumulatedHeights(rows)
+            surface.configure(configWithHeights(
+                rows: rows, current: 0, mc: mc, width: panelWidth,
+                accumulatedHeights: acc,
+                onHeightMeasured: { idx, h in pendingHeightUpdates.append((idx, h)) }
+            ))
+            surface.layoutSubtreeIfNeeded()
+            for _ in 0..<30 {
+                wall += 1.0 / 60.0
+                date = date.addingTimeInterval(1.0 / 60.0)
+                surface.debugTick(displayInterval: 1.0 / 60.0)
+            }
+            row2YHistory.append(surface.debugRowView(forIndex: 2)?.frame.minY ?? .nan)
+        }
+
+        print("[Symptom3-isolated] row2 Y across \(tickCount) ticks (current frozen at row 0, row 1 " +
+              "content swaps short→long at tick \(swapTick)): " +
+              row2YHistory.enumerated().map { "t\($0)=\(String(format: "%.2f", $1))" }.joined(separator: ", "))
+
+        let settledY = row2YHistory.last ?? .nan
+        let preSwapY = row2YHistory[swapTick - 1]
+        let atSwapY = row2YHistory[swapTick]
+        XCTAssertNotEqual(preSwapY, settledY, accuracy: 0.6,
+            "fixture sanity check: row 2's Y before the swap should differ from its settled value " +
+            "(row 1's real height must actually change at swapTick for this test to mean anything)")
+        XCTAssertEqual(atSwapY, settledY, accuracy: 0.6,
+            "REGRESSION: row 2's Y at the SAME tick row 1's content changed (\(atSwapY)) does not " +
+            "match the fully-settled value (\(settledY)) — the height correction landed a cycle " +
+            "late instead of in the same configure() cycle the new content was measured")
+        for i in (swapTick + 1)..<tickCount {
+            XCTAssertEqual(row2YHistory[i], settledY, accuracy: 0.6,
+                "row 2's Y at tick \(i) (\(row2YHistory[i])) drifted from the settled value " +
+                "(\(settledY)) after the swap — should already be correct from swapTick onward")
+        }
+    }
+
+    @MainActor
+    func test_symptom3_afterFix_noReflowSnap_heightLandsInSameCycle() {
         let rows = symptom3Rows(count: 30)
         let panelWidth: CGFloat = 260
         let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 700))
@@ -881,6 +991,8 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
         // low-res CGImage of the whole surface for later before/after extraction.
         var yHistory: [Int: [CGFloat]] = [:]
         var imageHistory: [CGImage] = []
+        var currentHistory: [Int] = []
+        var firstSeenTick: [Int: Int] = [:]
         let tickCount = 130
 
         for tickIndex in 0..<tickCount {
@@ -911,9 +1023,11 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
                 surface.debugTick(displayInterval: 1.0 / 60.0)
             }
 
+            currentHistory.append(current)
             for idx in max(0, current - 3)...min(rows.count - 1, current + 3) {
-                let y = surface.debugRowView(forIndex: idx)?.debugModelY ?? .nan
+                let y = surface.debugRowView(forIndex: idx)?.frame.minY ?? .nan
                 yHistory[idx, default: []].append(y)
+                if firstSeenTick[idx] == nil { firstSeenTick[idx] = tickIndex }
             }
             imageHistory.append(renderSurfaceCGImage(surface, scale: 1)!)
         }
@@ -955,10 +1069,29 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
             print("[Symptom3] tick=\(e.tickIndex) rows=\(e.rowIndices) Δy=\(e.deltaY.map { String(format: "%.2f", $0) }) plateau=\(e.plateauLengths)")
         }
 
-        XCTAssertGreaterThan(events.count, 0,
-            "expected at least one whole-stack settle→jump cluster — if this fails, the " +
-            "deferred-height-cache lag model did not reproduce Symptom 3 in this fixture and the " +
-            "suspicion should be treated as NOT reproduced, not confirmed")
+        // FIX VERIFICATION (2026-09-14, founder approved): with accumulatedHeights refreshed
+        // synchronously inside reconcileVisibleRowViews (LyricsLayerRendererView.swift, right
+        // after the content-update loop) from the renderer's OWN measuredHeightsByIndex, this
+        // SAME harness — unchanged, still simulating a lagging EXTERNAL height cache via
+        // pendingHeightUpdates/externalHeightCache — should now find ZERO whole-stack jumps: the
+        // renderer no longer depends on that external cache being prompt at all.
+        XCTAssertEqual(events.count, 0,
+            "REGRESSION: found \(events.count) whole-stack settle→jump cluster(s) after the fix — " +
+            "accumulatedHeights should now be corrected in the SAME configure() cycle a row's real " +
+            "height is first measured, so no stale frame should ever commit to screen")
+
+        // NOTE on "行高首次测出后下面各行 Y 一次到位": this fixture's tracking window (current±3)
+        // is narrower than the render radius (14), so a row's FIRST tracked tick often coincides
+        // with it being FRESHLY MOUNTED (pulled from the reuse pool) rather than with a height
+        // correction — and NativeLyricsFrameRenderSnapshot's deliberate teleport guard
+        // (`naturalModeMaxYStepPerTick`, LyricsLayerRendererView.swift, "a settled row must never
+        // jump a large distance for a single tick in natural mode") intentionally spreads a large
+        // first-mount position change over several ticks. That is correct, existing, load-bearing
+        // behavior — unrelated to the height-cache-staleness bug — and measuring it here would
+        // conflate the two. The "lands in the same cycle" claim is verified cleanly instead by
+        // test_symptom3_afterFix_isolatedHeightJump_rowLandsImmediately below, where current is
+        // FROZEN (no fresh-mount transitions possible) and only row 1's content genuinely changes
+        // — see that test for the direct, unconfounded proof.
 
         // Pick the event with the LONGEST plateau (most representative/stable — matches the
         // spec's "the founder-flagged instance had a 100-170ms plateau" framing) and centre the

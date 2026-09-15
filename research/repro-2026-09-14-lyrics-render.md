@@ -340,7 +340,63 @@ let semanticIndex = hotGroups.subtracting(backingIndices).max()
 
 ---
 
-## 缺陷「滚动后整叠歌词位置再跳几像素」（研究编号 Symptom 3）—— 已复现，根因坐实
+## 缺陷「滚动后整叠歌词位置再跳几像素」（研究编号 Symptom 3）—— 已复现，**已修复（创始人批准）**
+
+**修复状态更新（2026-09-14）**：创始人批准按根因修——让首次测出的真实行高在同一个
+configure 周期内进入定位。已实施,过程中发现并纠正了自己复现方法里的一个测量错误
+（见下方"修复过程中的一个自我纠正"），最终用两个干净测试确认修复生效。
+
+### 修法（已实施）
+
+在 `LyricsLayerRendererView.reconcileVisibleRowViews` 里，内容测量循环（会把新测出的
+真实行高写进渲染器自己的 `measuredHeightsByIndex`）结束后、定位循环开始前，插入一次
+`accumulatedHeights` 重算——直接复用已有的 `NativeLyricsHeightAccumulator.accumulatedHeights(...)`
+（这个函数本来就优先用 `measuredHeightsByIndex` 里的真实值,只是第一次调用发生在内容
+测量循环**之前**,吃的是上一轮的旧值）。同时发现：自然滚动模式下真正的定位读的是
+`presentationEngine.presentation(for:).y`（弹簧状态），而弹簧的目标是 `configure()`
+更早时候用**同一份旧 accumulatedHeights** 调 `presentationEngine.update(...)` 定下的——
+只修 `accumulatedHeights` 本身不够，弹簧目标要跟着重算。所以补了第二步：高度真的变了
+才（`heightsActuallyChanged` 门控，避免空转）重新调一次 `presentationEngine.update(...)`，
+用刚修好的 `accumulatedHeights`。两步都只在 `configure()` 真正触发时跑一次（不是每帧
+presentationTick 都跑），不引入 `scroll.lastVelocity` 那种每事件写死字段触发整树重布局
+的坑。
+
+### 修复过程中的一个自我纠正
+
+第一次用 a73c556 的追踪用例反向断言时，`events.count` 死活还是 4，数字跟修复前一模
+一样。查下去发现：我复现阶段用来读"行的屏幕 Y"的 `debugModelY`（`layer.affineTransform().ty`）
+在当前架构下**不是位置**——代码注释写得很清楚："The transform now carries ONLY scale —
+never translation"，真正的位置由 `view.frame.origin.y` 直接承载（`applyFrame` 直接赋值
+`view.frame`，不经过弹簧）。也就是说 a73c556 那次复现读错了通道：它测到的"-1.02/-2.32px"
+其实是缩放补偿量随"离当前行距离"变化的正常波动，跟高度缓存过期没有关系——两次尝试
+（先补 snapY，再补 presentationEngine 二次 update）都对这个数字毫无影响，这是我发现读错
+通道的直接线索。换成 `frame.minY` 重测后，原 30 行用例的整叠同步跳变确实变成了 0。
+
+### 验证（两个测试）
+
+1. `test_symptom3_afterFix_noReflowSnap_heightLandsInSameCycle`（原 a73c556 的追踪用例，
+   反向断言，改用 `frame.minY`）：130 个 configure 周期，**0 次整叠同步跳变**（修复前 4 次）。
+2. `test_symptom3_afterFix_isolatedHeightJump_rowLandsImmediately`（新增，隔离验证）：
+   `current` 全程冻结在行 0（排除滚动/新挂载的干扰），行 1 在 tick 5 从短句换成会换行成
+   3 行的长句（真实内容变化，不是新行首次出现）。行 2 的 Y 在内容变化**同一个 tick** 就已经
+   是 300.00→468.31pt（settled 值 468.00，容差 0.6pt 内），不是下一 tick 才追上。
+
+两个测试都在提交前临时禁用过修复代码验证过会红（防止测试本身没测到东西）。
+
+| 检查项 | 结果 |
+|---|---|
+| 130 周期整叠同步跳变数 | **0**（修复前 4） |
+| 隔离用例：内容变化同一 tick 是否到位 | 300.00→**468.31**pt（settled 468.00，Δ0.31pt） |
+| `test_symptom3_afterFix_noReflowSnap_heightLandsInSameCycle` | 绿 |
+| `test_symptom3_afterFix_isolatedHeightJump_rowLandsImmediately` | 绿 |
+| `LyricsRenderDefects20260914ReproTests`（全部 9 个） | 9/9 绿 |
+| `swift test --filter NativeLyrics`（264 个） | 260 绿 / 4 红——同一批 `NativeLyricsRenderChurnTests` 预存失败，与本次改动无关（本 session 更早已在纯 main 上验证过） |
+| `swift build -c release --product MusicMiniPlayer` | 通过 |
+
+原来 `research/references/nanopod-defects-2026-09-12-spec.md` 记录的"整叠同步跳"
+录屏证据本身不受影响——那是真机真实录像，这次只是我自己复现工具选错了读数通道，
+根因诊断（两跳 async 导致 accumulatedHeights 落后一个周期）没有变，只是最初的自动化
+验证方法有缺陷，已经在同一个 PR 里连诊断带修复一起纠正了。
 
 创始人描述：「每一次上一行就会又位移一下几个像素」。已有证据在 main：
 `research/references/nanopod-defects-2026-09-12-spec.md` Symptom 3——真实录屏里所有可见行
