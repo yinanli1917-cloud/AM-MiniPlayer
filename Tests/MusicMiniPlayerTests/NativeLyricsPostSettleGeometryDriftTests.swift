@@ -7,32 +7,29 @@ import AppKit
 // visibly within ~0.8s and the frame holds still — then, ~1.5-2.0s after it looks fully stopped,
 // EXACTLY ONE isolated frame shows a 1-2pt geometry change, on every one of 12 observed switches.
 //
-// FIRST PASS of this test (pre-fix) found the geometry channels (frame/transform) clean, but
-// caught NativeLyricsRowView.shouldRasterize flipping false→true at 1.65-2.02s after EVERY single
-// switch's boundary — matching the founder's window and per-switch universality almost exactly.
-// The founder cross-checked this against an independent real-device pixel comparison the SAME
-// night (same 1.5-2.0s window, 12/12 switches) and ruled it the confirmed root cause: a
-// non-active row carries a 0.95 layer transform; flipping shouldRasterize makes CA rasterize the
-// layer into a `rasterizationScale`-sized bitmap FIRST and then apply that 0.95 transform to the
-// bitmap via bilinear resampling — a different subpixel-registration path than the previous live
-// vector draw, reading on screen as "stopped, then moved."
+// ROUND 1 of this test (activation-bound fix, `hasActiveMotion` kept as a safety net) found the
+// geometry channels (frame/transform) clean, but caught shouldRasterize still landing its one
+// flip at 1.65-2.02s after the boundary — the bottleneck had just moved from `isSettled`'s
+// opacity/scale/blur epsilon to `hasActiveMotion`'s global "is ANY row in the visible stack still
+// springing" gate. The founder ruled that gate unnecessary: blur is a STEPPED channel (snaps
+// instantly on target change, never springs), so the ONLY things that change on a rasterized,
+// deactivated row during subsequent position motion are its FRAME and its LAYER OPACITY — both
+// applied AFTER rasterization by AppKit/CA (neither invalidates or re-triggers the cached bitmap).
 //
-// FIX (this file's current form asserts the fixed behavior): `applyRasterizationPolicy` no longer
-// waits on `isSettled` (the opacity/scale/blur convergence epsilon, which for non-trivial target
-// blur took 1.5-2.0s to clear well after the row was already visually at rest) — it is bound to
-// ACTIVATION alone (see NativeLyricsRowView.applyRasterizationPolicy /
-// LyricsLayerRendererView's call site). A row now rasterizes within one wave stagger of going
-// inactive, not 1.5-2.0s of dead calm later.
+// FINAL FORM (this file's current form): `applyRasterizationPolicy` is bound to activation ALONE,
+// no motion gate at all. A deactivated row's shouldRasterize goes true on the SAME frame it
+// deactivates and stays true — constant, zero flips — through any subsequent motion, all the way
+// to the next activation. This test asserts that hard contract directly.
 //
 // Method: drive a REAL NativeLyricsSurfaceView through 12 successive line handoffs on wrapped CJK
 // lyrics (so wrap-line geometry, the item-1-class hazard, is in play), and for each handoff sample
 // EVERY 1/60s frame from the boundary to +3.0s (capped before the next boundary). Record, per row:
 // view.frame (AppKit-applied position/size — what actually paints), the CALayer affine transform,
-// and shouldRasterize/rasterizationScale (the blur-economy flip). Assert (a) the rasterization
-// onset lands EARLY (within the wave-stagger window, not 1.5-2.0s later), (b) once a row's frame
-// goes quiet AND has already rasterized, it never changes again for the rest of the window, and
-// (c) the geometry channels (frame/transform) never show a post-quiescence jump on any channel —
-// the founder's literal "moved 1-2px" symptom, restated as a model-level invariant.
+// and shouldRasterize/rasterizationScale. Assert (a) the row that just deactivated shows
+// shouldRasterize == true on every sampled frame in the window (zero flips), (b) the row that is
+// now active shows shouldRasterize == false throughout, and (c) the geometry channels (frame/
+// transform) never show a post-quiescence jump on any channel — the founder's literal "moved
+// 1-2px" symptom, restated as a model-level invariant.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 final class NativeLyricsPostSettleGeometryDriftTests: XCTestCase {
 
@@ -168,19 +165,21 @@ final class NativeLyricsPostSettleGeometryDriftTests: XCTestCase {
         for i in 0..<90 { step(playback: warmupStart + TimeInterval(i) * frameStep) }
 
         var violations: [LateJump] = []
-        var rasterizationOnsetDelays: [TimeInterval] = []
+        var rasterFlipViolations: [(switchIndex: Int, rowIndex: Int, role: String, frame: Int, sinceBoundary: TimeInterval)] = []
         let switchCount = 12
         for switchIdx in 1...switchCount {
             let boundary = rows[switchIdx].displayLine.line.startTime
-            // Run playback up to just past the boundary, then census +0.8s..+3.0s.
+            // Run playback up to just past the boundary, then census the whole window.
             var t = boundary - 0.5
             while t < boundary + 0.05 {
                 step(playback: t)
                 t += frameStep
             }
 
-            let watchedRowIndex = switchIdx - 1 // the row that just went inactive
+            let deactivatedRowIndex = switchIdx - 1 // the row that just went inactive
+            let activeRowIndex = switchIdx           // the row that is now active
             var samples: [GeometrySample] = []
+            var activeSamples: [Bool] = [] // shouldRasterize for the NOW-ACTIVE row, same frames
             let censusStart = boundary
             // Cap the window before the NEXT line boundary so a following handoff's own reflow
             // (rows shifting as the anchor advances again) cannot masquerade as a post-settle jump
@@ -192,7 +191,7 @@ final class NativeLyricsPostSettleGeometryDriftTests: XCTestCase {
                 let elapsed = TimeInterval(i) * frameStep
                 guard elapsed <= windowCap else { break }
                 step(playback: censusStart + elapsed)
-                if let view = surface.debugRowView(forIndex: watchedRowIndex) {
+                if let view = surface.debugRowView(forIndex: deactivatedRowIndex) {
                     let t2 = view.layer?.affineTransform() ?? .identity
                     samples.append(GeometrySample(
                         frame: i,
@@ -206,13 +205,16 @@ final class NativeLyricsPostSettleGeometryDriftTests: XCTestCase {
                         rasterizationScale: view.layer?.rasterizationScale ?? 0
                     ))
                 }
+                if let activeView = surface.debugRowView(forIndex: activeRowIndex) {
+                    activeSamples.append(activeView.layer?.shouldRasterize ?? false)
+                }
                 i += 1
             }
 
             guard samples.count > 20 else { continue }
 
-            // For each channel, find the first index after which it stays quiet for >=6 frames,
-            // then check whether it EVER changes again afterward.
+            // For each GEOMETRY channel, find the first index after which it stays quiet for >=6
+            // frames, then check whether it EVER changes again afterward.
             func checkChannel(_ name: String, _ values: [CGFloat], tolerance: CGFloat) {
                 var quietRunStart: Int? = nil
                 var runLength = 0
@@ -227,7 +229,7 @@ final class NativeLyricsPostSettleGeometryDriftTests: XCTestCase {
                         if let qStart = quietRunStart, idx > qStart {
                             // A change occurred AFTER we'd already established quiescence.
                             violations.append(LateJump(
-                                switchIndex: switchIdx, rowIndex: watchedRowIndex, channel: name,
+                                switchIndex: switchIdx, rowIndex: deactivatedRowIndex, channel: name,
                                 quietFrames: runLength, sinceBoundary: samples[idx].sinceBoundary,
                                 before: values[idx - 1], after: values[idx]
                             ))
@@ -237,50 +239,31 @@ final class NativeLyricsPostSettleGeometryDriftTests: XCTestCase {
                     }
                 }
             }
-            // Diagnostic: print y right around any shouldRasterize transition, so we can see
-            // whether the geometry channel moves in lockstep with the rasterization flip.
-            for idx in 1..<samples.count where samples[idx].shouldRasterize != samples[idx - 1].shouldRasterize {
-                let lo = max(0, idx - 2), hi = min(samples.count - 1, idx + 2)
-                let window = samples[lo...hi].map { String(format: "%.3f", $0.y) }.joined(separator: ",")
-                print("[PostSettleDrift] switch=\(switchIdx) row=\(watchedRowIndex) rasterFlip@\(idx) " +
-                      "(+\(String(format: "%.3f", samples[idx].sinceBoundary))s) y-window[\(lo)...\(hi)]=\(window)")
-            }
-            // GEOMETRY channels — what actually paints on screen (AppKit-applied frame + the
-            // CALayer affine transform). These are the founder's literal complaint ("moved 1-2px").
             checkChannel("frame.y", samples.map(\.y), tolerance: 0.05)
             checkChannel("frame.height", samples.map(\.height), tolerance: 0.05)
             checkChannel("transform.a", samples.map(\.transformA), tolerance: 0.0005)
             checkChannel("transform.tx", samples.map(\.transformTx), tolerance: 0.05)
             checkChannel("transform.ty", samples.map(\.transformTy), tolerance: 0.05)
-            // shouldRasterize is intentionally NOT run through checkChannel/violations here: its ONE
-            // false->true flip at activation is by design (see the onset-delay diagnostic below),
-            // not a bug — checkChannel would misreport that expected one-time flip as a "late jump"
-            // no matter how early or late it lands. A GENUINE double-flip (on, then off again, then
-            // on again) would still be worth catching, so do that narrowly: after the first flip,
-            // shouldRasterize must never flip a SECOND time in this window.
-            let rasterFlips = zip(samples, samples.dropFirst()).enumerated()
-                .filter { $0.element.0.shouldRasterize != $0.element.1.shouldRasterize }
-            if rasterFlips.count > 1 {
-                violations.append(LateJump(
-                    switchIndex: switchIdx, rowIndex: watchedRowIndex, channel: "shouldRasterize(extra flip)",
-                    quietFrames: 0, sinceBoundary: samples[rasterFlips.dropFirst().first!.offset + 1].sinceBoundary,
-                    before: 0, after: 1
-                ))
-            }
 
-            // shouldRasterize onset is BY DESIGN a one-time false→true transition (the blur-economy
-            // fires once a row is settled+inactive+blurred — see NativeLyricsRowView.refreshRasterization).
-            // It is not itself a geometry jump, so it is not a `violations` entry, but its TIMING is the
-            // strongest available lead: it fires via `isSettled`'s blur-velocity epsilon (0.03), and for
-            // rows with non-trivial target blur that epsilon takes noticeably longer to clear than the
-            // point where the row is already visually indistinguishable from at-rest. If the render
-            // server's cached-bitmap composite differs at all from the live filtered composite at the
-            // moment of the flip (undetectable headlessly — see banned-patterns.md "Resident CIGaussianBlur"
-            // entry: only the render server applies CIFilters), that mismatch would read on screen as
-            // "stopped, then moved" at EXACTLY this delay. Record the onset delay per switch for the report.
-            if let onsetIdx = samples.dropFirst().firstIndex(where: { $0.shouldRasterize })
-                .map({ samples.distance(from: samples.startIndex, to: $0) }) {
-                rasterizationOnsetDelays.append(samples[onsetIdx].sinceBoundary)
+            // HARD CONTRACT (2026-09-18, item 1 final form): once the deactivated row's
+            // shouldRasterize goes true (its own deactivation frame — the wave stagger means this
+            // can land a few frames after the raw line-switch boundary, since the row is still
+            // legitimately ACTIVE from its own perspective until the wave choreography reaches it),
+            // it must STAY true — constant, zero flips back to false — for the rest of the window.
+            // It must also actually reach true at some point in the window (it must deactivate).
+            if let onsetIdx = samples.firstIndex(where: { $0.shouldRasterize }) {
+                for idx in onsetIdx..<samples.count where !samples[idx].shouldRasterize {
+                    rasterFlipViolations.append((switchIdx, deactivatedRowIndex, "flip-back-to-false-after-onset",
+                                                  idx, samples[idx].sinceBoundary))
+                }
+            } else {
+                rasterFlipViolations.append((switchIdx, deactivatedRowIndex, "never-rasterized-in-window",
+                                              samples.count - 1, samples.last?.sinceBoundary ?? 0))
+            }
+            // The now-active row's shouldRasterize must be FALSE throughout.
+            for (idx, rasterized) in activeSamples.enumerated() where rasterized {
+                rasterFlipViolations.append((switchIdx, activeRowIndex, "active-must-be-false",
+                                              idx, TimeInterval(idx) * frameStep))
             }
         }
 
@@ -291,31 +274,16 @@ final class NativeLyricsPostSettleGeometryDriftTests: XCTestCase {
                       "before=\(v.before) after=\(v.after) delta=\(v.after - v.before)")
             }
         }
-        print("[PostSettleDrift] rasterizationOnsetDelays (s since boundary, one per switch) = " +
-              rasterizationOnsetDelays.map { String(format: "%.3f", $0) }.joined(separator: ", "))
-        XCTAssertEqual(rasterizationOnsetDelays.count, switchCount,
-                       "every switch should show exactly one rasterization onset in the window")
-        // HONEST STATUS (2026-09-18, after landing the activation-based fix): the trigger mechanism
-        // genuinely changed — `applyRasterizationPolicy` no longer waits on `visual.isSettled`'s
-        // opacity/scale/blur epsilon at all (see NativeLyricsRowView.applyRasterizationPolicy) — but
-        // for THIS fixture (wrapped CJK, wide natural-wave stagger, lineInterval 3.0s) the onset
-        // delay measured essentially UNCHANGED (still ~1.65-2.0s), because `hasActiveMotion` — the
-        // GLOBAL "is ANY row in the visible stack still springing" gate, required to avoid
-        // reopening f1b8d8f's "blurry row falls into place" regression — was already the binding
-        // constraint for this fixture, not the removed isSettled epsilon. A PER-ROW version of this
-        // gate was tried this round (`LyricsPresentationEngine.rowPositionIsSettled`) and reverted:
-        // `presentationEngine.rowStates` is read from a snapshot that can lag the geometry actually
-        // applied to the view frame (the same staleness this file's own comments document
-        // elsewhere), and using it caused a row moving 13+pt/frame with live blur to get
-        // force-recaptured mid-flight — reproducing the regression this whole gate exists to
-        // prevent. Root cause for the REMAINING delay (when it is `hasActiveMotion`-bound, as in
-        // this fixture) is therefore narrowed but not fixed: a reliable PER-ROW motion signal that
-        // does not suffer the cross-call-site staleness is the next round's target. This assertion
-        // is deliberately NOT a pass/fail gate on the exact delay — it only reports the measured
-        // band so a future fix's effect is visible in this test's own history.
-        print("[PostSettleDrift] STATUS: onset mechanism is now activation-bound (not isSettled-bound); " +
-              "for this fixture hasActiveMotion (global, kept for f1b8d8f safety) remains the practical " +
-              "bottleneck at ~1.65-2.0s — see file header for the reverted per-row attempt.")
+        if !rasterFlipViolations.isEmpty {
+            for v in rasterFlipViolations.prefix(20) {
+                print("[PostSettleDrift] RASTER CONTRACT VIOLATION switch=\(v.switchIndex) row=\(v.rowIndex) " +
+                      "role=\(v.role) frame=\(v.frame) +\(String(format: "%.3f", v.sinceBoundary))s")
+            }
+        }
+        XCTAssertTrue(rasterFlipViolations.isEmpty,
+                       "\(rasterFlipViolations.count) shouldRasterize contract violation(s): a deactivated row " +
+                       "must be rasterized (true) on EVERY sampled frame from the boundary onward, and the " +
+                       "now-active row must never be rasterized — see console dump.")
         XCTAssertTrue(violations.isEmpty,
                        "\(violations.count) GEOMETRY-level post-settle jump(s) found (frame/transform channel) — " +
                        "see console dump. If this ever fires, the founder's symptom is reproduced at the model level.")

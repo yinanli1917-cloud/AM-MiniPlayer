@@ -457,24 +457,22 @@ final class NativeLyricsRowView: NSView {
     // which costs more than the live filter).
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    // Temporary same-build A/B switch for the WindowServer measurement; remove after acceptance.
-    private static let rasterizationDisabledByEnv =
-        ProcessInfo.processInfo.environment["NANOPOD_BLUR_RASTER_OFF"] != nil
-
-    // 2026-09-18 (3h round, item 1 — "停了又挪 1-2px" post-settle geometry jump, founder-confirmed
-    // root cause): this used to gate on `isSettled` (opacity/scale/blur all converged to a tight
-    // epsilon), which for rows with non-trivial target blur took 1.5-2.0s AFTER the row was already
-    // visually at rest to flip true — CA rasterizes the layer into a device-pixel bitmap via
-    // rasterizationScale and thereafter composites that bitmap with a bilinear-resampled affine
-    // transform (the row's 0.95 inactive-scale transform) instead of drawing the vector text live;
-    // that resampling reads differently on screen than the live vector draw did, one frame, at a
-    // fixed and reproducible delay after the row already looked stopped — independently confirmed
-    // against a real-device pixel comparison the same night (12/12 line switches, 1.5-2.0s window).
-    // Binding the flip to ACTIVATION instead removes the delay entirely: a row rasterizes the
-    // instant it deactivates (and de-rasterizes the instant it activates), so the one-time bitmap
-    // vs. live-vector visual difference — if this mechanism IS the artifact — lands on the SAME
-    // frame as the deactivation's own (much larger) visual transition, not isolated 1.5-2.0s later
-    // in dead calm. See NativeLyricsRasterizationActivationGateTests.
+    // 2026-09-18 (3h round, item 1 final form — founder-dictated after the activation-bound fix
+    // still measured the old 1.5-2.0s delay via the kept `hasActiveMotion` safety net): a
+    // deactivated row is rasterized from the SAME frame it deactivates, unconditionally, including
+    // through any position motion that follows. This is safe because blur is a STEPPED channel
+    // (`NativeLyricsVisualMotionState.setTarget` snaps `blur = nextTarget.blur` the instant a row's
+    // target changes — no springing left to race), so the only things that change DURING a
+    // deactivated row's subsequent motion are its FRAME (position) and its LAYER OPACITY — both of
+    // which are applied AFTER rasterization (CA composites the cached bitmap at wherever the layer
+    // currently is, at whatever opacity it currently has; neither triggers a recapture). There is
+    // no "still in flight, captured a stale/blurry snapshot" window left to protect (f1b8d8f's own
+    // repro is rewritten to assert the NEW contract — shouldRasterize itself must not flip during
+    // motion, not "must not rasterize" — see LyricsRenderDefects20260918ReproTests). The one-time
+    // bitmap-vs-live-vector visual difference this flip can produce (if it is ever the actual
+    // artifact — undetectable headlessly, only the render server applies rasterization) now lands
+    // on the SAME frame as the deactivation's own much larger visual transition, never isolated in
+    // dead calm afterward.
     func applyRasterizationPolicy(isActive: Bool) {
         rasterizationEligible = !isActive
         refreshRasterization()
@@ -484,59 +482,28 @@ final class NativeLyricsRowView: NSView {
         !translationLoadingDotContainerLayer.isHidden || !dotContainerLayer.isHidden
     }
 
-    // 2026-09-17 (CJK trailing-word ghost, "滋味", research/repro-2026-09-17-lyrics-render-3c.md
-    // §CJK): the rasterized bitmap snapshot must not be reused across a blur-radius or geometry
-    // change while a row stays settled+inactive — a stale snapshot (captured at an OLDER blur
-    // amount, e.g. while the row was still several lines from active) can otherwise keep
-    // compositing behind fresh live tile writes once the row becomes eligible-but-not-yet-
-    // refreshed. Same class of gotcha banned-patterns.md records for a mutated-in-place CIFilter:
-    // a resident render-server cache does not reliably reflect every upstream input change.
-    private struct RasterizationSignature: Equatable {
-        let blurRadius: CGFloat
-        let boundsSize: CGSize
-    }
-    private var rasterizationSignature: RasterizationSignature?
-    #if DEBUG
-    /// Incremented every time refreshRasterization actually forces a FRESH capture (a real
-    /// off-then-on toggle, or first-time engagement) — as opposed to a no-op call where the
-    /// row was already correctly rasterized at the current blur/geometry. Used to prove the
-    /// signature check only re-captures on a genuine change, not every frame.
-    private(set) var debugRasterizationCaptureCount = 0
-    #endif
-
+    // 2026-09-18: no manual off-then-on recapture dance anymore. CA invalidates and regenerates a
+    // rasterized layer's cached bitmap automatically whenever the layer's own content (or a
+    // sublayer's) actually needs display — a genuine blur-radius or geometry change already
+    // triggers that through the normal `setNeedsDisplay`-on-property-change path, same as any other
+    // CALayer property. The manual signature-based toggle this used to do (RasterizationSignature,
+    // "force a FRESH capture: toggling off then on...") existed to fix 2026-09-17's CJK
+    // trailing-word ghost — but that bug's actual cause was `shouldRasterize` staying TRUE through
+    // the window a row's TEXT PHASE went live (a stale snapshot kept compositing behind fresh live
+    // tile writes), which is fixed by `rasterizationEligible = !isActive` itself (isActive folds in
+    // `isTextPhaseActiveThisFrame`, revoking rasterization the SAME frame text goes live — see the
+    // call site in LyricsLayerRendererView.applyFrame, and NativeLyricsRasterizationSignatureTests'
+    // invariant (a), kept and still green). The toggle was never load-bearing for that fix.
     private func refreshRasterization() {
         let desired = rasterizationEligible
             && appliedBlurRadius > 0.001
             && !hasLiveDotAnimation
-            && !Self.rasterizationDisabledByEnv
-        guard let layer else { return }
-        guard desired else {
-            if layer.shouldRasterize {
-                layer.shouldRasterize = false
-            }
-            rasterizationSignature = nil
-            return
+        guard let layer, layer.shouldRasterize != desired else { return }
+        if desired {
+            // Same contentsScale convention as commonInit; without it the cache renders at 1x.
+            layer.rasterizationScale = NSScreen.main?.backingScaleFactor ?? 2
         }
-        // Round to damp float noise from spring-settled-but-not-bit-identical blur values —
-        // this is about catching a REAL blur-target change (e.g. the row's distance from active
-        // changed), not re-capturing every frame on sub-0.01pt jitter.
-        let currentSignature = RasterizationSignature(
-            blurRadius: (appliedBlurRadius * 100).rounded() / 100,
-            boundsSize: layer.bounds.size
-        )
-        if layer.shouldRasterize, rasterizationSignature == currentSignature {
-            return
-        }
-        // Force a FRESH capture: toggling off then on cannot reuse whatever bitmap the render
-        // server had cached for a DIFFERENT blur radius or geometry.
-        layer.shouldRasterize = false
-        // Same contentsScale convention as commonInit; without it the cache renders at 1x.
-        layer.rasterizationScale = NSScreen.main?.backingScaleFactor ?? 2
-        layer.shouldRasterize = true
-        rasterizationSignature = currentSignature
-        #if DEBUG
-        debugRasterizationCaptureCount += 1
-        #endif
+        layer.shouldRasterize = desired
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

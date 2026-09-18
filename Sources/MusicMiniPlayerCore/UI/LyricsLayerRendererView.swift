@@ -2329,46 +2329,25 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         // are still being animated, via updateDeactivationFade) so rasterization is revoked the
         // SAME frame either one goes live, not only when the visual target catches up.
         let isTextPhaseActiveThisFrame = textActiveByRowIndex[row.index] ?? false
-        let isDeactivatingThisFrame = row.index == deferredDeactivationIndex
-        // 2026-09-18 (3h round, item 1, founder-confirmed root cause — independent real-device
-        // pixel comparison the same night matched this mechanism's timing exactly, 12/12 line
-        // switches): rasterization eligibility no longer waits on `visual.isSettled` (the
-        // opacity/scale/blur convergence epsilon, which for non-trivial target blur took 1.5-2.0s
-        // AFTER the row already looked at rest to clear — the "stopped, then jumped" delay). It is
-        // now bound to ACTIVATION alone: a row rasterizes the instant it stops being active
-        // (`visual.target.isActive`/text-phase-active/deferred-deactivating, folded together
-        // below) and de-rasterizes the instant it becomes active again — CA re-derives the cached
-        // bitmap automatically whenever the layer's content actually changes (a genuine blur or
-        // geometry delta), so the old off-then-on manual force-recapture in
-        // NativeLyricsRowView.refreshRasterization's signature check is now a pure safety net, not
-        // load-bearing (kept — cheap, and it's what caught the CJK-ghost class of bug in 59647e1).
-        //
-        // `hasActiveMotion` STAYS in the gate — this is the one part of f1b8d8f still needed.
-        // Reason it cannot be dropped: `isActive` (this row's own text/visual-target state) says
-        // nothing about the row's Y POSITION, a separate spring in `presentationEngine`/`rowStates`.
-        // A row that just deactivated is immediately eligible by the new rule, but during a natural
-        // wave its OWN position (and neighbours', which the wave staggers) can still be actively
-        // springing toward its new slot for a couple hundred ms after deactivation — rasterizing
-        // into a bitmap mid-flight would reproduce exactly the already-fixed "blurry row falls into
-        // place" bug (f1b8d8f's own repro, LyricsRenderDefects20260918ReproTests.swift), just
-        // re-triggered by the activation edge instead of the settle edge.
-        //
-        // 2026-09-18: tried scoping this to a PER-ROW settle check (`presentationEngine.rowStates
-        // [row.index]`) instead of the global flag, to close the gap where a natural wave keeps some
-        // OTHER row moving and holds THIS row's rasterization hostage. Reverted: `rowStates` is read
-        // from a snapshot that can lag the geometry actually applied to the view frame by the same
-        // two-call-site staleness this file's own comments already document elsewhere ("a per-row
-        // delta measured between those two same-tick snapshots is near zero... captures kept
-        // landing mid-motion") — it let a row moving 13+pt/frame with live blur (f1b8d8f's own
-        // regression test) get force-recaptured mid-flight. The global `hasActiveMotion` is coarser
-        // (delays rasterization onset for a row that itself is already still, if anything else in
-        // the visible stack is moving) but it is the one reliably CORRECT signal available; using it
-        // does mean the activation-based fix's improvement over the old isSettled-epsilon delay is
-        // fixture-dependent — it helps wherever the epsilon (not genuine position motion) was the
-        // bottleneck, but a busy natural wave can still hold the flip back for close to a second.
+        // 2026-09-18 (3h round, item 1 FINAL FORM, founder-dictated after the previous round's
+        // activation-bound fix still measured the old 1.5-2.0s delay — the bottleneck had merely
+        // moved from `visual.isSettled`'s opacity/scale/blur epsilon to the kept `hasActiveMotion`
+        // position-motion gate). `hasActiveMotion` (and the per-row `deferredDeactivationIndex`
+        // check) are DROPPED from this condition entirely. A deactivated row rasterizes from the
+        // SAME frame it deactivates, unconditionally — including all the way through any position
+        // motion that follows (the natural wave settling it into its new slot). This is safe: blur
+        // is a STEPPED channel (`NativeLyricsVisualMotionState.setTarget` snaps `blur =
+        // nextTarget.blur` the instant the target changes, no spring left to race), so the ONLY
+        // things that change on a deactivated, rasterized row during its subsequent motion are its
+        // FRAME (position, via `view.frame`) and its LAYER OPACITY — both applied AFTER
+        // rasterization by AppKit/CA compositing the cached bitmap at wherever the layer currently
+        // is and however opaque it currently is; neither one invalidates or re-triggers the
+        // rasterized bitmap. There is no "still in flight, captured a stale/blurry snapshot" window
+        // left for `hasActiveMotion` to protect against — f1b8d8f's own regression test is rewritten
+        // under the new contract (`shouldRasterize` must not FLIP during motion, not "must not be
+        // rasterized during motion" — see LyricsRenderDefects20260918ReproTests) and stays green.
         view.applyRasterizationPolicy(
-            isActive: visual.target.isActive || isTextPhaseActiveThisFrame || isDeactivatingThisFrame
-                || presentationEngine.hasActiveMotion
+            isActive: visual.target.isActive || isTextPhaseActiveThisFrame
         )
         // Defect C instrumentation (founder 2026-09-17): frame.origin.y is the row's REAL carried
         // position (not the layer transform, which AppKit resets on every commit — see the
