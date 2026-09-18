@@ -2262,8 +2262,38 @@ final class NativeLyricsSurfaceView: NSView {
         // SAME frame either one goes live, not only when the visual target catches up.
         let isTextPhaseActiveThisFrame = textActiveByRowIndex[row.index] ?? false
         let isDeactivatingThisFrame = row.index == deferredDeactivationIndex
+        // 2026-09-18 ("每次切行都掉下来一条很模糊的行" — the blurry-row-falls regression 59647e1
+        // introduced on top of its own correct CJK-ghost fix): `visual.isSettled` covers ONLY
+        // opacity/scale/blur — it has never included the row's Y POSITION, a separate spring
+        // (`presentationEngine`/`rowStates`). Blur is a STEPPED channel in the shipping default
+        // (`NativeLyricsVisualMotionState.setTarget` snaps `blur = nextTarget.blur` the instant a
+        // row's target changes), so on a natural line change a distant row's blur target can snap
+        // to its new value on the SAME frame `visual.isSettled` goes true — while that row's frame
+        // (and, during a wave, its NEIGHBOURS' frames — the position spring propagates across
+        // several rows at once, `scheduleNaturalWave`) is still actively springing toward its new
+        // slot for many more frames. 59647e1's signature-based force-recapture
+        // (NativeLyricsRowView.refreshRasterization) then caches a bitmap of the row WHILE it is
+        // still visibly moving; the frame keeps carrying that frozen snapshot until it settles,
+        // reading as a blurry snapshot falling into place.
+        //
+        // Tried and reverted: gating per-row on a Y-position-delta measured against the row's own
+        // last painted position. `applyFrame` runs from TWO independent call sites per real
+        // display tick (`reconcileVisibleRowViews`'s own pass AND `applyFrames`'s presentation-tick
+        // pass), each building its OWN `nativeFrameRenderSnapshot` — a per-row delta measured
+        // between those two same-tick snapshots is near zero (no wall-clock time passed between
+        // them) even while the row moved substantially since the PREVIOUS real tick, so captures
+        // kept landing mid-motion (proven red by this repro test with that approach in place).
+        // `presentationEngine.hasActiveMotion` is a live, un-cached read of the engine's actual
+        // spring state (`rowStates`), correct regardless of how many times a frame gets rendered
+        // from it — using it here (coarser: gates ALL rows off during ANY row's motion, not only
+        // the specific row) trades a little rasterization staleness for correctness. This does not
+        // defeat 59647e1's own CJK-ghost fix: a row's position spring is idle during normal
+        // singing (only the ACTIVE row's opacity/scale/blur transition at activation; nothing else
+        // moves position), so `hasActiveMotion` returns to false well before the next line change,
+        // reopening the recapture window. Repro:
+        // Tests/MusicMiniPlayerTests/LyricsRenderDefects20260918ReproTests.swift.
         view.applyRasterizationPolicy(
-            isSettled: visual.isSettled,
+            isSettled: visual.isSettled && !presentationEngine.hasActiveMotion,
             isActive: visual.target.isActive || isTextPhaseActiveThisFrame || isDeactivatingThisFrame
         )
         // Defect C instrumentation (founder 2026-09-17): frame.origin.y is the row's REAL carried
