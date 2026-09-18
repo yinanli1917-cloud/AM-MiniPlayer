@@ -239,7 +239,7 @@ private class _FlippedView: NSView {
 }
 
 @MainActor
-final class NativeLyricsSurfaceView: NSView {
+final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     override var isFlipped: Bool { true }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
@@ -353,6 +353,37 @@ final class NativeLyricsSurfaceView: NSView {
     private var localEventMonitor: Any?
     private var lastConfigureEventSignature: String?
     private var lastAppliedConfigureSignature: String?
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Row-dump probe (founder 2026-09-18, nanopod://debug/rowdump). One-shot, on-demand dump
+    // of the CURRENTLY ACTIVE row and the row immediately BEFORE it — the pair involved in
+    // every "trailing glyph reads doubled" report — to a plain-text file the founder can
+    // attach as evidence the moment they see it, instead of describing it after the fact.
+    // Compiled into EVERY build, including plain release (same discipline as
+    // `NativeLyricsMaskTrace`): finding the layer tree costs nothing when nobody asks for it,
+    // and this function does no I/O of its own — `LyricsLayerRendererView.dumpActiveRows`
+    // wires it to a file write only when the URL handler invokes it.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    func rowDumpLines() -> [String] {
+        guard let activeIndex = nativeSemanticCurrentIndex else {
+            return ["(no active row — nothing playing)"]
+        }
+        var lines: [String] = []
+        if let activeID = rowIDByIndex[activeIndex], let activeView = rowViews[activeID] {
+            lines += activeView.rowDumpLines(role: "active(idx=\(activeIndex))")
+        } else {
+            lines.append("active row idx=\(activeIndex) not mounted")
+        }
+        let previousIndex = activeIndex - 1
+        if previousIndex >= 0 {
+            if let prevID = rowIDByIndex[previousIndex], let prevView = rowViews[prevID] {
+                lines += prevView.rowDumpLines(role: "previous(idx=\(previousIndex))")
+            } else {
+                lines.append("previous row idx=\(previousIndex) not mounted")
+            }
+        }
+        return lines
+    }
     #if DEBUG
     var debugSkipDedupe = false
     /// Soak/churn seams: bounded-growth proxies (mounted rows, visual-state map, reuse pool).

@@ -804,6 +804,54 @@ final class NativeLyricsRowView: NSView {
     /// LineGaps probe reads it under DebugLogger's runtime switch.
     var debugAppliedBlurRadius: CGFloat { max(0, appliedBlurRadius) }
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Row-dump probe (founder 2026-09-18, CJK trailing-word ghost follow-up,
+    // nanopod://debug/rowdump). One-shot, on-demand text-sublayer inventory for the row —
+    // every layer that can carry visible glyphs, so a founder who sees a duplicate/ghosted
+    // character on screen can dump the exact layer tree at that instant and hand back
+    // evidence instead of a description. Compiled into EVERY build (including plain
+    // release), same discipline as `debugMainBrightOpacity`/`debugAppliedBlurRadius` above —
+    // this reads plain CALayer properties, no DEBUG-only state, and does no I/O itself (the
+    // caller writes the returned lines to disk, matching NativeLyricsMaskTrace's own
+    // "armed at the call site, not the accessor" split).
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    func rowDumpLines(role: String) -> [String] {
+        var lines: [String] = []
+        let rowText = row?.displayLine.line.text ?? "?"
+        let rowID = row?.displayLine.id ?? "?"
+        lines.append("row role=\(role) id=\(rowID) text=\"\(rowText.prefix(12))\"")
+        func describe(_ label: String, _ layer: CALayer?) {
+            guard let layer else { return }
+            let string = (layer as? CATextLayer)?.string as? NSAttributedString
+            let stringPrefix = string?.string.prefix(8).description
+                ?? (layer as? CATextLayer)?.string as? String
+            let isBitmapContents = layer.contents != nil
+            let t = layer.affineTransform()
+            lines.append(
+                "  \(label) class=\(type(of: layer)) frame=\(layer.frame) opacity=\(layer.opacity) "
+                    + "hidden=\(layer.isHidden) string=\(stringPrefix.map { "\"\($0)\"" } ?? "nil") "
+                    + "contentsIsBitmap=\(isBitmapContents) shouldRasterize=\(layer.shouldRasterize) "
+                    + "transform=(a:\(t.a) b:\(t.b) c:\(t.c) d:\(t.d) tx:\(t.tx) ty:\(t.ty))"
+            )
+        }
+        describe("mainTextLayer(dim-base)", mainTextLayer)
+        describe("mainBrightTextLayer(line-level-bright)", mainBrightTextLayer)
+        describe("mainEmphasisLayer", mainEmphasisLayer)
+        for (i, l) in mainDimWordGlyphLayers.enumerated() where !l.isHidden {
+            describe("mainDimWordGlyphLayers[\(i)]", l)
+        }
+        for (i, l) in mainBrightWordGlyphLayers.enumerated() where !l.isHidden {
+            describe("mainBrightWordGlyphLayers[\(i)]", l)
+        }
+        for (i, l) in emphasisGlyphLayers.enumerated() where !l.isHidden {
+            describe("emphasisGlyphLayers[\(i)](legacy-current-arm)", l)
+        }
+        for (i, l) in mainEmphasisGlowLayers.enumerated() where !l.isHidden {
+            describe("mainEmphasisGlowLayers[\(i)]", l)
+        }
+        return lines
+    }
+
     #if DEBUG || LOCAL_DEVELOPER_BUILD
     var debugMainBrightOverlayActive: Bool {
         mainBrightTextLayer.string != nil && !mainBrightTextLayer.isHidden
