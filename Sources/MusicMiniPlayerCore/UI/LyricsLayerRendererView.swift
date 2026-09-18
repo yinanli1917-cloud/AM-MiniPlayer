@@ -2266,7 +2266,9 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         // The transform now carries ONLY scale — never translation. (Translation here was the bug:
         // AppKit's commit-time layout resets a layer-backed view's transform to identity, dropping the
         // row to the origin for a frame; the frame does not get reset.)
-        view.setPositioning(NativeLyricsRowScale.leadingTransform(scale: visual.scale, height: frame.height))
+        view.setPositioning(NativeLyricsRowScale.leadingTransform(
+            scale: visual.scale, height: frame.height, pivotY: view.verticalScalePivotY
+        ))
         let appliedTransform = view.layer?.affineTransform() ?? .identity
         let appliedScale = sqrt(appliedTransform.a * appliedTransform.a + appliedTransform.c * appliedTransform.c)
         recordRowFrameParityIfChanged(rowID: row.id, sample: NativeLyricsRowFrameParitySample(

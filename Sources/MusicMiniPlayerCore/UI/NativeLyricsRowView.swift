@@ -117,6 +117,10 @@ final class NativeLyricsRowView: NSView {
 
     private static let hoverBackgroundAlpha: CGFloat = 0.08
     private static let hoverBackgroundCornerRadius: CGFloat = 12
+    /// Top padding before the main lyric text starts — `layout()`'s `mainTextLayer.frame.minY`.
+    /// Named (was a bare `8` literal) so `verticalScalePivotY` below can share the exact same
+    /// value layout() actually uses, instead of risking the two drifting apart.
+    private static let mainTextTopInset: CGFloat = 8
     // CATextLayer clips text tight to its bounds: at frame height == usedRect.height the LAST wrapped
     // line's bottom pixels (CJK strokes / descenders) get shaved. Pad the rendered text-layer height so
     // the glyph bottoms have room. The row's stacking offset still uses the true (un-padded) height, so
@@ -561,6 +565,41 @@ final class NativeLyricsRowView: NSView {
             height += plan.constants.mainFontSize * 0.33 + Self.translationLoadingRowHeight
         }
         return ceil(height)
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 2026-09-18 fix (founder real-machine LineGaps evidence, research/repro-2026-09-18-
+    // lyrics-render-3d.md §4 third round): the 0.95<->1.00 active/inactive scale used to pivot Y
+    // at the row's geometric CENTER (`frame.height / 2`) — chosen, per NativeLyricsRowScale's own
+    // doc comment, to fix a DIFFERENT, earlier bug (pivoting near the top made CJK wrapped lines
+    // visibly gain/lose 行距 as the scale sprang). But centering the pivot means the row's FIRST
+    // (topmost) line of text — the line the founder is actually looking at, having just finished
+    // singing it — moves by `firstLineOffsetFromCenter * |Δscale|` every single activation/
+    // deactivation: for a typical 40pt single-line row that is ≈1pt, matching the founder's
+    // reported "each line change nudges 1-2px" and "the just-finished line's settle position
+    // doesn't match where it lands as the previous line" exactly.
+    //
+    // Fix (coordinator-approved): pivot Y at the FIRST LINE'S TEXT BASELINE instead — the
+    // baseline the founder is reading stays bit-for-bit fixed across the scale toggle; the
+    // shrink/expand now visibly extends DOWNWARD (into wrap-lines 2/3+ and the translation line,
+    // if any) instead of being distributed above and below a row center nobody is looking at.
+    // `mainTextTopInset` (8pt) is the same value `layout()` uses for `mainTextLayer.frame.minY`;
+    // `font.ascender` is the standard distance from a line's top to its own baseline for the
+    // default (non-custom) line height NSLayoutManager uses here (confirmed: `measuredTextHeight`
+    // does not set a custom line-height multiple). X pivot (`nativeLyricContentLeadingInset`,
+    // the 2026-09-17 C1 fix) is UNCHANGED — orthogonal axis, not touched here.
+    //
+    // Falls back to the row's own vertical center for non-text rows (the prelude dots row) —
+    // "first line baseline" has no meaning there, and this is deliberately scoped to the
+    // founder-reported text-row regression, not a blanket re-anchor of every row kind.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    var verticalScalePivotY: CGFloat {
+        guard let row, !row.isPrelude, let configuration else {
+            return bounds.height / 2
+        }
+        let plan = textRenderPlan(row: row, configuration: configuration)
+        let font = NSFont.systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
+        return Self.mainTextTopInset + font.ascender
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1052,7 +1091,7 @@ final class NativeLyricsRowView: NSView {
         lastLineLayoutCacheKey = cacheKey
         let plan = textRenderPlan(row: row, configuration: configuration)
         backgroundLayer.frame = Self.hoverBackgroundFrame(in: bounds)
-        var y: CGFloat = 8
+        var y: CGFloat = Self.mainTextTopInset
         if row.isPrelude {
             mainTextLayer.frame = .zero
             mainBrightTextLayer.frame = mainTextLayer.frame

@@ -25,8 +25,14 @@ final class RowScaleAnchorDisplacementTests: XCTestCase {
     func test_leadingTransform_afterFix_pivotsXAtTextLeftEdge_zeroDisplacement() {
         let height: CGFloat = 40
         let textLeftEdgeLocalX: CGFloat = nativeLyricContentLeadingInset
-        let inactive = NativeLyricsRowScale.leadingTransform(scale: 0.95, height: height)
-        let active = NativeLyricsRowScale.leadingTransform(scale: 1.0, height: height) // identity (guarded)
+        // pivotY is irrelevant to this test (it only ever reads `.x`, and X/Y scale
+        // independently in an affine transform) — 2026-09-18: leadingTransform now takes the
+        // real vertical pivot as an explicit parameter (NativeLyricsRowView.verticalScalePivotY
+        // in production, the first line's text baseline) instead of deriving height/2 itself;
+        // any fixed value here exercises the exact same X-axis code path.
+        let pivotY: CGFloat = height / 2
+        let inactive = NativeLyricsRowScale.leadingTransform(scale: 0.95, height: height, pivotY: pivotY)
+        let active = NativeLyricsRowScale.leadingTransform(scale: 1.0, height: height, pivotY: pivotY) // identity (guarded)
 
         // apply(transform, to: point) mirrors what CALayer does: p' = p applied through the affine transform.
         func apply(_ t: CGAffineTransform, _ p: CGPoint) -> CGPoint { p.applying(t) }

@@ -226,19 +226,32 @@ final class NativeLyricsActiveLineSpacingTests: XCTestCase {
     // leadingInset * |Δscale| (a real, deterministic 1.6pt every active<->inactive transition,
     // confirmed via RowScaleAnchorDisplacementTests before this fix). "Preserves left" now means
     // preserving THIS point, not x=0.
-    func test_leadingScale_preservesLeftCenter_matchingV28AnchorLeading() {
+    //
+    // 2026-09-18 (coordinator-approved follow-up, research/repro-2026-09-18-lyrics-render-3d.md
+    // §4 third round): `leadingTransform` no longer derives its OWN Y pivot from `height/2` — it
+    // now takes `pivotY` as an explicit parameter (production caller:
+    // `NativeLyricsRowView.verticalScalePivotY`, the row's first-line text baseline, exercised by
+    // `NativeLyricsBaselinePivotInvariantTests`). This test pinned `height/2` specifically, which
+    // was ONLY ever a stand-in for "whatever the pivot is" — rewritten to pass an explicit,
+    // arbitrary `pivotY` and assert the transform's actual, timeless construction property (any
+    // point placed exactly at the pivot maps to itself, regardless of what that pivot represents)
+    // instead of re-asserting the old, now-superseded height/2 choice as if it were load-bearing.
+    func test_leadingScale_preservesGivenPivot_atArbitraryPivotY() {
         let height: CGFloat = 80
-        let t = NativeLyricsRowScale.leadingTransform(scale: 0.95, height: height)
-        let pivot = CGPoint(x: nativeLyricContentLeadingInset, y: height / 2)
+        let pivotY: CGFloat = 30 // an arbitrary stand-in for "the first line's baseline" — the
+        // production value comes from font metrics (verticalScalePivotY), not tested here.
+        let t = NativeLyricsRowScale.leadingTransform(scale: 0.95, height: height, pivotY: pivotY)
+        let pivot = CGPoint(x: nativeLyricContentLeadingInset, y: pivotY)
         let mapped = pivot.applying(t)
         XCTAssertEqual(mapped.x, nativeLyricContentLeadingInset, accuracy: 0.0001,
                         "the text's own left edge (not the row's bare x=0 origin) must be invariant across the scale change")
-        XCTAssertEqual(mapped.y, height / 2, accuracy: 0.0001)
+        XCTAssertEqual(mapped.y, pivotY, accuracy: 0.0001,
+                        "whatever Y the caller designates as the pivot must be invariant across the scale change")
 
         let top = CGPoint(x: nativeLyricContentLeadingInset, y: 0).applying(t)
         let originScaled = CGPoint(x: nativeLyricContentLeadingInset, y: 0).applying(CGAffineTransform(scaleX: 0.95, y: 0.95))
         XCTAssertNotEqual(top.y, originScaled.y, accuracy: 0.0001,
-                          "leading-center scale must move the top edge; origin scale leaves it put (the 行距 look)")
-        XCTAssertEqual(NativeLyricsRowScale.leadingTransform(scale: 1, height: height), .identity)
+                          "pivot-centered scale must move a point away from the pivot; origin scale leaves it put")
+        XCTAssertEqual(NativeLyricsRowScale.leadingTransform(scale: 1, height: height, pivotY: pivotY), .identity)
     }
 }

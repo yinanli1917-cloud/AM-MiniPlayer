@@ -251,12 +251,23 @@ enum NativeLyricsRowScale {
     // via `RowScaleAnchorDisplacementTests` before this fix. Pivoting X at the SAME leading inset
     // the content itself uses makes the text's left edge invariant across the scale change (the
     // row still visually reads as "left-aligned, at the same x, just slightly larger/smaller").
-    // The Y pivot (row vertical centre) is UNCHANGED — it already solves a separate, orthogonal
-    // problem (CJK wrapped-line spacing) and is not touched here.
-    static func leadingTransform(scale: CGFloat, height: CGFloat) -> CGAffineTransform {
+    //
+    // 2026-09-18 fix (founder real-machine LineGaps evidence, research/repro-2026-09-18-lyrics-
+    // render-3d.md §4 third round): the Y pivot used to be the row's geometric CENTER
+    // (`height / 2`) — chosen to fix the ORIGINAL CJK-wrapped-line-spacing bug described above
+    // (pivoting near the TOP made lower wrap-lines visibly shift as scale sprang). But centering
+    // means the row's FIRST line of text — the line the founder is actually reading, having just
+    // finished or about to start singing it — ALSO moves by `firstLineOffsetFromCenter *
+    // |Δscale|` on every activation/deactivation (≈1pt for a typical single-line row) — matching
+    // the founder's "each line change nudges 1-2px" report exactly. Callers now pass `pivotY`
+    // directly (typically `NativeLyricsRowView.verticalScalePivotY`, the first line's text
+    // baseline) instead of this function deriving `height/2` itself — the row view is the only
+    // place with the font-metrics context needed to locate that baseline; this function stays a
+    // pure, pivot-agnostic geometry primitive. `height` is kept only as a validity guard (a
+    // degenerate zero-height row has nothing meaningful to scale).
+    static func leadingTransform(scale: CGFloat, height: CGFloat, pivotY: CGFloat) -> CGAffineTransform {
         guard abs(scale - 1) > 0.0001, height > 0 else { return .identity }
         let pivotX = nativeLyricContentLeadingInset
-        let pivotY = height / 2
         return CGAffineTransform(translationX: pivotX, y: pivotY)
             .scaledBy(x: scale, y: scale)
             .translatedBy(x: -pivotX, y: -pivotY)
