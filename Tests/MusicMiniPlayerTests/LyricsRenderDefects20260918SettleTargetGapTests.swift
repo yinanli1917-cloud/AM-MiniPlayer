@@ -549,4 +549,116 @@ final class LyricsRenderDefects20260918SettleTargetGapTests: XCTestCase {
                 }.joined(separator: " | ")
         )
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 2026-09-18 (coordinator follow-up, real-machine LineGaps evidence): the founder's
+    // 09-14 LineGaps log shows the SAME row (idx 1) recorded as `[1:y=42.0 h=40.0 s=1.00]` while
+    // active and `[1:y=-49.0 h=38.0 s=0.95]` two line-changes later — 38.0 = 40.0 × 0.95 exactly.
+    // Coordinator's hypothesis: `measuredHeight`/`accumulatedHeights` uses the SCALED row height,
+    // so activating/deactivating a row changes its OWN layout height by ±2pt, and (since
+    // accumulatedHeights is cumulative) shifts every OTHER row's target too.
+    //
+    // Verifies this DIRECTLY against `NativeLyricsRowView.measuredHeight(width:)` — the exact
+    // function that feeds `measuredHeightsByIndex` → `accumulatedHeights` (confirmed by reading
+    // `updateContentIfNeeded` in LyricsLayerRendererView.swift: `let height =
+    // view.measuredHeight(width:)`, unconditionally, no scale factor anywhere in that call
+    // chain). English + CJK, single-line AND wrapped, WITH and WITHOUT a translation line.
+    // ─────────────────────────────────────────────────────────────────────
+    @MainActor
+    private func configWithTranslation(
+        rows: [LayerBackedLyricRow], current: Int, mc: MusicController, width: CGFloat, showTranslation: Bool
+    ) -> LyricsLayerRendererConfiguration {
+        var heights: [Int: CGFloat] = [:]
+        for r in rows { heights[r.index] = 42 }
+        return LyricsLayerRendererConfiguration(
+            rows: rows, currentIndex: current, anchorY: 200, rowWidth: width,
+            renderedIndices: rows.map(\.index), accumulatedHeights: heights, lineTargetIndices: [:],
+            lineInterval: 3.0, hasSyllableSync: true,
+            trackContext: DiagnosticTrackContext(title: "T", artist: "A", album: "Al", duration: 240),
+            isWaveTimelineDiagnosticsEnabled: false, isManualScrolling: false, reduceMotion: false,
+            suppressInitialMotion: false, pendingTranslationLineIndices: [], showTranslation: showTranslation,
+            isTranslating: false, translationFailed: false, interludeAfterIndex: nil, directSnapRequest: nil,
+            controlsVisible: false, musicController: mc,
+            onLineTap: { _ in }, onDirectSnapConsumed: { _ in }, onManualScrollStarted: { _ in },
+            onManualScrollDelta: { _, _ in }, onManualScrollEnded: {}, onManualScrollRecovered: {},
+            onManualScrollChromeReset: nil, onHeightMeasured: { _, _ in }, lineMotionSamplingEnabled: false,
+            lineMotionFocusedSamplingUntil: Date.distantPast, lineMotionFirstRealDisplayIndex: 0,
+            onLineMotionFrames: { _, _, _, _ in })
+    }
+
+    private struct HeightCase {
+        let label: String
+        let line: LyricLine
+    }
+
+    @MainActor
+    func test_measuredHeight_isIndependentOfActiveInactiveScale() {
+        let panelWidth: CGFloat = 220
+        let mc = MusicController(preview: true)
+        mc.duration = 60
+        mc.isPlaying = true
+
+        let cases: [HeightCase] = [
+            HeightCase(label: "EN single-line", line: LyricLine(
+                text: "short line", startTime: 0, endTime: 2,
+                words: [LyricWord(word: "short ", startTime: 0, endTime: 1), LyricWord(word: "line", startTime: 1, endTime: 2)]
+            )),
+            HeightCase(label: "EN wrapped (3 lines)", line: LyricLine(
+                text: "a genuinely long line of lyrics that will definitely wrap across three separate visual lines at this width",
+                startTime: 0, endTime: 2,
+                words: [LyricWord(word: "a genuinely long line of lyrics that will definitely wrap across three separate visual lines at this width", startTime: 0, endTime: 2)]
+            )),
+            HeightCase(label: "EN single-line + translation", line: LyricLine(
+                text: "short line", startTime: 0, endTime: 2,
+                words: [LyricWord(word: "short ", startTime: 0, endTime: 1), LyricWord(word: "line", startTime: 1, endTime: 2)],
+                translation: "翻译文本"
+            )),
+            HeightCase(label: "CJK single-line", line: LyricLine(
+                text: "你好世界", startTime: 0, endTime: 2,
+                words: [LyricWord(word: "你", startTime: 0, endTime: 0.5), LyricWord(word: "好", startTime: 0.5, endTime: 1),
+                        LyricWord(word: "世", startTime: 1, endTime: 1.5), LyricWord(word: "界", startTime: 1.5, endTime: 2)]
+            )),
+            HeightCase(label: "CJK wrapped (3 lines)", line: LyricLine(
+                text: "這是一句非常長的中文歌詞一定會在這個寬度下換成三行文字內容測試測試測試",
+                startTime: 0, endTime: 2,
+                words: [LyricWord(word: "這是一句非常長的中文歌詞一定會在這個寬度下換成三行文字內容測試測試測試", startTime: 0, endTime: 2)]
+            )),
+            HeightCase(label: "CJK single-line + translation", line: LyricLine(
+                text: "你好世界", startTime: 0, endTime: 2,
+                words: [LyricWord(word: "你", startTime: 0, endTime: 0.5), LyricWord(word: "好", startTime: 0.5, endTime: 1),
+                        LyricWord(word: "世", startTime: 1, endTime: 1.5), LyricWord(word: "界", startTime: 1.5, endTime: 2)],
+                translation: "Hello world"
+            )),
+        ]
+
+        var mismatches: [String] = []
+        for c in cases {
+            let showTranslation = c.line.translation != nil
+            let rows = [row(for: c.line, index: 0), row(for: LyricLine(text: "next", startTime: 5, endTime: 6), index: 1)]
+            let view = NativeLyricsRowView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 400))
+            host(view, NSSize(width: panelWidth, height: 400))
+
+            // ACTIVE: row 0 is currentIndex.
+            view.configure(row: rows[0], configuration: configWithTranslation(rows: rows, current: 0, mc: mc, width: panelWidth, showTranslation: showTranslation))
+            view.layoutSubtreeIfNeeded()
+            let activeHeight = view.measuredHeight(width: panelWidth)
+
+            // INACTIVE: same row, same content, currentIndex now points elsewhere.
+            view.configure(row: rows[0], configuration: configWithTranslation(rows: rows, current: 1, mc: mc, width: panelWidth, showTranslation: showTranslation))
+            view.layoutSubtreeIfNeeded()
+            let inactiveHeight = view.measuredHeight(width: panelWidth)
+
+            print("[MeasuredHeightProbe] \(c.label): active=\(activeHeight) inactive=\(inactiveHeight) "
+                + "diff=\(activeHeight - inactiveHeight)")
+            if abs(activeHeight - inactiveHeight) > 0.01 {
+                mismatches.append("\(c.label): active=\(activeHeight) inactive=\(inactiveHeight)")
+            }
+        }
+
+        XCTAssertTrue(
+            mismatches.isEmpty,
+            "measuredHeight (the function that feeds accumulatedHeights) DOES vary with active/"
+                + "inactive state: \(mismatches.joined(separator: " | "))"
+        )
+    }
 }
