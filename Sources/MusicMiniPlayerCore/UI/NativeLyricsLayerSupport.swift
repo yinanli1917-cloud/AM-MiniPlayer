@@ -242,27 +242,46 @@ enum NativeLyricsMaskTrace {
         #endif
     }
 
+    // 2026-09-18 addition (stage bundle 3g item 2, research/repro-2026-09-18-lyrics-render-3g.md):
+    // `wholeLineHighlight` never flipped true across the founder's 710-record session even though
+    // he visually saw a whole-line-lit-no-mask frame — it is a probe BLIND SPOT (it only catches
+    // the exact "expectsPerRunSweep but appliedPerRunSweep=false while bright is visible" shape at
+    // the instant `updatePlaybackPhase` runs, which can already have advanced past a one-frame
+    // glitch by the time it's read). `brightUnmaskedIncomplete` is a second, independently-computed
+    // field using the SAME predicate `NativeLyricsSeekLandingMaskTests.isMaskLost` exercises
+    // (bright overlay visibly opaque + no per-run sweep engaged + expected progress still
+    // incomplete) — a real repro attempt for this exact shape found 0 violations across 66+
+    // synthetic seek points, so this field exists to catch whatever real-device condition those
+    // synthetic seeks don't reproduce, without waiting for another full investigation cycle.
     static func record(
         rowID: String,
         wordIndex: Int,
         wholeLineHighlight: Bool,
         perRunSweep: Bool,
         expected: CGFloat,
-        applied: CGFloat
+        applied: CGFloat,
+        mainBrightOverlayPresent: Bool = false,
+        mainBrightOpacity: Float = 0
     ) {
         guard isArmed else { return }
-        let key = "\(rowID)|\(wordIndex)|\(wholeLineHighlight)|\(perRunSweep)"
+        let brightUnmaskedIncomplete = mainBrightOverlayPresent
+            && !perRunSweep
+            && expected < 0.9
+            && mainBrightOpacity > 0.2
+        let key = "\(rowID)|\(wordIndex)|\(wholeLineHighlight)|\(perRunSweep)|\(brightUnmaskedIncomplete)"
         lock.lock()
         let changed = key != lastKey
         if changed { lastKey = key }
         lock.unlock()
         guard changed else { return }
         let line = String(
-            format: "{\"event\":\"mask_state\",\"row\":\"%@\",\"word\":%d,\"wholeLineHighlight\":%@,\"perRunSweep\":%@,\"expected\":%.3f,\"applied\":%.3f}\n",
+            format: "{\"event\":\"mask_state\",\"row\":\"%@\",\"word\":%d,\"wholeLineHighlight\":%@,\"perRunSweep\":%@,\"expected\":%.3f,\"applied\":%.3f,\"brightUnmaskedIncomplete\":%@,\"brightOpacity\":%.3f}\n",
             rowID, wordIndex,
             wholeLineHighlight ? "true" : "false",
             perRunSweep ? "true" : "false",
-            Double(expected), Double(applied)
+            Double(expected), Double(applied),
+            brightUnmaskedIncomplete ? "true" : "false",
+            Double(mainBrightOpacity)
         )
         let url = URL(fileURLWithPath: "/tmp/nanopod_mask_trace.jsonl")
         if !FileManager.default.fileExists(atPath: url.path) {
@@ -308,6 +327,44 @@ enum NativeLyricsMaskTrace {
             rowID, role, Double(y),
             isSettled ? "true" : "false",
             shouldRasterize ? "true" : "false"
+        )
+        let url = URL(fileURLWithPath: "/tmp/nanopod_mask_trace.jsonl")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        guard let handle = try? FileHandle(forWritingTo: url) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        if let data = line.data(using: .utf8) {
+            try? handle.write(contentsOf: data)
+        }
+    }
+
+    // 2026-09-18 (stage bundle 3g item 3): see the call site's doc comment in
+    // NativeLyricsRowView.applyMainWordFloatGlyphLayers for the exact desync this catches — a
+    // word's DIM tile is treated as "not floating" (per `floatingOrders`/`run.baseFloatY`) while
+    // its BRIGHT tile still receives a nonzero `floatY` (per `plan.perWordFloatY`), which would
+    // visibly separate the two — the founder's reported "duplicate offset down-right". Not
+    // reproduced synthetically as of this commit; this is on-device evidence collection for
+    // whenever it next happens, not a confirmed root cause.
+    private static var lastWordFloatDesyncKey: String = ""
+
+    static func recordWordFloatDesync(
+        rowID: String,
+        glyphIndex: Int,
+        glyphText: String,
+        floatY: CGFloat
+    ) {
+        guard isArmed else { return }
+        let key = "\(rowID)|\(glyphIndex)|\(String(format: "%.2f", floatY))"
+        lock.lock()
+        let changed = key != lastWordFloatDesyncKey
+        if changed { lastWordFloatDesyncKey = key }
+        lock.unlock()
+        guard changed else { return }
+        let line = String(
+            format: "{\"event\":\"word_float_desync\",\"row\":\"%@\",\"glyphIndex\":%d,\"glyphText\":\"%@\",\"floatY\":%.3f}\n",
+            rowID, glyphIndex, glyphText, Double(floatY)
         )
         let url = URL(fileURLWithPath: "/tmp/nanopod_mask_trace.jsonl")
         if !FileManager.default.fileExists(atPath: url.path) {

@@ -603,6 +603,39 @@ final class NativeLyricsRowView: NSView {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 2026-09-18 fix, round 2 (founder real-device rejection of the first-line-baseline pivot,
+    // research/repro-2026-09-18-lyrics-render-3g.md item 1): pivoting Y at the first line's
+    // baseline made THAT line invariant, but a uniform affine scale by construction still moves
+    // every OTHER point in the row by `(pointY - pivotY) * |Δscale|` — for the founder's actual
+    // test song (范玮琪《啟程》, 38 lines, almost every line wraps to 2 lines of Chinese), the
+    // SECOND wrap-line (and any translation line) still shifts ~0.05 × line-height ≈ 1.7pt on
+    // every activation/deactivation. A single scalar pivot cannot make ALL lines of a multi-line
+    // block stay put simultaneously while still visibly "shrinking" — that is a structural
+    // property of uniform 2D scale, not a tunable constant.
+    //
+    // Fix (per coordinator brief, option 2: stop scaling multi-line rows at all): a row whose
+    // main text wraps to more than one visual line renders at a FIXED scale of 1.0 — no
+    // active/inactive size distinction for that row. Single-line rows (the common case for
+    // shorter lyrics, and the only case where a single pivot point can make the ENTIRE visible
+    // row invariant) keep the existing first-line-baseline-pivoted 0.95<->1.0 spring. This is a
+    // deliberate trade of "wrapped rows lose the shrink cue" for "wrapped rows lose ALL residual
+    // motion" — the founder's repeated complaint was motion he did not expect, not the absence of
+    // a size cue. Scoped to whether MAIN TEXT wraps (not just the presence of a translation line,
+    // which sits below the pivot but was not what he reported).
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    var mainTextWrapsToMultipleLines: Bool {
+        guard let row, !row.isPrelude, let configuration else { return false }
+        let plan = textRenderPlan(row: row, configuration: configuration)
+        let font = NSFont.systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
+        let metrics = NativeLyricsTextMeasurement.metrics(
+            plan.displayText,
+            width: contentTextWidth(configuration),
+            font: font
+        )
+        return metrics.lineCount > 1
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - Rendering-truth read-back (tests only)
     //
     // The metrics/parity pipeline only validates plan->layer fidelity (we set an opacity,
@@ -1691,7 +1724,9 @@ final class NativeLyricsRowView: NSView {
                 wholeLineHighlight: maskTraceWholeLineHighlight,
                 perRunSweep: appliedMainProgress.appliedPerRunSweep,
                 expected: plan.mainSweepProgress,
-                applied: appliedMainProgress.progress
+                applied: appliedMainProgress.progress,
+                mainBrightOverlayPresent: !mainBrightTextLayer.isHidden && mainBrightTextLayer.string != nil,
+                mainBrightOpacity: debugMainBrightOpacity
             )
             let expectsNoLineLevelMainSweep = !expectsPerRunSweep
             let appliesLineLevelMainSweep = expectsNoLineLevelMainSweep
@@ -2880,6 +2915,30 @@ final class NativeLyricsRowView: NSView {
                     brightLayer.shadowRadius = 0
                 }
                 glowLayer.isHidden = true
+                // 2026-09-18 instrumentation (stage bundle 3g item 3, research/repro-2026-09-18-
+                // lyrics-render-3g.md): a genuine repro attempt for the founder's "CJK trailing
+                // glyph ghost" found the DIM/BRIGHT tile pair always position-matched in every
+                // synthetic scenario tried — but this line is the one place they could legitimately
+                // desync: `dimLayer`'s Y only adds `input.floatY` when `isFloatingWord` (line 2862's
+                // `!isFloatingWord` gate, using `floatingOrders` computed from `run.baseFloatY` in
+                // `applyActiveMainPhase`), while `brightLayer`'s Y ALWAYS adds `input.floatY`
+                // (`plan.perWordFloatY(at:)`, a separately-evaluated quantity). If those two float
+                // sources ever disagree on WHETHER a word counts as "floating" while both still
+                // report a nonzero `floatY` for it, the bright tile visibly floats away from its dim
+                // twin while `dimLayer.isHidden` stays false (both visible, offset) — exactly the
+                // reported "same character with a blurred duplicate offset down-right" shape. Not
+                // reproduced synthetically; this records the specific desync condition on-device so
+                // the next real-occurrence session has evidence instead of another blind repro
+                // attempt. Shares NativeLyricsMaskTrace's isArmed gate/output file — zero I/O by
+                // default, same discipline as every other production-safe probe in this file.
+                if !isFloatingWord, input.floatY != 0 {
+                    NativeLyricsMaskTrace.recordWordFloatDesync(
+                        rowID: row?.displayLine.id ?? "?",
+                        glyphIndex: index,
+                        glyphText: glyph.text,
+                        floatY: input.floatY
+                    )
+                }
             }
             let appliedFloat = brightLayer.position.y - glyph.rect.midY - padHalf
             minFloat = min(minFloat, appliedFloat)

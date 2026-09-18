@@ -1750,4 +1750,111 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
         }
         composeAnnotatedComparison(captures, to: "\(Self.outDir)/prelude-three-entry-paths.png")
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Stage bundle 3g item 4 (research/repro-2026-09-18-lyrics-render-3g.md): a FOURTH prelude-
+    // entry path, structurally distinct from all three above. Path C above ("手动滚回前奏") ends
+    // with the scroll gesture STILL FROZEN — manual-scroll state never releases. The founder's
+    // report is one step further: after scrolling back to the top, he presses "play from start"
+    // (an explicit restart — modeled here as `mc.seek(to: near-zero)`, the same signal a real
+    // restart control or progress-bar drag to 0 sends, per Defect D's own fix in
+    // synchronizeNativeSemanticIndex: an external seekGeneration bump releases a stale
+    // manual-scroll freeze). His screenshot: "三点根本没出现，第 0 行在面板顶部且模糊" — the dots
+    // fully missing (not just misaligned) and row 0 rendering as if it were a DISTANT/inactive row
+    // (blurred, stuck at the panel's static top) rather than the newly-active row.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    @MainActor
+    func test_fourthPreludeEntryPath_manualScrollToTopThenPlayFromStart_matchesOtherPaths() {
+        let rows = preludeSongRows()
+        let panelWidth: CGFloat = 360
+
+        func newSurface() -> (NativeLyricsSurfaceView, MusicController) {
+            let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 600))
+            host(surface, NSSize(width: panelWidth, height: 600))
+            let mc = MusicController(preview: true)
+            mc.duration = 60
+            mc.isPlaying = true
+            surface.debugSkipDedupe = true
+            return (surface, mc)
+        }
+
+        func capture(title: String, drive: (NativeLyricsSurfaceView, MusicController) -> Void) -> PreludeEntryCapture {
+            let (surface, mc) = newSurface()
+            drive(surface, mc)
+            let preludeView = surface.debugRowView(forIndex: 0)
+            let dotCenter = preludeView?.debugDotContainerCenter(in: surface.layer!) ?? .zero
+            let image = renderSurfaceCGImage(surface)!
+            let result = PreludeEntryCapture(
+                title: title, image: image,
+                dotHidden: preludeView?.debugPreludeDotContainerHidden,
+                dotOpacity: preludeView?.debugPreludeDotContainerOpacity,
+                dotCenterX: dotCenter.x, dotCenterY: dotCenter.y,
+                rowFrameMinY: preludeView?.frame.minY ?? .nan,
+                dotAnimating: false,
+                semanticIndex: surface.debugNativeSemanticIndex,
+                scrollTargetIndex: surface.debugNativeScrollTargetIndex
+            )
+            return result
+        }
+
+        // Reference: cold start straight into the prelude window (path A from the test above).
+        let reference = capture(title: "reference: 冷启动") { surface, mc in
+            mc.syncPlaybackClock(to: 0.2, playing: true)
+            surface.configure(config(rows: rows, current: 0, mc: mc, width: panelWidth))
+            surface.layoutSubtreeIfNeeded()
+            for _ in 0..<20 { surface.debugTick(displayInterval: 1.0 / 60.0) }
+        }
+
+        // The fourth path: play deep into the song, scroll all the way back (frozen, path C's
+        // setup), THEN press "play from start" — an explicit seek near t=0, exactly like Defect
+        // D's own repro but starting from a MANUAL-SCROLL freeze instead of natural playback.
+        let scrollThenRestart = capture(title: "D. 手动滚回顶后按「从头播」") { surface, mc in
+            for t: TimeInterval in [0.2, 13.0, 18.0, 23.0, 28.0, 33.0] {
+                mc.syncPlaybackClock(to: t, playing: true)
+                let current = min(max(0, NativeLyricsTimelinePolicy.liveDisplayIndex(at: t, rows: rows, fallback: 0)), max(0, rows.count - 1))
+                surface.configure(config(rows: rows, current: current, mc: mc, width: panelWidth))
+                surface.layoutSubtreeIfNeeded()
+                for _ in 0..<6 { surface.debugTick(displayInterval: 1.0 / 60.0) }
+            }
+            surface.debugBeginManualScroll(frozenAt: 0)
+            mc.syncPlaybackClock(to: 33.0, playing: true)
+            surface.configure(config(rows: rows, current: 5, mc: mc, width: panelWidth))
+            surface.layoutSubtreeIfNeeded()
+            for _ in 0..<20 { surface.debugTick(displayInterval: 1.0 / 60.0) }
+            XCTAssertTrue(surface.debugManualScrollActive, "precondition: still frozen from the scroll-back, like path C")
+
+            // "从头播": an explicit restart to (near) t=0 — a real seekGeneration bump, exactly
+            // the signal Defect D's fix listens for to release a stale manual-scroll freeze.
+            mc.seek(to: 0.2)
+            mc.syncPlaybackClock(to: 0.2, playing: true)
+            surface.configure(config(rows: rows, current: 0, mc: mc, width: panelWidth))
+            surface.layoutSubtreeIfNeeded()
+            for _ in 0..<20 { surface.debugTick(displayInterval: 1.0 / 60.0) }
+            XCTAssertFalse(surface.debugManualScrollActive,
+                "an explicit restart seek must release the manual-scroll freeze, per Defect D's fix")
+        }
+
+        for cap in [reference, scrollThenRestart] {
+            print("[PreludePath-D] \(cap.title): dotHidden=\(String(describing: cap.dotHidden)) " +
+                  "dotOpacity=\(String(describing: cap.dotOpacity)) dotCenter=(\(cap.dotCenterX), \(cap.dotCenterY)) " +
+                  "rowFrameMinY=\(cap.rowFrameMinY) semanticIndex=\(String(describing: cap.semanticIndex)) " +
+                  "scrollTargetIndex=\(String(describing: cap.scrollTargetIndex))")
+        }
+
+        XCTAssertEqual(scrollThenRestart.semanticIndex, 0,
+            "after 从头播 following a scroll-to-top freeze, row 0 (prelude) must be the semantic active row")
+        XCTAssertEqual(scrollThenRestart.dotHidden, false,
+            "the interlude dots must be visible after 从头播 releases the scroll-to-top freeze — "
+            + "founder reported them missing entirely (\"三点根本没出现\")")
+        XCTAssertGreaterThan(scrollThenRestart.dotOpacity ?? 0, 0.5,
+            "dot opacity must be substantially on, not a near-zero residual")
+        XCTAssertEqual(scrollThenRestart.dotCenterX, reference.dotCenterX, accuracy: 1.0,
+            "dot cluster X must match the reference cold-start path (same left edge as an active line)")
+        XCTAssertEqual(scrollThenRestart.dotCenterY, reference.dotCenterY, accuracy: 2.0,
+            "dot cluster Y (active slot) must match the reference cold-start path — founder reported "
+            + "row 0 \"stuck at the panel's static top\" instead of the active slot")
+        XCTAssertEqual(scrollThenRestart.rowFrameMinY, reference.rowFrameMinY, accuracy: 2.0,
+            "row 0's own frame position must match the reference — a distant/inactive-tier row would "
+            + "sit at a different Y than the active row's slot")
+    }
 }

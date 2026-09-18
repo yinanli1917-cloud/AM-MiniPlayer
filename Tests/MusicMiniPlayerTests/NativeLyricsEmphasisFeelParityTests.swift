@@ -193,4 +193,86 @@ final class NativeLyricsEmphasisFeelParityTests: XCTestCase {
             )
         }
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Stage bundle 3g item 6 (research/repro-2026-09-18-lyrics-render-3g.md): founder says the old
+    // "glow-blur highlight" look was good and doesn't know when ghosting was introduced; default
+    // arm is `amll`. `test_amll_glowLayerPositionMatchesBrightTile_zeroTolerance` above already
+    // covers this at 0.05s steps via the single-configure `driveEmphasisWord` helper (which
+    // re-derives a FRESH plan/layout per call, not a continuously-ticked real surface). This test
+    // strengthens that coverage two ways: (1) real 1/60s frame-by-frame granularity (matching an
+    // actual display link, not a coarser sample grid), and (2) drives a REAL, continuously-ticked
+    // `NativeLyricsSurfaceView` (deterministic clock) so per-frame state carries over exactly like
+    // production, instead of each sample being an independent one-shot reconfigure. Covers all
+    // three contrast arms uniformly in one loop, as the coordinator asked, even though `current`
+    // is the historical control arm and is not expected to hold this invariant (it deliberately
+    // uses a second, independently-positioned object — see the (c) test above).
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    @MainActor
+    private func hostRealSurfaceOnEmphasisLine(mode: NativeLyricsFeelParity.EmphasisMode) -> (NativeLyricsSurfaceView, MusicController, (CFTimeInterval) -> Void) {
+        NativeLyricsFeelParity.testingSweep = .v28
+        NativeLyricsFeelParity.testingEmphasis = mode
+        let panelWidth: CGFloat = 320
+        // Reuses this file's own emphasisLine() fixture ("about" is the sole emphasis-eligible
+        // run, same shot LyricsRenderDefects20260914ReproTests characterizes the peak with).
+        let row0 = row(for: emphasisLine(), index: 0)
+        let rows = [row0]
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 200))
+        host(surface, NSSize(width: panelWidth, height: 200))
+        let mc = MusicController(preview: true)
+        mc.duration = 40
+        mc.isPlaying = true
+        surface.debugSkipDedupe = true
+        var wall: CFTimeInterval = 11_000
+        var date = Date(timeIntervalSinceReferenceDate: 960_000_000)
+        surface.debugNowOverride = { wall }
+        mc.debugPlaybackClockDateProvider = { date }
+        func advanceTo(_ t: TimeInterval) {
+            wall += 1.0 / 60.0
+            date = date.addingTimeInterval(1.0 / 60.0)
+            mc.syncPlaybackClock(to: t, playing: true, at: date)
+            surface.configure(config(rows: rows, current: 0, mc: mc, width: panelWidth))
+            surface.debugTick(displayInterval: 1.0 / 60.0)
+        }
+        mc.syncPlaybackClock(to: 10.02, playing: true, at: date)
+        surface.configure(config(rows: rows, current: 0, mc: mc, width: panelWidth))
+        surface.layoutSubtreeIfNeeded()
+        return (surface, mc, advanceTo)
+    }
+
+    @MainActor
+    func test_allThreeArms_glowSharpTileZeroPositionalDifference_realSurfaceEveryFrame() {
+        defer { NativeLyricsFeelParity.resetTestingOverrides() }
+        for mode in [NativeLyricsFeelParity.EmphasisMode.current, .v28, .amll] {
+            let (surface, _, advanceTo) = hostRealSurfaceOnEmphasisLine(mode: mode)
+            var sawVisibleGlow = false
+            var t: TimeInterval = 10.02
+            while t < 14.5 {
+                advanceTo(t)
+                guard let view = surface.debugRowView(forIndex: 0) else { t += 1.0 / 60.0; continue }
+                for pair in view.debugEmphasisGlowTilePairs where pair.glowVisible {
+                    sawVisibleGlow = true
+                    XCTAssertEqual(pair.brightPosition.x, pair.glowPosition.x, accuracy: 0,
+                        "\(mode): glow sibling x must be identical to its bright tile at t=\(t)")
+                    XCTAssertEqual(pair.brightPosition.y, pair.glowPosition.y, accuracy: 0,
+                        "\(mode): glow sibling y must be identical to its bright tile at t=\(t)")
+                    XCTAssertEqual(pair.brightScale, pair.glowScale, accuracy: 0,
+                        "\(mode): glow sibling scale must be identical to its bright tile at t=\(t)")
+                }
+                t += 1.0 / 60.0
+            }
+            surface.debugNowOverride = nil
+            // Only `amll` uses the `mainEmphasisGlowLayers` SIBLING layer this accessor pairs
+            // against — `current` routes through the separate legacy `emphasisGlyphLayers` pool
+            // (see the (c) test above), and `v28`'s glow is a real CALayer shadow on the bright
+            // tile ITSELF (`applyEmphasisGlowOnSharedTile`'s `.v28` case explicitly keeps the
+            // sibling glow layer hidden — see `test_v28_glowShadowEngagesOnTheSharedTile` for that
+            // arm's own, structurally-can't-desync check). So only amll is expected to ever report
+            // `glowVisible` via THIS accessor; requiring it for v28 would be asserting the wrong
+            // mechanism.
+            if mode == .amll {
+                XCTAssertTrue(sawVisibleGlow, "\(mode): real-surface per-frame scan must hit the glow-visible window at least once")
+            }
+        }
+    }
 }
