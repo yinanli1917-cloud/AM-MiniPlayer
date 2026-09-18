@@ -438,14 +438,18 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
     /// `shouldDriveTextPhase`, i.e. whether the prelude row's dots get driven at all) correctly
     /// resolves to 0 — matching the hosted-surface test below, where dots DO become visible.
     ///
-    /// But `scrollToIndex` (the SEPARATE value that drives the presentation engine's scroll/anchor
-    /// target) is computed independently and still prefers `firstFutureIndex` whenever
-    /// `bufferedGroups` is empty on a seek — regardless of what semanticIndex resolved to. The two
-    /// values DIVERGE: the prelude row is correctly text-phase-active (dots animate) while the
-    /// engine's anchor target is the NEXT real row. The prelude row then renders at its normal
-    /// in-flow offset relative to THAT anchor (above it, since row 0 precedes row 1) instead of at
-    /// the centred anchorY spot every other "current" row gets — this is the defect-3 mechanism.
-    func test_amllState_backwardSeekIntoPreludeWindow_withCorrectFallback_scrollTargetStillDivergesFromSemanticIndex() {
+    /// 2026-09-18 (stage bundle 3i, item 1) — FIXED. `scrollToIndex` (the SEPARATE value that
+    /// drives the presentation engine's scroll/anchor target) used to be computed independently
+    /// and prefer `firstFutureIndex` whenever `bufferedGroups` was empty on a seek — regardless
+    /// of what semanticIndex resolved to, and regardless of whether any real row had ever
+    /// started at all. `amllState` now only takes that branch once at least one real row has
+    /// genuinely started (`anyRealRowStarted`); a seek landing before the first real line — the
+    /// prelude window — resolves `scrollToIndex` through the exact same `latestStartedIndex`
+    /// chain `semanticIndex` already trusted, so the two values agree instead of diverging. A
+    /// full-renderer repro of this same divergence via a mid-song-then-restart-to-0 sequence is
+    /// pinned in ManualScrollSeekReleaseTests.test_coldStartWhileMusicMidSong_thenRestartToZero_
+    /// droppedFrameVariants_preludeRowAnchored.
+    func test_amllState_backwardSeekIntoPreludeWindow_withCorrectFallback_scrollTargetMatchesSemanticIndex() {
         let rows = preludeSongRows()
         let previous = NativeLyricsTimelinePolicy.AMLLState(
             playbackTime: 32, hotGroups: [5], bufferedGroups: [5], scrollToIndex: 5, semanticIndex: 5
@@ -460,11 +464,11 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
         XCTAssertEqual(result.semanticIndex, 0,
             "with the production-accurate fallback (0, from LyricsService's own prelude reset), " +
             "semanticIndex correctly resolves to the prelude row — the dots SHOULD be text-phase-active")
-        XCTAssertNotEqual(result.scrollToIndex, result.semanticIndex,
-            "BUG reproduced: scrollToIndex (\(result.scrollToIndex)) diverges from semanticIndex " +
-            "(\(result.semanticIndex)) — the presentation engine's scroll/anchor target is the first " +
-            "REAL row while the prelude row is the text-phase-active one, so the prelude row renders " +
-            "at its in-flow offset relative to the WRONG anchor instead of at the centred anchorY spot")
+        XCTAssertEqual(result.scrollToIndex, result.semanticIndex,
+            "FIX: scrollToIndex (\(result.scrollToIndex)) must match semanticIndex " +
+            "(\(result.semanticIndex)) — a stale `previous.scrollToIndex` from deep in the song must " +
+            "not survive a seek back into the prelude window, and the presentation engine must not " +
+            "anchor on the next real row while the prelude row is the text-phase-active one")
     }
 
     @MainActor
@@ -550,9 +554,10 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
                 "sanity check: dots container should be visible now that the row is text-phase-active")
         }
 
-        // NOT REPRODUCED at this integration level, despite the confirmed amllState-level bug
-        // above (test_amllState_..._withCorrectFallback_scrollTargetStillDivergesFromSemanticIndex,
-        // which hand-feeds a `previous` snapshot and shows scrollToIndex=1 while semanticIndex=0).
+        // 2026-09-18 update: the amllState-level bug this diagnostic referenced is now FIXED (see
+        // test_amllState_..._withCorrectFallback_scrollTargetMatchesSemanticIndex, previously named
+        // ..._scrollTargetStillDivergesFromSemanticIndex). This end-to-end diagnostic is kept as-is —
+        // it never asserted the divergence itself (print-only), only sanity-checked semanticIndex.
         // Driven tick-by-tick through the real, stateful NativeLyricsSurfaceView, scrollTargetIndex
         // converges back to match semanticIndex (0) by the time these ticks settle — the exact
         // `previous.bufferedGroups`/`hotGroups` carry-over that produces the divergence in the

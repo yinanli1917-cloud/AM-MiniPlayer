@@ -275,4 +275,88 @@ final class ManualScrollSeekReleaseTests: XCTestCase {
         XCTAssertFalse(preludeView.debugPreludeDotContainerHidden,
                         "the new track's prelude dots must be visible, not stuck hidden/misplaced")
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Stage bundle 3i, coordinator hypothesis: item 1's "冷启动" is item 2's exact real-world
+    // shape — the founder started the app (or opened the lyrics tab for the first time) while
+    // Music.app was already mid-song, then pressed "从头播" (restart to 0). That is precisely
+    // the MusicController.pollPositionViaSB sequence item 2 fixed: a confirmed position jump
+    // that (pre-fix) got deferred for up to 3 polls AND could flip `isPlaying` false via the
+    // velocity-pause misfire — feeding the renderer a few ticks of stale/contradictory
+    // isPlaying + interpolated-time state right as it configures for the very first time.
+    //
+    // Re-run under BOTH dropped-frame tick lengths (100/250/500ms, not just steady 1/60s) and
+    // with the exact isPlaying flap the pre-fix velocity-pause bug produced (true -> false ->
+    // true across a few ticks) layered on top of the cold start, to see whether the renderer
+    // itself has an independent geometry bug once MusicController's own state is unstable in
+    // this way, now that item 2's fix means MusicController's `isPlaying`/`currentTime` stay
+    // consistent through the jump.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    @MainActor
+    func test_coldStartWhileMusicMidSong_thenRestartToZero_droppedFrameVariants_preludeRowAnchored() {
+        for tickMs in [100.0, 250.0, 500.0] {
+            let rows = preludeSongRows()
+            let panelWidth: CGFloat = 360
+            let anchorY: CGFloat = 200
+            let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 600))
+            host(surface, NSSize(width: panelWidth, height: 600))
+            let mc = MusicController(preview: true)
+            mc.duration = 240
+            mc.isPlaying = true
+            surface.debugSkipDedupe = true
+            var wall: CFTimeInterval = 13_000
+            var date = Date(timeIntervalSinceReferenceDate: 703_500_000)
+            surface.debugNowOverride = { wall }
+            mc.debugPlaybackClockDateProvider = { date }
+            defer { surface.debugNowOverride = nil; mc.debugPlaybackClockDateProvider = nil }
+
+            let tickInterval = tickMs / 1000.0
+            func tick(_ t: TimeInterval, playing: Bool, ticks: Int, current: Int) {
+                mc.syncPlaybackClock(to: t, playing: playing, at: date)
+                surface.configure(config(rows: rows, current: current, mc: mc, width: panelWidth, anchorY: anchorY))
+                surface.layoutSubtreeIfNeeded()
+                for _ in 0..<ticks {
+                    wall += tickInterval
+                    date = date.addingTimeInterval(tickInterval)
+                    mc.syncPlaybackClock(to: t, playing: playing, at: date)
+                    surface.debugTick(displayInterval: tickInterval)
+                }
+            }
+
+            // Music.app already mid-song (83.2s) when the surface configures for the very
+            // first time (real "cold start into a running session" shape) — a few prior seeks
+            // already happened on this long-lived MusicController from earlier tracks.
+            mc.registerSeek()
+            mc.registerSeek()
+            tick(83.2, playing: true, ticks: 6, current: min(rows.count - 1, 5))
+
+            // Simulate the exact isPlaying flap the pre-fix velocity-pause bug produced across
+            // a couple of polls (now fixed at the MusicController layer, but the renderer must
+            // also tolerate it independently — belt-and-suspenders check).
+            tick(83.2, playing: false, ticks: 2, current: min(rows.count - 1, 5))
+
+            // "从头播": explicit restart to 0, resuming playback.
+            mc.registerSeek()
+            tick(0.2, playing: true, ticks: 40, current: 0)
+            for _ in 0..<10 { tick(0.2, playing: true, ticks: 20, current: 0) }
+
+            XCTAssertEqual(surface.debugNativeSemanticIndex, 0,
+                            "tick=\(tickMs)ms: restart to 0 must resolve the prelude row as active")
+            print("[3i-diag] tick=\(tickMs)ms semantic=\(String(describing: surface.debugNativeSemanticIndex)) " +
+                  "scrollTarget=\(String(describing: surface.debugNativeScrollTargetIndex)) " +
+                  "manualActive=\(surface.debugManualScrollActive) " +
+                  "row0Y=\(String(describing: surface.debugRowView(forIndex: 0)?.frame.origin.y)) " +
+                  "row5Y=\(String(describing: surface.debugRowView(forIndex: min(rows.count - 1, 5))?.frame.origin.y))")
+            guard let preludeView = surface.debugRowView(forIndex: 0) else {
+                XCTFail("tick=\(tickMs)ms: prelude row view should be mounted")
+                continue
+            }
+            XCTAssertEqual(preludeView.frame.origin.y, anchorY, accuracy: 1.0,
+                            "tick=\(tickMs)ms: prelude row must sit at the anchor slot after restart, " +
+                            "not fall back to its natural top-of-stack flow position")
+            XCTAssertFalse(preludeView.debugPreludeDotContainerHidden,
+                            "tick=\(tickMs)ms: prelude dots must be visible after restart")
+        }
+    }
 }
