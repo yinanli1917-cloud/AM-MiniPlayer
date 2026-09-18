@@ -2915,6 +2915,30 @@ final class NativeLyricsRowView: NSView {
                     brightLayer.shadowRadius = 0
                 }
                 glowLayer.isHidden = true
+                // 2026-09-18 instrumentation (stage bundle 3g item 3, research/repro-2026-09-18-
+                // lyrics-render-3g.md): a genuine repro attempt for the founder's "CJK trailing
+                // glyph ghost" found the DIM/BRIGHT tile pair always position-matched in every
+                // synthetic scenario tried — but this line is the one place they could legitimately
+                // desync: `dimLayer`'s Y only adds `input.floatY` when `isFloatingWord` (line 2862's
+                // `!isFloatingWord` gate, using `floatingOrders` computed from `run.baseFloatY` in
+                // `applyActiveMainPhase`), while `brightLayer`'s Y ALWAYS adds `input.floatY`
+                // (`plan.perWordFloatY(at:)`, a separately-evaluated quantity). If those two float
+                // sources ever disagree on WHETHER a word counts as "floating" while both still
+                // report a nonzero `floatY` for it, the bright tile visibly floats away from its dim
+                // twin while `dimLayer.isHidden` stays false (both visible, offset) — exactly the
+                // reported "same character with a blurred duplicate offset down-right" shape. Not
+                // reproduced synthetically; this records the specific desync condition on-device so
+                // the next real-occurrence session has evidence instead of another blind repro
+                // attempt. Shares NativeLyricsMaskTrace's isArmed gate/output file — zero I/O by
+                // default, same discipline as every other production-safe probe in this file.
+                if !isFloatingWord, input.floatY != 0 {
+                    NativeLyricsMaskTrace.recordWordFloatDesync(
+                        rowID: row?.displayLine.id ?? "?",
+                        glyphIndex: index,
+                        glyphText: glyph.text,
+                        floatY: input.floatY
+                    )
+                }
             }
             let appliedFloat = brightLayer.position.y - glyph.rect.midY - padHalf
             minFloat = min(minFloat, appliedFloat)

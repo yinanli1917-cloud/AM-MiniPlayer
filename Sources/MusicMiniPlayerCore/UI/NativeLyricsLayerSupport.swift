@@ -339,4 +339,42 @@ enum NativeLyricsMaskTrace {
             try? handle.write(contentsOf: data)
         }
     }
+
+    // 2026-09-18 (stage bundle 3g item 3): see the call site's doc comment in
+    // NativeLyricsRowView.applyMainWordFloatGlyphLayers for the exact desync this catches — a
+    // word's DIM tile is treated as "not floating" (per `floatingOrders`/`run.baseFloatY`) while
+    // its BRIGHT tile still receives a nonzero `floatY` (per `plan.perWordFloatY`), which would
+    // visibly separate the two — the founder's reported "duplicate offset down-right". Not
+    // reproduced synthetically as of this commit; this is on-device evidence collection for
+    // whenever it next happens, not a confirmed root cause.
+    private static var lastWordFloatDesyncKey: String = ""
+
+    static func recordWordFloatDesync(
+        rowID: String,
+        glyphIndex: Int,
+        glyphText: String,
+        floatY: CGFloat
+    ) {
+        guard isArmed else { return }
+        let key = "\(rowID)|\(glyphIndex)|\(String(format: "%.2f", floatY))"
+        lock.lock()
+        let changed = key != lastWordFloatDesyncKey
+        if changed { lastWordFloatDesyncKey = key }
+        lock.unlock()
+        guard changed else { return }
+        let line = String(
+            format: "{\"event\":\"word_float_desync\",\"row\":\"%@\",\"glyphIndex\":%d,\"glyphText\":\"%@\",\"floatY\":%.3f}\n",
+            rowID, glyphIndex, glyphText, Double(floatY)
+        )
+        let url = URL(fileURLWithPath: "/tmp/nanopod_mask_trace.jsonl")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        guard let handle = try? FileHandle(forWritingTo: url) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        if let data = line.data(using: .utf8) {
+            try? handle.write(contentsOf: data)
+        }
+    }
 }
