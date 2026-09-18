@@ -276,6 +276,40 @@ wave 参与半径（radius=14）以内的行，每次切行都会被正确地再
 创始人一句话裁决：要不要把"持续再定位"的窗口从 radius=14 收窄到一个小得多的数字（比如只覆盖
 紧邻当前行的 2-3 行），让更远的行一旦离场就此冻结？
 
+### 第三轮（协调方带真机证据复核）：`accumulatedHeights` 用缩放后高度——假设已证伪；真身找到
+
+协调方在创始人 09-14 真机 LineGaps 日志里发现直接证据：同一行（idx 1）激活时记录为
+`[1:y=42.0 h=40.0 s=1.00]`，两次切行后 `[1:y=-49.0 h=38.0 s=0.95]`——38.0 精确等于 40.0×0.95。
+假设：`accumulatedHeights` 用的是缩放后的行高，行一激活/去激活，自己的布局高度就 ±2pt，累积量
+一变，所有其它行的目标 y 跟着整体挪——这能同时解释"每次切行都挪 1-2px"和"老行停下的位置和它
+成为上一行后的位置对不上"。
+
+**直接验证**（`test_measuredHeight_isIndependentOfActiveInactiveScale`）：`accumulatedHeights` 的
+唯一数据源是 `NativeLyricsRowView.measuredHeight(width:)`（读代码坐实：
+`LyricsLayerRendererView.swift` 的 `updateContentIfNeeded` 里 `let height =
+view.measuredHeight(width:)`，是 `measuredHeightsByIndex` 唯一的写入点，调用链里没有任何缩放
+因子）。直接在真实行视图上调用它——只切换 `currentIndex`（激活/非激活），内容不变：中英文各
+一，单行/换行（3 行）、有/无翻译行，共 6 组——**全部精确 0.0pt 差异**。**这个具体假设被证伪。**
+
+**真机日志那个 "h" 字段的真身**：它不是 `accumulatedHeights`/布局高度，是 `logLineGapsProbe`
+（`LyricsLayerRendererView.swift` 里我们自己的 LineGaps 诊断探针）**自己算出来的一个派生值**——
+探针代码原文：`scale != 1` 时 `height = frame.height * scale`——这是探针为了检测**屏幕上相邻两
+行渲染出来的包围盒有没有视觉重叠**（它自己的 `gap` 字段）而专门做的缩放修正，从来不是喂给
+`accumulatedHeights`/定位系统的那个值（那个值已经在提交 edca686 证实精确、从不漂移）。
+`40.0→38.0` 是这个探针**如实报告**"这一行现在因为非激活缩放，屏幕上渲染出来只有原尺寸的
+95%"——设计内、符合预期，跟 `NativeLyricsRowScale.leadingTransform` 的 `height/2` 垂直锚点用的
+是同一套算术，不是新 bug。
+
+**这解释了真机看到的竖向偏差吗——有一条更精确的剩余嫌疑**：`leadingTransform` 的缩放锚点在
+行高度垂直中心，缩放 1.00↔0.95 会让行的**渲染内容**（文字/圆点）在**它自己不变的定位槽位内**
+上下对称收缩/展开——对一个 40pt 高的行，`40×0.05/2=1.0pt`，即文字顶边会因为这次缩放在槽位内
+挪动约 1pt——量级和方向精确对得上创始人说的"1-2px"，且正是这个探针的 `gap` 字段本来就是为了
+监控的那类视觉效果。**但这是 `leadingTransform` 垂直锚点本身已知、有意为之的设计**（代码注释
+明确写着"为解决 CJK 换行行距跳变问题"），不是新发现的计算分歧——行的**槽位位置**（`targetY`）
+不受影响，只是行**自身内容**在缩放时于槽位内轻微收缩/展开。这是否是创始人观感里的"1-2px"，
+按"先复现再修"，需要创始人肉眼终验后再确认要不要动这个锚点设计（改锚点是全局性改动，会牵动
+已经验证过的 CJK 换行修复，不能顺手改）。
+
 ---
 
 ## 提交记录
