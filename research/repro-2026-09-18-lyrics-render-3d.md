@@ -310,6 +310,48 @@ view.measuredHeight(width:)`，是 `measuredHeightsByIndex` 唯一的写入点�
 按"先复现再修"，需要创始人肉眼终验后再确认要不要动这个锚点设计（改锚点是全局性改动，会牵动
 已经验证过的 CJK 换行修复，不能顺手改）。
 
+### 第四轮（协调方批准修复）：Y 锚点从行中心改到首行文字基线——已修复
+
+协调方裁定：量级、方向、"每次都有"、"老行停下后的位置对不上"全部吻合，批准修——把 Y 锚点从
+行几何中心改成**首行文字的基线**，让激活↔非激活切换时刚唱完那一行的基线位置不变，收缩/展开
+改为向下延伸；X 锚点保持不动（32pt，2026-09-17 C1 已修）。
+
+**实现**：
+- `NativeLyricsRowView` 新增 `verticalScalePivotY`：`mainTextTopInset（8pt，原来 `layout()` 里
+  裸写的字面量，现在有名字）+ font.ascender`——`font.ascender` 是 NSLayoutManager 默认（无自定义
+  行高倍数，读代码确认 `measuredTextHeight` 没设）行高模型下"行顶到基线"的标准距离。非文字行
+  （前奏点行）保留原来的行中心兜底，不动——这次修复只针对创始人报的文字行问题，不扩大范围。
+- `NativeLyricsRowScale.leadingTransform` 不再自己算 `height/2`，改为调用方显式传入 `pivotY`；
+  `LyricsLayerRendererView.applyFrame` 的调用点传 `view.verticalScalePivotY`。
+
+**测试**（协调方三项要求全部满足）：
+1. **不变式测试**（`NativeLyricsBaselinePivotTests`，真实 surface + 真实提交层树）：中英文各
+   单行/换行（3行）/带翻译行，共 6 组，激活↔非激活切换前后首行基线位移**精确 0.0000pt**。
+   踩过一个坑：最初用 `layer.convert(to: surface.layer)` 转到 surface 坐标算位移，测出
+   -96pt 到 -324pt 的"失败"——排查后发现那是行自己的**帧位置**在测量窗口内因为继续播放合法
+   地滚动了（上一轮 `edca686` 已证实这是正确行为），不是锚点的问题；改成只在行自己的局部坐标系
+   里用 `positioningTransform`（按 `setPositioning` 自己的注释，这个变换只带缩放、从不带位移）
+   算，把"帧位置滚动"这个无关变量隔离掉，才拿到干净信号。
+2. **CJK/EN 行距测试保持绿**：`NativeLyricsActiveLineSpacingTests`/
+   `RowScaleAnchorDisplacementTests` 全绿。`test_leadingScale_preservesLeftCenter_
+   matchingV28AnchorLeading` 确实钉的是 `height/2` 这个现在已经改掉的实现细节（不是行距本身），
+   已按协调方预判改写为 `test_leadingScale_preservesGivenPivot_atArbitraryPivotY`：改断言"任意
+   传入的 pivotY 都必须在变换后保持不变"这个变换本身真正、不随实现变化的数学性质，不再钉死
+   height/2 这个具体选择。真正测行距本身的 `assertActivationKeepsLayout`（行数/行距/字距/换行
+   片段高度）测的是 NSLayoutManager 自己的文字排版输出，跟 CALayer 缩放锚点是两个维度，确认
+   无需改动、本来就没受影响。
+3. **相邻行不重叠**：新测试用跟 `logLineGapsProbe` 完全一致的缩放修正几何公式，中英文各驱动
+   一次自然切行序列，每帧断言 gap ≥ 0——实测最小 gap 约 6.9-7.0pt，安全。
+
+全量回归（`NativeLyrics*`/`LyricsRenderDefects*`/`Handoff`/`PlaybackClockTrust`/
+`LyricsWholeLineFlash`/`ManualScroll`/`RowScaleAnchorDisplacement`）：321 个测试，4 处失败，
+全部集中在同一条已知预存 flaky（`NativeLyricsRenderChurnTests.
+test_previousLineDoesNotFadeBeforeItStartsMovingAcrossHandoff`），无新增失败。
+
+**已知、协调方明确接受的代价**：换行/带翻译的多行行，收缩/展开会向下延伸（第 2/3 行、翻译行
+会比原来多挪一点）——这是有意为之（首行是创始人在看的那一行，其余行不是这次修复关心的对象），
+不是新缺陷。等待创始人肉眼终验。
+
 ---
 
 ## 提交记录
@@ -322,12 +364,14 @@ view.measuredHeight(width:)`，是 `measuredHeightsByIndex` 唯一的写入点�
 6. `1cc317a docs: update stage bundle 3d report with §2/§3/§4 findings` —— 本报告 §2/§3/§4 首版补完。
 7. `77ef0c7 test(lyrics-ui): gate defect #4 settle-gap tests with XCTExpectFailure` —— §4 第二轮 step 1。
 8. `edca686 test(lyrics-ui): root-cause defect #4 — not a bug, disprove the settle-vs-target premise` —— §4 第二轮 step 2-4，三层探针 + 根因定位 + 原测试改写为真实不变式，全绿。
+9. `77e40a6 test(lyrics-ui): verify accumulatedHeights is independent of active/inactive scale` —— §4 第三轮，证伪"用缩放后行高"假设。
+10. `bb86928 docs: §4 third round — accumulatedHeights-uses-scaled-height hypothesis disproven` —— 本报告 §4 第三轮补完。
+11. `dcd7b6a fix(lyrics-ui): pivot the 0.95<->1.00 scale at the first-line text baseline` —— §4 第四轮，Y 锚点改为首行基线，协调方批准并验收的真正修复。
 
-全部未 push。提交 8（`edca686`）之上跑的最新一轮全量回归门（`NativeLyrics*`/
+全部未 push。提交 11（`dcd7b6a`）之上跑的最新一轮全量回归门（`NativeLyrics*`/
 `LyricsRenderDefects*`/`Handoff`/`PlaybackClockTrust`/`LyricsWholeLineFlash`/`ManualScroll`/
-`RowScaleAnchorDisplacement`，含本轮全部新增/改写测试）：**312 个测试，4 处失败**——全部集中在
+`RowScaleAnchorDisplacement`，含本轮全部新增/改写测试）：**321 个测试，4 处失败**——全部集中在
 同一个已知预存 harness 伪影
 `NativeLyricsRenderChurnTests.test_previousLineDoesNotFadeBeforeItStartsMovingAcrossHandoff`
-（`handoff_red_test_appear_window.md` 有案；本会话早前一轮全量回归里这条测试是绿的，flaky 非
-回归）；§4 两个测试（`test_english/cjk_settledRowRetargetingMatchesAccumulatedHeightDeltaExactly`）
-全绿，不再需要 `XCTExpectFailure`。没有真正的新增失败。
+（`handoff_red_test_appear_window.md` 有案，flaky 非回归）；§4 全部新增/改写测试全绿。没有真正
+的新增失败。
