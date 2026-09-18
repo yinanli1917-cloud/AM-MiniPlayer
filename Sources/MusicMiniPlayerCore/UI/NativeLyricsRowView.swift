@@ -466,17 +466,59 @@ final class NativeLyricsRowView: NSView {
         !translationLoadingDotContainerLayer.isHidden || !dotContainerLayer.isHidden
     }
 
+    // 2026-09-17 (CJK trailing-word ghost, "滋味", research/repro-2026-09-17-lyrics-render-3c.md
+    // §CJK): the rasterized bitmap snapshot must not be reused across a blur-radius or geometry
+    // change while a row stays settled+inactive — a stale snapshot (captured at an OLDER blur
+    // amount, e.g. while the row was still several lines from active) can otherwise keep
+    // compositing behind fresh live tile writes once the row becomes eligible-but-not-yet-
+    // refreshed. Same class of gotcha banned-patterns.md records for a mutated-in-place CIFilter:
+    // a resident render-server cache does not reliably reflect every upstream input change.
+    private struct RasterizationSignature: Equatable {
+        let blurRadius: CGFloat
+        let boundsSize: CGSize
+    }
+    private var rasterizationSignature: RasterizationSignature?
+    #if DEBUG
+    /// Incremented every time refreshRasterization actually forces a FRESH capture (a real
+    /// off-then-on toggle, or first-time engagement) — as opposed to a no-op call where the
+    /// row was already correctly rasterized at the current blur/geometry. Used to prove the
+    /// signature check only re-captures on a genuine change, not every frame.
+    private(set) var debugRasterizationCaptureCount = 0
+    #endif
+
     private func refreshRasterization() {
         let desired = rasterizationEligible
             && appliedBlurRadius > 0.001
             && !hasLiveDotAnimation
             && !Self.rasterizationDisabledByEnv
-        guard let layer, layer.shouldRasterize != desired else { return }
-        if desired {
-            // Same contentsScale convention as commonInit; without it the cache renders at 1x.
-            layer.rasterizationScale = NSScreen.main?.backingScaleFactor ?? 2
+        guard let layer else { return }
+        guard desired else {
+            if layer.shouldRasterize {
+                layer.shouldRasterize = false
+            }
+            rasterizationSignature = nil
+            return
         }
-        layer.shouldRasterize = desired
+        // Round to damp float noise from spring-settled-but-not-bit-identical blur values —
+        // this is about catching a REAL blur-target change (e.g. the row's distance from active
+        // changed), not re-capturing every frame on sub-0.01pt jitter.
+        let currentSignature = RasterizationSignature(
+            blurRadius: (appliedBlurRadius * 100).rounded() / 100,
+            boundsSize: layer.bounds.size
+        )
+        if layer.shouldRasterize, rasterizationSignature == currentSignature {
+            return
+        }
+        // Force a FRESH capture: toggling off then on cannot reuse whatever bitmap the render
+        // server had cached for a DIFFERENT blur radius or geometry.
+        layer.shouldRasterize = false
+        // Same contentsScale convention as commonInit; without it the cache renders at 1x.
+        layer.rasterizationScale = NSScreen.main?.backingScaleFactor ?? 2
+        layer.shouldRasterize = true
+        rasterizationSignature = currentSignature
+        #if DEBUG
+        debugRasterizationCaptureCount += 1
+        #endif
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
