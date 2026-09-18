@@ -148,4 +148,131 @@ final class ManualScrollSeekReleaseTests: XCTestCase {
         XCTAssertNotEqual(firstRealLineView.frame.origin.y, anchorY, accuracy: 1.0,
                            "row 1 (not currently singing) must NOT be sitting at the anchor slot")
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Stage bundle 3i item 1 (founder report, 2026-09-18): "3h 里冷启动三点也跑到面板最顶上了"
+    // (3h regression — cold start now shows the prelude dots run to the panel's static top,
+    // where 3g's cold start correctly anchored them at the current-row slot). Suspect: 047f401
+    // (`synchronizeNativeSemanticIndex`, this same file) widened seek-discontinuity detection to
+    // treat a bare `seekGenerationChanged` as equivalent to `nativeSeekDiscontinuityOccurred` in
+    // TWO places — (a) `releasingManualScrollFreeze = seekGenerationChanged && manualScrollState
+    // .isActive`, and (b) the snap-branch's `playbackModeSaysSeek || seekGenerationChanged`. A
+    // real cold start on a LONG-LIVED renderer/MusicController (the common production shape:
+    // NativeLyricsSurfaceView and MusicController both persist across track/tab changes) can
+    // reach its first `synchronizeNativeSemanticIndex` call with `musicController.seekGeneration`
+    // already non-zero (prior seeks from earlier tracks/sessions) while this call's own
+    // `lastObservedSeekGeneration` is still its freshly-initialized 0 — `seekGenerationChanged`
+    // reads true on a call that is NOT a real discontinuity release at all.
+    //
+    // Two variants below cover both widened branches:
+    //   1. Plain cold start (manual scroll never touched) with a pre-existing non-zero
+    //      seekGeneration — exercises branch (b).
+    //   2. Cold start into a NEW track while `manualScrollState` is stale-active from a
+    //      PREVIOUS track's gesture (the renderer view was never torn down) — exercises branch
+    //      (a), the literal "冷启动" a persistent app process produces.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    @MainActor
+    func test_coldStartWithPriorSeekHistory_preludeRowAnchoredNotAtPanelTop() {
+        let rows = preludeSongRows()
+        let panelWidth: CGFloat = 360
+        let anchorY: CGFloat = 200
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 600))
+        host(surface, NSSize(width: panelWidth, height: 600))
+        let mc = MusicController(preview: true)
+        mc.duration = 40
+        mc.isPlaying = true
+        surface.debugSkipDedupe = true
+        var wall: CFTimeInterval = 11_000
+        var date = Date(timeIntervalSinceReferenceDate: 701_500_000)
+        surface.debugNowOverride = { wall }
+        mc.debugPlaybackClockDateProvider = { date }
+        defer { surface.debugNowOverride = nil; mc.debugPlaybackClockDateProvider = nil }
+
+        // Simulate a long-lived MusicController that has already seen seeks from earlier tracks/
+        // sessions before this (fresh) lyrics surface renders anything at all.
+        mc.registerSeek()
+        mc.registerSeek()
+        mc.registerSeek()
+
+        // First-ever configure() on this surface: straight to the prelude window, playing,
+        // nothing manually scrolled — the plain "cold start" path.
+        mc.syncPlaybackClock(to: 0.2, playing: true, at: date)
+        surface.configure(config(rows: rows, current: 0, mc: mc, width: panelWidth, anchorY: anchorY))
+        surface.layoutSubtreeIfNeeded()
+        for _ in 0..<40 {
+            wall += 1.0 / 60.0
+            date = date.addingTimeInterval(1.0 / 60.0)
+            mc.syncPlaybackClock(to: 0.2, playing: true, at: date)
+            surface.debugTick(displayInterval: 1.0 / 60.0)
+        }
+
+        XCTAssertEqual(surface.debugNativeSemanticIndex, 0,
+                        "cold start into the prelude window must resolve row 0 as the active row")
+        guard let preludeView = surface.debugRowView(forIndex: 0) else {
+            XCTFail("prelude row view should be mounted")
+            return
+        }
+        XCTAssertEqual(preludeView.frame.origin.y, anchorY, accuracy: 1.0,
+                        "3h regression: prior seekGeneration history must not push the cold-start " +
+                        "prelude row off the anchor slot to the panel's static top")
+        XCTAssertFalse(preludeView.debugPreludeDotContainerHidden,
+                        "the prelude dots must be visible on a plain cold start")
+    }
+
+    @MainActor
+    func test_newTrackColdStart_whileManualScrollStaleActiveFromPreviousTrack_preludeRowAnchored() {
+        let rows = preludeSongRows()
+        let panelWidth: CGFloat = 360
+        let anchorY: CGFloat = 200
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 600))
+        host(surface, NSSize(width: panelWidth, height: 600))
+        let mc = MusicController(preview: true)
+        mc.duration = 40
+        mc.isPlaying = true
+        surface.debugSkipDedupe = true
+        var wall: CFTimeInterval = 12_000
+        var date = Date(timeIntervalSinceReferenceDate: 702_500_000)
+        surface.debugNowOverride = { wall }
+        mc.debugPlaybackClockDateProvider = { date }
+        defer { surface.debugNowOverride = nil; mc.debugPlaybackClockDateProvider = nil }
+
+        func tick(_ t: TimeInterval, playing: Bool, ticks: Int, current: Int) {
+            mc.syncPlaybackClock(to: t, playing: playing, at: date)
+            surface.configure(config(rows: rows, current: current, mc: mc, width: panelWidth, anchorY: anchorY))
+            surface.layoutSubtreeIfNeeded()
+            for _ in 0..<ticks {
+                wall += 1.0 / 60.0
+                date = date.addingTimeInterval(1.0 / 60.0)
+                mc.syncPlaybackClock(to: t, playing: playing, at: date)
+                surface.debugTick(displayInterval: 1.0 / 60.0)
+            }
+        }
+
+        // A previous track's manual-scroll gesture that never got a chance to release normally
+        // (view stays mounted across the track change — the production shape).
+        tick(20.0, playing: true, ticks: 20, current: 2)
+        surface.debugBeginManualScroll(frozenAt: 2)
+        XCTAssertTrue(surface.debugManualScrollActive, "precondition: stale manual scroll from the previous track")
+
+        // Track change to a brand-new song + an implicit seek to 0 (what "cold start"/track
+        // change into a new song commonly does) — the new track's first-ever render.
+        mc.registerSeek()
+        tick(0.2, playing: true, ticks: 40, current: 0)
+        // Let the presentation spring fully settle before asserting final geometry.
+        for _ in 0..<10 { tick(0.2, playing: true, ticks: 20, current: 0) }
+
+        XCTAssertFalse(surface.debugManualScrollActive, "a real track-change seek must release the stale freeze")
+        XCTAssertEqual(surface.debugNativeSemanticIndex, 0,
+                        "new track's cold start must resolve its own prelude row (index 0) as active")
+        guard let preludeView = surface.debugRowView(forIndex: 0) else {
+            XCTFail("prelude row view should be mounted")
+            return
+        }
+        XCTAssertEqual(preludeView.frame.origin.y, anchorY, accuracy: 1.0,
+                        "3h regression: releasing a stale manual-scroll freeze on a new track's cold " +
+                        "start must not leave the new prelude row off the anchor slot")
+        XCTAssertFalse(preludeView.debugPreludeDotContainerHidden,
+                        "the new track's prelude dots must be visible, not stuck hidden/misplaced")
+    }
 }
