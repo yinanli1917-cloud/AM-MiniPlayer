@@ -1845,15 +1845,34 @@ final class NativeLyricsRowView: NSView {
         // from its rest position, so the base copy must be blanked exactly like a floating
         // ordinary word. amount == 0 (outside the emphasis window) leaves the word coincident
         // with the base, matching the existing floatY == 0 exemption above.
+        // 2026-09-18 (3h round, item 6, founder-dictated fix): `NativeLyricsEmphasisPlan.scale`
+        // (1 + emphasisWeight*0.1*amount, up to ~1.12x — confirmed by
+        // NativeLyricsEmphasisHollowOverlapTests) enlarges the bright tile around its own centre,
+        // so a scale > 1 makes the rendered tile wider than the STATIC (unscaled) hollow cut for
+        // just this word's own characters — the overflow bleeds onto the immediately adjacent
+        // word's still-full-opacity dim ink (the "edge blur/double image" shape the founder
+        // described). Hollow the SAME neighbour character(s) too, using the identical `scale`
+        // value already computed for the bright layer (no separate calculation) as the trigger.
+        // This is safe, not just "hides the symptom": `applyMainWordFloatGlyphLayers` already
+        // builds a per-glyph dim tile for EVERY word in the line (not only floating ones) —
+        // widening `floatingOrders` to include the neighbour makes its dim tile become VISIBLE at
+        // its own REST position (`floatY` is 0 for a word that hasn't started), which is exactly
+        // where the whole-line base was drawing it — a clean 1:1 ink replacement, not a new gap.
         let floatingOrders: Set<Int> = keepWholeLineDim
-            ? Set(plan.wordRuns.enumerated().compactMap { order, run in
+            ? Set(plan.wordRuns.enumerated().flatMap { order, run -> [Int] in
                   if emphasisOrders.contains(order) {
                       let isActiveEmphasis = run.emphasis.liftY != 0
                           || run.emphasis.floatY != 0
                           || run.emphasis.scale != 1
-                      return isActiveEmphasis ? order : nil
+                      guard isActiveEmphasis else { return [] }
+                      var orders = [order]
+                      if run.emphasis.scale > 1.001 {
+                          if order > 0 { orders.append(order - 1) }
+                          if order < plan.wordRuns.count - 1 { orders.append(order + 1) }
+                      }
+                      return orders
                   }
-                  return run.baseFloatY != 0 ? order : nil
+                  return run.baseFloatY != 0 ? [order] : []
               })
             : []
         if geometryReady {
