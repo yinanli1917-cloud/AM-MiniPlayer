@@ -1,3 +1,15 @@
+# 阶段包 3g（2026-09-18 01:16，main 79db025）
+
+- 包：仓库根目录 `nanoPod.app`，git=79db025，纯净版，md5=69db31021d9232dc90fba8c18a64a3a3（Contents/MacOS/nanoPod）。上一包 3f=1f034a8。
+- 你对 3f 的六条反馈只有一条真复现真修（切行 1–2px）；其余按铁律如实记「未复现」，代码里留了新探针。逐条报告：research/repro-2026-09-18-lyrics-render-3g.md。
+- **切行 1–2px——改法换了。** 3f 把纵向缩放锚点放首行基线只保住首行；《啟程》几乎全是折成两行的中文行，第二行每次切行必挪约 1.7pt，所以对你等于没修。3g：折成两行以上的行不再做 0.95↔1.0 缩放，单行行保持原样。代价：同一首歌里单行行会缩、折行行不缩。**要你一眼裁：这种不一致能不能接受？不能就改成所有行都不缩。**
+- **整行全亮无遮罩——未复现。** 你日志里 710 条记录「整行高亮」标志从未翻真，是探针盲区；3g 换了判据（亮层可见 + mask 未生效 + 进度未完成）写进同一 trace 文件字段 `brightUnmaskedIncomplete`，下次撞见把 /tmp/nanopod_mask_trace.jsonl 发我。
+- **「旅程」中文尾字重影——未复现。** 有一条具体嫌疑路径（dim 与 bright 字块对「该词是否浮动」判断不一致就会偏右下重影，与你截图形状吻合），加了探针 `recordWordFloatDesync`。看到重影时执行一次 `open "nanopod://debug/rowdump"`，把 /tmp/nanopod_rowdump.txt 一起发我。
+- **三点——未复现你说的「不出现/第 0 行卡顶部」**，只复现出 3d 记过的 X 0.9pt 残留。
+- **切歌 bloom 回归——未复现**，没有红测试就没做二分。
+- **强调词——**三臂 glow 与字块位置逐帧零差，这个子指标干净；你说「以前正常」但 v0.29 你已看过有重影，所以对照包放在 builds/nanoPod-v0.28.app 与 builds/nanoPod-v2.8.app，请你各放同一首英文逐字歌看一眼强调词，告诉我哪个是「以前正常」的那版。
+- 门禁：swift test 1481 通过、1 失败为 HANDOFF 已记录的预存 flaky；merge-base 断言通过。e2e 冒烟未跑（会接管 Music.app）。
+
 # 阶段包 3f（2026-09-18，只含 bug 修复；3～3e 作废）
 
 - 包：仓库根目录 `nanoPod.app`，git=1f034a8，纯净版。md5=22ed940c5524592d3d476d7029bee90c（Contents/MacOS/nanoPod）。
