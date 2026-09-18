@@ -1724,7 +1724,9 @@ final class NativeLyricsRowView: NSView {
                 wholeLineHighlight: maskTraceWholeLineHighlight,
                 perRunSweep: appliedMainProgress.appliedPerRunSweep,
                 expected: plan.mainSweepProgress,
-                applied: appliedMainProgress.progress
+                applied: appliedMainProgress.progress,
+                mainBrightOverlayPresent: !mainBrightTextLayer.isHidden && mainBrightTextLayer.string != nil,
+                mainBrightOpacity: debugMainBrightOpacity
             )
             let expectsNoLineLevelMainSweep = !expectsPerRunSweep
             let appliesLineLevelMainSweep = expectsNoLineLevelMainSweep

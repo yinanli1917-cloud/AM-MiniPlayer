@@ -242,27 +242,46 @@ enum NativeLyricsMaskTrace {
         #endif
     }
 
+    // 2026-09-18 addition (stage bundle 3g item 2, research/repro-2026-09-18-lyrics-render-3g.md):
+    // `wholeLineHighlight` never flipped true across the founder's 710-record session even though
+    // he visually saw a whole-line-lit-no-mask frame — it is a probe BLIND SPOT (it only catches
+    // the exact "expectsPerRunSweep but appliedPerRunSweep=false while bright is visible" shape at
+    // the instant `updatePlaybackPhase` runs, which can already have advanced past a one-frame
+    // glitch by the time it's read). `brightUnmaskedIncomplete` is a second, independently-computed
+    // field using the SAME predicate `NativeLyricsSeekLandingMaskTests.isMaskLost` exercises
+    // (bright overlay visibly opaque + no per-run sweep engaged + expected progress still
+    // incomplete) — a real repro attempt for this exact shape found 0 violations across 66+
+    // synthetic seek points, so this field exists to catch whatever real-device condition those
+    // synthetic seeks don't reproduce, without waiting for another full investigation cycle.
     static func record(
         rowID: String,
         wordIndex: Int,
         wholeLineHighlight: Bool,
         perRunSweep: Bool,
         expected: CGFloat,
-        applied: CGFloat
+        applied: CGFloat,
+        mainBrightOverlayPresent: Bool = false,
+        mainBrightOpacity: Float = 0
     ) {
         guard isArmed else { return }
-        let key = "\(rowID)|\(wordIndex)|\(wholeLineHighlight)|\(perRunSweep)"
+        let brightUnmaskedIncomplete = mainBrightOverlayPresent
+            && !perRunSweep
+            && expected < 0.9
+            && mainBrightOpacity > 0.2
+        let key = "\(rowID)|\(wordIndex)|\(wholeLineHighlight)|\(perRunSweep)|\(brightUnmaskedIncomplete)"
         lock.lock()
         let changed = key != lastKey
         if changed { lastKey = key }
         lock.unlock()
         guard changed else { return }
         let line = String(
-            format: "{\"event\":\"mask_state\",\"row\":\"%@\",\"word\":%d,\"wholeLineHighlight\":%@,\"perRunSweep\":%@,\"expected\":%.3f,\"applied\":%.3f}\n",
+            format: "{\"event\":\"mask_state\",\"row\":\"%@\",\"word\":%d,\"wholeLineHighlight\":%@,\"perRunSweep\":%@,\"expected\":%.3f,\"applied\":%.3f,\"brightUnmaskedIncomplete\":%@,\"brightOpacity\":%.3f}\n",
             rowID, wordIndex,
             wholeLineHighlight ? "true" : "false",
             perRunSweep ? "true" : "false",
-            Double(expected), Double(applied)
+            Double(expected), Double(applied),
+            brightUnmaskedIncomplete ? "true" : "false",
+            Double(mainBrightOpacity)
         )
         let url = URL(fileURLWithPath: "/tmp/nanopod_mask_trace.jsonl")
         if !FileManager.default.fileExists(atPath: url.path) {
