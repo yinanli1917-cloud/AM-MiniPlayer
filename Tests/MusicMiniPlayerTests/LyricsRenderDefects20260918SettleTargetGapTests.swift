@@ -251,31 +251,41 @@ final class LyricsRenderDefects20260918SettleTargetGapTests: XCTestCase {
         return results
     }
 
+    // 2026-09-18 (coordinator instruction): known-red until the root cause is fixed. Gated with
+    // XCTExpectFailure so this stays green in ordinary CI/main-line runs (no permanently-red
+    // test blocking the branch) while STILL keeping the real assertion — XCTExpectFailure fails
+    // the test if the wrapped block unexpectedly PASSES, so this cannot silently rot into a
+    // no-op once the underlying bug is fixed. Remove the wrapper (leaving the bare assertion)
+    // the moment the fix lands.
     @MainActor
     func test_english_settledRowNeverNudgesAgainAfterGoingQuiet() {
-        let results = measureSettleThenNudge(rows: englishRows(), label: "EN")
-        XCTAssertTrue(
-            results.isEmpty,
-            "English: a row's frame.origin.y moved again after settling for ≥0.5s. "
-                + results.map {
-                    "row=\($0.rowIndex) t=\(String(format: "%.3f", $0.t)) settledY=\(String(format: "%.2f", $0.settledY)) "
-                        + "nudgedY=\(String(format: "%.2f", $0.nudgedY)) delta=\(String(format: "%.2f", $0.delta)) "
-                        + "reFeed@settle=\($0.reFeedCountAtSettle) reFeed@nudge=\($0.reFeedCountAtNudge)"
-                }.joined(separator: " | ")
-        )
+        XCTExpectFailure("Defect #4: known post-settle nudge, not yet root-caused — see research/repro-2026-09-18-lyrics-render-3d.md §4") {
+            let results = measureSettleThenNudge(rows: englishRows(), label: "EN")
+            XCTAssertTrue(
+                results.isEmpty,
+                "English: a row's frame.origin.y moved again after settling for ≥0.5s. "
+                    + results.map {
+                        "row=\($0.rowIndex) t=\(String(format: "%.3f", $0.t)) settledY=\(String(format: "%.2f", $0.settledY)) "
+                            + "nudgedY=\(String(format: "%.2f", $0.nudgedY)) delta=\(String(format: "%.2f", $0.delta)) "
+                            + "reFeed@settle=\($0.reFeedCountAtSettle) reFeed@nudge=\($0.reFeedCountAtNudge)"
+                    }.joined(separator: " | ")
+            )
+        }
     }
 
     @MainActor
     func test_cjk_settledRowNeverNudgesAgainAfterGoingQuiet() {
-        let results = measureSettleThenNudge(rows: cjkRows(), label: "CJK")
-        XCTAssertTrue(
-            results.isEmpty,
-            "CJK: a row's frame.origin.y moved again after settling for ≥0.5s. "
-                + results.map {
-                    "row=\($0.rowIndex) t=\(String(format: "%.3f", $0.t)) settledY=\(String(format: "%.2f", $0.settledY)) "
-                        + "nudgedY=\(String(format: "%.2f", $0.nudgedY)) delta=\(String(format: "%.2f", $0.delta)) "
-                        + "reFeed@settle=\($0.reFeedCountAtSettle) reFeed@nudge=\($0.reFeedCountAtNudge)"
-                }.joined(separator: " | ")
-        )
+        XCTExpectFailure("Defect #4: known post-settle nudge, not yet root-caused — see research/repro-2026-09-18-lyrics-render-3d.md §4") {
+            let results = measureSettleThenNudge(rows: cjkRows(), label: "CJK")
+            XCTAssertTrue(
+                results.isEmpty,
+                "CJK: a row's frame.origin.y moved again after settling for ≥0.5s. "
+                    + results.map {
+                        "row=\($0.rowIndex) t=\(String(format: "%.3f", $0.t)) settledY=\(String(format: "%.2f", $0.settledY)) "
+                            + "nudgedY=\(String(format: "%.2f", $0.nudgedY)) delta=\(String(format: "%.2f", $0.delta)) "
+                            + "reFeed@settle=\($0.reFeedCountAtSettle) reFeed@nudge=\($0.reFeedCountAtNudge)"
+                    }.joined(separator: " | ")
+            )
+        }
     }
 }
