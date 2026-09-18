@@ -431,6 +431,17 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         manualScrollState.begin(frozenDisplayIndex: index)
     }
     var debugManualScrollActive: Bool { manualScrollState.isActive }
+    /// Stage bundle 3i item 4 (seek-landing mask, variant (b) "手动滚动→tapToLine"): tap-to-line
+    /// is normally only reachable from a real mouse-down inside the surface's own hit-testing
+    /// (a genuine NSEvent), which this codebase already treats as unfakeable headlessly (same
+    /// reasoning as `debugBeginManualScroll` above for scroll-wheel events). Exposes the
+    /// production `handleNativeLineTap` path directly so a test can drive "manual-scroll frozen,
+    /// then tap a line to recover" — a structurally distinct discontinuity from an explicit
+    /// progress-bar seek (goes through `semanticSpringRetarget(reason: .tapToLine)`, not
+    /// `mc.seek(to:)`/seekGeneration at all).
+    func debugTapLine(index: Int, line: LyricLine) {
+        handleNativeLineTap(rowIndex: index, line: line)
+    }
     #endif
     private var initialMeasurementsPending = true
     // Reveal gate. Freshly-mounted rows are positioned ONLY by their layer transform, so for the
