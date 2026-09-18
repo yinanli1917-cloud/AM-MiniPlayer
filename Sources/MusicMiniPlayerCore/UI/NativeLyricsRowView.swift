@@ -73,6 +73,13 @@ final class NativeLyricsRowView: NSView {
     private var mainDimWordGlyphLayers: [CATextLayer] = []
     private var mainBrightWordGlyphLayers: [CATextLayer] = []
     private var mainWordGlyphLayerSignatures: [EmphasisGlyphLayerSignature?] = []
+    // feel/emphasis v28/amll arms (2026-09-17): index-aligned with mainBrightWordGlyphLayers.
+    // `amll` mounts a pre-rendered (offline, non-resident) blurred-bitmap sibling directly below
+    // the matching bright tile for a glyph currently inside its emphasis glow window; its
+    // position/transform are copied from that SAME bright tile at the same call site
+    // (applyMainWordFloatGlyphLayers), so it can never be independently wrong. `current`/`v28`
+    // never populate this pool.
+    private var mainEmphasisGlowLayers: [CALayer] = []
     private var lastMainSweepWavefrontX: [Int: CGFloat] = [:]
     private var lastTranslationSweepWavefrontX: [Int: CGFloat] = [:]
     private var lastLineLayoutMetrics = LineLayoutAppliedMetrics.inactive
@@ -564,6 +571,49 @@ final class NativeLyricsRowView: NSView {
         emphasisGlyphLayers.map { layer in
             let t = layer.affineTransform()
             return (layer.position.y, sqrt(t.a * t.a + t.c * t.c), layer.isHidden)
+        }
+    }
+
+    /// True when NOTHING in the legacy `emphasisGlyphLayers` pool is currently visible — the
+    /// feel/emphasis `v28`/`amll` contrast arms must never populate this pool (they fold emphasis
+    /// words into the ordinary per-word tile pipeline instead), so this pins "no second
+    /// independently-positioned object" directly (`NativeLyricsEmphasisFeelParityTests`).
+    var debugEmphasisGlyphLayerPoolAllHidden: Bool {
+        emphasisGlyphLayers.allSatisfy(\.isHidden)
+    }
+
+    /// feel/emphasis `v28`: shadowOpacity currently applied to each `mainBrightWordGlyphLayers`
+    /// tile — the glow for this arm is a real CALayer shadow on the SAME object that carries the
+    /// sharp glyph (never a second layer), so this is the whole observable glow signal for it.
+    var debugMainBrightWordGlyphShadowOpacities: [Float] {
+        mainBrightWordGlyphLayers.map(\.shadowOpacity)
+    }
+
+    /// feel/emphasis `amll`: true only if NONE of the glow sibling layers carry a live
+    /// `layer.filters` entry — the glow bitmap must be `layer.contents` (a cached, offline-
+    /// rendered CGImage), never a resident CIFilter attached to the layer.
+    var debugEmphasisGlowLayersHaveNoLiveFilters: Bool {
+        mainEmphasisGlowLayers.allSatisfy { $0.filters == nil || $0.filters?.isEmpty == true }
+    }
+
+    /// feel/emphasis `amll`: index-aligned (bright tile position/scale, glow sibling
+    /// position/scale, glow visible/opacity) pairs, sourced from `mainBrightWordGlyphLayers` /
+    /// `mainEmphasisGlowLayers`. The glow's position/transform are copied from the bright tile at
+    /// the same call site (`applyEmphasisGlowOnSharedTile`), so this pair should read IDENTICAL
+    /// whenever the glow is visible — that equality is the structural guarantee against ghosting.
+    var debugEmphasisGlowTilePairs: [(
+        brightPosition: CGPoint, glowPosition: CGPoint,
+        brightScale: CGFloat, glowScale: CGFloat,
+        glowVisible: Bool, glowOpacity: Float
+    )] {
+        zip(mainBrightWordGlyphLayers, mainEmphasisGlowLayers).map { bright, glow in
+            let bt = bright.affineTransform()
+            let gt = glow.affineTransform()
+            return (
+                bright.position, glow.position,
+                sqrt(bt.a * bt.a + bt.c * bt.c), sqrt(gt.a * gt.a + gt.c * gt.c),
+                !glow.isHidden, glow.opacity
+            )
         }
     }
 
@@ -1415,6 +1465,19 @@ final class NativeLyricsRowView: NSView {
         #if DEBUG
         debugPlaybackPhaseUpdateCount += 1
         #endif
+        // A genuine playback discontinuity (explicit seek / tap-to-line / direct snap) is the
+        // same class of event `configure()` already treats as a reason to reset the monotone
+        // post-line karaoke fade floor (see mainPostLineFadeFloor's declaration comment) — except
+        // configure() only fires that reset when THIS VIEW gets reassigned to a DIFFERENT row.
+        // A row view that stays mounted across a seek (the common case: nearby rows are never
+        // recycled through prepareForReuse) never took that path, so a floor already pinned near
+        // 0 from before the seek stayed pinned forever, even after seeking back into that same
+        // line's own span where the freshly computed fade is 1 — the karaoke highlight overlay
+        // never returned (2026-09-17: "seek back into an already-sung line loses its highlight").
+        if configuration.nativeSeekDiscontinuityOccurred {
+            mainPostLineFadeFloor = 1
+            translationPostLineFadeFloor = 1
+        }
         // Phase timing MUST come from the shared monotonic clock (phaseRenderTime), never the raw
         // SB clock: a backward resync dip at line start collapses the active plan to progress 0
         // for a frame — the handoff style flash (docs/defect-recordings/2026-07-11).
@@ -1783,14 +1846,25 @@ final class NativeLyricsRowView: NSView {
                 bounds: mainBrightTextLayer.bounds
             )
         }
+        // feel/emphasis v28/amll (2026-09-17): emphasis words are folded into the per-glyph tile
+        // pipeline (applyMainWordFloatGlyphLayers, above) instead of the separate emphasisGlyphLayers
+        // pool. Forcing an empty emphasisOrders set here routes through applyEmphasisGlyphLayers'
+        // own existing "no emphasis words" early-out, which already hides that pool correctly.
+        let tilesOwnEmphasis = !emphasisOrders.isEmpty && NativeLyricsFeelParity.emphasisMode != .current
         let emphasisResult = applyEmphasisGlyphLayers(
             plan: plan,
             currentTime: currentTime,
             linePlan: linePlan,
-            emphasisOrders: emphasisOrders,
+            emphasisOrders: tilesOwnEmphasis ? [] : emphasisOrders,
             managesContainerText: !geometryReady
         )
-        if emphasisResult.applied {
+        if tilesOwnEmphasis {
+            // The per-glyph tile pipeline already rendered this line's emphasis glow on/beside each
+            // glyph's own tile. A shadow painted on the WHOLE-LINE mainBrightTextLayer here too would
+            // be a second, independently-positioned glow source — the exact class of ghost this arm
+            // exists to eliminate — so it must stay clean.
+            clearEmphasis(from: mainBrightTextLayer)
+        } else if emphasisResult.applied {
             clearEmphasis(from: mainBrightTextLayer)
         } else if let activeRun, activeRun.emphasis.glowOpacity > 0 {
             mainBrightTextLayer.shadowColor = NSColor.white.cgColor
@@ -2477,12 +2551,79 @@ final class NativeLyricsRowView: NSView {
         static let inactive = MainWordFloatAppliedMetrics(sampleCount: 0, floatSpread: 0)
     }
 
+    private struct EmphasisGlowBitmapKey: Hashable {
+        let text: String
+        let fontSize: CGFloat
+        let blurRadius: CGFloat
+    }
+
+    // Offline (non-resident) blurred glyph bitmaps for the feel/emphasis `amll` arm. Rendered ONCE
+    // per (text, fontSize, blurRadius) and cached — never attached as a live `layer.filters` CIFilter
+    // (banned-patterns.md: a stored CIFilter's mutated inputRadius is silently ignored by the render
+    // server; a fresh instance per change is required, but a fresh instance EVERY FRAME is the
+    // resident-blur WindowServer cost this arm exists to avoid). Assigning a cached CGImage to
+    // `layer.contents` costs nothing to composite while the layer sits hidden between emphasis words.
+    private static var emphasisGlowBitmapCache: [EmphasisGlowBitmapKey: (image: CGImage, size: CGSize)] = [:]
+    private static let emphasisGlowCIContext = CIContext(options: [.useSoftwareRenderer: false])
+
+    private static func emphasisGlowBitmap(
+        text: String, fontSize: CGFloat, blurRadius: CGFloat
+    ) -> (image: CGImage, size: CGSize)? {
+        guard blurRadius > 0.05, !text.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        // Blur radius is a smooth per-frame ramp, not a discrete set of values; round to the nearest
+        // 0.5pt (visually indistinguishable) so the cache stays small across a whole emphasis window.
+        let roundedRadius = (blurRadius * 2).rounded() / 2
+        let key = EmphasisGlowBitmapKey(text: text, fontSize: fontSize, blurRadius: roundedRadius)
+        if let cached = emphasisGlowBitmapCache[key] { return cached }
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        let attributed = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor.white])
+        let glyphSize = attributed.size()
+        guard glyphSize.width > 0, glyphSize.height > 0 else { return nil }
+        // Pad for the blur's spread so it is not clipped at the bitmap edge.
+        let pad = ceil(roundedRadius * 3)
+        let canvasSize = CGSize(width: glyphSize.width + pad * 2, height: glyphSize.height + pad * 2)
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        let pixelWidth = max(1, Int((canvasSize.width * scale).rounded(.up)))
+        let pixelHeight = max(1, Int((canvasSize.height * scale).rounded(.up)))
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil, width: pixelWidth, height: pixelHeight, bitsPerComponent: 8, bytesPerRow: 0,
+                space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else { return nil }
+        context.scaleBy(x: scale, y: scale)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        attributed.draw(at: CGPoint(x: pad, y: pad))
+        NSGraphicsContext.restoreGraphicsState()
+        guard let sharpImage = context.makeImage() else { return nil }
+        guard let filter = CIFilter(name: "CIGaussianBlur") else { return nil }
+        filter.setValue(CIImage(cgImage: sharpImage), forKey: kCIInputImageKey)
+        filter.setValue(roundedRadius * scale, forKey: kCIInputRadiusKey)
+        guard let output = filter.outputImage,
+              let cgImage = emphasisGlowCIContext.createCGImage(
+                output, from: CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight)
+              )
+        else { return nil }
+        let result = (image: cgImage, size: canvasSize)
+        emphasisGlowBitmapCache[key] = result
+        return result
+    }
+
     /// v2.8 per-word cascade: draw every NON-emphasis word as per-glyph layers floated by that word's
     /// own `baseFloatY`. The dim glyphs (always visible) parent to `mainTextLayer`; the bright glyphs
     /// parent to `mainBrightTextLayer` and so inherit the sweep mask — brightness stays a smooth
     /// gradient and the 2pt float never shifts the horizontal wavefront. Position carries the float
-    /// (scale stays 1 → no top-clip). Emphasis (long) words are skipped; they keep their own
-    /// scale/glow glyph layers, so the two partitions cover the line without overlap or gap.
+    /// (scale stays 1 → no top-clip).
+    ///
+    /// Emphasis words: under the `current` feel/emphasis arm they are skipped here entirely — they
+    /// keep their own separate scale/glow glyph layers (`applyEmphasisGlyphLayers`), so the two
+    /// partitions cover the line without overlap or gap. Under `v28`/`amll` (2026-09-17, founder-
+    /// approved contrast arm for the emphasis ghost, research/repro-2026-09-17-lyrics-render-3c.md
+    /// §B) emphasis words are folded INTO this same per-glyph tile instead — one positioned object
+    /// per glyph, never two — with the intensification (scale/lift) applied as an extra transform on
+    /// that SAME bright tile, and the glow rendered either as a real shadow on that same tile (`v28`)
+    /// or a position-copied blurred-bitmap sibling (`amll`); see `applyEmphasisGlyphOnSharedTile`.
     private func applyMainWordFloatGlyphLayers(
         plan: NativeLyricsTextRenderPlan,
         currentTime: TimeInterval,
@@ -2492,9 +2633,21 @@ final class NativeLyricsRowView: NSView {
         floatingOrders: Set<Int> = []
     ) -> MainWordFloatAppliedMetrics {
         let floats = plan.perWordFloatY(at: currentTime)
-        var inputs: [(glyph: NativeLyricsTextSweepVisualRun.Glyph, floatY: CGFloat, isFloatingWord: Bool)] = []
+        let tilesOwnEmphasis = !emphasisOrders.isEmpty && NativeLyricsFeelParity.emphasisMode != .current
+        struct Input {
+            let glyph: NativeLyricsTextSweepVisualRun.Glyph
+            let floatY: CGFloat
+            let isFloatingWord: Bool
+            let emphasis: EmphasisGlyphExpectedMetrics?
+        }
+        var inputs: [Input] = []
         for line in linePlan {
-            for run in line.runs where !emphasisOrders.contains(run.order) {
+            let wavefront = tilesOwnEmphasis
+                ? NativeLyricsTextSweepLayout.wavefrontX(
+                    for: line, fadeHalfPoint: plan.constants.fadeHalfPoint, currentTime: currentTime
+                  )
+                : 0
+            for run in line.runs where tilesOwnEmphasis || !emphasisOrders.contains(run.order) {
                 let floatY = run.order < floats.count ? floats[run.order] : 0
                 // `floatsDimBase` (the `layer` A/B arm) always tessellates every non-emphasis word as
                 // a dim tile. The default (whole-line dim base) arm shows a dim tile ONLY for a word
@@ -2502,8 +2655,25 @@ final class NativeLyricsRowView: NSView {
                 // out of the whole-line string, so exactly one visible copy of the glyph exists, at
                 // the SAME floated position as the bright tile (no ghost).
                 let isFloatingWord = floatsDimBase || floatingOrders.contains(run.order)
-                for glyph in run.glyphs {
-                    inputs.append((glyph, floatY, isFloatingWord))
+                let isEmphasisRun = tilesOwnEmphasis && emphasisOrders.contains(run.order) && run.order < plan.wordRuns.count
+                if isEmphasisRun {
+                    let wordRun = plan.wordRuns[run.order]
+                    let glyphCount = max(1, run.glyphs.count)
+                    let duration = max(0, wordRun.endTime - wordRun.startTime)
+                    let du = max(1.0, duration) * (run.order == plan.wordRuns.count - 1 ? 1.2 : 1.0)
+                    for glyph in run.glyphs {
+                        let expected = expectedEmphasisGlyphMetrics(
+                            glyph: glyph, run: wordRun, glyphCount: glyphCount, du: du,
+                            wavefrontX: wavefront, fadeHalfPoint: plan.constants.fadeHalfPoint,
+                            brightAlpha: plan.constants.brightAlpha * plan.mainPostLineFade,
+                            dimAlpha: dimBaseEffectiveAlpha(), currentTime: currentTime
+                        )
+                        inputs.append(Input(glyph: glyph, floatY: floatY, isFloatingWord: isFloatingWord, emphasis: expected))
+                    }
+                } else {
+                    for glyph in run.glyphs {
+                        inputs.append(Input(glyph: glyph, floatY: floatY, isFloatingWord: isFloatingWord, emphasis: nil))
+                    }
                 }
             }
         }
@@ -2524,6 +2694,7 @@ final class NativeLyricsRowView: NSView {
             let isFloatingWord = input.isFloatingWord
             let dimLayer = mainDimWordGlyphLayers[index]
             let brightLayer = mainBrightWordGlyphLayers[index]
+            let glowLayer = mainEmphasisGlowLayers[index]
             dimLayer.isHidden = !isFloatingWord
             brightLayer.isHidden = false
             let signature = EmphasisGlyphLayerSignature(
@@ -2557,22 +2728,92 @@ final class NativeLyricsRowView: NSView {
             // The dim tile floats in lockstep with the bright tile whenever it is the one standing in
             // for the (now-blanked) whole-line glyph — otherwise it sits at rest, coincident with the
             // whole-line copy that is still showing through (floatY == 0 there anyway).
-            let dimCenterY = glyph.rect.midY + Self.textBottomClipPad / 2 + (isFloatingWord ? input.floatY : 0)
-            let brightCenterY = glyph.rect.midY + Self.textBottomClipPad / 2 + input.floatY
+            let padHalf = Self.textBottomClipPad / 2
+            let dimCenterY = glyph.rect.midY + padHalf + (isFloatingWord ? input.floatY : 0)
             dimLayer.position = CGPoint(x: glyph.rect.midX, y: dimCenterY)
-            brightLayer.position = CGPoint(x: glyph.rect.midX, y: brightCenterY)
-            let appliedFloat = brightLayer.position.y - glyph.rect.midY - Self.textBottomClipPad / 2
+            if let emphasis = input.emphasis {
+                // v28/amll: the emphasis position formula already includes baseFloatY + the per-
+                // glyph cascade (charFloat/liftY/spreadX) — apply it directly to THIS tile instead of
+                // the plain `floats[order]` float, and add the intensification scale as a transform
+                // on the SAME object, so it is geometrically impossible for the glow/scale to land
+                // anywhere but exactly where the sharp glyph itself is.
+                brightLayer.position = CGPoint(x: emphasis.position.x, y: emphasis.position.y + padHalf)
+                brightLayer.setAffineTransform(CGAffineTransform(scaleX: emphasis.scale, y: emphasis.scale))
+                applyEmphasisGlowOnSharedTile(
+                    brightLayer: brightLayer, glowLayer: glowLayer, glyph: glyph,
+                    fontSize: fontSize, expected: emphasis
+                )
+            } else {
+                brightLayer.position = CGPoint(x: glyph.rect.midX, y: glyph.rect.midY + padHalf + input.floatY)
+                if brightLayer.affineTransform() != .identity { brightLayer.setAffineTransform(.identity) }
+                if brightLayer.shadowOpacity != 0 {
+                    brightLayer.shadowOpacity = 0
+                    brightLayer.shadowRadius = 0
+                }
+                glowLayer.isHidden = true
+            }
+            let appliedFloat = brightLayer.position.y - glyph.rect.midY - padHalf
             minFloat = min(minFloat, appliedFloat)
             maxFloat = max(maxFloat, appliedFloat)
         }
         for index in inputs.count..<mainDimWordGlyphLayers.count {
             mainDimWordGlyphLayers[index].isHidden = true
             mainBrightWordGlyphLayers[index].isHidden = true
+            mainEmphasisGlowLayers[index].isHidden = true
         }
         return MainWordFloatAppliedMetrics(
             sampleCount: inputs.count,
             floatSpread: maxFloat - minFloat
         )
+    }
+
+    /// Applies the `v28`/`amll` glow treatment to an emphasis glyph that is sharing the ordinary
+    /// per-word bright tile (never a second independently-positioned layer). `v28`: a real
+    /// `CALayer.shadow*` on `brightLayer` itself — cannot desync because it IS that layer. `amll`: a
+    /// pre-rendered blurred-bitmap sibling (`glowLayer`) whose position/transform are copied from
+    /// `brightLayer` in this SAME call (never computed independently), opacity riding
+    /// `expected.glowOpacity`, mounted only while that glyph is inside its emphasis window.
+    private func applyEmphasisGlowOnSharedTile(
+        brightLayer: CATextLayer,
+        glowLayer: CALayer,
+        glyph: NativeLyricsTextSweepVisualRun.Glyph,
+        fontSize: CGFloat,
+        expected: EmphasisGlyphExpectedMetrics
+    ) {
+        switch NativeLyricsFeelParity.emphasisMode {
+        case .current:
+            glowLayer.isHidden = true
+        case .v28:
+            glowLayer.isHidden = true
+            if expected.glowOpacity > 0.001 {
+                brightLayer.shadowColor = NSColor.white.cgColor
+                brightLayer.shadowOpacity = Float(min(1, expected.glowOpacity))
+                brightLayer.shadowRadius = expected.shadowRadius
+                brightLayer.shadowOffset = .zero
+            } else {
+                brightLayer.shadowOpacity = 0
+                brightLayer.shadowRadius = 0
+            }
+        case .amll:
+            if brightLayer.shadowOpacity != 0 {
+                brightLayer.shadowOpacity = 0
+                brightLayer.shadowRadius = 0
+            }
+            guard expected.glowOpacity > 0.001,
+                  let bitmap = Self.emphasisGlowBitmap(text: glyph.text, fontSize: fontSize, blurRadius: expected.shadowRadius)
+            else {
+                glowLayer.isHidden = true
+                return
+            }
+            glowLayer.isHidden = false
+            glowLayer.contents = bitmap.image
+            glowLayer.bounds = CGRect(origin: .zero, size: bitmap.size)
+            // Position/transform are COPIED from the sharp tile that was just written above — the
+            // sibling can never be independently wrong because it never computes its own position.
+            glowLayer.position = brightLayer.position
+            glowLayer.setAffineTransform(brightLayer.affineTransform())
+            glowLayer.opacity = Float(min(1, expected.glowOpacity))
+        }
     }
 
     private func ensureMainWordGlyphLayerCount(_ count: Int) {
@@ -2589,6 +2830,16 @@ final class NativeLyricsRowView: NSView {
             mainDimWordGlyphLayers.append(dimLayer)
             mainBrightWordGlyphLayers.append(brightLayer)
             mainWordGlyphLayerSignatures.append(nil)
+            // Glow sibling for the amll arm — inserted BELOW its bright tile so the sharp glyph
+            // always paints on top of its own soft halo. contents-only layer (a pre-rendered
+            // bitmap image, never a live CIFilter), so it costs nothing to composite while hidden.
+            let glowLayer = CALayer().lyricsInert()
+            glowLayer.contentsScale = scale
+            glowLayer.masksToBounds = false
+            glowLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+            glowLayer.isHidden = true
+            mainBrightTextLayer.insertSublayer(glowLayer, below: brightLayer)
+            mainEmphasisGlowLayers.append(glowLayer)
         }
     }
 
@@ -2608,6 +2859,10 @@ final class NativeLyricsRowView: NSView {
     private func hideMainWordGlyphLayers() {
         for layer in mainDimWordGlyphLayers { layer.isHidden = true }
         for layer in mainBrightWordGlyphLayers { layer.isHidden = true }
+        for layer in mainEmphasisGlowLayers {
+            layer.isHidden = true
+            layer.shadowOpacity = 0
+        }
     }
 
     private struct EmphasisGlyphAppliedMetrics {

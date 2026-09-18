@@ -18,6 +18,7 @@ public enum NativeLyricsFeelParity {
     public static let blurDefaultsKey = "nanoPodFeelBlur"
     public static let sweepDefaultsKey = "nanoPodFeelSweep"
     public static let waveDefaultsKey = "nanoPodFeelWave"
+    public static let emphasisDefaultsKey = "nanoPodFeelEmphasis"
     public static let appearWindowDuration: TimeInterval = 0.8
 
     public enum AppearWindowMode: String, CaseIterable {
@@ -68,17 +69,47 @@ public enum NativeLyricsFeelParity {
         }
     }
 
+    /// 2026-09-17 founder-approved contrast arm for the emphasis-word ghost (09-14/09-15/09-17
+    /// reports): `current` keeps the historical two-object split — a separate `emphasisGlyphLayers`
+    /// pool positioned independently of the ordinary per-word tiles in
+    /// `applyMainWordFloatGlyphLayers` (`NativeLyricsRowView.swift`, fork point at the
+    /// `!emphasisOrders.contains(run.order)` filter) — which is structurally ghost-prone: two
+    /// separately-positioned CALayer objects for the same characters, updated by two independent
+    /// formulas, can drift apart by a sub-point amount that reads as a duplicate at 24pt. `v28` and
+    /// `amll` both fold emphasis words into the SAME per-glyph tile pipeline every other word uses
+    /// (one positioned object per glyph, never two) and apply the scale/lift intensification as an
+    /// extra transform on that SAME object — so the position can never drift. They differ only in
+    /// how the glow/blur highlight is rendered: `v28` replicates the v2.8 SwiftUI engine's shape
+    /// (real `CALayer.shadowOpacity/shadowRadius` on that SAME tile — a shadow cannot desync from
+    /// its own layer); `amll` uses a pre-rendered (offline, non-resident) blurred bitmap sibling
+    /// layer whose position/transform is copied from the sharp tile at the SAME call site (so it
+    /// cannot be independently wrong), avoiding both the CIFilter-mutation trap (banned-patterns.md:
+    /// a stored CIFilter's mutated inputRadius is silently ignored by the render server) and a
+    /// resident live blur filter's per-frame WindowServer cost.
+    public enum EmphasisMode: String, CaseIterable {
+        case current = "current"
+        case v28 = "v28"
+        case amll = "amll"
+
+        public static func resolve(from raw: String?) -> EmphasisMode {
+            guard let raw else { return .current }
+            return EmphasisMode(rawValue: raw.lowercased()) ?? .current
+        }
+    }
+
     #if DEBUG
     nonisolated(unsafe) public static var testingAppear: AppearWindowMode?
     nonisolated(unsafe) public static var testingBlur: BlurMode?
     nonisolated(unsafe) public static var testingSweep: SweepPathMode?
     nonisolated(unsafe) public static var testingWave: WaveMode?
+    nonisolated(unsafe) public static var testingEmphasis: EmphasisMode?
 
     public static func resetTestingOverrides() {
         testingAppear = nil
         testingBlur = nil
         testingSweep = nil
         testingWave = nil
+        testingEmphasis = nil
     }
     #endif
 
@@ -119,6 +150,16 @@ public enum NativeLyricsFeelParity {
         #endif
         return WaveMode.resolve(
             from: UserDefaults.standard.string(forKey: waveDefaultsKey)
+        )
+    }
+
+    public static var emphasisMode: EmphasisMode {
+        #if DEBUG
+        if let testingEmphasis { return testingEmphasis }
+        if isRunningTests { return .current }
+        #endif
+        return EmphasisMode.resolve(
+            from: UserDefaults.standard.string(forKey: emphasisDefaultsKey)
         )
     }
 
@@ -164,6 +205,7 @@ public enum NativeLyricsFeelParity {
             UserDefaults.standard.removeObject(forKey: blurDefaultsKey)
             UserDefaults.standard.removeObject(forKey: sweepDefaultsKey)
             UserDefaults.standard.removeObject(forKey: waveDefaultsKey)
+            UserDefaults.standard.removeObject(forKey: emphasisDefaultsKey)
             #if DEBUG
             resetTestingOverrides()
             #endif
@@ -181,6 +223,9 @@ public enum NativeLyricsFeelParity {
             return true
         case "wave":
             UserDefaults.standard.set(WaveMode.resolve(from: value).rawValue, forKey: waveDefaultsKey)
+            return true
+        case "emphasis":
+            UserDefaults.standard.set(EmphasisMode.resolve(from: value).rawValue, forKey: emphasisDefaultsKey)
             return true
         default:
             return false

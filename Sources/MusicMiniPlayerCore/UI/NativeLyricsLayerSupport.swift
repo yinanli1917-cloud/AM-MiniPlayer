@@ -275,4 +275,49 @@ enum NativeLyricsMaskTrace {
             try? handle.write(contentsOf: data)
         }
     }
+
+    /// Row-position probe (founder 2026-09-17, defect C investigation: "刚变为非激活的那一行又
+    /// 挪 1-2px" — a row jumping a SECOND time after it already looks settled). Records the
+    /// FRAME-carried `y` (never a layer-transform translation — see the "frame not transform"
+    /// banned pattern in `applyFrame`, since AppKit resets a layer-backed view's transform
+    /// translation on every commit) for the ACTIVE row and, separately, for the row currently
+    /// held in deferred-deactivation (the one that just went inactive and is fading out), plus
+    /// the row's own `shouldRasterize`/`isSettled` state so a jump can be correlated with the
+    /// blur-economy rasterization snapshot (`applyRasterizationPolicy`). Same discipline as
+    /// `record` above: shares its `isArmed` gate and output file, and writes ONLY when the
+    /// (rowID, role, y, isSettled, shouldRasterize) tuple actually changes — never per frame.
+    /// Instrumentation only; does not read or alter any positioning/rasterization decision.
+    private static var lastPositionKey: String = ""
+
+    static func recordRowPosition(
+        rowID: String,
+        role: String,
+        y: CGFloat,
+        isSettled: Bool,
+        shouldRasterize: Bool
+    ) {
+        guard isArmed else { return }
+        let key = "\(rowID)|\(role)|\(String(format: "%.2f", y))|\(isSettled)|\(shouldRasterize)"
+        lock.lock()
+        let changed = key != lastPositionKey
+        if changed { lastPositionKey = key }
+        lock.unlock()
+        guard changed else { return }
+        let line = String(
+            format: "{\"event\":\"row_position\",\"row\":\"%@\",\"role\":\"%@\",\"y\":%.2f,\"isSettled\":%@,\"shouldRasterize\":%@}\n",
+            rowID, role, Double(y),
+            isSettled ? "true" : "false",
+            shouldRasterize ? "true" : "false"
+        )
+        let url = URL(fileURLWithPath: "/tmp/nanopod_mask_trace.jsonl")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        guard let handle = try? FileHandle(forWritingTo: url) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        if let data = line.data(using: .utf8) {
+            try? handle.write(contentsOf: data)
+        }
+    }
 }
