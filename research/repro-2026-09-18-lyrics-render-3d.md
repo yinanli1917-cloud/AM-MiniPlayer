@@ -172,38 +172,85 @@ string` 对这类行按设计恒为 nil），已修正为只检查 `perRunSweep`
 
 ---
 
-## §2：前奏三点冷启动 vs 手动滚回顶部形态不一致 —— 未动手,按要求先报
+## §2：前奏三点冷启动 vs 手动滚回顶部形态不一致 —— 轻量复核，完整状态机仍未做
 
-本轮未新增调查（时间分配给了协调方插入的更高优先级 §0 与原定 §1/§4）。上一轮
-（`research/repro-2026-09-17-lyrics-render-3c.md` §D）已把 Y 轴坐标三条路径的一致性坐实
-（377.0/377.0/377.0 精确相等）并修复了一个失同步 bug（e9ed7b4）；创始人要求的"完整状态机对照
-（出现方式/逐帧进度动画/退场方式）"仍未做，按 09-17 报告结尾"先报你"的约定保持未动。
+用本轮实际跑的 `test_threePreludeEntryPaths_coldStart_seekBack_manualScrollBack`（在 3d + 本轮
+全部修复之上重新验证，非新写代码）的真实打印复核了静止终态（不是逐帧过程）：
 
-## §3：CJK 尾字重影仍在 —— 未动手，按要求先报
+| 路径 | dotHidden | dotOpacity | dotAnimating | dotCenter | rowFrameMinY | semanticIndex |
+|---|---|---|---|---|---|---|
+| A 冷启动 | false | 1.0 | false | (50.0, 377.0) | 200.0 | 0 |
+| B seek 回前奏 | false | 1.0 | false | (50.0, 377.0) | 200.0 | 0 |
+| C 手动滚回前奏 | false | 1.0 | false | (49.1, 377.0) | 200.0 | 0 |
 
-同上，上一轮（3c 报告 §CJK）已经把机制定位到光栅化缓存与文本相位解耦的窗口期
-（`applyRasterizationPolicy` 用视觉目标而非文本相位的激活标志），本轮 §0 的修复顺带触碰了
-同一个函数（新增了 `!presentationEngine.hasActiveMotion` 门禁），但没有改变 3c 报告里那条
-CJK 根因链路本身——`NativeLyricsRasterizationSignatureTests`（59647e1 自己的 CJK 复现测试）
-本轮全绿，说明这条修复仍然有效。创始人要求的按需 dump 入口 `nanopod://debug/rowdump` 本轮
-未实现，按"先报"约定保持未动。
+A、B 在这张表的每一个字段上**逐位精确相等**；C 只有 `dotCenter.x`（49.1 vs 50.0）不同——这就是
+74507a7 自己commit message 里点名"未完全解决"的残留：0.95 缩放对**非文字元素**（点簇的整体
+居中）仍有约 0.9pt 的残余水平位移（缩放锚点已经对齐到文字左边缘，但点簇是居中布局，不是靠左
+布局，所以同一个锚点修复对它只减小、没有清零）；C 的 `rowOpacity`（config 层，非上表字段）
+是手动滚动 0.6 档，A/B 是 1.0——这是设计好的手动滚动统一变暗，不是 bug。
 
-## §4：每次切行 1-2px —— 未触及
+**仍未做**：创始人要求的"完整状态机对照（出现方式/逐帧进度动画/退场方式）"是逐帧过程量，上面
+这张表只是三条路径**各自静止终态**的对照（沿用既有测试的既有断言点，本轮没有新增逐帧采样代码）
+——诚实说明这不满足"完整状态机"的要求，按时间预算本轮先报终态对照，逐帧过程对照建议下一轮用
+`NativeLyricsMaskTrace` 同款"每帧只在变化时记一条"的打点方式，对三条路径各录一份 dot
+opacity/scale/center 的时间序列再比对。
 
-时间/精力分配给了协调方插入的更高优先级 §0（已完整解决）与原定 §1（fuzz 测试 + 单调状态
-审计），本轮没有余力再开新的调查线。上一轮（3c 报告 §C1）已经把"每次都有"的 1.6pt 水平位移
-坐实并修复（74507a7，缩放锚点从行原点移到文字左边缘）；创始人这次问的是**垂直方向**、"波浪
-结束 settle 的 frame.y 与下一次 reconcile 给它的目标 y 是否一致"，这是一个新的、独立的测量
-任务，建议作为下一轮的第一优先级（方法已经很清楚：真实 surface，记录行 N 波浪 settle 时刻的
-`frame.origin.y`，与行 N+1 激活那一帧 `presentationEngine.presentation(for: N)?.targetY` 逐帧
-比较，非零则继续深挖 accumulatedHeights/弹簧目标来源分叉点）。
+## §3：CJK 尾字重影仍在 —— rowdump 入口已实现；headless 复现仍是盲区
+
+**已实现**：`nanopod://debug/rowdump`（release 也可用，见提交记录）——创始人下次真机看到重影时
+执行一次，`/tmp/nanopod_rowdump.txt` 会写入当前激活行 + 上一行所有可见文本/位图子层（类名、
+frame、opacity、string 前 8 字、contents 是否为位图、shouldRasterize、transform）。
+
+**headless 复现**：用 59647e1 自己的 CJK 复现夹具（行 6 = "爱愁思心碎滋味"）驱动过已知重影
+窗口（t≈13.85-14.10），每帧调用同一个 dump 函数，归档到
+`/tmp/nanopod_rowdump_cjk_ghost_repro.txt`（1416 行）+ 逐帧扫"同一字形出现在 dim+bright 配对
+之外的第三层"——**0 处命中**。这与 3c 报告的结论一致：这一类重影的根因线索是 CALayer
+shadow/CIFilter 在渲染服务端的合成，`CALayer.render(in:)`（headless PNG 测试唯一可用的方法）
+不保证还原——不是"没有重影"，是"这个检测方法测不到"（banned-patterns.md 已有的同类盲区）。
+`NativeLyricsRasterizationSignatureTests`（59647e1 自己的 CJK 回归测试）本轮仍然全绿，§0 的
+修复（新增 `!presentationEngine.hasActiveMotion` 门禁）没有削弱它。
+
+**未做**：真机验证（rowdump 入口需要创始人在真机上实际触发一次并把 `/tmp/nanopod_rowdump.txt`
+的内容带回来，才能推进这条线）。
+
+## §4：每次切行 1-2px（垂直）—— 已测量到真实、可复现的信号，未能定位到确凿的两处计算分歧，未修
+
+真实 surface + 真实 60Hz 锁步时钟（中英文各一，2.5s 行间隔隔离每次切行，见
+`Tests/MusicMiniPlayerTests/LyricsRenderDefects20260918SettleTargetGapTests.swift`）：每一行在
+**真正离开过激活位（不是"自己歌词唱完"，是语义索引已经换成别的行）**之后，稳定 ≥0.5s，随后仍
+会再挪动一次，幅度约 1-6pt（不是固定 1.6pt，且方向、大小与行号无明显线性关系）。写这个测试的
+过程本身踩了两个方法论坑（详见测试文件头注释，未删除保留在案）：① 最初把"稳定"判定绑定在
+"这一行自己的歌词已经唱完"上——错的，`NativeLyricsTimelinePolicy.liveDisplayIndex` 在整个间隙
+里让最后开始的行继续算"当前行"，行其实还老老实实待在 anchor，压根没开始它自己的切换动作，这
+样测出来的"二次挪动"其实是它人生中**第一次、唯一一次**正确的切换，不是缺陷；② 改成"语义索引
+已不是自己"仍不够，因为一个还没轮到播放的远处行从 tick 0 起就"不是当前行"，它的冷挂载→首次
+定位这个只发生一次的过程被误判成了"已经稳定又被挪动"。两次都加了 guard 才拿到干净信号。
+
+`debugHeightCorrectionReFeedCount`（b12db38/Symptom-3 高度缓存纠正机制的计数器）在 settle 时刻
+和 nudge 时刻读数**从不变化**——排除了这个之前调查过的机制。读代码找到一个结构上可疑、但没能
+把算术对上的候选：`LyricWaveTiming.seededTargetsForNaturalAdvance`（`LyricsView.swift`）在**每
+一次**自然切行时，无条件把 `targetRadius`（写死 14，与歌曲/面板无关）范围内**所有**行的目标
+重新写成 `targets[index] = oldIndex`——包括那些早就稳定、跟这次切行毫无关系的行。如果这类行在
+被重新播种之前的目标本来就不是 `oldIndex`，理论上会有一次"倒退回 oldIndex 再被自己那条
+（可能延迟为 0 的）波浪 schedule 条目纠正回真值"的小折返。但手推一个简单的连续单步切行算术，
+这个折返在大多数情况下应该正好抵消成 0——跟测出来的非零结果对不上，说明这条推理漏了什么，本轮
+没能补全。**按"先复现再修"，不满足"两处计算的差异已找到"的门槛，未修**——测试本身以"应为空、
+实测非空"的诚实红态提交，作为下一轮的起点；建议的下一步实验（把可见行撑到 60+ 行，让远处行
+真正落在 radius=14 之外、彻底不再被后续切行触碰，观察信号是否消失）写在了测试文件头注释里。
 
 ---
 
 ## 提交记录
 
-1. `fix(lyrics-ui): gate rasterization recapture on presentationEngine.hasActiveMotion, not just opacity/scale/blur` —— §0 修复。
-2. `test(lyrics-ui): repro the blurry-row-falls regression from 59647e1 on natural line change` —— §0 复现测试。
-3. `test(lyrics-ui): sustained random-seek fuzz for mask desync (defect #1)` —— §1 fuzz 测试（含建模修正）。
+1. `f1b8d8f fix(lyrics-ui): gate rasterization recapture on presentationEngine.hasActiveMotion` —— §0 修复 + 复现测试。
+2. `9f0f8f7 test(lyrics-ui): sustained random-seek fuzz test for mask desync (defect #1)` —— §1 fuzz 测试（含建模修正过程）。
+3. `138b4fa docs: repro report for stage bundle 3d — blurry-row fix + seek-fuzz findings` —— 本报告首版。
+4. `f3ab9ab test(lyrics-ui): measure per-line-change settle-vs-reconcile-target gap (defect #4)` —— §4 测量（诚实红态，未修）。
+5. `a692472 feat(lyrics-ui): add nanopod://debug/rowdump entry point (defect #3 follow-up)` —— §3 rowdump 入口 + headless CJK dump。
 
-全部未 push。
+全部未 push。回归门（`NativeLyrics*`/`LyricsRenderDefects*`/`Handoff`/`PlaybackClockTrust`/
+`LyricsWholeLineFlash`/`ManualScroll`/`RowScaleAnchorDisplacement`，含本轮全部新增测试）：
+309 个测试，6 处失败——全部是预期内的：§4 测试自身的诚实红态（2 个测试方法各 1 处断言失败）+
+`NativeLyricsRenderChurnTests.test_previousLineDoesNotFadeBeforeItStartsMovingAcrossHandoff`
+（已知预存 harness 伪影，`handoff_red_test_appear_window.md` 有案，本会话更早一次全量回归里
+这条还是绿的，flaky 非回归）。没有真正的新增失败。
