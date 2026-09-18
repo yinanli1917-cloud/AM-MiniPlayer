@@ -280,4 +280,54 @@ final class NativeLyricsSeekLandingMaskTests: XCTestCase {
         }
         XCTAssertEqual(violations, 0, "\(violations)/\(total) seek landing frames were bright-and-unmasked")
     }
+
+    // MARK: - 3h round: seek landing on a row that must be FIRST-MOUNTED on the landing frame
+    //
+    // Every scenario above warms up close to the target index, so the target row view is already
+    // mounted (or freshly re-mounted from the reuse pool several ticks before the census). The
+    // founder's real-machine trace was a genuine seek-back (external Music.app scrub), which can
+    // land far enough away that the target row was NOT rendered before the jump — it must be
+    // dequeued/mounted from scratch on the exact same tick the seek lands, exercising reset() +
+    // the mask/text-phase application in the SAME commit for the first time. That is a distinct
+    // code path from "already-mounted row gets a new configuration".
+    @MainActor
+    func test_exhaustive_seekLandsOnRowThatMustBeFirstMountedOnLandingFrame_noLandingFrameIsBrightAndUnmasked() {
+        var violations = 0
+        var total = 0
+        var firstMountCases = 0
+        for lineIndex in [6, 7, 8, 9, 10, 11, 15, 19] {
+            for frac in [0.3, 0.5, 0.6, 0.75, 0.9] {
+                let (surface, mc, rows, clocks) = makeHarness(rowCount: 20)
+                defer { surface.debugNowOverride = nil; mc.debugPlaybackClockDateProvider = nil }
+                // Warm up FAR from the target (line 0) so the target row index is, whenever
+                // possible, outside the natural render radius and has never been mounted.
+                warmUp(surface: surface, mc: mc, rows: rows, clocks: clocks,
+                       toTime: rows[0].displayLine.line.startTime + 0.2, currentIndex: 0, ticks: 30)
+                let wasMountedBeforeSeek = surface.debugRowView(forIndex: lineIndex) != nil
+                if !wasMountedBeforeSeek { firstMountCases += 1 }
+                let line = rows[lineIndex].displayLine.line
+                let seekTime = line.startTime + (line.endTime - line.startTime) * frac
+                total += 1
+                guard let landed = seekAndCaptureLandingFrame(
+                    surface: surface, mc: mc, rows: rows, clocks: clocks, seekTo: seekTime, expectedIndex: lineIndex
+                ) else {
+                    XCTFail("line \(lineIndex) frac=\(frac): row never mounted after a far seek landing")
+                    continue
+                }
+                if !isLandingFrameAcceptable(row: landed) {
+                    violations += 1
+                    print("[SeekLandingMask] FIRST-MOUNT VIOLATION line=\(lineIndex) frac=\(frac) "
+                        + "wasMountedBeforeSeek=\(wasMountedBeforeSeek) "
+                        + "expected=\(landed.debugLastMainExpectedProgress ?? -1) "
+                        + "brightOpacity=\(landed.debugMainBrightOpacity) "
+                        + "perRunSweep=\(landed.debugLastAppliedActivePerRunSweep)")
+                }
+            }
+        }
+        print("[SeekLandingMask] first-mount-on-landing-tick cases: \(firstMountCases)/\(total)")
+        XCTAssertGreaterThan(firstMountCases, 0,
+            "fixture must actually exercise at least one genuine first-mount-on-landing case")
+        XCTAssertEqual(violations, 0,
+            "\(violations)/\(total) FAR-SEEK landing frames were bright-and-unmasked (some first-mounted on the landing tick)")
+    }
 }

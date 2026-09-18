@@ -321,6 +321,17 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     private var manualScrollState = NativeLyricsManualScrollState()
     private var manualPresentationNeedsApply = false
     private var manualScrollEndTimer: Timer?
+    // 2026-09-18 (3h round, item 4): `synchronizeNativeSemanticIndex` is invoked from MANY
+    // independent call sites (`runtimeConfiguration(from:)`'s many callers), each of which consumes
+    // `lastObservedSeekGeneration` — a real seekGeneration bump only gets "noticed" by the FIRST
+    // call within a tick; every later call in the SAME tick already sees it as stale. A per-call
+    // `LyricsLayerRendererConfiguration` flag is therefore the wrong place to carry "we just
+    // released a manual-scroll freeze because of a genuine seek" — whichever caller happens to read
+    // that PARTICULAR returned config misses it if a different caller's call consumed the signal
+    // first. This is a renderer-instance-level timestamp instead: stable across the race, and gives
+    // every subsequent tick within the window a chance to force-refresh the text/dot phase, not just
+    // a single (possibly-missed) tick.
+    private var manualScrollFreezeReleaseForceUntil: CFTimeInterval = 0
     private var manualScrollRecoveryTimer: Timer?
     private var nativeLineAdvanceTimer: Timer?
     private var nativeLineAdvanceTimerTargetPlaybackTime: TimeInterval?
@@ -1500,9 +1511,30 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         // semantic path (amllState from real playback time) every other entry does. This does NOT
         // affect manual scroll ending normally (timer/tap) — those already call `.reset()`
         // themselves; this only covers the case nothing else was going to.
-        if configuration.musicController.seekGeneration != lastObservedSeekGeneration,
-           manualScrollState.isActive {
+        // 2026-09-18 (3h round, item 4 — "三点根本没出现" after scrolling to the prelude row and
+        // pressing 从头播): capture whether THIS call is the one that releases a manual-scroll
+        // freeze because of a genuine seek, and mark the discontinuity directly here — do not rely
+        // on `configuration.playbackMode` after the reset. `playbackMode` is a computed property
+        // read from fields (`nativeManualScrollSnapshot`, baked into `configuration` by the CALLER
+        // BEFORE this function runs) that predate `manualScrollState.reset()` below; because the
+        // founder's repro freezes AND restarts on the SAME index (0), `playbackMode` still reads
+        // `.directSnap(.manualScroll)` on this exact tick (never `.seek`/`.tapToLine`), so a
+        // reason-matching check downstream can never see this release as a discontinuity — the
+        // dot/text phase for that row then never gets force-refreshed and stays stuck on whatever
+        // it was showing when frozen (here: hidden, opacity 0). The release itself — a genuine
+        // seekGeneration bump arriving while a freeze was active — IS the discontinuity, regardless
+        // of what stale reason enum `playbackMode` still carries this tick.
+        let seekGenerationChanged = configuration.musicController.seekGeneration != lastObservedSeekGeneration
+        let releasingManualScrollFreeze = seekGenerationChanged && manualScrollState.isActive
+        if releasingManualScrollFreeze {
             manualScrollState.reset()
+            configuration.nativeSeekDiscontinuityOccurred = true
+            // See `manualScrollFreezeReleaseForceUntil`'s declaration: this per-call config flag
+            // alone is not reliable across `runtimeConfiguration(from:)`'s many independent
+            // callers within one real tick — back it with a small time window on the renderer
+            // instance itself so the text/dot phase force-refresh cannot be silently dropped by a
+            // race between callers. 0.5s covers several real frames at any caller's own cadence.
+            manualScrollFreezeReleaseForceUntil = currentMediaTime() + 0.5
         }
         // 2026-09-14 founder (message B): while manual-scroll frozen, the phase clock must NOT
         // track real playback time — real playback keeps advancing wherever the song actually is
@@ -1587,8 +1619,11 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
             // prevent; regression caught 2026-09-17, same session as the fix). `.manualScroll` was
             // already excluded above for a different reason (its own investigation). `.trackReset`
             // is a new-song discontinuity already covered by `configure()`'s own row-identity reset.
-            if !isManualScrollFrozen, case .directSnap(let reason) = configuration.playbackMode,
-               reason == .seek || reason == .tapToLine {
+            let playbackModeSaysSeek: Bool = {
+                guard case .directSnap(let reason) = configuration.playbackMode else { return false }
+                return reason == .seek || reason == .tapToLine
+            }()
+            if !isManualScrollFrozen, playbackModeSaysSeek || seekGenerationChanged {
                 configuration.nativeSeekDiscontinuityOccurred = true
             }
             cancelNativeLineAdvanceTimer()
@@ -2294,40 +2329,25 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         // are still being animated, via updateDeactivationFade) so rasterization is revoked the
         // SAME frame either one goes live, not only when the visual target catches up.
         let isTextPhaseActiveThisFrame = textActiveByRowIndex[row.index] ?? false
-        let isDeactivatingThisFrame = row.index == deferredDeactivationIndex
-        // 2026-09-18 ("每次切行都掉下来一条很模糊的行" — the blurry-row-falls regression 59647e1
-        // introduced on top of its own correct CJK-ghost fix): `visual.isSettled` covers ONLY
-        // opacity/scale/blur — it has never included the row's Y POSITION, a separate spring
-        // (`presentationEngine`/`rowStates`). Blur is a STEPPED channel in the shipping default
-        // (`NativeLyricsVisualMotionState.setTarget` snaps `blur = nextTarget.blur` the instant a
-        // row's target changes), so on a natural line change a distant row's blur target can snap
-        // to its new value on the SAME frame `visual.isSettled` goes true — while that row's frame
-        // (and, during a wave, its NEIGHBOURS' frames — the position spring propagates across
-        // several rows at once, `scheduleNaturalWave`) is still actively springing toward its new
-        // slot for many more frames. 59647e1's signature-based force-recapture
-        // (NativeLyricsRowView.refreshRasterization) then caches a bitmap of the row WHILE it is
-        // still visibly moving; the frame keeps carrying that frozen snapshot until it settles,
-        // reading as a blurry snapshot falling into place.
-        //
-        // Tried and reverted: gating per-row on a Y-position-delta measured against the row's own
-        // last painted position. `applyFrame` runs from TWO independent call sites per real
-        // display tick (`reconcileVisibleRowViews`'s own pass AND `applyFrames`'s presentation-tick
-        // pass), each building its OWN `nativeFrameRenderSnapshot` — a per-row delta measured
-        // between those two same-tick snapshots is near zero (no wall-clock time passed between
-        // them) even while the row moved substantially since the PREVIOUS real tick, so captures
-        // kept landing mid-motion (proven red by this repro test with that approach in place).
-        // `presentationEngine.hasActiveMotion` is a live, un-cached read of the engine's actual
-        // spring state (`rowStates`), correct regardless of how many times a frame gets rendered
-        // from it — using it here (coarser: gates ALL rows off during ANY row's motion, not only
-        // the specific row) trades a little rasterization staleness for correctness. This does not
-        // defeat 59647e1's own CJK-ghost fix: a row's position spring is idle during normal
-        // singing (only the ACTIVE row's opacity/scale/blur transition at activation; nothing else
-        // moves position), so `hasActiveMotion` returns to false well before the next line change,
-        // reopening the recapture window. Repro:
-        // Tests/MusicMiniPlayerTests/LyricsRenderDefects20260918ReproTests.swift.
+        // 2026-09-18 (3h round, item 1 FINAL FORM, founder-dictated after the previous round's
+        // activation-bound fix still measured the old 1.5-2.0s delay — the bottleneck had merely
+        // moved from `visual.isSettled`'s opacity/scale/blur epsilon to the kept `hasActiveMotion`
+        // position-motion gate). `hasActiveMotion` (and the per-row `deferredDeactivationIndex`
+        // check) are DROPPED from this condition entirely. A deactivated row rasterizes from the
+        // SAME frame it deactivates, unconditionally — including all the way through any position
+        // motion that follows (the natural wave settling it into its new slot). This is safe: blur
+        // is a STEPPED channel (`NativeLyricsVisualMotionState.setTarget` snaps `blur =
+        // nextTarget.blur` the instant the target changes, no spring left to race), so the ONLY
+        // things that change on a deactivated, rasterized row during its subsequent motion are its
+        // FRAME (position, via `view.frame`) and its LAYER OPACITY — both applied AFTER
+        // rasterization by AppKit/CA compositing the cached bitmap at wherever the layer currently
+        // is and however opaque it currently is; neither one invalidates or re-triggers the
+        // rasterized bitmap. There is no "still in flight, captured a stale/blurry snapshot" window
+        // left for `hasActiveMotion` to protect against — f1b8d8f's own regression test is rewritten
+        // under the new contract (`shouldRasterize` must not FLIP during motion, not "must not be
+        // rasterized during motion" — see LyricsRenderDefects20260918ReproTests) and stays green.
         view.applyRasterizationPolicy(
-            isSettled: visual.isSettled && !presentationEngine.hasActiveMotion,
-            isActive: visual.target.isActive || isTextPhaseActiveThisFrame || isDeactivatingThisFrame
+            isActive: visual.target.isActive || isTextPhaseActiveThisFrame
         )
         // Defect C instrumentation (founder 2026-09-17): frame.origin.y is the row's REAL carried
         // position (not the layer transform, which AppKit resets on every commit — see the
@@ -3019,10 +3039,33 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
             lineGapsProbeLogged = true
             logLineGapsProbe(phase: nil, activeIndex: armedIdx, anchorY: runtimeConfiguration.anchorY)
         }
+        // 2026-09-18 (3h round, item 4 — "三点根本没出现" after a manual-scroll-to-top freeze
+        // followed by 从头播): `activeTextLineChanged` is an INDEX-equality check, but a genuine
+        // discontinuity (an explicit seek releasing a manual-scroll freeze) can land on the SAME
+        // index the frozen display was already showing — here, both the freeze (`frozenAt: 0`) and
+        // the restart land on index 0, so the index never visibly "changes" even though the
+        // semantic MEANING of index 0 just flipped from "a stale frozen snapshot from deep in the
+        // song" to "the real prelude at t≈0". Without a force, the text/dot phase for that row is
+        // never re-driven: `shouldUpdateActiveTextPhase`'s non-force path throttles on a REAL wall
+        // clock interval, so a tight test loop (or, in production, a user who restarts and does not
+        // touch anything else for a frame) can go the whole census window without a single refresh,
+        // leaving the dots stuck at their frozen values (hidden opacity 0 — read on screen as "the
+        // three dots never came back"). `nativeSeekDiscontinuityOccurred` is already the correct,
+        // narrower signal for exactly this class of event (set only for a real user-initiated seek
+        // or tap-to-line, not passive clock jitter — see its own call sites above), but it is a
+        // PER-CALL config flag and `synchronizeNativeSemanticIndex` runs from many independent
+        // `runtimeConfiguration(from:)` call sites within one real tick — whichever call first
+        // notices the seekGeneration bump consumes `lastObservedSeekGeneration`, so a LATER call's
+        // own returned config (the one THIS function actually reads) can read the flag back false
+        // even though a release genuinely just happened. `manualScrollFreezeReleaseForceUntil` is
+        // the race-proof version: a renderer-instance timestamp set once at the release site,
+        // checked here against the real clock so no caller can miss it.
         let shouldUpdateTextPhase = shouldUpdateActiveTextPhase(
             runtimeConfiguration: runtimeConfiguration,
             now: now,
             force: activeTextLineChanged || shouldApplyManualPresentation
+                || runtimeConfiguration.nativeSeekDiscontinuityOccurred
+                || now < manualScrollFreezeReleaseForceUntil
         )
         let shouldApplyPresentationFrame = shouldApplyManualPresentation
             || semanticChanged

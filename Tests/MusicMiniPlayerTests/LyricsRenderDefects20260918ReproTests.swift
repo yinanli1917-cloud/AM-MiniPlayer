@@ -12,23 +12,28 @@ import AppKit
 // snapshot event, no vertical component) — analytically not a plausible source of a "falling
 // blurry ghost"; not exercised further here.
 //
-// Root cause isolated for 59647e1: `NativeLyricsVisualMotionState.isSettled` (consumed by
-// `applyRasterizationPolicy(isSettled:isActive:)`) covers ONLY opacity/scale/blur convergence —
-// it has NEVER included the row's Y POSITION, which is a completely separate spring system
-// (`LyricsPresentationEngine`/`rowStates`, driven by `presentationEngine.update`). In the
-// shipping default (`NativeLyricsFeelParity.blurMode == .current`), blur is a STEPPED channel:
-// `NativeLyricsVisualMotionState.setTarget` snaps `blur = nextTarget.blur` (with `blurVelocity =
-// 0`) the INSTANT a row's target changes — it does not spring. On a natural line change, a
-// distant row's blur target (a function of `abs(displayIndex - currentIndex)`) very often
-// changes by exactly one bucket, and that new blur value is APPLIED IMMEDIATELY, so
-// `visual.isSettled` can read true on the very same frame the line changes — while that same
-// row's Y POSITION is still actively springing toward its new slot (a real, multi-frame motion,
-// entirely decoupled from `isSettled`). 59647e1 added a force-recapture whenever the applied
-// blur differs from the last-captured signature while `isSettled && !isActive` — so it can
-// (and, per this test, does) force a FRESH rasterization capture of a row while that row is
-// still visibly moving. The cached bitmap is correct content-wise but frozen mid-transit
-// relative to any transient state; on screen this reads as a blurry snapshot "falling" into its
-// final slot, matching the founder's report exactly. See research/repro-2026-09-18-lyrics-render-3d.md §1(prepend).
+// Root cause isolated for 59647e1 (ORIGINAL, pre-3h-round form): `NativeLyricsVisualMotionState.
+// isSettled` covered ONLY opacity/scale/blur convergence — never the row's Y POSITION, a separate
+// spring system (`LyricsPresentationEngine`/`rowStates`). Blur is a STEPPED channel (snaps
+// instantly on target change), so `isSettled` could read true on the very same frame a distant
+// row's blur bucket changed, while that row's Y POSITION was still actively springing — and the
+// OLD manual force-recapture (toggle shouldRasterize off then on whenever the applied blur
+// differed from a cached signature) would force a fresh bitmap capture mid-flight, reading on
+// screen as a blurry snapshot "falling" into its final slot.
+//
+// 2026-09-18 (3h round, item 1 FINAL FORM, founder-dictated): the fix for THIS class of bug is no
+// longer "gate the manual recapture on isSettled" — there IS no manual recapture anymore
+// (NativeLyricsRowView.refreshRasterization just sets `shouldRasterize` directly; CA re-derives
+// the cached bitmap on its own whenever a rasterized layer's content genuinely changes). The new
+// contract this test enforces: once a row deactivates, `shouldRasterize` must never FLIP again
+// while that row is still visibly moving (position motion, tracked the same way as before via
+// frame-to-frame Y delta) — a flip mid-flight would mean the activation/deactivation edge itself
+// landed awkwardly relative to the row's own motion, which the renderer's activation bookkeeping
+// (`textActiveByRowIndex`) should never produce on an ordinary natural line change. This is a
+// WEAKER but still meaningful invariant than "never rasterize during motion" (the old contract) —
+// rasterizing WHILE a row moves is now by design (blur is stepped, so the bitmap is never stale
+// relative to blur; only frame/opacity change during motion, and both apply AFTER rasterization).
+// See research/repro-2026-09-18-lyrics-render-3d.md §1(prepend) for the original defect history.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 final class LyricsRenderDefects20260918ReproTests: XCTestCase {
     private var hostWindow: NSWindow?
@@ -109,7 +114,7 @@ final class LyricsRenderDefects20260918ReproTests: XCTestCase {
         defer { surface.debugNowOverride = nil; mc.debugPlaybackClockDateProvider = nil }
 
         var lastY: [Int: CGFloat] = [:]
-        var lastCaptureCount: [Int: Int] = [:]
+        var lastRasterized: [Int: Bool] = [:]
         struct Anomaly { let rowIndex: Int; let t: TimeInterval; let dy: CGFloat; let blur: CGFloat }
         var anomalies: [Anomaly] = []
 
@@ -118,19 +123,21 @@ final class LyricsRenderDefects20260918ReproTests: XCTestCase {
                 guard let v = surface.debugRowView(forIndex: idx) else { continue }
                 let y = v.frame.origin.y
                 let blur = v.debugAppliedBlurRadius
-                let captureCount = v.debugRasterizationCaptureCount
-                if let prevY = lastY[idx], let prevCapture = lastCaptureCount[idx] {
+                let rasterized = v.layer?.shouldRasterize ?? false
+                if let prevY = lastY[idx], let prevRasterized = lastRasterized[idx] {
                     let dy = abs(y - prevY)
-                    let capturedThisFrame = captureCount > prevCapture
-                    // A fresh capture landing on a frame where the row is still visibly in
-                    // flight (>3pt in one 1/60s tick — real spring-settle motion, not float
-                    // noise) is exactly the "rasterized bitmap frozen mid-transit" defect.
-                    if capturedThisFrame && blur > 0.01 && dy > 3.0 {
+                    let flippedThisFrame = rasterized != prevRasterized
+                    // NEW CONTRACT (2026-09-18, item 1 final form): shouldRasterize must not FLIP
+                    // on a frame where the row is still visibly in flight (>3pt in one 1/60s
+                    // tick — real spring-settle motion, not float noise). Rasterizing (or staying
+                    // rasterized) WHILE the row moves is fine by design; only a mid-flight FLIP
+                    // would indicate the activation bookkeeping landed awkwardly.
+                    if flippedThisFrame && blur > 0.01 && dy > 3.0 {
                         anomalies.append(Anomaly(rowIndex: idx, t: t, dy: dy, blur: blur))
                     }
                 }
                 lastY[idx] = y
-                lastCaptureCount[idx] = captureCount
+                lastRasterized[idx] = rasterized
             }
         }
 
@@ -155,9 +162,9 @@ final class LyricsRenderDefects20260918ReproTests: XCTestCase {
 
         XCTAssertTrue(
             anomalies.isEmpty,
-            "A row's rasterized bitmap must never be force-recaptured while its own frame is "
-                + "still moving (>3pt/frame) with nonzero blur — the frozen-snapshot-falls-into-"
-                + "place defect. Anomalies: "
+            "A row's shouldRasterize must never FLIP while its own frame is still moving "
+                + "(>3pt/frame) with nonzero blur — the frozen-snapshot-falls-into-place defect "
+                + "class, under the new (2026-09-18) contract. Anomalies: "
                 + anomalies.map { "idx=\($0.rowIndex) t=\(String(format: "%.3f", $0.t)) dy=\(String(format: "%.2f", $0.dy)) blur=\(String(format: "%.2f", $0.blur))" }.joined(separator: "; ")
         )
     }

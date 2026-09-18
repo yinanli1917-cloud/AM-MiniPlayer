@@ -149,37 +149,38 @@ final class NativeLyricsRasterizationSignatureTests: XCTestCase {
             "FIX: a stale rasterized snapshot must never composite alongside an already-live per-run sweep — this is the CJK '滋味' ghost precondition")
     }
 
-    // (b) settled+inactive+blurred row: a genuine blur-radius change forces a fresh rasterization
-    // capture; repeated frames at the SAME blur/geometry do not re-capture (Gate4 semantics —
-    // settled non-active rows stay cheap, no per-frame re-rasterize cost).
+    // (b) 2026-09-18 (item 1 final form): NativeLyricsRowView.refreshRasterization no longer does a
+    // manual off-then-on recapture dance keyed on a blur/geometry signature — CA invalidates and
+    // regenerates a rasterized layer's cached bitmap automatically whenever the layer's content
+    // actually changes, same as any other CALayer property. `shouldRasterize` itself must flip
+    // ONLY on the activation edge — deactivate once, it goes true and STAYS true (no toggling)
+    // through any number of subsequent blur-radius changes, until the row activates again.
     @MainActor
-    func test_rasterizationSignature_recapturesOnBlurChange_notOnRepeatedFrames() {
+    func test_shouldRasterize_flipsOnlyOnActivationEdge_neverToggledByBlurChangesWhileInactive() {
         let view = NativeLyricsRowView(frame: NSRect(x: 0, y: 0, width: 320, height: 40))
         host(view, NSSize(width: 320, height: 40))
         view.layoutSubtreeIfNeeded()
         CATransaction.flush()
 
         _ = view.applyBlurRadius(3.0)
-        view.applyRasterizationPolicy(isSettled: true, isActive: false)
-        XCTAssertTrue(view.layer?.shouldRasterize ?? false)
-        XCTAssertEqual(view.debugRasterizationCaptureCount, 1, "first engagement must capture once")
+        view.applyRasterizationPolicy(isActive: false)
+        XCTAssertTrue(view.layer?.shouldRasterize ?? false, "deactivated + blurred row must rasterize immediately")
 
-        // Repeated frames, same blur, still settled+inactive — must NOT re-capture.
+        // Repeated frames, same blur, still inactive — must stay rasterized without ever toggling.
         for _ in 0..<5 {
             _ = view.applyBlurRadius(3.0)
-            view.applyRasterizationPolicy(isSettled: true, isActive: false)
+            view.applyRasterizationPolicy(isActive: false)
+            XCTAssertTrue(view.layer?.shouldRasterize ?? false)
         }
-        XCTAssertEqual(view.debugRasterizationCaptureCount, 1, "unchanged blur/geometry across repeated frames must not re-capture")
 
-        // A genuine blur-target change while still settled+inactive must force a fresh capture.
+        // A genuine blur-target change while still inactive must NOT toggle shouldRasterize off —
+        // it stays true throughout; CA is trusted to re-derive the bitmap on its own.
         _ = view.applyBlurRadius(6.0)
-        view.applyRasterizationPolicy(isSettled: true, isActive: false)
-        XCTAssertEqual(view.debugRasterizationCaptureCount, 2, "a real blur-radius change must force a fresh rasterization capture, not reuse the stale one")
-        XCTAssertTrue(view.layer?.shouldRasterize ?? false)
+        view.applyRasterizationPolicy(isActive: false)
+        XCTAssertTrue(view.layer?.shouldRasterize ?? false, "a blur change while inactive must not un-rasterize the row")
 
-        // Becoming active revokes rasterization immediately (no capture on disengagement).
-        view.applyRasterizationPolicy(isSettled: true, isActive: true)
+        // Becoming active revokes rasterization immediately.
+        view.applyRasterizationPolicy(isActive: true)
         XCTAssertFalse(view.layer?.shouldRasterize ?? true, "an active row must never stay rasterized")
-        XCTAssertEqual(view.debugRasterizationCaptureCount, 2, "disengaging must not count as a capture")
     }
 }

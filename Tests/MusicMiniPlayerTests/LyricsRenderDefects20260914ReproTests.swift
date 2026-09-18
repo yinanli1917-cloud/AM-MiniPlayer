@@ -1857,4 +1857,105 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
             "row 0's own frame position must match the reference — a distant/inactive-tier row would "
             + "sit at a different Y than the active row's slot")
     }
+
+    // 3h round, item 4 (coordinator's specific untested angle 2026-09-18): the founder's
+    // hypothesis was that "从头播" might not bump `seekGeneration` (going through a
+    // position-zero/UI-only path instead of a real `seek(to:)`), or might race a manual-scroll
+    // recovery grace window, or might behave differently while PAUSED. Code trace first:
+    // `MusicController.previousTrack()`'s restart branch (`currentTime > 3.0`) always calls
+    // `seek(to: 0)`, and `seek(to:)` unconditionally calls `registerSeek()` — there is no
+    // position-zero path that bypasses seekGeneration in this codebase. That specific
+    // hypothesis is structurally false, not "not yet reproduced". The one genuinely untested
+    // angle left is PAUSED restart (every existing prelude-path test keeps `mc.isPlaying = true`
+    // throughout).
+    @MainActor
+    func test_fifthPreludeEntryPath_pausedRestartAfterScrollFreeze_matchesPlayingPath() {
+        let rows = preludeSongRows()
+        let panelWidth: CGFloat = 360
+
+        func newSurface() -> (NativeLyricsSurfaceView, MusicController) {
+            let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 600))
+            host(surface, NSSize(width: panelWidth, height: 600))
+            let mc = MusicController(preview: true)
+            mc.duration = 60
+            mc.isPlaying = true
+            surface.debugSkipDedupe = true
+            return (surface, mc)
+        }
+
+        func capture(title: String, drive: (NativeLyricsSurfaceView, MusicController) -> Void) -> PreludeEntryCapture {
+            let (surface, mc) = newSurface()
+            drive(surface, mc)
+            let preludeView = surface.debugRowView(forIndex: 0)
+            let dotCenter = preludeView?.debugDotContainerCenter(in: surface.layer!) ?? .zero
+            return PreludeEntryCapture(
+                title: title, image: renderSurfaceCGImage(surface)!,
+                dotHidden: preludeView?.debugPreludeDotContainerHidden,
+                dotOpacity: preludeView?.debugPreludeDotContainerOpacity,
+                dotCenterX: dotCenter.x, dotCenterY: dotCenter.y,
+                rowFrameMinY: preludeView?.frame.minY ?? .nan,
+                dotAnimating: false,
+                semanticIndex: surface.debugNativeSemanticIndex,
+                scrollTargetIndex: surface.debugNativeScrollTargetIndex
+            )
+        }
+
+        let reference = capture(title: "reference: 冷启动 (playing)") { surface, mc in
+            mc.syncPlaybackClock(to: 0.2, playing: true)
+            surface.configure(config(rows: rows, current: 0, mc: mc, width: panelWidth))
+            surface.layoutSubtreeIfNeeded()
+            for _ in 0..<20 { surface.debugTick(displayInterval: 1.0 / 60.0) }
+        }
+
+        // Same scroll-to-top-freeze setup as path D, but the founder PAUSES before restarting —
+        // and stays paused through the restart and the post-restart settle window (no grace-period
+        // timer gets a chance to fire and release the freeze on its own; the explicit seek must do
+        // it regardless of play state).
+        let pausedRestart = capture(title: "E. 暂停中手动滚回顶后按「从头播」（保持暂停）") { surface, mc in
+            for t: TimeInterval in [0.2, 13.0, 18.0, 23.0, 28.0, 33.0] {
+                mc.syncPlaybackClock(to: t, playing: true)
+                let current = min(max(0, NativeLyricsTimelinePolicy.liveDisplayIndex(at: t, rows: rows, fallback: 0)), max(0, rows.count - 1))
+                surface.configure(config(rows: rows, current: current, mc: mc, width: panelWidth))
+                surface.layoutSubtreeIfNeeded()
+                for _ in 0..<6 { surface.debugTick(displayInterval: 1.0 / 60.0) }
+            }
+            surface.debugBeginManualScroll(frozenAt: 0)
+            mc.syncPlaybackClock(to: 33.0, playing: true)
+            surface.configure(config(rows: rows, current: 5, mc: mc, width: panelWidth))
+            surface.layoutSubtreeIfNeeded()
+            for _ in 0..<20 { surface.debugTick(displayInterval: 1.0 / 60.0) }
+            XCTAssertTrue(surface.debugManualScrollActive, "precondition: still frozen from the scroll-back")
+
+            // Pause BEFORE the restart seek (matches "他会先暂停再回頭播" as a real possible order)
+            // and leave it paused through the whole settle window.
+            mc.isPlaying = false
+            mc.seek(to: 0.2)
+            mc.syncPlaybackClock(to: 0.2, playing: false)
+            surface.configure(config(rows: rows, current: 0, mc: mc, width: panelWidth))
+            surface.layoutSubtreeIfNeeded()
+            for _ in 0..<20 { surface.debugTick(displayInterval: 1.0 / 60.0) }
+            XCTAssertFalse(surface.debugManualScrollActive,
+                "an explicit restart seek must release the manual-scroll freeze REGARDLESS of play state")
+        }
+
+        for cap in [reference, pausedRestart] {
+            print("[PreludePath-E] \(cap.title): dotHidden=\(String(describing: cap.dotHidden)) " +
+                  "dotOpacity=\(String(describing: cap.dotOpacity)) dotCenter=(\(cap.dotCenterX), \(cap.dotCenterY)) " +
+                  "rowFrameMinY=\(cap.rowFrameMinY) semanticIndex=\(String(describing: cap.semanticIndex))")
+        }
+
+        XCTAssertEqual(pausedRestart.semanticIndex, 0,
+            "after a PAUSED 从头播 following a scroll-to-top freeze, row 0 must be the semantic active row")
+        XCTAssertEqual(pausedRestart.dotHidden, false,
+            "interlude dots must be visible after a paused restart releases the freeze")
+        XCTAssertGreaterThan(pausedRestart.dotOpacity ?? 0, 0.5,
+            "dot opacity must be substantially on even while paused")
+        XCTAssertEqual(pausedRestart.dotCenterX, reference.dotCenterX, accuracy: 1.0,
+            "dot cluster X must match the playing reference")
+        XCTAssertEqual(pausedRestart.dotCenterY, reference.dotCenterY, accuracy: 2.0,
+            "dot cluster Y must match the playing reference — a paused restart must not leave row 0 "
+            + "\"stuck at the panel's static top\"")
+        XCTAssertEqual(pausedRestart.rowFrameMinY, reference.rowFrameMinY, accuracy: 2.0,
+            "row 0's frame position must match the playing reference even while paused")
+    }
 }

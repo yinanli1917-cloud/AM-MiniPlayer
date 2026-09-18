@@ -181,4 +181,79 @@ final class NativeLyricsTrackChangeBloomTests: XCTestCase {
                 + "the pre-switch settled spread (\(settledSpread)) — rows bunched near a shared origin")
         }
     }
+
+    // 3h round, item 5 (coordinator's specific ask 2026-09-18): "切歌后前10帧行位置连续性测试，
+    // 红了才二分" — a genuine bloom (rows momentarily collapsing to/bursting from the wrong
+    // position) would show as a DISCONTINUOUS per-row Y jump between two consecutive rendered
+    // frames, distinct from the smooth per-frame spring delta of normal settling. This drives 10
+    // REAL frames past the settled-surface track change above and checks every mounted row's
+    // frame-to-frame Y delta against a generous smooth-motion budget (mirrors the existing
+    // `NativeLyricsRasterizationTrap`-class budgets elsewhere in this renderer, e.g.
+    // `nativeLyricSmoothMotionBudgetPerTick` idioms) — any single-frame teleport is the bloom
+    // signature this test is built to catch.
+    @MainActor
+    func test_trackChange_onAlreadySettledSurface_first10FramesHaveNoPositionDiscontinuity() {
+        let surface = NativeLyricsSurfaceView(frame: CGRect(x: 0, y: 0, width: 360, height: 600))
+        hostInWindow(surface)
+        surface.debugInitialMeasurementsPending = false
+
+        let songA = songRows(idPrefix: "songA2", count: 25)
+        surface.configure(makeConfiguration(rows: songA, currentIndex: 5))
+        surface.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        surface.debugSkipDedupe = true
+        surface.configure(makeConfiguration(rows: songA, currentIndex: 5))
+        surface.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+
+        let songB = songRows(idPrefix: "songB2", count: 25)
+        surface.debugSkipDedupe = true
+        surface.configure(makeConfiguration(rows: songB, currentIndex: 0))
+        surface.layoutSubtreeIfNeeded()
+
+        // Row-Y-by-index across 10 real frames, including the switch frame itself (frame 0).
+        var framesByIndex: [Int: [CGFloat]] = [:]
+        func captureFrame() {
+            for index in 0..<25 {
+                guard let y = surface.debugRowView(forIndex: index)?.frame.origin.y else { continue }
+                framesByIndex[index, default: []].append(y)
+            }
+        }
+        captureFrame()
+        for _ in 0..<10 {
+            RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 60.0))
+            surface.debugTick(displayInterval: 1.0 / 60.0)
+            captureFrame()
+        }
+
+        // Smooth-motion budget: the renderer's own natural-mode per-tick cap
+        // (`nativeLyricNaturalModeMaxPerTickDelta`, documented at LyricsLayerRendererView.swift:1790
+        // as "Largest per-tick position change a row may take in NATURAL mode") is 150px for
+        // normally-springing rows; a genuine teleport/collapse would blow well past that in one
+        // frame. Use the same order of magnitude here so this test catches an actual discontinuity,
+        // not ordinary fast-spring motion during a track-change resettle.
+        let maxSmoothPerFrameDelta: CGFloat = 200
+        var discontinuities: [(index: Int, frame: Int, from: CGFloat, to: CGFloat)] = []
+        for (index, ys) in framesByIndex {
+            guard ys.count > 1 else { continue }
+            for i in 1..<ys.count {
+                let delta = abs(ys[i] - ys[i - 1])
+                if delta > maxSmoothPerFrameDelta {
+                    discontinuities.append((index, i, ys[i - 1], ys[i]))
+                }
+            }
+        }
+
+        if !discontinuities.isEmpty {
+            for d in discontinuities.sorted(by: { $0.frame < $1.frame }).prefix(20) {
+                print("[TrackChangeBloom] DISCONTINUITY row=\(d.index) frame=\(d.frame) "
+                    + "\(String(format: "%.1f", d.from)) -> \(String(format: "%.1f", d.to)) "
+                    + "(Δ=\(String(format: "%.1f", d.to - d.from)))")
+            }
+        }
+        XCTAssertTrue(discontinuities.isEmpty,
+            "\(discontinuities.count) row position discontinuit(y/ies) found in the first 10 post-switch "
+            + "frames — this is the geometry-level bloom signature; if this ever fires, bisect "
+            + "5e85f31..HEAD (e9ed7b4, f1b8d8f, 59647e1, dcd7b6a, d8f45e8) against THIS test")
+    }
 }
