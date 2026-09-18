@@ -213,30 +213,68 @@ shadow/CIFilter 在渲染服务端的合成，`CALayer.render(in:)`（headless P
 **未做**：真机验证（rowdump 入口需要创始人在真机上实际触发一次并把 `/tmp/nanopod_rowdump.txt`
 的内容带回来，才能推进这条线）。
 
-## §4：每次切行 1-2px（垂直）—— 已测量到真实、可复现的信号，未能定位到确凿的两处计算分歧，未修
+## §4：每次切行 1-2px（垂直）—— 根因已定位：不是计算 bug，是设计如此；原测试假设已证伪
+
+### 第一轮（诚实红态）：测到真实信号，但没能定位确凿的两处计算分歧
 
 真实 surface + 真实 60Hz 锁步时钟（中英文各一，2.5s 行间隔隔离每次切行，见
 `Tests/MusicMiniPlayerTests/LyricsRenderDefects20260918SettleTargetGapTests.swift`）：每一行在
 **真正离开过激活位（不是"自己歌词唱完"，是语义索引已经换成别的行）**之后，稳定 ≥0.5s，随后仍
-会再挪动一次，幅度约 1-6pt（不是固定 1.6pt，且方向、大小与行号无明显线性关系）。写这个测试的
-过程本身踩了两个方法论坑（详见测试文件头注释，未删除保留在案）：① 最初把"稳定"判定绑定在
-"这一行自己的歌词已经唱完"上——错的，`NativeLyricsTimelinePolicy.liveDisplayIndex` 在整个间隙
-里让最后开始的行继续算"当前行"，行其实还老老实实待在 anchor，压根没开始它自己的切换动作，这
-样测出来的"二次挪动"其实是它人生中**第一次、唯一一次**正确的切换，不是缺陷；② 改成"语义索引
-已不是自己"仍不够，因为一个还没轮到播放的远处行从 tick 0 起就"不是当前行"，它的冷挂载→首次
-定位这个只发生一次的过程被误判成了"已经稳定又被挪动"。两次都加了 guard 才拿到干净信号。
+会再挪动一次，幅度约 1-6pt。写这个测试的过程本身踩了两个方法论坑（详见测试文件头注释，未删除
+保留在案）：① 最初把"稳定"判定绑定在"这一行自己的歌词已经唱完"上——错的，
+`NativeLyricsTimelinePolicy.liveDisplayIndex` 在整个间隙里让最后开始的行继续算"当前行"，这样
+测出来的"二次挪动"其实是它人生中第一次、唯一一次正确的切换；② 改成"语义索引已不是自己"仍不够，
+一个还没轮到播放的远处行从 tick 0 起就"不是当前行"，它的冷挂载→首次定位被误判成"已经稳定又被
+挪动"。两次都加了 guard 才拿到干净信号。当时怀疑的候选（`seededTargetsForNaturalAdvance` 无条件
+把 radius=14 内所有行目标重写成 `oldIndex`）手推简单连续单步算术应该抵消成 0，跟非零结果对不上，
+当时没能补全，测试以诚实红态（配 `XCTExpectFailure`）先提交。
 
-`debugHeightCorrectionReFeedCount`（b12db38/Symptom-3 高度缓存纠正机制的计数器）在 settle 时刻
-和 nudge 时刻读数**从不变化**——排除了这个之前调查过的机制。读代码找到一个结构上可疑、但没能
-把算术对上的候选：`LyricWaveTiming.seededTargetsForNaturalAdvance`（`LyricsView.swift`）在**每
-一次**自然切行时，无条件把 `targetRadius`（写死 14，与歌曲/面板无关）范围内**所有**行的目标
-重新写成 `targets[index] = oldIndex`——包括那些早就稳定、跟这次切行毫无关系的行。如果这类行在
-被重新播种之前的目标本来就不是 `oldIndex`，理论上会有一次"倒退回 oldIndex 再被自己那条
-（可能延迟为 0 的）波浪 schedule 条目纠正回真值"的小折返。但手推一个简单的连续单步切行算术，
-这个折返在大多数情况下应该正好抵消成 0——跟测出来的非零结果对不上，说明这条推理漏了什么，本轮
-没能补全。**按"先复现再修"，不满足"两处计算的差异已找到"的门槛，未修**——测试本身以"应为空、
-实测非空"的诚实红态提交，作为下一轮的起点；建议的下一步实验（把可见行撑到 60+ 行，让远处行
-真正落在 radius=14 之外、彻底不再被后续切行触碰，观察信号是否消失）写在了测试文件头注释里。
+### 第二轮（协调方要求做到根因）：三层探针，结论是"没有 bug"
+
+按协调方指示追加三层证据（同一测试文件）：
+
+1. **`XCTExpectFailure` 标注**——保留断言，主线不再常红。
+2. **radius=14 验证**：60 行大 cast，`test_radiusHypothesis_nudgesAtDistanceBeyond14`——845 次
+   挪动里，绝大多数（798/845）发生在 `abs(行号-当前激活行号) <= 14` 以内，超出 14 的只有边界
+   附近的 47 次（测量误差：取样时机比真正判定 radius 的那一刻略晚了几帧）——radius=14 假设**基本
+   成立**，但这只回答了"挪动会不会停"，没回答"挪动本身是不是 bug"。
+3. **两层直接探针**（`LyricsPresentationEngine` 新增 `#if DEBUG` 埋点，见下方提交记录）：
+   - `debugReseedLog`：专门盯 `seededTargetsForNaturalAdvance` 那一行代码——**0 次命中**。原因：
+     `lineTargetIndices` 在每次波浪 1s 左右完全 settle 后会被清空成 `[:]`（`advancePendingWave`
+     收尾），而我的行间隔（1.2-2.5s）都长于这个 settle 时间，所以每次新切行发生时，这本字典早
+     就是空的——"重写成不同值"这个前提在这批复现条件下从未发生过。**当初怀疑的这个机制，被证伪，
+     不是"没测到"，是它根本没有运行到会出问题的那个分支。**
+   - `debugTargetYChangeLog`（更broad的探针，直接扎在 `reconcileRows`——**每一次** `targetY`
+     被计算的唯一地方，不管调用方是谁）：60 行等高测试，960 次"已稳定行的目标被改写"事件，
+     **960/960 精确等于 -50.000（一行高度），零例外**；再用原始变高（中英文实际内容，非等高）
+     fixture 复测，90 次事件，**用探针记录的两次 `accumulatedHeights[targetIndex]` 读数直接反算
+     期望位移，0 次超出 0.01pt 误差**。
+
+### 结论：这不是计算 bug
+
+`targetY = anchorY - accumulatedHeights[目标行] + accumulatedHeights[本行]` 每一次都被正确、
+一致地计算——`accumulatedHeights[目标行]` 随着当前播放行前进而单调增大，这意味着**任何仍在
+wave 参与半径（radius=14）以内的行，每次切行都会被正确地再推一次目标**——这是"整个面板跟着当前
+行同步滚动"这个设计本身自带的行为，不是 bug。第一轮报告里测到的"1-6pt"这个数字，其真实身份是
+本测试自己探测逻辑的副产物：`ReNudge.delta` 取的是"位移首次超过 0.3pt 噪声阈值那一帧"的
+`y - settledY`——那只是一次正在加速的弹簧运动**刚开始那一帧的切片**，从来就不是这次挪动的真实
+总位移（真实总位移经探针证实精确等于一行真实高度差）——不是产品代码的问题，是我自己这套探测
+方法本身的量出了问题。
+
+原来两个测试（`test_english/cjk_settledRowNeverNudgesAgainAfterGoingQuiet`）断言"已稳定行永不
+再动"这个不变式，现已证明为假（不成立是设计使然，不是缺陷）——已重写为
+`test_english/cjk_settledRowRetargetingMatchesAccumulatedHeightDeltaExactly`：断言"任何一次已稳定
+行的目标改写，都必须精确等于 accumulatedHeights 差值"（即"零算术异常"）——**全绿，不再需要
+`XCTExpectFailure`**。
+
+### 遗留的、真正需要创始人裁决的问题（不是 bug，是产品选择）
+
+行在 radius=14 范围内会持续被重新定位，直到掉出这个半径——这是不是创始人想要的？如果创始人的
+体感期望是"离开激活位、肉眼看它停稳之后，就该定住不再动，不管歌还在不在继续播"，那这是一个
+**新的产品需求**（把"持续跟随当前行滚动"改成"离开激活位以外的行冻结在原地"），影响面是整个
+滚动模型的设计，不是一处局部补丁——按"先复现再修"的边界，本轮不擅自决定并实现这个改动，留给
+创始人一句话裁决：要不要把"持续再定位"的窗口从 radius=14 收窄到一个小得多的数字（比如只覆盖
+紧邻当前行的 2-3 行），让更远的行一旦离场就此冻结？
 
 ---
 
@@ -245,12 +283,17 @@ shadow/CIFilter 在渲染服务端的合成，`CALayer.render(in:)`（headless P
 1. `f1b8d8f fix(lyrics-ui): gate rasterization recapture on presentationEngine.hasActiveMotion` —— §0 修复 + 复现测试。
 2. `9f0f8f7 test(lyrics-ui): sustained random-seek fuzz test for mask desync (defect #1)` —— §1 fuzz 测试（含建模修正过程）。
 3. `138b4fa docs: repro report for stage bundle 3d — blurry-row fix + seek-fuzz findings` —— 本报告首版。
-4. `f3ab9ab test(lyrics-ui): measure per-line-change settle-vs-reconcile-target gap (defect #4)` —— §4 测量（诚实红态，未修）。
+4. `f3ab9ab test(lyrics-ui): measure per-line-change settle-vs-reconcile-target gap (defect #4)` —— §4 第一轮测量（诚实红态，未修）。
 5. `a692472 feat(lyrics-ui): add nanopod://debug/rowdump entry point (defect #3 follow-up)` —— §3 rowdump 入口 + headless CJK dump。
+6. `1cc317a docs: update stage bundle 3d report with §2/§3/§4 findings` —— 本报告 §2/§3/§4 首版补完。
+7. `77ef0c7 test(lyrics-ui): gate defect #4 settle-gap tests with XCTExpectFailure` —— §4 第二轮 step 1。
+8. `edca686 test(lyrics-ui): root-cause defect #4 — not a bug, disprove the settle-vs-target premise` —— §4 第二轮 step 2-4，三层探针 + 根因定位 + 原测试改写为真实不变式，全绿。
 
-全部未 push。回归门（`NativeLyrics*`/`LyricsRenderDefects*`/`Handoff`/`PlaybackClockTrust`/
-`LyricsWholeLineFlash`/`ManualScroll`/`RowScaleAnchorDisplacement`，含本轮全部新增测试）：
-309 个测试，6 处失败——全部是预期内的：§4 测试自身的诚实红态（2 个测试方法各 1 处断言失败）+
+全部未 push。提交 8（`edca686`）之上跑的最新一轮全量回归门（`NativeLyrics*`/
+`LyricsRenderDefects*`/`Handoff`/`PlaybackClockTrust`/`LyricsWholeLineFlash`/`ManualScroll`/
+`RowScaleAnchorDisplacement`，含本轮全部新增/改写测试）：**312 个测试，4 处失败**——全部集中在
+同一个已知预存 harness 伪影
 `NativeLyricsRenderChurnTests.test_previousLineDoesNotFadeBeforeItStartsMovingAcrossHandoff`
-（已知预存 harness 伪影，`handoff_red_test_appear_window.md` 有案，本会话更早一次全量回归里
-这条还是绿的，flaky 非回归）。没有真正的新增失败。
+（`handoff_red_test_appear_window.md` 有案；本会话早前一轮全量回归里这条测试是绿的，flaky 非
+回归）；§4 两个测试（`test_english/cjk_settledRowRetargetingMatchesAccumulatedHeightDeltaExactly`）
+全绿，不再需要 `XCTExpectFailure`。没有真正的新增失败。
