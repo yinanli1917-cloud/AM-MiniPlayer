@@ -2266,8 +2266,14 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         // The transform now carries ONLY scale — never translation. (Translation here was the bug:
         // AppKit's commit-time layout resets a layer-backed view's transform to identity, dropping the
         // row to the origin for a frame; the frame does not get reset.)
+        // 2026-09-18 round 2 (research/repro-2026-09-18-lyrics-render-3g.md item 1): a multi-line
+        // (wrapped) row is pinned to scale 1.0 — see `mainTextWrapsToMultipleLines`'s doc comment.
+        // `effectiveScale` (not the model's `visual.scale`) drives BOTH the transform and the
+        // recorded "expected" telemetry so the two never disagree for a row we deliberately never
+        // scale.
+        let effectiveScale = view.mainTextWrapsToMultipleLines ? 1.0 : visual.scale
         view.setPositioning(NativeLyricsRowScale.leadingTransform(
-            scale: visual.scale, height: frame.height, pivotY: view.verticalScalePivotY
+            scale: effectiveScale, height: frame.height, pivotY: view.verticalScalePivotY
         ))
         let appliedTransform = view.layer?.affineTransform() ?? .identity
         let appliedScale = sqrt(appliedTransform.a * appliedTransform.a + appliedTransform.c * appliedTransform.c)
@@ -2276,7 +2282,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
             appliedY: view.frame.origin.y,
             expectedHeight: frame.height,
             appliedHeight: view.frame.height,
-            expectedScale: visual.scale,
+            expectedScale: effectiveScale,
             appliedScale: appliedScale
         ))
         let appliedBlur = view.applyBlurRadius(visual.blur)
