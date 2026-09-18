@@ -2226,7 +2226,25 @@ final class NativeLyricsSurfaceView: NSView {
             appliedScale: appliedScale
         ))
         let appliedBlur = view.applyBlurRadius(visual.blur)
-        view.applyRasterizationPolicy(isSettled: visual.isSettled, isActive: visual.target.isActive)
+        // 2026-09-17 (CJK trailing-word ghost, "滋味"): `visual.target.isActive` is the VISUAL
+        // wave/spring target's own activation flag, deliberately decoupled from the TEXT PHASE's
+        // activation (`configurationForTextPhase`'s own comment: text phase follows the semantic
+        // singing line, not the scroll wave's per-row visual target — a different bug's fix). That
+        // decoupling left a window where a row's text phase is ALREADY driving live per-glyph
+        // sweep writes while the visual target still reports inactive — `shouldRasterize` stayed
+        // true through that window, so WindowServer kept compositing a stale cached bitmap
+        // (captured while the row was still blurred/inactive) simultaneously with the fresh live
+        // tiles (confirmed: 6 consecutive real frames, t=13.85-14.10, blur=0.5, sweepApplied=true
+        // — research/repro-2026-09-17-lyrics-render-3c.md §CJK). Fold in text-phase activation AND
+        // the deferred-deactivation fade (the other case where a settled-looking row's own tiles
+        // are still being animated, via updateDeactivationFade) so rasterization is revoked the
+        // SAME frame either one goes live, not only when the visual target catches up.
+        let isTextPhaseActiveThisFrame = textActiveByRowIndex[row.index] ?? false
+        let isDeactivatingThisFrame = row.index == deferredDeactivationIndex
+        view.applyRasterizationPolicy(
+            isSettled: visual.isSettled,
+            isActive: visual.target.isActive || isTextPhaseActiveThisFrame || isDeactivatingThisFrame
+        )
         // Defect C instrumentation (founder 2026-09-17): frame.origin.y is the row's REAL carried
         // position (not the layer transform, which AppKit resets on every commit — see the
         // comment above on `view.frame`), so trace that, not a transform ty. Logs only the active

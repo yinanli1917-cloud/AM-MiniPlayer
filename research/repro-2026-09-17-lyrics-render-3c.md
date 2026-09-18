@@ -276,3 +276,93 @@ Y 坐标上，所以 Y 完全不受影响，X 受影响——不是新 bug，是
 
 **一眼判断问题**：手动滚回开头看到那个高亮胶囊时，你的鼠标/触控板指针是不是刚好停在那一行
 歌词上（不用特意去动它——滚轮本身不会移动指针，它就停在你开始滚动前所在的位置）？
+
+---
+
+## 第二轮追加（创始人 2026-09-17 更正 C、重新定义 D）
+
+### C1：切行「每次都有」的 1-2px 位移 —— 假设未获证实（诚实报告，非「没问题」）
+
+**假设**：激活行用逐字 tile（NSLayoutManager 测量）画，非激活行用整行 CATextLayer（内部走
+Core Text）画，两套排版引擎对同一字形算出的位置有细微差异，导致每次切行必跳。
+
+**验证方法**：headless 直接对照 NSLayoutManager（`NativeLyricsTextSweepLayout.makePlan`，
+tile 位置的真实来源）与独立构造的 `CTLine`（Core Text 原生测量，CATextLayer 内部渲染引擎
+的最佳可测代理）对同一字符串/字体/宽度算出的**相对**字形偏移，中英文各一组，另加强制换行
+（窄宽度）各测第二个折行片段（排除折行点本身不是问题——两套逻辑都用 NSLayoutManager 定
+折行点，折行点必然一致；真正要测的是折行**内**的逐字定位）。
+
+**结果**：`Tests/MusicMiniPlayerTests/GlyphLayoutAgreementTests.swift`，4 个场景（CJK 单行/
+CJK 折行第二段/英文单行/英文折行第二段）——**逐字符相对偏移误差全部精确为 0.000pt**，无一
+例外。NSLayoutManager 与 CoreText 在这个可测层面**完全一致**，不支持"两套排版引擎逐字定位
+不同"这个假设作为"每次切行必跳 1-2px"的主因。
+
+**诚实的局限**：这个测试只证明了"NSLayoutManager 的测量"与"独立构造的 CTLine 的测量"一致，
+不能 100% 证明"CATextLayer 实际渲染出的像素"与这两者一致——CATextLayer 内部具体怎么渲染
+是 headless 测不到的黑盒（和 banned-patterns.md 记录的 CIFilter/阴影合成盲区同一类）。也
+只测了**水平**方向；没测垂直（baseline/行高）方向的 tile vs 整行层对照，而每次切行的视觉
+跳动完全可能是垂直方向的（字形基线、CJK 降部留白 `textBottomClipPad` 这类只在 tile 路径存
+在的补偿，整行层是否也有对应处理，本轮未核实）。**下一步建议**：垂直方向做同样的对照，
+以及真机上用 `NativeLyricsMaskTrace.recordRowPosition`（C 的埋点，已随 rasterization 修复
+一起落地）配合逐帧 PNG 差分定位到底是哪个方向、哪个通道在跳。
+
+### C2：切行「时不时」更大的跳动 —— 与时钟纠正的相关性未坐实（诚实报告）
+
+**真机日志相关性**：`research/nanopod_debug_2026-09-17.log` 里 11 次被采信（非压制）的
+DRIFT CORRECTION（0.2s≤|drift|<5s）——**只有 1 次**前后 4 秒窗口内恰好有 `LineGaps` 采样，
+且那次采样没看出 idx 变化。**不是"没有相关性"，是 LineGaps 探针（每次切行后只武装一次、
+延迟 1.0-1.2s 采一个点）密度太低，够不着时钟纠正事件发生的那个精确时刻。**
+
+**headless 注入复现**：`Tests/MusicMiniPlayerTests/LineJumpClockCorrelationTests.swift`——
+用真实 `MusicController.syncPlaybackClock` 在真实 surface 上注入与创始人日志同量级
+（0.35s/0.5s/0.85s 向后纠正）、精确落在行边界附近（边界前 0.05s / 边界后 0.02s / 0.10s）
+的纠正，逐帧读 `debugNativeSemanticIndex`。**4 组全部只有干净的单次 `2→3` 跳转，没有一次
+出现"跳到 3 又退回 2 再跳回 3"的双跳**——这个具体机制（纠正落地让语义索引瞬间前后摆一次）
+在我构造的这批注入条件下没有复现。
+
+**诚实说明**：这是"这几种注入条件下没复现"，不是"这个类的 bug 不存在"——我的合成纠正仍然
+是脚本直接调 `syncPlaybackClock`，不是真实 ScriptingBridge 轮询的完整时序（真实轮询有
+`queueWait`/`sbRead` 的真实排队延迟、可能与 60Hz 渲染帧的相位关系不同），也没有覆盖创始人
+日志里那次 -115.86s（换歌）量级的纠正、或多次纠正连续到达的情形。
+
+**下一步建议**：既然"每次都有"的 C1 假设本轮没坐实，而"时不时"的 C2 复现也没有在这几种
+注入条件下命中，建议创始人下次真机撞见跳动时，开 `NanoPodMaskTraceEnabled`（这次已给
+`recordRowPosition` 加了埋点，能记录真实的 `frame.origin.y`/`isSettled`/`shouldRasterize`
+变化）+ 观察当时 `/tmp/nanopod_debug.log` 的 `[Timing]` 行是否恰好在同一秒内——这次拿到的
+是第一手真实关联证据，比我继续在 headless 里试更多合成组合更可靠。
+
+### D：三点应该是滚动/锚定模型里真正的 row 0 —— 机制已定位，未修
+
+**创始人的修正**：三点不是"位置对不对"的问题，是"手动滚动没有把它当一个可以被锚定/激活的
+真·行"——滚到顶应该能让它占据激活槽位（像任何一行播到时会做的那样），而不是被钳制在第一句
+真词上。
+
+**根因（读代码坐实）**：`NativeLyricsSurfaceView.beginNativeManualScrollIfNeeded`
+（`LyricsLayerRendererView.swift:3640-3643`）只在手势**开始**那一刻调用一次
+`manualScrollState.begin(frozenDisplayIndex: configuration.effectiveScrollTargetIndex)`——
+`frozenDisplayIndex`（决定哪一行享受"激活槽位"待遇：opacity/hover/左对齐）从此**在整个滚动
+手势期间不再更新**（`NativeLyricsManualScrollState.apply(deltaY:velocity:bounds:)`，
+`LyricsPresentationModels.swift:1036-1054`，只改 `manualOffset`/`rawOffset`，从不碰
+`frozenDisplayIndex`）。也就是说：滚动手势一开始，"哪一行是活的"这个判断就已经**定死**在
+手势开始那一刻正在播的行——不管你之后滚到哪、滚多远，都不会改变。如果创始人开始滚动时
+正在播的是第一句真词（不是前奏窗口内），`frozenDisplayIndex` 全程锁定在那一句，滚到顶
+只是把内容几何上滚上去，前奏三点单纯按自己在内容流里的堆叠位置显示——不享受任何"激活"
+待遇，这与他截图里"三点在上方、第一句带激活/悬停态"完全吻合。
+
+**滚动手势结束后**：`manualScrollState.reset()`（滚动停止 2s 后自动触发，
+`scheduleNativeScrollEnd`）会让画面交还给真实语义索引——这个索引由真实播放时间决定，如果
+播放确实已经过了前奏窗口，第一句本来就该是真正的"当前行"。**这里有一个我没有把握判定
+清楚的歧义**：创始人的截图状态，究竟是（a）滚动手势*进行中*的一帧（此时 dots 理应和所有
+行一样统一变暗到 0.6/0.95 档，不该有任何一行显示"激活"胶囊——如果截图里第一句确实带激活
+态，那更可能是手势已经*结束*、画面已交还真实语义索引的状态），还是（b）手势已结束、播放
+真的已经过了前奏、第一句变成真当前行本身就是**正确**行为，创始人想要的其实是"哪怕前奏已经
+唱完，只要我手动滚回去看它，它也该被当作当前行对待"这样一个新的、超出现有"当前行=正在唱的
+那句"这套语义的要求。这两种读法对应完全不同的修法（前者是纯粹的"滚动中当前行判定跟手势
+脱节"bug，后者是要新加"用户主动看哪行就让哪行临时享受当前行待遇"这样一个新特性）。
+
+**未修**：按要求先报机制，等创始人确认是上面哪一种读法（或都不是）后再动手，避免改错方向。
+
+**一眼判断问题（重新问一遍，帮助判定上面的歧义）**：你截图那一刻，手指/触控板是刚松开还是
+还按着在滚？如果已经松开超过 2 秒，那时播放进度条实际显示的时间是不是已经过了前奏（这样
+"第一句是当前行"在纯"当前行=正在唱的那句"这套语义下其实是对的，问题变成"你是否想要一套
+新的、允许手动浏览覆盖当前行"）？
