@@ -2227,6 +2227,21 @@ final class NativeLyricsSurfaceView: NSView {
         ))
         let appliedBlur = view.applyBlurRadius(visual.blur)
         view.applyRasterizationPolicy(isSettled: visual.isSettled, isActive: visual.target.isActive)
+        // Defect C instrumentation (founder 2026-09-17): frame.origin.y is the row's REAL carried
+        // position (not the layer transform, which AppKit resets on every commit — see the
+        // comment above on `view.frame`), so trace that, not a transform ty. Logs only the active
+        // row and the just-deactivated (deferred) row, only on change — see recordRowPosition.
+        if visual.target.isActive {
+            NativeLyricsMaskTrace.recordRowPosition(
+                rowID: row.id, role: "active", y: frame.origin.y,
+                isSettled: visual.isSettled, shouldRasterize: view.layer?.shouldRasterize ?? false
+            )
+        } else if row.index == deferredDeactivationIndex {
+            NativeLyricsMaskTrace.recordRowPosition(
+                rowID: row.id, role: "deactivated", y: frame.origin.y,
+                isSettled: visual.isSettled, shouldRasterize: view.layer?.shouldRasterize ?? false
+            )
+        }
         #if DEBUG
         if debugCensusEnabled {
             var track = debugCensusByIndex[row.index] ?? DebugCensusTrack()
