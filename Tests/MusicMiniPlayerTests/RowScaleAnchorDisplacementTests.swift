@@ -3,32 +3,28 @@ import AppKit
 @testable import MusicMiniPlayerCore
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// C1 follow-up (coordinator 2026-09-17): the tile-vs-whole-line text-LAYOUT-engine hypothesis
-// came back negative (GlyphLayoutAgreementTests: 0.000pt agreement, all 4 scenarios). Redirected
-// suspicion: the inactive-row 0.95<->1.00 scale (`NativeLyricsRowScale.leadingTransform`) and
-// WHERE it is anchored.
+// C1 (coordinator 2026-09-17): the tile-vs-whole-line text-LAYOUT-engine hypothesis came back
+// negative (GlyphLayoutAgreementTests: 0.000pt agreement, all 4 scenarios). Redirected suspicion
+// to the inactive-row 0.95<->1.00 scale (`NativeLyricsRowScale.leadingTransform`) and WHERE it is
+// anchored — CONFIRMED: it pivoted X at the ROW LAYER'S OWN LOCAL ORIGIN (x=0), not the text's own
+// left edge (`nativeLyricContentLeadingInset` = 32pt inside that same local space). Since the
+// transform applies to the ROW'S OWN BACKING LAYER (parent of every text sublayer), the text's
+// on-screen X used to be `32 * scale` — a REAL, deterministic 1.6pt (32 * 0.05) difference between
+// the two resting scales, not spring jitter, confirmed both analytically and against a real
+// committed layer tree.
 //
-// Read directly: `leadingTransform(scale:height:)` pivots Y at `height/2` (row vertical centre)
-// but pivots X at the ROW LAYER'S OWN LOCAL ORIGIN (x=0) — NOT at the text's own left edge. The
-// text content itself starts at `nativeLyricContentLeadingInset` = 32pt inside that same local
-// space (`NativeLyricsRowView.layout()`: `let textX = nativeLyricContentLeadingInset`). Since the
-// transform is applied to the ROW'S OWN BACKING LAYER (`setPositioning` -> `layer.setAffineTransform`,
-// parent of every text sublayer), every text sublayer's on-screen X is
-// `32 * scale` (relative to the row's frame origin) — NOT constant across scale changes.
-//
-// Exact predicted displacement between the inactive (0.95) and active (1.00) resting states:
-//   Δx = 32 * (1.00 - 0.95) = 1.6pt
-// This is a REAL, deterministic, EVERY-TIME difference between a row's two resting scales — not
-// spring jitter — which matches "每次切行都有 1-2px 位移" far better than the tile/whole-line
-// layout-engine hypothesis (which measured 0.000pt).
+// FIX LANDED (research/repro-2026-09-17-lyrics-render-3c.md §C1): `leadingTransform` now pivots X
+// at `nativeLyricContentLeadingInset` (the text's own left edge) instead of 0 — the Y pivot (row
+// vertical centre, solving a separate CJK-wrap-spacing problem) is unchanged. These tests now
+// assert the FIXED invariant (0.000pt) as the permanent regression guard, both CJK and English.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 final class RowScaleAnchorDisplacementTests: XCTestCase {
 
-    /// Pure-math confirmation of the transform's actual pivot, read directly off
-    /// `NativeLyricsRowScale.leadingTransform` — no view/layer involved, just the formula.
-    func test_leadingTransform_pivotsXAtRowOrigin_notTextLeftEdge() {
+    /// Pure-math confirmation of the transform's actual (now-fixed) pivot — no view/layer
+    /// involved, just the formula.
+    func test_leadingTransform_afterFix_pivotsXAtTextLeftEdge_zeroDisplacement() {
         let height: CGFloat = 40
-        let textLeftEdgeLocalX: CGFloat = 32 // nativeLyricContentLeadingInset
+        let textLeftEdgeLocalX: CGFloat = nativeLyricContentLeadingInset
         let inactive = NativeLyricsRowScale.leadingTransform(scale: 0.95, height: height)
         let active = NativeLyricsRowScale.leadingTransform(scale: 1.0, height: height) // identity (guarded)
 
@@ -42,10 +38,11 @@ final class RowScaleAnchorDisplacementTests: XCTestCase {
         print(String(format: "[C1-SCALE-ANCHOR] text left edge (local x=%.0f): inactive(0.95)=%.3f active(1.00)=%.3f displacement=%.3fpt",
                      textLeftEdgeLocalX, xAtInactive, xAtActive, displacement))
 
-        XCTAssertEqual(xAtInactive, textLeftEdgeLocalX * 0.95, accuracy: 0.001)
+        XCTAssertEqual(xAtInactive, textLeftEdgeLocalX, accuracy: 0.001,
+                        "FIX: the text's left edge must be invariant under the scale change, not just the row's bare x=0 origin")
         XCTAssertEqual(xAtActive, textLeftEdgeLocalX, accuracy: 0.001)
-        XCTAssertEqual(displacement, textLeftEdgeLocalX * 0.05, accuracy: 0.001,
-                        "the row-scale transform pivots X at the row's own origin, not the text's left edge — every active<->inactive transition moves the text horizontally by leadingInset * |Δscale|")
+        XCTAssertEqual(displacement, 0, accuracy: 0.001,
+                        "FIX: the row-scale transform now pivots X at the text's own left edge — active<->inactive must not move it")
     }
 
     private var hostWindow: NSWindow?
@@ -90,12 +87,16 @@ final class RowScaleAnchorDisplacementTests: XCTestCase {
 
     /// Real surface, real spring settle: drive a row through active -> inactive (the moment a
     /// line just finished and recedes) and read its REAL, converted-to-surface-space text-layer
-    /// left edge X before and after, confirming the analytical prediction against the actual
-    /// committed layer tree (not just the formula in isolation).
+    /// left edge X before and after, confirming the fix against the actual committed layer tree
+    /// (not just the formula in isolation). CJK and English each get their own row so a
+    /// script-specific regression can't hide behind the other.
     @MainActor
-    func test_realRow_textLeftEdgeX_shiftsByPredictedAmount_acrossActiveInactiveTransition() {
-        let rows = (0..<4).map { i in
-            row(for: LyricLine(text: "line \(i) words here", startTime: TimeInterval(i) * 3, endTime: TimeInterval(i + 1) * 3), index: i)
+    private func assertTextLeftEdgeInvariant(chars: [String], label: String) {
+        var rows: [LayerBackedLyricRow] = []
+        var start: TimeInterval = 0
+        for (i, text) in chars.enumerated() {
+            rows.append(row(for: LyricLine(text: text, startTime: start, endTime: start + 3), index: i))
+            start += 3
         }
         let panelWidth: CGFloat = 360
         let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 600))
@@ -128,22 +129,30 @@ final class RowScaleAnchorDisplacementTests: XCTestCase {
         /// on-screen X WindowServer would composite.
         func row1TextLeftEdgeSurfaceX() -> CGFloat? {
             guard let view = surface.debugRowView(forIndex: 1), let layer = view.layer else { return nil }
-            let localPoint = CGPoint(x: 32, y: 0) // nativeLyricContentLeadingInset
+            let localPoint = CGPoint(x: nativeLyricContentLeadingInset, y: 0)
             return layer.convert(localPoint, to: surface.layer).x
         }
 
-        // Row 1 active (t=1.5, mid its own [3,6) span... use its own start).
-        tick(3.5, 20)
-        guard let xActive = row1TextLeftEdgeSurfaceX() else { XCTFail("row 1 not mounted while active"); return }
+        tick(3.5, 20) // row 1 active
+        guard let xActive = row1TextLeftEdgeSurfaceX() else { XCTFail("\(label): row 1 not mounted while active"); return }
 
-        // Play forward well past row 1 so it fully recedes to its settled INACTIVE scale.
-        tick(9.5, 60)
-        guard let xInactive = row1TextLeftEdgeSurfaceX() else { XCTFail("row 1 not mounted while inactive"); return }
+        tick(9.5, 60) // play forward well past row 1 so it fully recedes to its settled INACTIVE scale
+        guard let xInactive = row1TextLeftEdgeSurfaceX() else { XCTFail("\(label): row 1 not mounted while inactive"); return }
 
         let displacement = xActive - xInactive
-        print(String(format: "[C1-SCALE-ANCHOR] real row1 text-left-edge surface X: active=%.3f inactive=%.3f displacement=%.3fpt",
+        print(String(format: "[C1-SCALE-ANCHOR] \(label) real row1 text-left-edge surface X: active=%.3f inactive=%.3f displacement=%.3fpt",
                      xActive, xInactive, displacement))
-        XCTAssertEqual(displacement, 32 * 0.05, accuracy: 0.05,
-                        "real committed layer tree must show the SAME ~1.6pt horizontal displacement the formula predicts")
+        XCTAssertEqual(displacement, 0, accuracy: 0.05,
+                        "\(label): FIX: the real committed layer tree's text left edge must not move across the active<->inactive transition")
+    }
+
+    @MainActor
+    func test_realRow_afterFix_englishLine_textLeftEdgeInvariantAcrossActiveInactiveTransition() {
+        assertTextLeftEdgeInvariant(chars: ["intro line", "line one words here", "line two", "line three"], label: "EN")
+    }
+
+    @MainActor
+    func test_realRow_afterFix_cjkLine_textLeftEdgeInvariantAcrossActiveInactiveTransition() {
+        assertTextLeftEdgeInvariant(chars: ["前奏行", "这是第一句歌词内容", "第二句歌词", "第三句歌词"], label: "CJK")
     }
 }

@@ -219,16 +219,24 @@ final class NativeLyricsActiveLineSpacingTests: XCTestCase {
         XCTAssertGreaterThan(view.debugVisibleDimWordGlyphCount, 0)
     }
 
+    // 2026-09-17 (C1 fix, research/repro-2026-09-17-lyrics-render-3c.md §C1): the X pivot moved
+    // from the row's own frame origin (x=0) to the text's actual left edge
+    // (nativeLyricContentLeadingInset, 32pt) — x=0 was never the text's own position, it was 32pt
+    // to the text's LEFT, so scaling around it silently moved the text by
+    // leadingInset * |Δscale| (a real, deterministic 1.6pt every active<->inactive transition,
+    // confirmed via RowScaleAnchorDisplacementTests before this fix). "Preserves left" now means
+    // preserving THIS point, not x=0.
     func test_leadingScale_preservesLeftCenter_matchingV28AnchorLeading() {
         let height: CGFloat = 80
         let t = NativeLyricsRowScale.leadingTransform(scale: 0.95, height: height)
-        let pivot = CGPoint(x: 0, y: height / 2)
+        let pivot = CGPoint(x: nativeLyricContentLeadingInset, y: height / 2)
         let mapped = pivot.applying(t)
-        XCTAssertEqual(mapped.x, 0, accuracy: 0.0001)
+        XCTAssertEqual(mapped.x, nativeLyricContentLeadingInset, accuracy: 0.0001,
+                        "the text's own left edge (not the row's bare x=0 origin) must be invariant across the scale change")
         XCTAssertEqual(mapped.y, height / 2, accuracy: 0.0001)
 
-        let top = CGPoint(x: 0, y: 0).applying(t)
-        let originScaled = CGPoint(x: 0, y: 0).applying(CGAffineTransform(scaleX: 0.95, y: 0.95))
+        let top = CGPoint(x: nativeLyricContentLeadingInset, y: 0).applying(t)
+        let originScaled = CGPoint(x: nativeLyricContentLeadingInset, y: 0).applying(CGAffineTransform(scaleX: 0.95, y: 0.95))
         XCTAssertNotEqual(top.y, originScaled.y, accuracy: 0.0001,
                           "leading-center scale must move the top edge; origin scale leaves it put (the 行距 look)")
         XCTAssertEqual(NativeLyricsRowScale.leadingTransform(scale: 1, height: height), .identity)
