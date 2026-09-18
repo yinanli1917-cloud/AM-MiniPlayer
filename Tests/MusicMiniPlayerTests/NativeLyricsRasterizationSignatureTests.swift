@@ -160,25 +160,25 @@ final class NativeLyricsRasterizationSignatureTests: XCTestCase {
         CATransaction.flush()
 
         _ = view.applyBlurRadius(3.0)
-        view.applyRasterizationPolicy(isSettled: true, isActive: false)
+        view.applyRasterizationPolicy(isActive: false)
         XCTAssertTrue(view.layer?.shouldRasterize ?? false)
         XCTAssertEqual(view.debugRasterizationCaptureCount, 1, "first engagement must capture once")
 
         // Repeated frames, same blur, still settled+inactive — must NOT re-capture.
         for _ in 0..<5 {
             _ = view.applyBlurRadius(3.0)
-            view.applyRasterizationPolicy(isSettled: true, isActive: false)
+            view.applyRasterizationPolicy(isActive: false)
         }
         XCTAssertEqual(view.debugRasterizationCaptureCount, 1, "unchanged blur/geometry across repeated frames must not re-capture")
 
         // A genuine blur-target change while still settled+inactive must force a fresh capture.
         _ = view.applyBlurRadius(6.0)
-        view.applyRasterizationPolicy(isSettled: true, isActive: false)
+        view.applyRasterizationPolicy(isActive: false)
         XCTAssertEqual(view.debugRasterizationCaptureCount, 2, "a real blur-radius change must force a fresh rasterization capture, not reuse the stale one")
         XCTAssertTrue(view.layer?.shouldRasterize ?? false)
 
         // Becoming active revokes rasterization immediately (no capture on disengagement).
-        view.applyRasterizationPolicy(isSettled: true, isActive: true)
+        view.applyRasterizationPolicy(isActive: true)
         XCTAssertFalse(view.layer?.shouldRasterize ?? true, "an active row must never stay rasterized")
         XCTAssertEqual(view.debugRasterizationCaptureCount, 2, "disengaging must not count as a capture")
     }

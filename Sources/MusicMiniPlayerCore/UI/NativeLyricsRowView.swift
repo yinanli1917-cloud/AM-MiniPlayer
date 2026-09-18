@@ -461,8 +461,22 @@ final class NativeLyricsRowView: NSView {
     private static let rasterizationDisabledByEnv =
         ProcessInfo.processInfo.environment["NANOPOD_BLUR_RASTER_OFF"] != nil
 
-    func applyRasterizationPolicy(isSettled: Bool, isActive: Bool) {
-        rasterizationEligible = isSettled && !isActive
+    // 2026-09-18 (3h round, item 1 — "停了又挪 1-2px" post-settle geometry jump, founder-confirmed
+    // root cause): this used to gate on `isSettled` (opacity/scale/blur all converged to a tight
+    // epsilon), which for rows with non-trivial target blur took 1.5-2.0s AFTER the row was already
+    // visually at rest to flip true — CA rasterizes the layer into a device-pixel bitmap via
+    // rasterizationScale and thereafter composites that bitmap with a bilinear-resampled affine
+    // transform (the row's 0.95 inactive-scale transform) instead of drawing the vector text live;
+    // that resampling reads differently on screen than the live vector draw did, one frame, at a
+    // fixed and reproducible delay after the row already looked stopped — independently confirmed
+    // against a real-device pixel comparison the same night (12/12 line switches, 1.5-2.0s window).
+    // Binding the flip to ACTIVATION instead removes the delay entirely: a row rasterizes the
+    // instant it deactivates (and de-rasterizes the instant it activates), so the one-time bitmap
+    // vs. live-vector visual difference — if this mechanism IS the artifact — lands on the SAME
+    // frame as the deactivation's own (much larger) visual transition, not isolated 1.5-2.0s later
+    // in dead calm. See NativeLyricsRasterizationActivationGateTests.
+    func applyRasterizationPolicy(isActive: Bool) {
+        rasterizationEligible = !isActive
         refreshRasterization()
     }
 

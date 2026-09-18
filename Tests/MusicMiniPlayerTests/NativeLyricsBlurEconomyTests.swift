@@ -206,7 +206,7 @@ final class NativeLyricsBlurEconomyTests: XCTestCase {
         view.layoutSubtreeIfNeeded()
 
         view.applyBlurRadius(4)
-        view.applyRasterizationPolicy(isSettled: true, isActive: false)
+        view.applyRasterizationPolicy(isActive: false)
         XCTAssertEqual(view.layer?.shouldRasterize, false,
                        "a row with running loading-dot animations must not be rasterized (each animation frame would invalidate the cache)")
 
@@ -235,9 +235,9 @@ final class NativeLyricsBlurEconomyTests: XCTestCase {
         commitTransactions()
 
         view.applyBlurRadius(4)
-        view.applyRasterizationPolicy(isSettled: true, isActive: false)
+        view.applyRasterizationPolicy(isActive: false)
         commitTransactions()
-        view.applyRasterizationPolicy(isSettled: false, isActive: false)
+        view.applyRasterizationPolicy(isActive: false)
         commitTransactions()
         view.applyBlurRadius(0)
         commitTransactions()
@@ -266,7 +266,7 @@ final class NativeLyricsBlurEconomyTests: XCTestCase {
         view.layoutSubtreeIfNeeded()
 
         view.applyBlurRadius(4)
-        view.applyRasterizationPolicy(isSettled: true, isActive: false)
+        view.applyRasterizationPolicy(isActive: false)
         XCTAssertEqual(view.layer?.shouldRasterize, true, "precondition: the row must be rasterized before reuse")
 
         view.prepareForReuse()
