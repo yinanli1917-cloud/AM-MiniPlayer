@@ -136,14 +136,13 @@ final class NativeLyricsSeekLandingMaskTests: XCTestCase {
     @MainActor
     private func warmUp(
         surface: NativeLyricsSurfaceView, mc: MusicController, rows: [LayerBackedLyricRow],
-        clocks: Clocks, toTime: TimeInterval, currentIndex: Int, ticks: Int
+        clocks: Clocks, toTime: TimeInterval, currentIndex: Int, ticks: Int, step: TimeInterval = 1.0 / 60.0
     ) {
         surface.debugNowOverride = { clocks.wall }
         mc.debugPlaybackClockDateProvider = { clocks.date }
         mc.syncPlaybackClock(to: toTime, playing: mc.isPlaying, at: clocks.date)
         surface.configure(config(rows, current: currentIndex, mc: mc))
         surface.layoutSubtreeIfNeeded()
-        let step = 1.0 / 60.0
         for _ in 0..<ticks {
             clocks.wall += step
             clocks.date = clocks.date.addingTimeInterval(step)
@@ -155,10 +154,19 @@ final class NativeLyricsSeekLandingMaskTests: XCTestCase {
     /// Performs a REAL seek (bumps `seekGeneration` via `mc.seek(to:)`, exactly like a progress-bar
     /// drag or an external Music.app seek) and captures ONLY the very first post-seek landing
     /// frame's row state — no warm-up ticks after the jump.
+    ///
+    /// `step`: the landing frame's own tick length — stage bundle 3i variant (a), a dropped/long
+    /// frame right at the landing moment (100/250/500ms instead of the ideal 1/60s), since the
+    /// founder observed these glitches more often under system load (dropped frames).
+    /// `configureTwice`: stage bundle 3i variant (d) — HANDOFF.md notes `applyFrame` has two call
+    /// sites (`reconcileVisibleRowViews`'s own pass and the presentation-tick pass); calling
+    /// `configure()` twice for the SAME landing tick exercises whichever internal state a second,
+    /// redundant call in the same real tick could leave inconsistent.
     @MainActor
     private func seekAndCaptureLandingFrame(
         surface: NativeLyricsSurfaceView, mc: MusicController, rows: [LayerBackedLyricRow],
-        clocks: Clocks, seekTo: TimeInterval, expectedIndex: Int
+        clocks: Clocks, seekTo: TimeInterval, expectedIndex: Int,
+        step: TimeInterval = 1.0 / 60.0, configureTwice: Bool = false
     ) -> NativeLyricsRowView? {
         mc.seek(to: seekTo)
         // seek(to:) in preview mode already calls syncPlaybackClock; re-affirm the deterministic
@@ -166,7 +174,9 @@ final class NativeLyricsSeekLandingMaskTests: XCTestCase {
         // default, so pin it explicitly to the harness clock right after).
         mc.syncPlaybackClock(to: seekTo, playing: mc.isPlaying, at: clocks.date)
         surface.configure(config(rows, current: expectedIndex, mc: mc))
-        let step = 1.0 / 60.0
+        if configureTwice {
+            surface.configure(config(rows, current: expectedIndex, mc: mc))
+        }
         clocks.wall += step
         clocks.date = clocks.date.addingTimeInterval(step)
         surface.debugTick(displayInterval: step)
@@ -329,5 +339,161 @@ final class NativeLyricsSeekLandingMaskTests: XCTestCase {
             "fixture must actually exercise at least one genuine first-mount-on-landing case")
         XCTAssertEqual(violations, 0,
             "\(violations)/\(total) FAR-SEEK landing frames were bright-and-unmasked (some first-mounted on the landing tick)")
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Stage bundle 3i item 4 (coordinator brief, (a)-(d)): every scenario above drives an ideal
+    // 1/60s tick. The founder reports this class of glitch shows up more often when the machine
+    // is under load (concurrent builds, several packages running) — i.e. dropped/long frames —
+    // which these tests never modeled. Four variants below, matching the coordinator's own list.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    // MARK: - (a) Dropped-frame variants: landing tick itself is 100/250/500ms, not 1/60s
+
+    @MainActor
+    func test_droppedFrameVariants_seekLandingFrameIsNeverBrightAndUnmasked() {
+        var violations = 0
+        var total = 0
+        for stepMs in [100.0, 250.0, 500.0] {
+            let step = stepMs / 1000.0
+            for lineIndex in [3, 6, 8, 10] {
+                for frac in [0.3, 0.6, 0.9] {
+                    let (surface, mc, rows, clocks) = makeHarness()
+                    defer { surface.debugNowOverride = nil; mc.debugPlaybackClockDateProvider = nil }
+                    let warmIndex = max(0, lineIndex - 2)
+                    warmUp(surface: surface, mc: mc, rows: rows, clocks: clocks,
+                           toTime: rows[warmIndex].displayLine.line.startTime + 0.2,
+                           currentIndex: warmIndex, ticks: 15, step: step)
+                    let line = rows[lineIndex].displayLine.line
+                    let seekTime = line.startTime + (line.endTime - line.startTime) * frac
+                    total += 1
+                    guard let landed = seekAndCaptureLandingFrame(
+                        surface: surface, mc: mc, rows: rows, clocks: clocks,
+                        seekTo: seekTime, expectedIndex: lineIndex, step: step
+                    ) else { continue }
+                    if !isLandingFrameAcceptable(row: landed) {
+                        violations += 1
+                        print("[SeekLandingMask] DROPPED-FRAME VIOLATION step=\(stepMs)ms line=\(lineIndex) frac=\(frac) "
+                            + "expected=\(landed.debugLastMainExpectedProgress ?? -1) "
+                            + "brightOpacity=\(landed.debugMainBrightOpacity) "
+                            + "perRunSweep=\(landed.debugLastAppliedActivePerRunSweep)")
+                    }
+                }
+            }
+        }
+        XCTAssertEqual(violations, 0, "\(violations)/\(total) dropped-frame seek landing frames were bright-and-unmasked")
+    }
+
+    // MARK: - (b) Manual-scroll → tapToLine path
+
+    @MainActor
+    func test_manualScrollThenTapToLine_landingFrameIsNeverBrightAndUnmasked() {
+        var violations = 0
+        var total = 0
+        for lineIndex in [3, 6, 8, 10] {
+            for frac in [0.3, 0.6, 0.9] {
+                let (surface, mc, rows, clocks) = makeHarness()
+                defer { surface.debugNowOverride = nil; mc.debugPlaybackClockDateProvider = nil }
+                let warmIndex = max(0, lineIndex - 2)
+                warmUp(surface: surface, mc: mc, rows: rows, clocks: clocks,
+                       toTime: rows[warmIndex].displayLine.line.startTime + 0.2, currentIndex: warmIndex, ticks: 15)
+                // User grabs the scroll and freezes on a DIFFERENT row, then taps the target line
+                // directly — recovery goes through `handleNativeLineTap`'s own
+                // `semanticSpringRetarget(reason: .tapToLine)`, never `mc.seek(to:)`/seekGeneration
+                // at all — a structurally distinct discontinuity from every scenario above.
+                surface.debugBeginManualScroll(frozenAt: max(0, warmIndex - 1))
+                XCTAssertTrue(surface.debugManualScrollActive, "precondition: manual scroll must be active before the tap")
+                let line = rows[lineIndex].displayLine.line
+                let frac_ = frac
+                let tapTime = line.startTime + (line.endTime - line.startTime) * frac_
+                mc.syncPlaybackClock(to: tapTime, playing: mc.isPlaying, at: clocks.date)
+                surface.debugTapLine(index: lineIndex, line: line)
+                surface.configure(config(rows, current: lineIndex, mc: mc))
+                let step = 1.0 / 60.0
+                clocks.wall += step
+                clocks.date = clocks.date.addingTimeInterval(step)
+                surface.debugTick(displayInterval: step)
+                total += 1
+                guard let landed = surface.debugRowView(forIndex: lineIndex) else { continue }
+                if !isLandingFrameAcceptable(row: landed) {
+                    violations += 1
+                    print("[SeekLandingMask] TAP-TO-LINE VIOLATION line=\(lineIndex) frac=\(frac) "
+                        + "expected=\(landed.debugLastMainExpectedProgress ?? -1) "
+                        + "brightOpacity=\(landed.debugMainBrightOpacity) "
+                        + "perRunSweep=\(landed.debugLastAppliedActivePerRunSweep)")
+                }
+            }
+        }
+        XCTAssertEqual(violations, 0, "\(violations)/\(total) manual-scroll-then-tap landing frames were bright-and-unmasked")
+    }
+
+    // MARK: - (c) 5 consecutive seeks within <1s of each other
+
+    @MainActor
+    func test_rapidConsecutiveSeeks_landingFrameIsNeverBrightAndUnmasked() {
+        var violations = 0
+        var total = 0
+        let (surface, mc, rows, clocks) = makeHarness()
+        defer { surface.debugNowOverride = nil; mc.debugPlaybackClockDateProvider = nil }
+        warmUp(surface: surface, mc: mc, rows: rows, clocks: clocks,
+               toTime: rows[2].displayLine.line.startTime + 0.2, currentIndex: 2, ticks: 15)
+
+        // 5 seeks, each landing frame captured with only ~0.15s of wall-clock time between them
+        // (the tick advance inside seekAndCaptureLandingFrame itself + a small extra gap) — well
+        // under 1s apart, matching the coordinator's "连续 5 次间隔 <1s 的回跳" brief.
+        let targets: [(line: Int, frac: Double)] = [(6, 0.5), (3, 0.7), (9, 0.4), (5, 0.6), (7, 0.3)]
+        for (lineIndex, frac) in targets {
+            let line = rows[lineIndex].displayLine.line
+            let seekTime = line.startTime + (line.endTime - line.startTime) * frac
+            total += 1
+            guard let landed = seekAndCaptureLandingFrame(
+                surface: surface, mc: mc, rows: rows, clocks: clocks, seekTo: seekTime, expectedIndex: lineIndex
+            ) else { continue }
+            if !isLandingFrameAcceptable(row: landed) {
+                violations += 1
+                print("[SeekLandingMask] RAPID-SEEK VIOLATION line=\(lineIndex) frac=\(frac) "
+                    + "expected=\(landed.debugLastMainExpectedProgress ?? -1) "
+                    + "brightOpacity=\(landed.debugMainBrightOpacity) "
+                    + "perRunSweep=\(landed.debugLastAppliedActivePerRunSweep)")
+            }
+            // A small extra gap (well under 1s total between consecutive seeks) — models a user
+            // rapidly dragging the progress bar back and forth without giving any seek time to
+            // fully settle before the next one lands.
+            clocks.wall += 0.1
+            clocks.date = clocks.date.addingTimeInterval(0.1)
+        }
+        XCTAssertEqual(violations, 0, "\(violations)/\(total) rapid-consecutive-seek landing frames were bright-and-unmasked")
+    }
+
+    // MARK: - (d) configure() called twice in the same tick
+
+    @MainActor
+    func test_configureCalledTwiceInSameTick_landingFrameIsNeverBrightAndUnmasked() {
+        var violations = 0
+        var total = 0
+        for lineIndex in [3, 6, 8, 10] {
+            for frac in [0.3, 0.6, 0.9] {
+                let (surface, mc, rows, clocks) = makeHarness()
+                defer { surface.debugNowOverride = nil; mc.debugPlaybackClockDateProvider = nil }
+                let warmIndex = max(0, lineIndex - 2)
+                warmUp(surface: surface, mc: mc, rows: rows, clocks: clocks,
+                       toTime: rows[warmIndex].displayLine.line.startTime + 0.2, currentIndex: warmIndex, ticks: 15)
+                let line = rows[lineIndex].displayLine.line
+                let seekTime = line.startTime + (line.endTime - line.startTime) * frac
+                total += 1
+                guard let landed = seekAndCaptureLandingFrame(
+                    surface: surface, mc: mc, rows: rows, clocks: clocks,
+                    seekTo: seekTime, expectedIndex: lineIndex, configureTwice: true
+                ) else { continue }
+                if !isLandingFrameAcceptable(row: landed) {
+                    violations += 1
+                    print("[SeekLandingMask] DOUBLE-CONFIGURE VIOLATION line=\(lineIndex) frac=\(frac) "
+                        + "expected=\(landed.debugLastMainExpectedProgress ?? -1) "
+                        + "brightOpacity=\(landed.debugMainBrightOpacity) "
+                        + "perRunSweep=\(landed.debugLastAppliedActivePerRunSweep)")
+                }
+            }
+        }
+        XCTAssertEqual(violations, 0, "\(violations)/\(total) double-configure-in-one-tick landing frames were bright-and-unmasked")
     }
 }

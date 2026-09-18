@@ -800,14 +800,48 @@ enum NativeLyricsTimelinePolicy {
         // Backing parts stay in hotGroups (they LIGHT simultaneously) but never lead:
         // the primary slot and the scroll resolve on melody lines only, falling back to
         // the unfiltered sets when a window contains nothing else.
+        //
+        // 2026-09-18 (stage bundle 3i, item 1 — "三点跑到别处"/scrollToIndex-semanticIndex
+        // divergence, pinned as a known-unfixed defect by
+        // LyricsRenderDefects20260914ReproTests.test_amllState_backwardSeekIntoPreludeWindow_
+        // withCorrectFallback_scrollTargetStillDivergesFromSemanticIndex): a seek landing INSIDE
+        // the prelude window (before any real line has ever started) fell into this
+        // `isSeeking, let firstFutureIndex` branch and jumped the scroll/anchor target ahead to
+        // the first REAL line, while `semanticIndex` below correctly resolves to the prelude row
+        // via its own `fallback` fallback chain. The two values then diverge for the same tick:
+        // the prelude row is text-phase-active (dots animate) but the presentation engine anchors
+        // on the NEXT row, so the prelude row renders at its in-flow offset relative to the WRONG
+        // anchor instead of the centred anchorY slot.
+        //
+        // Fix: only prefer `firstFutureIndex` when we are already inside the song (some real row
+        // has genuinely started/ended by `playbackTime`) — i.e. a seek that lands in a GAP
+        // between two real lines, where scrolling ahead to the next line is the intended
+        // behavior. A seek that lands before the first real line has ever started (the prelude/
+        // intro) has no "current melody row" to hold, so anchor on the same row semanticIndex
+        // resolves to instead — `latestStartedIndex` already equals `fallback` in exactly this
+        // case (no non-prelude row's startTime <= playbackTime), so this is a straight re-use of
+        // the same resolution semanticIndex already trusts, not a new special case.
+        let anyRealRowStarted = sortedRows.contains {
+            !$0.isPrelude && $0.displayLine.line.startTime <= playbackTime
+        }
         let scrollToIndex: Int
         if let firstBuffered = bufferedGroups.subtracting(backingIndices).min() {
             scrollToIndex = firstBuffered
+        } else if !anyRealRowStarted {
+            // No real row has ever started yet (still inside the prelude/intro) — there is no
+            // "deep in the song" state to hold onto, so a stale `previous.scrollToIndex` must
+            // NOT be trusted here (that was the old bug's other face: `previous` still carries
+            // whatever row was active before a seek back to t=0, e.g. 5, even once semanticIndex
+            // has already correctly resolved to the prelude). Resolve via the exact same
+            // `latestStartedIndex` chain `semanticIndex` below falls back to, so the two values
+            // agree instead of diverging.
+            scrollToIndex = latestStartedIndex
         } else if isSeeking, let firstFutureIndex {
             scrollToIndex = firstFutureIndex
         } else {
-            // Buffered set empty or backing-only: hold the melody. latestStartedIndex
-            // itself falls back to backing rows when a song has nothing else.
+            // Buffered set empty or backing-only, already past the first real line: hold the
+            // melody. latestStartedIndex itself falls back to backing rows when a song has
+            // nothing else.
             scrollToIndex = previous?.scrollToIndex ?? latestStartedIndex
         }
 

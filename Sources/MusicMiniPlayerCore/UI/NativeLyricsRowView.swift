@@ -1817,13 +1817,37 @@ final class NativeLyricsRowView: NSView {
     ) -> MainTextPhaseAppliedMetrics {
         let activeRun = plan.wordRuns.last { $0.startTime <= currentTime }
             ?? plan.wordRuns.first
-        let linePlan = mainSweepLinePlan(for: plan, bounds: mainBrightTextLayer.bounds)
+        // 2026-09-18 (stage bundle 3i, item 3 — CJK trailing-line ghost): the dim base
+        // (`applyFloatingHiddenBase`, below) wraps against `contentTextWidth(configuration)` —
+        // `configuration.rowWidth` minus insets, documented at its own declaration as the
+        // "single source of truth ... never bounds.width, which can be stale/zero on a fresh
+        // view [or] pooled one before layout() runs". The bright per-glyph sweep layout used to
+        // read `mainBrightTextLayer.bounds.width` instead — exactly the quantity that comment
+        // warns against — so a `configure()` at a NEW rowWidth landing before the next AppKit
+        // layout pass catches `bounds` up to it (a dropped/delayed frame; `layout()`'s own
+        // memoization gate means this is not guaranteed to run synchronously with configure())
+        // made the two systems wrap the SAME text against DIFFERENT widths for one or more
+        // ticks: the dim base commits to its new wrap immediately, the bright per-glyph tiles
+        // stay laid out for the OLD width until `bounds` catches up. The dim base's newly
+        // revealed trailing line then has no bright tile drawn over it at all — a dim-only
+        // (0.35 opacity), blurred-looking duplicate of the row's own trailing text. Route both
+        // through the exact same width source so they can never disagree.
+        let sweepBounds: CGRect
+        if let configuration {
+            sweepBounds = CGRect(x: 0, y: 0, width: contentTextWidth(configuration), height: mainBrightTextLayer.bounds.height)
+        } else {
+            sweepBounds = mainBrightTextLayer.bounds
+        }
+        let linePlan = mainSweepLinePlan(for: plan, bounds: sweepBounds)
         let emphasisOrders = Self.activeEmphasisOrders(plan: plan)
         // v2.8 Canvas: dim base is one laid-out string (pass 1); only the bright overlay
         // is per-glyph so words can float (pass 2). Nilling the dim string and retessellating
         // it as CATextLayer tiles was the activation 行距/字距 jump (founder 2026-08-27).
         // Before layout (bounds are .zero on a fresh/pooled row) we keep the whole-line dim
         // and hide the sung overlay, so the dim base is never blank (the 从无到有 guard).
+        // `geometryReady`'s WIDTH check stays on the real `bounds` (not `contentTextWidth`,
+        // which is always > 0 regardless of layout state) — it is asking "has this row been
+        // laid out at all yet", not "what width should wrapping use".
         let geometryReady = mainBrightTextLayer.bounds.width > 1
             && mainBrightTextLayer.bounds.height > 1
             && !linePlan.isEmpty
