@@ -366,3 +366,96 @@ DRIFT CORRECTION（0.2s≤|drift|<5s）——**只有 1 次**前后 4 秒窗口�
 还按着在滚？如果已经松开超过 2 秒，那时播放进度条实际显示的时间是不是已经过了前奏（这样
 "第一句是当前行"在纯"当前行=正在唱的那句"这套语义下其实是对的，问题变成"你是否想要一套
 新的、允许手动浏览覆盖当前行"）？
+
+---
+
+## 第三轮（创始人 2026-09-17 裁决 D 为失同步 bug，已修；C1 继续深挖；C2 暂停）
+
+### D：已批准并修复
+
+**创始人裁决的关键证据**：截图 3 进度条 0:00 / -5:03、播放键 ▶（已回到开头且暂停）——播放
+时间确实在前奏窗内，却是第一句歌词占激活槽位。**排除了上一轮"也许是正确行为"的歧义**：
+这就是失同步 bug。
+
+**根因坐实**：外部 seek（进度条拖拽，不是歌词面板内部的点击跳行）只会碰
+`MusicController.seekGeneration`，从不触碰 `NativeLyricsSurfaceView.manualScrollState`（这层
+耦合只存在于面板内部的 `handleNativeLineTap`）。如果 seek 落地时手动滚动手势仍然
+"active"（手势进行中，或者已松手但还在 `scheduleNativeScrollEnd` 的 2 秒宽限期内），
+`LyricsLayerRendererConfiguration.playbackMode` 会无视这次 seek，直接判定
+`.directSnap(.manualScroll)`（`effectiveIsManualScrolling` 的检查排在 `.natural` 之前），
+这条分支锚定到 `frozenDisplayIndex`——手势**开始**那一刻正在播的行——seek 真正的目标时间
+完全没有机会参与解析。
+
+**修复**：`synchronizeNativeSemanticIndex` 现在一旦观察到新的 `seekGeneration`，在
+`playbackMode`/`effectiveIsManualScrolling` 被读取**之前**就先释放仍然 active 的
+`manualScrollState`——真实 seek 永远优先，走和其他入口相同的语义解析路径（按真实播放时间算
+`amllState`）。手动滚动正常结束（计时器/点击）的既有路径不受影响。
+
+**复现（先红后绿，已按铁律验证）**：`Tests/MusicMiniPlayerTests/ManualScrollSeekReleaseTests.
+swift`——真实 surface：播到 20s（行 2 激活）→ 冻结手动滚动在行 2 → 显式 seek 到 0 + 暂停 →
+断言前奏行变成真正激活行（语义索引 0、`frame.y == anchorY`、三点可见），行 1 不在锚位上。
+临时禁用新加的释放调用重跑，确认红（语义索引卡在 2、`manualScrollState` 永远 active、三点
+永远隐藏）——与创始人截图现象精确吻合；恢复修复后转绿。
+
+**验证**：`NativeLyrics*`/`LyricsRenderDefects`/`Handoff`/`PlaybackClockTrust`/`ManualScroll`
+全量 293 个测试，仅 1 个已知预存 harness 缺陷。
+
+**提交**：`e9ed7b4` —— `fix(lyrics-ui): release manual-scroll freeze when an external seek lands`
+
+### C1：找到精确的、每次都有的机制——缩放锚点不在文字左边缘
+
+创始人的新假设（缩放锚点，不是排版引擎）**坐实，且数字精确**。
+
+**读代码坐实锚点位置**：`NativeLyricsRowScale.leadingTransform(scale:height:)`——
+
+```swift
+let pivotY = height / 2
+return CGAffineTransform(translationX: 0, y: pivotY)
+    .scaledBy(x: scale, y: scale)
+    .translatedBy(x: 0, y: -pivotY)
+```
+
+Y 轴锚点在行高度垂直中心（`pivotY`，这个之前就是有意为之，为了避免 CJK 折行行距跳变）；
+**X 轴锚点在 0**——即行视图自己 local 坐标系的原点（行 frame 的左边缘），**不是文字左边缘**。
+这个 transform 直接施加在行的**整个 backing layer** 上（`setPositioning` →
+`layer.setAffineTransform`），而文字内容（`mainTextLayer` 等）的 frame.x 是
+`nativeLyricContentLeadingInset = 32`（前导缩进，`NativeLyricsRowView.layout()`：
+`let textX = nativeLyricContentLeadingInset`）——文字左边缘在 local x=32，不在 x=0。
+
+**精确数字**（公式直接算 + 真实渲染树验证，两者完全一致）：
+
+| 状态 | local x=32 缩放后的 x | 
+|---|---|
+| 非激活（scale=0.95） | 32 × 0.95 = **30.400** |
+| 激活（scale=1.00） | 32 × 1.00 = **32.000** |
+| **位移** | **1.600pt** |
+
+`Tests/MusicMiniPlayerTests/RowScaleAnchorDisplacementTests.swift` 两个测试：①
+纯公式验证（不涉及视图/层）；② 真实 surface 驱动一行从激活播到远超其后（彻底沉入非激活
+状态），用 `CALayer.convert(_:to:)` 把文字层 frame 原点通过该行**当前真实生效**的仿射变换
+转到 surface 坐标——**两者读数都精确是 1.600pt**，不是巧合也不是弹簧过程中的瞬时值：
+激活/非激活是两个**确定性的、每次都一样**的静止态，缩放锚点错位让这两个静止态本身就相差
+1.6pt——**这就是"每次切行都有 1-2px 位移"的根因**，且量级（1.6pt ≈ 1.6px）精确吻合创始人
+的描述。
+
+这与上一轮 C1 的负结果（NSLayoutManager vs CoreText 排版引擎逐字定位差 0.000pt）**不矛盾**：
+两套排版引擎测量文字位置本身是一致的；真正让文字挪位置的是**缩放这个 transform 的锚点选错
+了**，跟排版引擎无关，是几何层的问题，在 headless 下用 `CALayer.convert` 读真实 transform
+就能精确坐实，不需要碰 `layer.render(in:)` 位图（这条路更直接，误差为 0，不像位图质心比较
+还要处理反走样噪声）。
+
+**修法建议（本轮未动手，按要求只报数字+建议）**：`NativeLyricsRowScale.leadingTransform`
+需要把 X 轴锚点也移到文字左边缘（local x=32），而不是行 frame 原点（x=0）——即
+`CGAffineTransform(translationX: pivotX, y: pivotY).scaledBy(...).translatedBy(x: -pivotX,
+y: -pivotY)`，其中 `pivotX = nativeLyricContentLeadingInset`（或者更泛化地，从
+`contentTextWidth`/行内容的真实左边界推导，避免写死常量）。这个改动**只影响水平锚点**，
+不碰已经验证过、专门为解决 CJK 折行行距问题而设的垂直锚点（`pivotY = height/2`）——两者是
+正交的两个维度，不需要一起改。需要确认的是：面板悬停高亮背景层
+（`hoverBackgroundFrame`，`x = nativeLyricContentLeadingInset - 8`）等其它以 local x=0
+为参照系的兄弟层是否也依赖"缩放锚点在 x=0"这个假设，如果依赖，需要一并核实改了锚点后
+它们是否还对齐——这是我建议先做的最小回归检查，不属于本轮范围。
+
+### C2：暂停
+
+按要求本轮不再投入，`NativeLyricsMaskTrace.recordRowPosition` 埋点已在提交 `c755d1c`（本报告
+上一轮）落地并保留，创始人下次真机撞见时会自动留证。

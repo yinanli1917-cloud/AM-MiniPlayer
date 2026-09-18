@@ -242,12 +242,24 @@ public enum NativeLyricsFeelParity {
 /// sprang 0.95 → 1, because the first wrap-line stayed put while later
 /// wrap-lines dropped.
 enum NativeLyricsRowScale {
+    // 2026-09-17 fix (C1, research/repro-2026-09-17-lyrics-render-3c.md §C1): the X pivot used
+    // to be 0 — the ROW'S OWN frame origin — not the text's left edge. Text content (and every
+    // sibling that shares its leading reference: translation, emphasis layer, prelude dots'
+    // frame) starts at `nativeLyricContentLeadingInset`, so scaling around x=0 moved the text's
+    // left edge by `leadingInset * |Δscale|` on every active<->inactive transition — a real,
+    // deterministic 1.6pt (32pt inset × 0.05) displacement every single time, confirmed exactly
+    // via `RowScaleAnchorDisplacementTests` before this fix. Pivoting X at the SAME leading inset
+    // the content itself uses makes the text's left edge invariant across the scale change (the
+    // row still visually reads as "left-aligned, at the same x, just slightly larger/smaller").
+    // The Y pivot (row vertical centre) is UNCHANGED — it already solves a separate, orthogonal
+    // problem (CJK wrapped-line spacing) and is not touched here.
     static func leadingTransform(scale: CGFloat, height: CGFloat) -> CGAffineTransform {
         guard abs(scale - 1) > 0.0001, height > 0 else { return .identity }
+        let pivotX = nativeLyricContentLeadingInset
         let pivotY = height / 2
-        return CGAffineTransform(translationX: 0, y: pivotY)
+        return CGAffineTransform(translationX: pivotX, y: pivotY)
             .scaledBy(x: scale, y: scale)
-            .translatedBy(x: 0, y: -pivotY)
+            .translatedBy(x: -pivotX, y: -pivotY)
     }
 }
 
