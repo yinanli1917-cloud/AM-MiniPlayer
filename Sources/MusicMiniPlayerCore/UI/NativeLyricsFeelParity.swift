@@ -91,9 +91,12 @@ public enum NativeLyricsFeelParity {
         case v28 = "v28"
         case amll = "amll"
 
+        // 2026-09-17: founder switched the shipping default to `amll` after independently
+        // verifying the arm (this session's B report + the founder's own real-machine check).
+        // `current`/`v28` stay fully selectable via the debug URL for A/B comparison.
         public static func resolve(from raw: String?) -> EmphasisMode {
-            guard let raw else { return .current }
-            return EmphasisMode(rawValue: raw.lowercased()) ?? .current
+            guard let raw else { return .amll }
+            return EmphasisMode(rawValue: raw.lowercased()) ?? .amll
         }
     }
 
@@ -156,7 +159,7 @@ public enum NativeLyricsFeelParity {
     public static var emphasisMode: EmphasisMode {
         #if DEBUG
         if let testingEmphasis { return testingEmphasis }
-        if isRunningTests { return .current }
+        if isRunningTests { return .amll }
         #endif
         return EmphasisMode.resolve(
             from: UserDefaults.standard.string(forKey: emphasisDefaultsKey)

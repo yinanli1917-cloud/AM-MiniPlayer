@@ -176,6 +176,12 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
         effectiveGhostGapY: CGFloat
     ) {
         NativeLyricsFeelParity.testingSweep = .v28
+        // These tests characterize the LEGACY two-object emphasis pipeline specifically
+        // (emphasisGlyphLayers pool, its own position/shadow formula) — pin `current` explicitly
+        // now that the shipping default switched to `amll` (2026-09-17,
+        // research/repro-2026-09-17-lyrics-render-3c.md §B), which folds emphasis words into the
+        // ordinary per-word tile pipeline instead and would never populate this pool.
+        NativeLyricsFeelParity.testingEmphasis = .current
         let line = emphasisLine()
         let target = row(for: line, index: 0)
         let view = NativeLyricsRowView(frame: NSRect(x: 0, y: 0, width: width, height: 96))
