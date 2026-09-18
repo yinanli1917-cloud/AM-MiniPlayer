@@ -1452,6 +1452,27 @@ final class NativeLyricsSurfaceView: NSView {
         // fresh, never-backward time. A backward step beyond the resync tolerance is a real
         // discontinuity and is followed; synchronize itself re-anchors on explicit seeks below.
         let musicController = configuration.musicController
+        // Defect D fix (founder 2026-09-17, screenshot 3: progress bar at 0:00 while the FIRST
+        // REAL LYRIC LINE — not the prelude row — held the active slot/capsule): an external seek
+        // (progress bar, not a tap-to-line inside this view) only bumps `seekGeneration` — it does
+        // NOT go through `forceDirectSnap`/`nativeDirectSnapReason`, and has zero knowledge of
+        // `manualScrollState`. If the seek lands while a manual-scroll gesture is still active (or
+        // within grace before `scheduleNativeScrollEnd`'s 2s timer fires), `playbackMode` computes
+        // `.directSnap(.manualScroll)` REGARDLESS of the seek (`effectiveIsManualScrolling` is
+        // checked before `.natural` in `playbackMode`), and that branch anchors to
+        // `frozenDisplayIndex` — the row that was playing when the gesture BEGAN — not to the
+        // seek's target time. frozenDisplayIndex then "survives" the seek landing entirely, which
+        // is exactly the founder's repro: seeking to 0 (prelude window) still showed the row that
+        // was playing at the OLD frozen position (index 1) as active. A genuine external seek must
+        // always win over a stale manual-scroll freeze — release it here, before `playbackMode`/
+        // `effectiveIsManualScrolling` are evaluated, so the seek resolves through the SAME
+        // semantic path (amllState from real playback time) every other entry does. This does NOT
+        // affect manual scroll ending normally (timer/tap) — those already call `.reset()`
+        // themselves; this only covers the case nothing else was going to.
+        if configuration.musicController.seekGeneration != lastObservedSeekGeneration,
+           manualScrollState.isActive {
+            manualScrollState.reset()
+        }
         // 2026-09-14 founder (message B): while manual-scroll frozen, the phase clock must NOT
         // track real playback time — real playback keeps advancing wherever the song actually is
         // while the display freezes on a row the user scrolled to. Feeding that real (unrelated)
