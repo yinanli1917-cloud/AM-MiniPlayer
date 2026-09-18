@@ -172,6 +172,19 @@ struct LyricsLayerRendererConfiguration {
     var nativeHotActiveIndices: Set<Int> = []
     var nativeBufferedActiveIndices: Set<Int> = []
     var nativeTextActiveIndex: Int? = nil
+    // Set once per configure() cycle by synchronizeNativeSemanticIndex whenever it detects a
+    // genuine playback discontinuity (explicit seek, tap-to-line, direct snap/manual-scroll
+    // landing, or a jump beyond the resync tolerance) — never for ordinary forward playback or
+    // small backward clock jitter. Consumed by NativeLyricsRowView.updatePlaybackPhase to release
+    // the monotone post-line karaoke fade floor (mainPostLineFadeFloor). Without this, a row view
+    // that stays mounted across a backward seek (common: nearby rows are never recycled through
+    // prepareForReuse) keeps a floor pinned near 0 from BEFORE the seek forever — even though the
+    // freshly computed fade for the seeked-to time is 1 — so the karaoke highlight never returns
+    // ("seek back into an already-sung line loses its highlight", 2026-09-17). The floor's own
+    // reset condition inside configure() already treats a row-identity change as this same class
+    // of "genuine discontinuity"; an explicit seek that re-enters the SAME row's own line is that
+    // same class of event and gets the same treatment here.
+    var nativeSeekDiscontinuityOccurred: Bool = false
     // Monotonic phase clock (defect-A fix, 2026-07-12). The semantic index is protected from the
     // SB clock's backward resync dips by the renderer's monotonic clock, but the TEXT PHASE
     // (karaoke sweep, translation reveal, bright overlays, dots) read the RAW clock — so in the
@@ -1510,6 +1523,22 @@ final class NativeLyricsSurfaceView: NSView {
             // Keep the seek token in sync: this branch already snapped, so a seek that happened in
             // snap mode must not re-fire when natural playback resumes.
             lastObservedSeekGeneration = configuration.musicController.seekGeneration
+            // Only `.seek`/`.tapToLine` represent a genuine jump to a different point in playback
+            // time — the class of event the post-line fade floor needs releasing for. The other
+            // snap reasons are NOT time-jumps and must NOT release it:
+            // `.initialLayout`/`.reducedMotion`/`.occlusionResume` can recur on essentially every
+            // `configure()` cycle for a surface that never satisfies their "settled" condition
+            // (confirmed empirically: a synthetic test harness that never fully lays out kept
+            // reporting `.initialLayout` on every call, which — before this narrowing — reset the
+            // floor every frame and reintroduced the exact "previous line pops back to full
+            // brightness on ordinary forward playback" bug `NativeLyricsGapHandoffTests` exists to
+            // prevent; regression caught 2026-09-17, same session as the fix). `.manualScroll` was
+            // already excluded above for a different reason (its own investigation). `.trackReset`
+            // is a new-song discontinuity already covered by `configure()`'s own row-identity reset.
+            if !isManualScrollFrozen, case .directSnap(let reason) = configuration.playbackMode,
+               reason == .seek || reason == .tapToLine {
+                configuration.nativeSeekDiscontinuityOccurred = true
+            }
             cancelNativeLineAdvanceTimer()
             return
         }
@@ -1564,6 +1593,18 @@ final class NativeLyricsSurfaceView: NSView {
                 liveIndex: liveIndex,
                 explicitSeek: explicitSeek
             )
+        // Deliberately narrower than `isSeek` (which also fires for a passive backward CLOCK
+        // JITTER/resync beyond resyncRewindTolerance — `clock.step == .seek` — and for
+        // non-explicit index divergence): `NativeLyricsGapHandoffTests` pins that jitter crossing a
+        // line's end must NOT re-light its just-faded overlay, which is exactly what happened when
+        // this flag was driven by `isSeek` (regression caught 2026-09-17). `explicitSeek` is the
+        // production entry point's own signal (`MusicController.seek(to:)` → `registerSeek()`,
+        // bumping `seekGeneration`) — true only for a real user-initiated seek, never for a passive
+        // clock correction, so it is the correct "genuine discontinuity" test for releasing the
+        // post-line fade floor.
+        if explicitSeek {
+            configuration.nativeSeekDiscontinuityOccurred = true
+        }
         // On a seek, recompute with the buffered trail reset so the scroll snaps to the new line
         // instead of dragging the previous bright lines (and waving) toward it.
         let timelineState = isSeek

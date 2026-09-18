@@ -1415,6 +1415,19 @@ final class NativeLyricsRowView: NSView {
         #if DEBUG
         debugPlaybackPhaseUpdateCount += 1
         #endif
+        // A genuine playback discontinuity (explicit seek / tap-to-line / direct snap) is the
+        // same class of event `configure()` already treats as a reason to reset the monotone
+        // post-line karaoke fade floor (see mainPostLineFadeFloor's declaration comment) — except
+        // configure() only fires that reset when THIS VIEW gets reassigned to a DIFFERENT row.
+        // A row view that stays mounted across a seek (the common case: nearby rows are never
+        // recycled through prepareForReuse) never took that path, so a floor already pinned near
+        // 0 from before the seek stayed pinned forever, even after seeking back into that same
+        // line's own span where the freshly computed fade is 1 — the karaoke highlight overlay
+        // never returned (2026-09-17: "seek back into an already-sung line loses its highlight").
+        if configuration.nativeSeekDiscontinuityOccurred {
+            mainPostLineFadeFloor = 1
+            translationPostLineFadeFloor = 1
+        }
         // Phase timing MUST come from the shared monotonic clock (phaseRenderTime), never the raw
         // SB clock: a backward resync dip at line start collapses the active plan to progress 0
         // for a frame — the handoff style flash (docs/defect-recordings/2026-07-11).
