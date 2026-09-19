@@ -740,47 +740,174 @@ final class NativeLyricsRealEventScrollTapMaskTests: XCTestCase {
     }
 
     // MARK: - Dimension 6: manual-scroll landing on the row right after a REAL interlude gap,
-    // driven from the actual production `LyricLayerRowBuilder` + `LyricsService.updateInterludeAfterIndex`
-    // formulas (not a hand-derived closed form — the earlier version of this test asserted a
-    // formula that used the WRONG row-height source (config's declared height instead of the
-    // production `measuredHeightsByIndex` estimate) and was a TEST bug, not an app bug; deleted).
+    // built from actual pipeline output — NOT the disk cache (which only had a 49-line QQ
+    // variant with empty `words`, produced gap=0, and could not exercise this mechanism; see the
+    // deleted test note below). `DEVELOPER_DIR=/Applications/Xcode.app swift run LyricsVerifier
+    // check "啟程" "Christine Fan" 277 --dump` (network, extended `--dump` in main.swift to also
+    // print endTime + per-word timings) resolved NetEase, 49 real lines + 1 prelude = 50 display
+    // rows, WORD-LEVEL sync. Display index [15] "天开始明亮的过程" startTime=94.2, and its
+    // `endTime` is 99.4 — the LAST WORD's own end ("程"[97.6-99.4]), not the raw line duration —
+    // exactly the `LyricsParser.swift:353` `endTime = min(endTime, lastWord.endTime)` capping the
+    // earlier (49-line cache) test could only describe from source, not exercise. Display [16]
+    // "每一天 都有一些事情将会发生" starts at 113.9. gap = 113.9 - 99.4 = 14.5s >= 5.0s — a REAL,
+    // code-verified interlude: `interludeAfterIndex` = 15, frozen landing row for a scroll-back
+    // gesture starting inside the tail = 16.
     //
-    // Fixture data: real 《啟程》 lyrics_cache.json entry (QQ, line-level, `words: []`), the ONLY
-    // version present on disk after searching all 4 on-disk cache locations (unsandboxed +
-    // sandboxed container, both under /Users and the /System/Volumes/Data mirror) — a 49-line
-    // variant, not the 38-line variant the founder's real session had loaded (debug log said
-    // "38L"). Rows 13→14 in this cache: "你能让我看见黑夜过去" 90.30–94.69, then "天开始明亮的
-    // 过程" 94.69–114.58 (a 20s line covering the long instrumental tail). Because this cache
-    // entry has empty `words`, `LyricsParser`'s `endTime = min(endTime, lastWord.endTime)` capping
-    // (LyricsParser.swift:353) never fires — `LayerBackedLyricInterlude`/`updateInterludeAfterIndex`
-    // both compute `gap = nextLine.startTime - currentLine.endTime` from these SAME contiguous
-    // cache values, which is always exactly 0. This specific cached entry therefore cannot
-    // reproduce an interlude via the production gap-detection formula as currently written —
-    // honestly recorded, not worked around by hand-editing the real data to fabricate a gap.
+    // (Deleted: test_anchorY_exactlyMatchesClosedFormInterludeAdvance — its "expected" formula
+    // used the test's own config row-height dict instead of production's measuredHeightsByIndex
+    // estimate; that failure was a test bug, not an app bug.)
 
     @MainActor
-    func test_interludeAnchorAdvance_withRealQiChengCacheData_manualScrollLandingAfterGap() {
-        // Real cache values (verbatim from lyrics_cache.json key 034e5cbf...49-line entry).
-        let realLineTexts = [
-            "你能让我看见黑夜过去",  // idx 13
-            "天开始明亮的过程",      // idx 14 — long tail 94.69→114.58 in the cache (words: [])
-            "每一天 都有一些事情将会发生", // idx 15
-        ]
-        let realStarts: [TimeInterval] = [90.30, 94.69, 114.58]
-        let realEnds: [TimeInterval] = [94.69, 114.58, 122.57]
-
+    private func makeQiChengRealRows() -> [LayerBackedLyricRow] {
+        // Verbatim from the --dump above (NetEase, real pipeline output, word-level).
+        func w(_ word: String, _ s: TimeInterval, _ e: TimeInterval) -> LyricWord {
+            LyricWord(word: word, startTime: s, endTime: e)
+        }
         var sourceLines: [LyricLine] = []
-        for i in 0..<realLineTexts.count {
-            sourceLines.append(LyricLine(text: realLineTexts[i], startTime: realStarts[i], endTime: realEnds[i], words: []))
+        sourceLines.append(LyricLine(text: "⋯", startTime: 0.0, endTime: 25.9, words: []))
+        sourceLines.append(LyricLine(text: "每一天 都有一些事情将会发生", startTime: 25.9, endTime: 31.9, words: [
+            w("每", 25.9, 26.3), w("一", 26.3, 26.8), w("天 ", 26.8, 28.2), w("都", 28.2, 28.5),
+            w("有", 28.5, 28.7), w("一", 28.7, 28.9), w("些", 28.9, 29.1), w("事", 29.1, 29.4),
+            w("情", 29.4, 29.7), w("将", 29.7, 29.9), w("会", 29.9, 30.4), w("发", 30.4, 30.8), w("生", 30.8, 31.9),
+        ]))
+        for i in 2...13 {
+            // Filler rows (not exercised by this test's assertions) — real text/timing not
+            // required for indices the test never targets; distinct placeholder text keeps row
+            // identity unambiguous in failure output. 12 filler rows (indices 2...13) so the
+            // next appended row lands at index 14, matching the dump's own [14] bracket exactly.
+            let s = 32.0 + Double(i) * 4.4
+            sourceLines.append(LyricLine(text: "filler\(i)", startTime: s, endTime: s + 4.0, words: []))
         }
-        let displayLines = sourceLines.enumerated().map { i, l in
-            DisplayLyricLine(id: "real\(i)", sourceIndex: i, segmentIndex: 0, segmentCount: 1, line: l)
-        }
-        let rows = LyricLayerRowBuilder.makeRows(from: displayLines, sourceLines: sourceLines, firstRealLyricIndex: 0)
+        sourceLines.append(LyricLine(text: "你能让我看见黑夜过去", startTime: 89.8, endTime: 93.7, words: [
+            w("你", 89.8, 90.1), w("能", 90.1, 90.3), w("让", 90.3, 90.6), w("我", 90.6, 90.8),
+            w("看", 90.8, 91.1), w("见", 91.1, 91.3), w("黑", 91.3, 91.6), w("夜", 91.6, 91.8),
+            w("过", 91.8, 92.2), w("去", 92.2, 93.7),
+        ])) // index 14
+        sourceLines.append(LyricLine(text: "天开始明亮的过程", startTime: 94.2, endTime: 99.4, words: [
+            w("天", 94.2, 94.5), w("开", 94.5, 94.7), w("始", 94.7, 95.1), w("明", 95.1, 95.4),
+            w("亮", 95.4, 95.9), w("的", 95.9, 97.1), w("过", 97.1, 97.6), w("程", 97.6, 99.4),
+        ])) // index 15 — its endTime (99.4) is the last-word-capped value, not a raw line duration
+        sourceLines.append(LyricLine(text: "每一天 都有一些事情将会发生", startTime: 113.9, endTime: 120.1, words: [
+            w("每", 113.9, 114.6), w("一", 114.6, 114.8), w("天 ", 114.8, 116.3), w("都", 116.3, 116.5),
+            w("有", 116.5, 116.8), w("一", 116.8, 117.0), w("些", 117.0, 117.2), w("事", 117.2, 117.5),
+            w("情", 117.5, 117.8), w("将", 117.8, 118.1), w("会", 118.1, 118.5), w("发", 118.5, 118.8), w("生", 118.8, 120.1),
+        ])) // index 16 — the frozen manual-scroll landing row right after the gap
+        sourceLines.append(LyricLine(text: "每段路 都有即将要来的旅程", startTime: 121.9, endTime: 127.9, words: [
+            w("每", 121.9, 122.5), w("段", 122.5, 122.9), w("路 ", 122.9, 124.3), w("都", 124.3, 124.6),
+            w("有", 124.6, 124.8), w("即", 124.8, 125.1), w("将", 125.1, 125.3), w("要", 125.3, 125.6),
+            w("来", 125.6, 125.9), w("的", 125.9, 126.1), w("旅", 126.1, 126.5), w("程", 126.5, 127.9),
+        ])) // index 17
 
-        XCTAssertNil(rows[1].interlude,
-            "as recorded: this cache entry's contiguous endTime==nextStart chain produces gap=0 "
-            + "via LayerBackedLyricInterlude's own formula — no interlude registers from this "
-            + "specific real data without the 38-line variant's actual (capped) endTimes")
+        // The count-12 filler loop above lands indices 2...11 (10 rows) between index 1 and the
+        // real index-12 row appended next, matching the dump's own [02]-[11] slots so index
+        // arithmetic (12/15/16/17) below lines up with the dump's own bracketed indices.
+        let displayLines = sourceLines.enumerated().map { i, l in
+            DisplayLyricLine(id: "qc\(i)", sourceIndex: i, segmentIndex: 0, segmentCount: 1, line: l)
+        }
+        return LyricLayerRowBuilder.makeRows(from: displayLines, sourceLines: sourceLines, firstRealLyricIndex: 1)
+    }
+
+    @MainActor
+    func test_interludeAnchorAdvance_withRealQiChengPipelineData_gapIsDetected() {
+        let rows = makeQiChengRealRows()
+        // index 15 = "天开始明亮的过程" (endTime 99.4, last-word-capped); index 16 starts 113.9.
+        XCTAssertEqual(rows[15].displayLine.line.text, "天开始明亮的过程")
+        XCTAssertEqual(rows[15].displayLine.line.endTime, 99.4, accuracy: 0.01)
+        XCTAssertNotNil(rows[15].interlude,
+            "real pipeline data: gap = 113.9 - 99.4 = 14.5s >= 5.0s must register as an interlude")
+        XCTAssertEqual(rows[15].interlude?.startTime ?? -1, 99.4, accuracy: 0.01)
+        XCTAssertEqual(rows[15].interlude?.endTime ?? -1, 113.9, accuracy: 0.01)
+    }
+
+    @MainActor
+    func test_realManualScrollFreezeInsideRealInterludeGap_anchorAndMaskOnRealTap() {
+        let rows = makeQiChengRealRows()
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 320, height: 600))
+        let window = host(surface, NSSize(width: 320, height: 600))
+        let mc = MusicController(preview: true)
+        mc.duration = 277
+        mc.isPlaying = true
+        surface.debugSkipDedupe = true
+        let clocks = Clocks(wall: 6_000, date: Date(timeIntervalSinceReferenceDate: 950_000_000))
+        defer { surface.debugNowOverride = nil; mc.debugPlaybackClockDateProvider = nil }
+
+        // Warm up to index 16 (the row right after the gap) so it is already "live" — mirroring
+        // the founder's path where playback had already reached that line before the tail ended.
+        warmUp(surface: surface, mc: mc, rows: rows, clocks: clocks,
+               toTime: rows[16].displayLine.line.startTime + 0.3, currentIndex: 16, ticks: 20,
+               interludeAfterIndex: 15)
+        let steadyAnchor = surface.debugCurrentAnchorY
+        print("[RealEventMask] QICHENG steady anchorY (row16 live, gap already closed) = \(steadyAnchor.map(String.init) ?? "nil")")
+
+        // Now move the LIVE clock DEEP INSIDE the gap (index 15's tail — real founder scenario:
+        // playback is still in the long tail when the user starts scrolling) and begin a REAL
+        // scroll gesture from there while frozen index resolves to 16 (the row right after the
+        // gap start — `effectiveScrollTargetIndex` at gesture-begin, matching the b8eb126 anchor
+        // mechanism under test).
+        let midGapTime = 105.0 // inside [99.4, 113.9)
+        mc.syncPlaybackClock(to: midGapTime, playing: mc.isPlaying, at: clocks.date)
+        var cfg = config(rows, current: 16, mc: mc, interludeAfterIndex: 15)
+        surface.configure(cfg)
+        clocks.wall += 1.0 / 60.0
+        clocks.date = clocks.date.addingTimeInterval(1.0 / 60.0)
+        surface.debugTick(displayInterval: 1.0 / 60.0)
+        let preScrollAnchor = surface.debugCurrentAnchorY
+        print("[RealEventMask] QICHENG mid-gap anchorY (t=105, before scroll) = \(preScrollAnchor.map(String.init) ?? "nil")")
+
+        sendRealScroll(surface: surface, window: window, deltaY: 1, phase: .began)
+        clocks.wall += 1.0 / 60.0
+        clocks.date = clocks.date.addingTimeInterval(1.0 / 60.0)
+        surface.debugTick(displayInterval: 1.0 / 60.0)
+        XCTAssertTrue(surface.debugManualScrollActive, "precondition: real scroll must have started manual-scroll ownership")
+        let manualStartAnchor = surface.debugCurrentAnchorY
+        print("[RealEventMask] QICHENG manualStart anchorY = \(manualStartAnchor.map(String.init) ?? "nil")")
+
+        // The RIGHT comparison for "did manual-scroll's OWN transition introduce a jump" is
+        // preScrollAnchor (natural playback, mid-gap, one tick before the gesture) vs
+        // manualStartAnchor (frozen, same mid-gap instant, one tick after the gesture began) —
+        // NOT `steadyAnchor` (captured at a DIFFERENT playback time, before jumping into the gap
+        // at all). Comparing against `steadyAnchor` conflates "the interlude's own continuous
+        // ramp between two different times" with "a discontinuity manual-scroll itself caused" —
+        // an earlier version of this test made exactly that mistake and reported a false 34pt
+        // "jump" that was really just the correct, continuous interlude advance already active
+        // during natural playback at t=105 (logged here for the record: steadyAnchor=\(steadyAnchor.map(String.init) ?? "nil")).
+        if let preScrollAnchor, let manualStartAnchor {
+            let delta = abs(manualStartAnchor - preScrollAnchor)
+            print("[RealEventMask] QICHENG anchor delta (preScroll vs manualStart, same instant) = \(delta)")
+            XCTAssertLessThan(delta, 6.0,
+                "row16's anchorY jumped \(delta)pt at the exact instant manual-scroll began, "
+                + "while frozen inside a REAL interlude gap (preScroll=\(preScrollAnchor), "
+                + "manualStart=\(manualStartAnchor)) — matches the founder's anchor=-26-vs-42 "
+                + "evidence shape with real production data")
+        } else {
+            XCTFail("debugCurrentAnchorY was nil at preScroll or manualStart")
+        }
+
+        // Real taps on the two rows the founder's evidence bracketed: N-2 (a filler row here,
+        // still real hit-test path) and N itself (row 16).
+        performRealScrollBackGesture(surface: surface, window: window, clocks: clocks, lines: 2)
+        sendRealScroll(surface: surface, window: window, deltaY: 0, phase: .ended)
+        for target in [14, 16] {
+            let line = rows[target].displayLine.line
+            let tapTime = line.startTime + (line.endTime - line.startTime) * 0.6
+            mc.syncPlaybackClock(to: tapTime, playing: mc.isPlaying, at: clocks.date)
+            guard sendRealClick(surface: surface, window: window, rowIndex: target) else {
+                XCTFail("row \(target) not hit-testable for real tap"); continue
+            }
+            let step = 1.0 / 60.0
+            clocks.wall += step
+            clocks.date = clocks.date.addingTimeInterval(step)
+            surface.debugTick(displayInterval: step)
+            if let landed = surface.debugRowView(forIndex: target) {
+                let acceptable = isLandingFrameAcceptable(row: landed)
+                print("[RealEventMask] QICHENG tap target=\(target) acceptable=\(acceptable) "
+                    + "expected=\(landed.debugLastMainExpectedProgress ?? -1) "
+                    + "brightOpacity=\(landed.debugMainBrightOpacity) "
+                    + "wholeLineHighlight=\(landed.debugLastWholeLineHighlight)")
+                XCTAssertTrue(acceptable, "real tap on row \(target) after a real interlude-gap manual scroll: "
+                    + "bright-and-unmasked landing frame")
+            }
+        }
+        _ = cfg // silence unused-var warning if optimized away
     }
 }
