@@ -628,6 +628,23 @@ final class NativeLyricsRowView: NSView {
         }
     }
 
+    /// Presentation-vs-model drift diagnostic (research/repro-2026-09-19-lyrics-render-3l.md step
+    /// 3): every renderer-created layer is expected to be `.lyricsInert()` (implicit actions
+    /// killed) AND never carry a resident explicit `CAAnimation` on `position`, so `layer.position`
+    /// (the MODEL value this file assigns every frame) and `layer.presentation()?.position` (what
+    /// the compositor is ACTUALLY drawing, which lags the model while any animation is in flight)
+    /// must be identical every frame. A nonzero delta here — not a difference in the two float
+    /// FORMULAS `NativeLyricsDimBaseFloatGateConsistencyTests` checks — is the CA-level "the number
+    /// is right but the pixel hasn't caught up yet" ghost: a stray implicit action on an ancestor,
+    /// or an explicit spring left running from a superseded code path.
+    var debugMainWordGlyphPresentationDeltas: [(dimDeltaY: CGFloat, brightDeltaY: CGFloat)] {
+        zip(mainDimWordGlyphLayers, mainBrightWordGlyphLayers).map { dim, bright in
+            let dimDelta = abs((dim.presentation()?.position.y ?? dim.position.y) - dim.position.y)
+            let brightDelta = abs((bright.presentation()?.position.y ?? bright.position.y) - bright.position.y)
+            return (dimDelta, brightDelta)
+        }
+    }
+
     /// Repro/regression instrumentation (defect 1, emphasis words, 2026-09-14 founder report).
     /// `applyMainWordFloatGlyphLayers` still SKIPS emphasis-order runs entirely (`where
     /// !emphasisOrders.contains(run.order)`) — emphasis words render exclusively through
