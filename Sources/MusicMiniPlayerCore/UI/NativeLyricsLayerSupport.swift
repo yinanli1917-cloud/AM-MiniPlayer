@@ -261,27 +261,29 @@ enum NativeLyricsMaskTrace {
         expected: CGFloat,
         applied: CGFloat,
         mainBrightOverlayPresent: Bool = false,
-        mainBrightOpacity: Float = 0
+        mainBrightOpacity: Float = 0,
+        brightHiddenWhileSweeping: Bool = false
     ) {
         guard isArmed else { return }
         let brightUnmaskedIncomplete = mainBrightOverlayPresent
             && !perRunSweep
             && expected < 0.9
             && mainBrightOpacity > 0.2
-        let key = "\(rowID)|\(wordIndex)|\(wholeLineHighlight)|\(perRunSweep)|\(brightUnmaskedIncomplete)"
+        let key = "\(rowID)|\(wordIndex)|\(wholeLineHighlight)|\(perRunSweep)|\(brightUnmaskedIncomplete)|\(brightHiddenWhileSweeping)"
         lock.lock()
         let changed = key != lastKey
         if changed { lastKey = key }
         lock.unlock()
         guard changed else { return }
         let line = String(
-            format: "{\"event\":\"mask_state\",\"row\":\"%@\",\"word\":%d,\"wholeLineHighlight\":%@,\"perRunSweep\":%@,\"expected\":%.3f,\"applied\":%.3f,\"brightUnmaskedIncomplete\":%@,\"brightOpacity\":%.3f}\n",
+            format: "{\"event\":\"mask_state\",\"row\":\"%@\",\"word\":%d,\"wholeLineHighlight\":%@,\"perRunSweep\":%@,\"expected\":%.3f,\"applied\":%.3f,\"brightUnmaskedIncomplete\":%@,\"brightOpacity\":%.3f,\"brightHiddenWhileSweeping\":%@}\n",
             rowID, wordIndex,
             wholeLineHighlight ? "true" : "false",
             perRunSweep ? "true" : "false",
             Double(expected), Double(applied),
             brightUnmaskedIncomplete ? "true" : "false",
-            Double(mainBrightOpacity)
+            Double(mainBrightOpacity),
+            brightHiddenWhileSweeping ? "true" : "false"
         )
         let url = URL(fileURLWithPath: "/tmp/nanopod_mask_trace.jsonl")
         if !FileManager.default.fileExists(atPath: url.path) {

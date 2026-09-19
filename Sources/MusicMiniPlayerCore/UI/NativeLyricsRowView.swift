@@ -224,6 +224,7 @@ final class NativeLyricsRowView: NSView {
         if self.row?.displayLine.id != row.displayLine.id {
             mainPostLineFadeFloor = 1
             translationPostLineFadeFloor = 1
+            mainWasTextActiveLastPhase = false
         }
         self.row = row
         self.configuration = configuration
@@ -276,6 +277,12 @@ final class NativeLyricsRowView: NSView {
     // ───────────────────────────────────────────────────────────────────────────
     private var mainPostLineFadeFloor: CGFloat = 1
     private var translationPostLineFadeFloor: CGFloat = 1
+    // Tracks the text-activation state `updatePlaybackPhase` observed LAST TIME it ran on this
+    // view (regardless of role/config churn in between) — the activation-edge detector the fade
+    // floor reset above relies on. Never true after `prepareForReuse`/a fresh mount, so a
+    // recycled view can't inherit a stale "already active" reading from whatever line it used
+    // to represent.
+    private var mainWasTextActiveLastPhase = false
 
     func freezeParkedTextPhaseOpacity() {
         if parkedMainBrightOpacity == nil {
@@ -354,6 +361,7 @@ final class NativeLyricsRowView: NSView {
         clearParkedTextPhaseOpacity()
         mainPostLineFadeFloor = 1
         translationPostLineFadeFloor = 1
+        mainWasTextActiveLastPhase = false
         // Clear the scale/position transform too. layout() re-asserts positioningTransform on every
         // commit; if a recycled row keeps the previous row's scale, the next mount flashes that old
         // size for one frame before applyFrame writes the new scale (the seek size-pop).
@@ -847,8 +855,21 @@ final class NativeLyricsRowView: NSView {
                 ?? (layer as? CATextLayer)?.string as? String
             let isBitmapContents = layer.contents != nil
             let t = layer.affineTransform()
+            // 2026-09-19 founder follow-up: the model layer (what this whole dump otherwise
+            // reads) can commit a value the render server has not caught up to yet — an
+            // implicit-animation leak (see banned-patterns.md) that only shows up on the
+            // PRESENTATION layer, the tree Core Animation is actually compositing on screen right
+            // now. Printing both side by side turns "model says X, screen looked like Y" from an
+            // unfalsifiable eyewitness report into a captured discrepancy. `superlayer` names the
+            // actual parent this layer composites under — confirms/refutes whether a layer still
+            // lives under the opacity-bearing ancestor its dim tier depends on (e.g. a dim glyph
+            // tile that got reparented off mainTextLayer would no longer inherit its 0.35).
+            let presentationOpacity = layer.presentation()?.opacity
+            let presentationOpacityText = presentationOpacity.map { String($0) } ?? "nil(no-presentation)"
+            let superlayerName = layer.superlayer.map { "\(type(of: $0))" } ?? "nil"
             lines.append(
                 "  \(label) class=\(type(of: layer)) frame=\(layer.frame) opacity=\(layer.opacity) "
+                    + "presentationOpacity=\(presentationOpacityText) superlayer=\(superlayerName) "
                     + "hidden=\(layer.isHidden) string=\(stringPrefix.map { "\"\($0)\"" } ?? "nil") "
                     + "contentsIsBitmap=\(isBitmapContents) shouldRasterize=\(layer.shouldRasterize) "
                     + "transform=(a:\(t.a) b:\(t.b) c:\(t.c) d:\(t.d) tx:\(t.tx) ty:\(t.ty))"
@@ -1596,6 +1617,32 @@ final class NativeLyricsRowView: NSView {
             rowIndex: row.index,
             textActiveIndex: configuration.effectiveTextActiveIndex
         )
+        // 2026-09-19 real-device repro (row dump + mask trace, "想爱 就不能害怕会有伤痕"):
+        // the `nativeSeekDiscontinuityOccurred` reset above only fires for rows that actually
+        // get `updatePlaybackPhase` called on them during the exact tick the flag is true — a
+        // transient, one-frame signal. A row that sits mounted-but-inactive (e.g. representing
+        // an upcoming line that hasn't been promoted to "active" yet) can miss that tick
+        // entirely, so a floor pinned near 0 from a PREVIOUS activation of this same line
+        // survives, and the row's karaoke overlay never lights when it naturally becomes
+        // active again — independent of whether a seek ever happened.
+        // Fix at the clock/activation-edge level instead of the transient flag: the floor must
+        // be armed to 1 whenever this row is (re)entering its own active window, detected two
+        // ways — (a) the activation EDGE (this row was not text-active last update and is now),
+        // which catches every promotion path regardless of how it happened, and (b) the render
+        // clock sitting before this line's own start (a landing seek can put a row directly into
+        // "active" mid-span without ever crossing a false→true edge on this exact view). Gating
+        // on the edge (not every active frame) is required — resetting on every tick a row is
+        // active is the previously-banned `.initialLayout`-style repeat-snap that relit an
+        // ALREADY-CORRECTLY-fading previous line (see docs/defect-recordings, 2026-09-17).
+        if isActive {
+            let justEnteredActiveWindow = !mainWasTextActiveLastPhase
+            let renderTimeBeforeLineStart = renderTime < row.displayLine.line.startTime
+            if justEnteredActiveWindow || renderTimeBeforeLineStart {
+                mainPostLineFadeFloor = 1
+                translationPostLineFadeFloor = 1
+            }
+        }
+        mainWasTextActiveLastPhase = isActive
 
         var sample: NativeLyricsTextPhaseSample?
         if managesTransaction {
@@ -1619,6 +1666,24 @@ final class NativeLyricsRowView: NSView {
                 currentTime: renderTime
             )
             let expectsPerRunSweep = row.displayLine.line.hasSyllableSync && !plan.wordRuns.isEmpty
+            // 2026-09-19 real-device repro (rowdump "想爱 就不能害怕会有伤痕"): the dim-base
+            // compensation flags (`mainDimCompensationActive`/`translationDimCompensationActive`)
+            // used to be written ONLY inside `updateTextLayers` (called from `configure()`, which
+            // runs at mount/reuse — not every frame). A row promoted to active purely through the
+            // per-frame `updatePlaybackPhase` path (the common case: the render loop reassigns
+            // roles without a fresh `configure()` when the row's own content didn't change) kept
+            // whatever flag value was baked in when it was last configured — often `false` from
+            // when it was configured as an upcoming/inactive row — so `applyDimBaseCompensation`
+            // forced the dim base to full opacity (uncompensated) even while genuinely active and
+            // swept: the whole line read as fully bright with no per-word mask. Recompute both
+            // flags from the CURRENT activation state on every phase update, not just at
+            // configure-time, so an activation transition that skips `configure()` still corrects
+            // the compensation the same frame.
+            mainDimCompensationActive = expectsPerRunSweep
+            translationDimCompensationActive = isActive
+                && row.displayLine.line.hasSyllableSync
+                && plan.translation != nil
+            applyDimBaseCompensation()
             let appliedMainProgress = expectsPerRunSweep
                 ? applyActiveMainPhase(plan: plan, currentTime: renderTime)
                 : applyStaticActiveTextPhase(plan: plan)
@@ -1666,6 +1731,17 @@ final class NativeLyricsRowView: NSView {
                 && !appliedMainProgress.appliedPerRunSweep
                 && !mainBrightTextLayer.isHidden
                 && mainBrightTextLayer.string != nil
+            // 2026-09-19 real-device repro blind spot: neither `wholeLineHighlight` (bright visible
+            // with no mask) nor `brightUnmaskedIncomplete` (bright visible + incomplete) catch the
+            // OPPOSITE shape actually seen on device — the bright overlay entirely HIDDEN
+            // (mainPostLineFadeFloor pinned to 0 from a stale prior activation) while the active
+            // line's expected sweep progress is partway through. That row silently renders as
+            // dim-only with no karaoke overlay at all; record it as its own field so a future
+            // real-device session doesn't require a live repro to notice it again.
+            let maskTraceBrightHiddenWhileSweeping = expectsPerRunSweep
+                && plan.mainSweepProgress > 0.001
+                && plan.mainSweepProgress < 0.999
+                && mainBrightTextLayer.isHidden
             NativeLyricsMaskTrace.record(
                 rowID: row.displayLine.id,
                 wordIndex: maskTraceWordIndex,
@@ -1674,7 +1750,8 @@ final class NativeLyricsRowView: NSView {
                 expected: plan.mainSweepProgress,
                 applied: appliedMainProgress.progress,
                 mainBrightOverlayPresent: !mainBrightTextLayer.isHidden && mainBrightTextLayer.string != nil,
-                mainBrightOpacity: debugMainBrightOpacity
+                mainBrightOpacity: debugMainBrightOpacity,
+                brightHiddenWhileSweeping: maskTraceBrightHiddenWhileSweeping
             )
             let expectsNoLineLevelMainSweep = !expectsPerRunSweep
             let appliesLineLevelMainSweep = expectsNoLineLevelMainSweep
@@ -1743,6 +1820,12 @@ final class NativeLyricsRowView: NSView {
                 )
             }
         } else {
+            // Same staleness fix as the active branch above: a row demoted from active purely via
+            // the per-frame role reassignment (no fresh `configure()`) must not keep reading as
+            // "sweep in progress" for dim-compensation purposes.
+            mainDimCompensationActive = false
+            translationDimCompensationActive = false
+            applyDimBaseCompensation()
             applyInactivePlaybackLayerState()
         }
         updateDotsPhase(row: row, currentTime: renderTime)
