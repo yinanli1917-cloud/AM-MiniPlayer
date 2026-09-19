@@ -848,6 +848,26 @@ final class NativeLyricsRowView: NSView {
         let rowText = row?.displayLine.line.text ?? "?"
         let rowID = row?.displayLine.id ?? "?"
         lines.append("row role=\(role) id=\(rowID) text=\"\(rowText.prefix(12))\"")
+        // 2026-09-19 coordinator follow-up ("未来的旅程" blurred duplicate ~10pt below the
+        // active line): the row ROOT layer's own frame/transform/opacity is the thing the
+        // surface positions every frame (`applyFrame`/`setPositioning`/`setRowOpacity`) — a
+        // duplicate sitting a fixed few points BELOW the real row would most simply be this
+        // row's own root layer landing at the wrong Y (stale presentation transform), not a
+        // sublayer issue at all. Print model AND presentation side by side for the same
+        // model/presentation-timing reason `describe` below does per sublayer.
+        if let rootLayer = layer {
+            let modelTransform = rootLayer.affineTransform()
+            let presentationTransform = rootLayer.presentation()?.affineTransform()
+            let presentationOpacity = rootLayer.presentation()?.opacity
+            lines.append(
+                "  ROOT frame=\(frame) opacity=\(rootLayer.opacity) "
+                    + "presentationOpacity=\(presentationOpacity.map { String($0) } ?? "nil(no-presentation)") "
+                    + "transform=(tx:\(modelTransform.tx) ty:\(modelTransform.ty) "
+                    + "a:\(modelTransform.a) d:\(modelTransform.d)) "
+                    + "presentationTransform=(tx:\(presentationTransform?.tx.description ?? "nil") "
+                    + "ty:\(presentationTransform?.ty.description ?? "nil"))"
+            )
+        }
         func describe(_ label: String, _ layer: CALayer?) {
             guard let layer else { return }
             let string = (layer as? CATextLayer)?.string as? NSAttributedString
@@ -867,15 +887,52 @@ final class NativeLyricsRowView: NSView {
             let presentationOpacity = layer.presentation()?.opacity
             let presentationOpacityText = presentationOpacity.map { String($0) } ?? "nil(no-presentation)"
             let superlayerName = layer.superlayer.map { "\(type(of: $0))" } ?? "nil"
+            // 2026-09-19 coordinator follow-up: a blurred/rasterized copy is the fingerprint of
+            // EITHER a resident CIFilter (banned-patterns.md's "resident CIGaussianBlur" trap) OR
+            // a stale rasterized bitmap that never got invalidated (`shouldRasterize` +
+            // `rasterizationScale`) — the existing dump had neither, so a filtered/rasterized
+            // duplicate was structurally invisible to it even when mounted and printed.
+            let filtersDescription: String
+            if let filters = layer.filters, !filters.isEmpty {
+                filtersDescription = filters.map { filter -> String in
+                    guard let ciFilter = filter as? CIFilter else { return "\(type(of: filter))" }
+                    let radius = ciFilter.value(forKey: "inputRadius")
+                    return "\(ciFilter.name)(inputRadius:\(radius.map { "\($0)" } ?? "n/a"))"
+                }.joined(separator: ",")
+            } else {
+                filtersDescription = "none"
+            }
             lines.append(
                 "  \(label) class=\(type(of: layer)) frame=\(layer.frame) opacity=\(layer.opacity) "
                     + "presentationOpacity=\(presentationOpacityText) superlayer=\(superlayerName) "
                     + "hidden=\(layer.isHidden) string=\(stringPrefix.map { "\"\($0)\"" } ?? "nil") "
                     + "contentsIsBitmap=\(isBitmapContents) shouldRasterize=\(layer.shouldRasterize) "
+                    + "rasterizationScale=\(layer.rasterizationScale) filters=\(filtersDescription) "
                     + "transform=(a:\(t.a) b:\(t.b) c:\(t.c) d:\(t.d) tx:\(t.tx) ty:\(t.ty))"
             )
         }
         describe("mainTextLayer(dim-base)", mainTextLayer)
+        // 2026-09-19 coordinator follow-up: the dim base's per-CHARACTER foreground alpha (which
+        // characters are "hollowed" to .clear to make room for a floating word's own tile — see
+        // `applyFloatingHiddenBase`) is exactly the state a duplicate/ghost report needs: a
+        // character that reads as VISIBLE here (alpha > 0) while its own word is ALSO floating
+        // (a separate bright/dim tile drawn elsewhere) is two copies of the same glyph on screen
+        // at once. Previously invisible to this dump — only the layer's own opacity was printed,
+        // never what the attributed string underneath is actually doing character-by-character.
+        if let attributed = mainTextLayer.string as? NSAttributedString, attributed.length > 0 {
+            var segments: [String] = []
+            attributed.enumerateAttribute(
+                .foregroundColor, in: NSRange(location: 0, length: attributed.length)
+            ) { value, range, _ in
+                let alpha = (value as? NSColor)?.alphaComponent ?? 1
+                guard alpha < 0.99 else { return }
+                let text = (attributed.string as NSString).substring(with: range)
+                segments.append("\"\(text)\"@\(range)=alpha:\(alpha)")
+            }
+            lines.append(
+                "  mainTextLayer(dim-base) hollowedRanges=\(segments.isEmpty ? "none" : segments.joined(separator: ","))"
+            )
+        }
         describe("mainBrightTextLayer(line-level-bright)", mainBrightTextLayer)
         describe("mainEmphasisLayer", mainEmphasisLayer)
         for (i, l) in mainDimWordGlyphLayers.enumerated() where !l.isHidden {
