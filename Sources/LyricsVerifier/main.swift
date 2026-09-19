@@ -288,9 +288,13 @@ private func runAdHoc(args: [String]) async {
             let hasKana = LanguageUtils.containsJapanese(line.text)
             let hasKorean = LanguageUtils.containsKorean(line.text)
             let cnFlag = (hasCJK && !hasKana && !hasKorean) ? " 🚨CN" : ""
-            log("  [\(String(format: "%02d", i))] \(String(format: "%6.1f", line.startTime))s  \(line.text)\(cnFlag)")
+            log("  [\(String(format: "%02d", i))] \(String(format: "%6.1f", line.startTime))s -> \(String(format: "%6.1f", line.endTime))s  words=\(line.words.count)  \(line.text)\(cnFlag)")
             if let trans = line.translation {
                 log("       ↳ trans: \(trans)")
+            }
+            if !line.words.isEmpty {
+                let wdump = line.words.map { "\($0.word)[\(String(format: "%.1f", $0.startTime))-\(String(format: "%.1f", $0.endTime))]" }.joined(separator: " ")
+                log("       ↳ words: \(wdump)")
             }
         }
     }
