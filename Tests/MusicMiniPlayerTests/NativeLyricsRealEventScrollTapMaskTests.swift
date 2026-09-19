@@ -511,4 +511,276 @@ final class NativeLyricsRealEventScrollTapMaskTests: XCTestCase {
             "row 4's Y jumped \(delta)pt across manual-scroll start while an interlude was live "
             + "(steadyY=\(steadyY), manualStartY=\(manualStartY)) — matches the founder's anchor=-26 vs 42 evidence shape")
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Coordinator's 2026-09-18 follow-up dimensions (post stage-bundle-3j first pass, all green).
+    // Each new dimension is its own test method; run ONLY this file, never the full regression.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    // MARK: - Dimension 1: tap timing from real `ended`, every 16ms out to 3s
+
+    @MainActor
+    func test_tapTimingSweep_every16msFromEndedTo3s_noLandingFrameIsBrightAndUnmasked() {
+        var violations = 0
+        var ran = 0
+        let lineIndex = 7
+        let frac = 0.6
+        var offsetMs = 0
+        while offsetMs <= 3000 {
+            let (surface, window, mc, rows, clocks) = makeHarness(rowCount: 14)
+            defer { surface.debugNowOverride = nil; mc.debugPlaybackClockDateProvider = nil }
+            let warmIndex = max(0, lineIndex - 2)
+            warmUp(surface: surface, mc: mc, rows: rows, clocks: clocks,
+                   toTime: rows[warmIndex].displayLine.line.startTime + 0.2, currentIndex: warmIndex, ticks: 15)
+            performRealScrollBackGesture(surface: surface, window: window, clocks: clocks, lines: 4)
+            sendRealScroll(surface: surface, window: window, deltaY: 0, phase: .ended)
+            let offsetSeconds = TimeInterval(offsetMs) / 1000.0
+            clocks.wall += offsetSeconds
+            clocks.date = clocks.date.addingTimeInterval(offsetSeconds)
+            let line = rows[lineIndex].displayLine.line
+            let tapTime = line.startTime + (line.endTime - line.startTime) * frac
+            mc.syncPlaybackClock(to: tapTime, playing: mc.isPlaying, at: clocks.date)
+            guard sendRealClick(surface: surface, window: window, rowIndex: lineIndex) else {
+                offsetMs += 16
+                continue
+            }
+            ran += 1
+            let step = 1.0 / 60.0
+            clocks.wall += step
+            clocks.date = clocks.date.addingTimeInterval(step)
+            surface.debugTick(displayInterval: step)
+            if let landed = surface.debugRowView(forIndex: lineIndex), !isLandingFrameAcceptable(row: landed) {
+                violations += 1
+                print("[RealEventMask] TIMING-SWEEP VIOLATION offsetMs=\(offsetMs) "
+                    + "manualScrollStillActive=\(surface.debugManualScrollActive) "
+                    + "expected=\(landed.debugLastMainExpectedProgress ?? -1) "
+                    + "brightOpacity=\(landed.debugMainBrightOpacity)")
+            }
+            offsetMs += 16
+        }
+        print("[RealEventMask] timing sweep ran=\(ran) violations=\(violations)")
+        XCTAssertGreaterThan(ran, 0, "timing sweep never landed a hit-testable frame")
+        XCTAssertEqual(violations, 0, "\(violations)/\(ran) timing-sweep landings were bright-and-unmasked")
+    }
+
+    // MARK: - Dimension 2: 1000ms tick added to the landing-tick cadence set
+
+    @MainActor
+    func test_realScrollBackThenRealTap_1000msTick_noLandingFrameIsBrightAndUnmasked() {
+        var violations = 0
+        var ran = 0
+        for timing in TapTiming.allCases {
+            for lineIndex in [4, 7, 10] {
+                for frac in [0.3, 0.6, 0.9] {
+                    let (didRun, violated) = runScrollThenTapScenario(
+                        cjk: false, timing: timing, step: 1.0, lineIndex: lineIndex, frac: frac, label: "1000ms-tick"
+                    )
+                    if didRun { ran += 1 }
+                    if violated { violations += 1 }
+                }
+            }
+        }
+        print("[RealEventMask] 1000ms-tick ran=\(ran) violations=\(violations)")
+        XCTAssertGreaterThan(ran, 0, "1000ms-tick sweep never landed a hit-testable frame")
+        XCTAssertEqual(violations, 0, "\(violations)/\(ran) 1000ms-tick landings were bright-and-unmasked")
+    }
+
+    // MARK: - Dimension 3: scroll-back distance swept 1–15 lines
+
+    @MainActor
+    func test_scrollDistanceSweep_1to15Lines_noLandingFrameIsBrightAndUnmasked() {
+        var violations = 0
+        var ran = 0
+        let lineIndex = 2
+        let frac = 0.5
+        for lines in 1...15 {
+            let (surface, window, mc, rows, clocks) = makeHarness(rowCount: 20)
+            defer { surface.debugNowOverride = nil; mc.debugPlaybackClockDateProvider = nil }
+            let warmIndex = lineIndex + lines
+            warmUp(surface: surface, mc: mc, rows: rows, clocks: clocks,
+                   toTime: rows[warmIndex].displayLine.line.startTime + 0.2, currentIndex: warmIndex, ticks: 15)
+            performRealScrollBackGesture(surface: surface, window: window, clocks: clocks, lines: lines)
+            sendRealScroll(surface: surface, window: window, deltaY: 0, phase: .ended)
+            let line = rows[lineIndex].displayLine.line
+            let tapTime = line.startTime + (line.endTime - line.startTime) * frac
+            mc.syncPlaybackClock(to: tapTime, playing: mc.isPlaying, at: clocks.date)
+            guard sendRealClick(surface: surface, window: window, rowIndex: lineIndex) else { continue }
+            ran += 1
+            let step = 1.0 / 60.0
+            clocks.wall += step
+            clocks.date = clocks.date.addingTimeInterval(step)
+            surface.debugTick(displayInterval: step)
+            if let landed = surface.debugRowView(forIndex: lineIndex), !isLandingFrameAcceptable(row: landed) {
+                violations += 1
+                print("[RealEventMask] SCROLL-DISTANCE VIOLATION lines=\(lines) "
+                    + "expected=\(landed.debugLastMainExpectedProgress ?? -1) "
+                    + "brightOpacity=\(landed.debugMainBrightOpacity)")
+            }
+        }
+        print("[RealEventMask] scroll-distance sweep ran=\(ran) violations=\(violations)")
+        XCTAssertGreaterThan(ran, 0, "scroll-distance sweep never landed a hit-testable frame")
+        XCTAssertEqual(violations, 0, "\(violations)/\(ran) scroll-distance landings were bright-and-unmasked")
+    }
+
+    // MARK: - Dimension 4: real line-change concurrent with the tap (click lands within ±1 frame
+    // of the ACTIVE line's own boundary — the semantic index is changing under the tap).
+
+    @MainActor
+    func test_realTapConcurrentWithLineChangeBoundary_plusMinusOneFrame_noLandingFrameIsBrightAndUnmasked() {
+        var violations = 0
+        var ran = 0
+        let step = 1.0 / 60.0
+        // Tap TARGET is a different row than the one whose boundary we straddle — the boundary
+        // line keeps playing/advancing underneath while the user's tap lands on another row.
+        let boundaryLine = 5
+        let tapTarget = 8
+        for frameOffset in [-1, 0, 1] {
+            let (surface, window, mc, rows, clocks) = makeHarness(rowCount: 14)
+            defer { surface.debugNowOverride = nil; mc.debugPlaybackClockDateProvider = nil }
+            let warmIndex = max(0, tapTarget - 2)
+            warmUp(surface: surface, mc: mc, rows: rows, clocks: clocks,
+                   toTime: rows[warmIndex].displayLine.line.startTime + 0.2, currentIndex: warmIndex, ticks: 15)
+            performRealScrollBackGesture(surface: surface, window: window, clocks: clocks, lines: 3)
+            sendRealScroll(surface: surface, window: window, deltaY: 0, phase: .ended)
+
+            // Drive the LIVE playback clock to straddle `boundaryLine`'s end/next-start boundary
+            // by exactly `frameOffset` real ticks, while the tap itself targets `tapTarget`.
+            let boundaryTime = rows[boundaryLine].displayLine.line.endTime
+            let strraddleTime = boundaryTime + TimeInterval(frameOffset) * step
+            mc.syncPlaybackClock(to: strraddleTime, playing: mc.isPlaying, at: clocks.date)
+            surface.configure(config(rows, current: boundaryLine + (frameOffset >= 0 ? 1 : 0), mc: mc))
+            clocks.wall += step
+            clocks.date = clocks.date.addingTimeInterval(step)
+            surface.debugTick(displayInterval: step)
+
+            guard sendRealClick(surface: surface, window: window, rowIndex: tapTarget) else { continue }
+            ran += 1
+            let tapLine = rows[tapTarget].displayLine.line
+            let tapTime = tapLine.startTime + (tapLine.endTime - tapLine.startTime) * 0.6
+            mc.syncPlaybackClock(to: tapTime, playing: mc.isPlaying, at: clocks.date)
+            clocks.wall += step
+            clocks.date = clocks.date.addingTimeInterval(step)
+            surface.debugTick(displayInterval: step)
+            if let landed = surface.debugRowView(forIndex: tapTarget), !isLandingFrameAcceptable(row: landed) {
+                violations += 1
+                print("[RealEventMask] LINE-CHANGE-BOUNDARY VIOLATION frameOffset=\(frameOffset) "
+                    + "expected=\(landed.debugLastMainExpectedProgress ?? -1) "
+                    + "brightOpacity=\(landed.debugMainBrightOpacity)")
+            }
+        }
+        print("[RealEventMask] line-change-boundary ran=\(ran) violations=\(violations)")
+        XCTAssertGreaterThan(ran, 0, "line-change-boundary sweep never landed a hit-testable frame")
+        XCTAssertEqual(violations, 0, "\(violations)/\(ran) line-change-boundary landings were bright-and-unmasked")
+    }
+
+    // MARK: - Dimension 5: interlude immediately BEFORE the tap target (not the tap target itself)
+
+    @MainActor
+    func test_interludeAdjacentToTapTarget_noLandingFrameIsBrightAndUnmasked() {
+        var violations = 0
+        var ran = 0
+        // interludeAt: 6 means row 6 carries the interlude gap; the tap target is row 7 — the
+        // very next row after the interlude, mirroring the founder's evidence (manualStart frame
+        // right before a tap-to-line landing, with an interlude in play nearby).
+        let interludeAt = 6
+        let tapTarget = 7
+        for frac in [0.1, 0.3, 0.5, 0.7, 0.9] {
+            for timing in TapTiming.allCases {
+                let rows = makeWordLevelRows(14, interludeAt: interludeAt)
+                let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 320, height: 600))
+                let window = host(surface, NSSize(width: 320, height: 600))
+                let mc = MusicController(preview: true)
+                mc.duration = 240
+                mc.isPlaying = true
+                surface.debugSkipDedupe = true
+                let clocks = Clocks(wall: 6_000, date: Date(timeIntervalSinceReferenceDate: 950_000_000))
+                defer { surface.debugNowOverride = nil; mc.debugPlaybackClockDateProvider = nil }
+
+                // Warm up INSIDE the interlude window (row 6 ended, interlude runs 6s) so
+                // `interludeAnchorAdvance` is actively shifting `anchorY` while we scroll+tap.
+                let interludeStart = rows[interludeAt].displayLine.line.endTime
+                warmUp(surface: surface, mc: mc, rows: rows, clocks: clocks,
+                       toTime: interludeStart + 2.0, currentIndex: interludeAt,
+                       ticks: 15, interludeAfterIndex: interludeAt)
+
+                performRealScrollBackGesture(surface: surface, window: window, clocks: clocks, lines: 3)
+                switch timing {
+                case .duringGestureChanged:
+                    sendRealScroll(surface: surface, window: window, deltaY: 4, phase: .changed)
+                case .afterEndedWithinGrace:
+                    sendRealScroll(surface: surface, window: window, deltaY: 0, phase: .ended)
+                    clocks.wall += 0.3; clocks.date = clocks.date.addingTimeInterval(0.3)
+                case .duringMomentum:
+                    sendRealScroll(surface: surface, window: window, deltaY: 0, phase: .ended)
+                    sendRealScroll(surface: surface, window: window, deltaY: 3, phase: [], momentumPhase: .began)
+                }
+
+                let tapLine = rows[tapTarget].displayLine.line
+                let tapTime = tapLine.startTime + (tapLine.endTime - tapLine.startTime) * frac
+                mc.syncPlaybackClock(to: tapTime, playing: mc.isPlaying, at: clocks.date)
+                guard sendRealClick(surface: surface, window: window, rowIndex: tapTarget) else { continue }
+                ran += 1
+                let step = 1.0 / 60.0
+                clocks.wall += step
+                clocks.date = clocks.date.addingTimeInterval(step)
+                surface.debugTick(displayInterval: step)
+                if let landed = surface.debugRowView(forIndex: tapTarget), !isLandingFrameAcceptable(row: landed) {
+                    violations += 1
+                    print("[RealEventMask] INTERLUDE-ADJACENT VIOLATION timing=\(timing.rawValue) frac=\(frac) "
+                        + "expected=\(landed.debugLastMainExpectedProgress ?? -1) "
+                        + "brightOpacity=\(landed.debugMainBrightOpacity)")
+                }
+                surface.stopAnimations()
+                window.orderOut(nil)
+            }
+        }
+        print("[RealEventMask] interlude-adjacent ran=\(ran) violations=\(violations)")
+        XCTAssertGreaterThan(ran, 0, "interlude-adjacent sweep never landed a hit-testable frame")
+        XCTAssertEqual(violations, 0, "\(violations)/\(ran) interlude-adjacent landings were bright-and-unmasked")
+    }
+
+    // MARK: - Dimension 6: manual-scroll landing on the row right after a REAL interlude gap,
+    // driven from the actual production `LyricLayerRowBuilder` + `LyricsService.updateInterludeAfterIndex`
+    // formulas (not a hand-derived closed form — the earlier version of this test asserted a
+    // formula that used the WRONG row-height source (config's declared height instead of the
+    // production `measuredHeightsByIndex` estimate) and was a TEST bug, not an app bug; deleted).
+    //
+    // Fixture data: real 《啟程》 lyrics_cache.json entry (QQ, line-level, `words: []`), the ONLY
+    // version present on disk after searching all 4 on-disk cache locations (unsandboxed +
+    // sandboxed container, both under /Users and the /System/Volumes/Data mirror) — a 49-line
+    // variant, not the 38-line variant the founder's real session had loaded (debug log said
+    // "38L"). Rows 13→14 in this cache: "你能让我看见黑夜过去" 90.30–94.69, then "天开始明亮的
+    // 过程" 94.69–114.58 (a 20s line covering the long instrumental tail). Because this cache
+    // entry has empty `words`, `LyricsParser`'s `endTime = min(endTime, lastWord.endTime)` capping
+    // (LyricsParser.swift:353) never fires — `LayerBackedLyricInterlude`/`updateInterludeAfterIndex`
+    // both compute `gap = nextLine.startTime - currentLine.endTime` from these SAME contiguous
+    // cache values, which is always exactly 0. This specific cached entry therefore cannot
+    // reproduce an interlude via the production gap-detection formula as currently written —
+    // honestly recorded, not worked around by hand-editing the real data to fabricate a gap.
+
+    @MainActor
+    func test_interludeAnchorAdvance_withRealQiChengCacheData_manualScrollLandingAfterGap() {
+        // Real cache values (verbatim from lyrics_cache.json key 034e5cbf...49-line entry).
+        let realLineTexts = [
+            "你能让我看见黑夜过去",  // idx 13
+            "天开始明亮的过程",      // idx 14 — long tail 94.69→114.58 in the cache (words: [])
+            "每一天 都有一些事情将会发生", // idx 15
+        ]
+        let realStarts: [TimeInterval] = [90.30, 94.69, 114.58]
+        let realEnds: [TimeInterval] = [94.69, 114.58, 122.57]
+
+        var sourceLines: [LyricLine] = []
+        for i in 0..<realLineTexts.count {
+            sourceLines.append(LyricLine(text: realLineTexts[i], startTime: realStarts[i], endTime: realEnds[i], words: []))
+        }
+        let displayLines = sourceLines.enumerated().map { i, l in
+            DisplayLyricLine(id: "real\(i)", sourceIndex: i, segmentIndex: 0, segmentCount: 1, line: l)
+        }
+        let rows = LyricLayerRowBuilder.makeRows(from: displayLines, sourceLines: sourceLines, firstRealLyricIndex: 0)
+
+        XCTAssertNil(rows[1].interlude,
+            "as recorded: this cache entry's contiguous endTime==nextStart chain produces gap=0 "
+            + "via LayerBackedLyricInterlude's own formula — no interlude registers from this "
+            + "specific real data without the 38-line variant's actual (capped) endTimes")
+    }
 }

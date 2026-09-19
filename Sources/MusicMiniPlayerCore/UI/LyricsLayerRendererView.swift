@@ -479,6 +479,14 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     }
     /// The renderer's resolved semantic (active) line index — what the surface believes is current.
     var debugNativeSemanticIndex: Int? { nativeSemanticCurrentIndex }
+    /// Stage bundle 3j: the interlude-advance-adjusted `anchorY` this frame's `runtimeConfiguration`
+    /// would resolve to for the CURRENT `configuration` — exposes the exact value
+    /// `interludeAnchorAdvance` (LyricsLayerRendererView.swift ~1213) produces, so a test can pin
+    /// it to a derived number instead of only inferring it from a row's on-screen Y.
+    var debugCurrentAnchorY: CGFloat? {
+        guard let configuration else { return nil }
+        return runtimeConfiguration(from: configuration).anchorY
+    }
     #if DEBUG
     /// Test seam: deterministic wall clock for the presentation-tick path (spring/wave deltas,
     /// the appear window, the text-phase throttle). nil = CACurrentMediaTime().
