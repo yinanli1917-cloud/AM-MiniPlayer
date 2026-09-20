@@ -237,6 +237,7 @@ final class NativeLyricsRowView: NSView {
             mainPostLineFadeFloor = 1
             translationPostLineFadeFloor = 1
             mainWasTextActiveLastPhase = false
+            mainWordFloatFloor.removeAll()
         }
         self.row = row
         self.configuration = configuration
@@ -289,6 +290,24 @@ final class NativeLyricsRowView: NSView {
     // ───────────────────────────────────────────────────────────────────────────
     private var mainPostLineFadeFloor: CGFloat = 1
     private var translationPostLineFadeFloor: CGFloat = 1
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // Monotonic per-word sweep-float floor (contract lyrics-ux-contract.md line 25/39:
+    // a swept character floats to −2pt over max(1.0s, wordDuration) and HOLDS — it must
+    // never fall back toward its rest position while its line stays active). `baseFloat`
+    // in NativeLyricsTextRenderPlan is a PURE function of `currentTime - word.startTime`;
+    // it is correctly monotonic for a strictly-increasing clock, but `updatePlaybackPhase`
+    // reads the raw render clock (see `mainPostLineFadeFloor` above for the same class of
+    // bug on the fade), so a backward poll-resync/drift-correction tick shrinks `elapsed`
+    // and RAISES `baseFloatY` back toward 0 for a frame — the swept word visibly rises then
+    // drops back before continuing, most noticeable on longer multi-character runs (founder
+    // report, "未来的旅程" 2026-09-19: floats up, drops back, unlike shorter neighbouring
+    // words where the same dip is imperceptible). Keyed by word order (not word identity) so
+    // it naturally spans this row's ENTIRE current line; reset alongside `mainPostLineFadeFloor`
+    // on every trigger that also re-arms that floor (line change / seek discontinuity /
+    // activation edge) so a genuinely new line or a real seek starts each word fresh at 0.
+    // ───────────────────────────────────────────────────────────────────────────
+    private var mainWordFloatFloor: [Int: CGFloat] = [:]
     // Tracks the text-activation state `updatePlaybackPhase` observed LAST TIME it ran on this
     // view (regardless of role/config churn in between) — the activation-edge detector the fade
     // floor reset above relies on. Never true after `prepareForReuse`/a fresh mount, so a
@@ -374,6 +393,7 @@ final class NativeLyricsRowView: NSView {
         mainPostLineFadeFloor = 1
         translationPostLineFadeFloor = 1
         mainWasTextActiveLastPhase = false
+        mainWordFloatFloor.removeAll()
         // Clear the scale/position transform too. layout() re-asserts positioningTransform on every
         // commit; if a recycled row keeps the previous row's scale, the next mount flashes that old
         // size for one frame before applyFrame writes the new scale (the seek size-pop).
@@ -1755,6 +1775,7 @@ final class NativeLyricsRowView: NSView {
         if configuration.nativeSeekDiscontinuityOccurred {
             mainPostLineFadeFloor = 1
             translationPostLineFadeFloor = 1
+            mainWordFloatFloor.removeAll()
         }
         // Phase timing MUST come from the shared monotonic clock (phaseRenderTime), never the raw
         // SB clock: a backward resync dip at line start collapses the active plan to progress 0
@@ -1787,6 +1808,7 @@ final class NativeLyricsRowView: NSView {
             if justEnteredActiveWindow || renderTimeBeforeLineStart {
                 mainPostLineFadeFloor = 1
                 translationPostLineFadeFloor = 1
+                mainWordFloatFloor.removeAll()
             }
         }
         mainWasTextActiveLastPhase = isActive
@@ -3041,7 +3063,13 @@ final class NativeLyricsRowView: NSView {
                   )
                 : 0
             for run in line.runs where tilesOwnEmphasis || !emphasisOrders.contains(run.order) {
-                let floatY = run.order < floats.count ? floats[run.order] : 0
+                let rawFloatY = run.order < floats.count ? floats[run.order] : 0
+                // Monotonic floor (see `mainWordFloatFloor`'s declaration): a swept word's float
+                // only ever moves toward its target (more negative) and holds — a backward render-
+                // clock tick must not raise it back toward 0 mid-hold.
+                let flooredFloatY = min(rawFloatY, mainWordFloatFloor[run.order] ?? 0)
+                mainWordFloatFloor[run.order] = flooredFloatY
+                let floatY = flooredFloatY
                 // `floatsDimBase` (the `layer` A/B arm) always tessellates every non-emphasis word as
                 // a dim tile. The default (whole-line dim base) arm shows a dim tile ONLY for a word
                 // that is actually floating — `applyFloatingHiddenBase` blanks that same word's range
