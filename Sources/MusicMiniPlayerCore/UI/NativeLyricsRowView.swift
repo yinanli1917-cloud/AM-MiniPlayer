@@ -2262,7 +2262,39 @@ final class NativeLyricsRowView: NSView {
             // 2026-09-19 founder-dictated fix) so the bright tiles it paints this SAME frame use
             // the floored value too — a backward clock step can't re-light them, and their fade
             // stays in lockstep with `mainBrightTextLayer`'s own opacity.
-            mainPostLineFadeFloor = min(mainPostLineFadeFloor, plan.mainPostLineFade)
+            //
+            // 2026-09-19 real-device repro (/tmp/nanopod_debug.log 18:10:55 "position jump
+            // 215.4s→83.7s" during a pause/play mash; 18:11:36 `bright=0.000 eff=0.000` on a row
+            // whose line is still genuinely active, minutes later): the floor's semantics only
+            // hold AFTER the line has ended. A transient interpolated-clock reading that briefly
+            // reports a time WELL PAST this line's own end (a pause/resume mash's position
+            // correction landing on a stale sample, or any other momentary bad read) makes
+            // `plan.mainPostLineFade` compute as fully decayed for that ONE frame — `min` then
+            // crushes the floor to ~0, and since nothing else re-arms it (this row never took a
+            // line-change/seek/activation-edge, because the clock recovers a frame later and the
+            // line is STILL genuinely active), the floor stays crushed forever: the karaoke
+            // overlay reads permanently invisible for the rest of that line. The floor's monotone
+            // "never rises" guarantee is only meant to apply to the post-line GAP, never to time
+            // that is legitimately still inside the line's own sung window — so re-arm it to 1
+            // unconditionally whenever `currentTime` sits at or before this line's own end.
+            //
+            // FOUNDER-FLAGGED TRADE-OFF: a row has no signal available here to tell "this line is
+            // still genuinely playing" (this bug) apart from "the surface has already moved past
+            // this line and is parking it through the post-line gap, and a non-explicit backward
+            // jitter happens to land before its end" (the older, narrower scenario
+            // `NativeLyricsGapHandoffTests.test_overlayRelightsOnBackwardJitterAcrossLineEnd_founderAcceptedTradeoff`
+            // exercises) — `configuration.effectiveCurrentIndex` does NOT distinguish them (it
+            // stays on this row throughout the post-line gap too). This fix accepts reopening the
+            // older, narrower case to close the newer, worse one (see that test's header comment
+            // for the full trade-off write-up); a real reconciliation needs a signal this row does
+            // not currently have (e.g. whether the surface has begun this row's deferred
+            // deactivation) plumbed through from the surface, out of scope for this pass.
+            let mainLineEnd = plan.wordRuns.last?.endTime ?? currentTime
+            if currentTime <= mainLineEnd {
+                mainPostLineFadeFloor = 1
+            } else {
+                mainPostLineFadeFloor = min(mainPostLineFadeFloor, plan.mainPostLineFade)
+            }
             wordFloatResult = applyMainWordFloatGlyphLayers(
                 plan: plan,
                 currentTime: currentTime,
@@ -2322,11 +2354,16 @@ final class NativeLyricsRowView: NSView {
                 mainWordFloatSpread: 0
             )
         }
-        // Floor already pinned above (before the per-glyph pass) when geometryReady; the
-        // non-geometry-ready branch returns early and never reaches here, so this is a no-op
-        // re-assertion in that case, kept for clarity and as a safety net if a future call path
-        // reaches this line without having gone through the pin above.
-        mainPostLineFadeFloor = min(mainPostLineFadeFloor, plan.mainPostLineFade)
+        // Floor already pinned above (before the per-glyph pass, with the same "still inside the
+        // line ⇒ force 1" guard) when geometryReady; the non-geometry-ready branch returns early
+        // and never reaches here, so this is a no-op re-assertion in that case, kept as a safety
+        // net if a future call path reaches this line without having gone through the pin above.
+        let mainLineEndSafetyNet = plan.wordRuns.last?.endTime ?? currentTime
+        if currentTime <= mainLineEndSafetyNet {
+            mainPostLineFadeFloor = 1
+        } else {
+            mainPostLineFadeFloor = min(mainPostLineFadeFloor, plan.mainPostLineFade)
+        }
         mainBrightTextLayer.opacity = Float(mainPostLineFadeFloor)
         mainBrightTextLayer.isHidden = plan.mainSweepProgress <= 0.001 || mainPostLineFadeFloor <= 0.001
         let sweepResult = updatePerRunSweepMask(
@@ -2490,7 +2527,14 @@ final class NativeLyricsRowView: NSView {
             translationBrightTextLayer.isHidden = true
             return nil
         }
-        translationPostLineFadeFloor = min(translationPostLineFadeFloor, translation.postLineFade)
+        // Same "still inside the line ⇒ force 1" guard as `mainPostLineFadeFloor` above (same
+        // founder-flagged trade-off documented there) — a transient bad clock read past this
+        // line's own end must not permanently crush the translation overlay either.
+        if translation.currentTime <= translation.lineEndTime {
+            translationPostLineFadeFloor = 1
+        } else {
+            translationPostLineFadeFloor = min(translationPostLineFadeFloor, translation.postLineFade)
+        }
         translationBrightTextLayer.opacity = Float(translationPostLineFadeFloor)
         translationBrightTextLayer.isHidden = translation.progress <= 0.001 || translationPostLineFadeFloor <= 0.001
         guard let configuration else { return nil }

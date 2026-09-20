@@ -190,3 +190,74 @@ let floatY = flooredFloatY
   的产物）改为「dim 字块永不使用（`dimHidden` 恒真）」，测试名同步改
   （`test_cjk/englishSweptGlyph_dimTileNeverUsed`）。两处改写都在文件头注释里说明了
   被谁、何时、因为什么取代。
+
+---
+
+## 追加任务 A（同日，协调者转真机日志）：暂停连击后亮层永久消失
+
+### 现场
+
+`/tmp/nanopod_debug.log` 18:10:55 `position jump 215.4s→83.7s`（暂停/播放连击期间插值
+时钟瞬间读到一个远超实际位置的坏值，随即纠正回真实值）；18:11:36
+`[ActiveBrightness] idx=17 … bright=0.000 eff=0.000`——行 17 此时仍是真正在播的行（不是
+过去行），但亮层永久读 0；`/tmp/nanopod_mask_trace.jsonl` 显示该行 word 0–7 全部
+`brightHiddenWhileSweeping=true、brightOpacity=0`。
+
+### 根因（已复现）
+
+`mainPostLineFadeFloor`（本文件前两次修复引入/移动过位置的单向地板）语义原本只对
+「行已结束」成立：地板只降不升，防止行末渐隐途中因时钟回退被错误重新点亮
+（`NativeLyricsDimBaseNeverMovesTests`/48863d5 那次修复的用途）。但这次真机的坏值是
+**一帧瞬间读到远在行尾之后**（215.4s，而这一行其实还在唱，真实位置只有 83.7s）——那一帧
+`plan.mainPostLineFade` 被算成「早已淡出」，`min` 把地板砸到 0；下一帧时钟纠正回 83.7s
+（仍在行内），但地板只有在「换行 / 显式 seek / 重新进入激活窗口边沿」这三个既有触发点
+才会复位，而这一行从始至终没有换行也没有 seek——地板永久卡在 0，行内亮层从此再也点不亮，
+直到这一行自然结束。
+
+### 修复
+
+`mainPostLineFadeFloor`（含 `translationPostLineFadeFloor`）改为：只在
+`currentTime > lineEnd`（`lineEnd = 最后一个字 endTime`）时才走原来的单向 `min` 衰减；
+只要 `currentTime <= lineEnd`（真正还在这一行的唱段内），无条件把地板拉回 1——「行内任何
+时刻亮层都必须可见」，衰减地板的语义严格限定在「行已结束之后」。
+
+### 已知冲突（未强行调和，标记待创始人裁决）
+
+`NativeLyricsGapHandoffTests.test_overlayDoesNotRelightOnBackwardJitterAcrossLineEnd`
+（早前会话产物）钉死的是相反结论：「非显式 seek 的时钟回退，就算穿回行尾之前，也不许
+重新点亮已淡出的行」。两条规则在单行视图内部**结构上无法区分**——`configuration.
+effectiveCurrentIndex` 在 GapHandoff 的整个 gap 期间也一直停在这一行（跟本次真 bug 场景
+一样），不能当判据。两者本质是同一机制（非显式回退穿过行尾）在两个会话被要求两种相反
+行为。本次选择修复更新、更严重的 bug（仍在播的行永久失去高亮），代价是重新打开旧场景
+（已经深入 gap 的过去行，遇到穿回行尾之前的回退时会重新点亮，而不是保持淡出）。已把
+`NativeLyricsGapHandoffTests` 里那条测试改名
+`test_overlayRelightsOnBackwardJitterAcrossLineEnd_founderAcceptedTradeoff` 并钉死新结果，
+文件头注释写明两边取舍与真正的修复方向（往行视图里传一个「这一行是否已经开始
+deferred-deactivation 淡出」的信号，本次范围外）——**这条需要创始人亲自确认接受**，不是
+静默改的。
+
+### 测试
+
+新增 `Tests/MusicMiniPlayerTests/NativeLyricsPostLineFadeFloorRearmTests.swift`：
+- `test_transientClockJumpPastLineEnd_doesNotPermanentlyCrushBrightOverlay`：真 surface，
+  长行（8 个词、8s），中途注入一帧「行尾 +30s」再下一帧纠正回行内，断言亮层立刻恢复且
+  后续持续可见。`git stash`（临时改回单向 `min`）验证：改前红（亮层永久 0.0）、改后绿。
+- `test_pausePlayMashWithPositionCorrection_doesNotPermanentlyCrushBrightOverlay`：走真
+  `MusicController.syncPlaybackClock` 的 pause/play 连击 + 坏位置纠正路径（更贴近真机
+  产生该轨迹的方式），同样断言恢复。
+
+### 回归（串行）
+
+`NativeLyricsPostLineFadeFloorRearmTests`（2，新增）+ `NativeLyricsGapHandoffTests`（3，
+含 1 条按上述取舍改写）+ `NativeLyricsPostSeekReactivationMaskTests` +
+`NativeLyricsSeekLandingMaskTests` + `NativeLyricsPauseFreezeTests` +
+`NativeLyricsPauseResumeFlutterTests` + `NativeLyricsWordFloatHoldTests` +
+`NativeLyricsDimBaseNeverMovesTests` + `NativeLyricsSweepGhostTests` +
+`NativeLyricsDimBaseFloatGateConsistencyTests` + `NativeLyricsHandoffClockTests` +
+`NativeLyricsMaskExhaustiveHandoffTests` 共 41 个用例全绿。`swift build` 全量无新增错误。
+
+## 追加任务 B：rowdump 加 mask 层信息
+
+见对应 commit（`NativeLyricsRowDump.swift`）——为 `mainBrightTextLayer` 的 mask 层
+（类名/frame/若为 sweep mask 的当前 wavefront x 与进度）和每个 bright 字块自身的 mask
+状态各加一行 dump 输出，供下次「整行全亮」类现场直接读 mask 状态，不需要再临时加日志。
