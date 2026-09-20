@@ -2321,7 +2321,11 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         // AppKit's commit-time layout resets a layer-backed view's transform to identity, dropping the
         // row to the origin for a frame; the frame does not get reset.)
         view.setPositioning(NativeLyricsRowScale.leadingTransform(
-            scale: visual.scale, height: frame.height, pivotY: view.verticalScalePivotY
+            // 2026-09-20 founder: "下一行激活后行间距会变" — the 3f first-line-baseline pivot made a
+            // wrapped row's lower lines stretch downward on activation, changing the visual gap to
+            // the next row. v2.8 scaled about the row's vertical centre (`.scaleEffect(anchor:
+            // .leading)`); restore that so activation is symmetric and the gap reads constant.
+            scale: visual.scale, height: frame.height, pivotY: frame.height / 2
         ))
         let appliedTransform = view.layer?.affineTransform() ?? .identity
         let appliedScale = sqrt(appliedTransform.a * appliedTransform.a + appliedTransform.c * appliedTransform.c)

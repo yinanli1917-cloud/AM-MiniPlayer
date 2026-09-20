@@ -919,6 +919,11 @@ final class NativeLyricsRowView: NSView {
         describe("mainBrightTextLayer(line-level-bright)", mainBrightTextLayer)
         describe("mainEmphasisLayer", mainEmphasisLayer)
         describe("activeLineDrawLayer", activeLineDrawLayer)
+        for entry in activeLineDrawLayer.recentInputs.suffix(240) {
+            let floats = entry.floats.map { String(format: "%.2f", $0) }.joined(separator: ",")
+            let waves = entry.waves.map { String(format: "%.1f", $0) }.joined(separator: ",")
+            lines.append(String(format: "  singlePass t=%.0f dim=%.3f bright=%.3f floats=[%@] waves=[%@]", entry.wall, entry.dim, entry.bright, floats, waves))
+        }
         for (i, l) in mainDimWordGlyphLayers.enumerated() where !l.isHidden {
             describe("mainDimWordGlyphLayers[\(i)]", l)
         }

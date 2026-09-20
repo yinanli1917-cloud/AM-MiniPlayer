@@ -1,13 +1,16 @@
 import AppKit
 import QuartzCore
 
-/// v2.8-faithful single-pass renderer for the ACTIVE syllable-synced line (2026-09-20, founder:
-/// "按 v2.8 / AMLL 的方式"). One layer draws the whole line every frame from ONE layout:
-///   1. dim pass  — every run at the dim alpha, translated by its float (dim floats WITH bright);
-///   2. bright pass per visual line — same runs at the bright alpha (emphasis runs scaled/lifted/
-///      glowed), then a destination-in horizontal gradient at that line's wavefront.
-/// No per-glyph tiles, no hollowed base string, no mask sublayers, no second font resolution:
-/// there is exactly one glyph geometry, so nothing can double, drift, or hand off between layers.
+/// Active syllable-synced line, AMLL/v2.8 model with cached glyph bitmaps (2026-09-20).
+///
+/// ONE layout (NSLayoutManager over the whole line) is the single geometry source. Each word run
+/// is rasterized ONCE from that layout into a bitmap (so the font is whatever AppKit resolved for
+/// the line, identical for dim and bright), then only MOVED per frame via layer position: the
+/// float, lift and scale are compositor transforms, never a re-rasterization — no per-frame
+/// anti-aliasing shimmer, no CPU text drawing in the presentation loop.
+///
+/// Structure: `dimContainer` (all runs, alpha = dim tier) and `brightContainer` (same bitmaps,
+/// alpha = bright) whose `mask` holds one gradient band per visual line at that line's wavefront.
 final class NativeLyricsActiveLineDrawLayer: CALayer {
     struct RunInput: Equatable {
         let lineIndex: Int
@@ -37,8 +40,18 @@ final class NativeLyricsActiveLineDrawLayer: CALayer {
     private var textContainer: NSTextContainer?
     private var textStorage: NSTextStorage?
     private(set) var frameInput: FrameInput?
+    /// Evidence ring (last 240 accepted inputs): wall ms, per-run floatY, per-line wavefront, dim alpha.
+    private(set) var recentInputs: [(wall: Double, floats: [CGFloat], waves: [CGFloat], dim: CGFloat, bright: CGFloat)] = []
+
+    private let dimContainer = CALayer()
+    private let brightContainer = CALayer()
+    private let brightMask = CALayer()
+    private var dimRunLayers: [CALayer] = []
+    private var brightRunLayers: [CALayer] = []
+    private var maskLineLayers: [NativeLyricsSweepMaskLineLayer] = []
+    private var runImageCache: [String: (image: CGImage, frame: CGRect)] = [:]
     #if DEBUG
-    private(set) var debugDrawCount = 0
+    private(set) var debugRasterizations = 0
     #endif
 
     override func action(forKey event: String) -> CAAction? { NSNull() }
@@ -46,11 +59,25 @@ final class NativeLyricsActiveLineDrawLayer: CALayer {
     override init() {
         super.init()
         isOpaque = false
-        needsDisplayOnBoundsChange = true
         contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        for l in [dimContainer, brightContainer, brightMask] {
+            _ = l.lyricsInert()
+            l.contentsScale = contentsScale
+        }
+        brightContainer.mask = brightMask
+        addSublayer(dimContainer)
+        addSublayer(brightContainer)
     }
     override init(layer: Any) { super.init(layer: layer) }
     required init?(coder: NSCoder) { super.init(coder: coder) }
+
+    override var bounds: CGRect {
+        didSet {
+            dimContainer.frame = bounds
+            brightContainer.frame = bounds
+            brightMask.frame = bounds
+        }
+    }
 
     /// The single layout this layer draws from. Same attributes as the sweep layout (system
     /// semibold, wrap by word, zero padding) so run/glyph rects from the sweep plan line up.
@@ -78,112 +105,121 @@ final class NativeLyricsActiveLineDrawLayer: CALayer {
         textContainer = container
         textStorage = storage
         layoutKey = key
+        runImageCache.removeAll()
         return manager
     }
 
-    func update(_ input: FrameInput) {
-        // Redraw only when something visible changed (a held float + unchanged wavefront is a
-        // no-op frame); the compositor keeps the last bitmap.
-        guard frameInput != input else { return }
-        frameInput = input
-        setNeedsDisplay()
-    }
-
-    override func draw(in ctx: CGContext) {
-        guard let input = frameInput, let layoutManager = textLayoutManager, let textContainer else { return }
-        #if DEBUG
-        debugDrawCount += 1
-        #endif
-        // Normalise to a top-left origin regardless of how CA handed us the context.
-        if ctx.ctm.d > 0 {
-            ctx.translateBy(x: 0, y: bounds.height)
-            ctx.scaleBy(x: 1, y: -1)
-        }
+    /// Rasterize one run's glyphs from the shared layout. The bitmap is padded so glow/scale
+    /// never clip; `frame` is where it sits in this layer's (top-left) coordinates at rest.
+    private func runImage(for run: RunInput) -> (image: CGImage, frame: CGRect)? {
+        let key = "\(run.charRange.location):\(run.charRange.length)"
+        if let cached = runImageCache[key] { return cached }
+        guard let layoutManager = textLayoutManager else { return nil }
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: run.charRange, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else { return nil }
+        let pad: CGFloat = 8
+        let frame = run.rect.insetBy(dx: -pad, dy: -pad)
+        let scale = contentsScale
+        let w = Int((frame.width * scale).rounded(.up)), h = Int((frame.height * scale).rounded(.up))
+        guard w > 0, h > 0,
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.scaleBy(x: scale, y: scale)
+        // CG bitmap is y-up; text layout is y-down. Flip, then shift so `frame.origin` maps to 0.
+        ctx.translateBy(x: 0, y: frame.height)
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.translateBy(x: -frame.minX, y: -frame.minY)
         NSGraphicsContext.saveGraphicsState()
-        defer { NSGraphicsContext.restoreGraphicsState() }
         NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
         ctx.setShouldSmoothFonts(true)
         ctx.setAllowsFontSmoothing(true)
         ctx.setShouldAntialias(true)
         ctx.setAllowsAntialiasing(true)
-        // v2.8 drew with `.disablesSubpixelQuantization`: glyph origins must NOT snap to whole
-        // pixels, otherwise a 2pt float rendered over ~60 frames steps one pixel at a time
-        // (founder: "每一行都是抖的"). Fractional positioning keeps the float continuous.
-        ctx.setAllowsFontSubpixelPositioning(true)
-        ctx.setShouldSubpixelPositionFonts(true)
-        ctx.setAllowsFontSubpixelQuantization(false)
-        ctx.setShouldSubpixelQuantizeFonts(false)
+        layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: .zero)
+        NSGraphicsContext.restoreGraphicsState()
+        guard let image = ctx.makeImage() else { return nil }
+        #if DEBUG
+        debugRasterizations += 1
+        #endif
+        runImageCache[key] = (image, frame)
+        return (image, frame)
+    }
 
-        func glyphRange(_ run: RunInput) -> NSRange {
-            layoutManager.glyphRange(forCharacterRange: run.charRange, actualCharacterRange: nil)
-        }
-
-        // 1. Dim pass: the whole line, each run carried by its own float.
-        for run in input.runs {
-            let range = glyphRange(run)
-            guard range.length > 0 else { continue }
-            ctx.saveGState()
-            ctx.setAlpha(input.dimAlpha)
-            ctx.translateBy(x: 0, y: run.floatY)
-            layoutManager.drawGlyphs(forGlyphRange: range, at: .zero)
-            ctx.restoreGState()
-        }
-
-        // 2. Bright pass, one transparency layer per visual line, masked by that line's wavefront.
-        for (lineIndex, line) in input.lines.enumerated() {
-            let runs = input.runs.filter { $0.lineIndex == lineIndex }
-            guard !runs.isEmpty else { continue }
-            let leftEdge = line.wavefrontX - input.fadeHalfPoint
-            let rightEdge = line.wavefrontX + input.fadeHalfPoint
-            // Fully ahead of the sweep: nothing bright on this line yet (v2.8 `fullyAhead`).
-            guard rightEdge > line.maskRect.minX else { continue }
-            ctx.saveGState()
-            ctx.clip(to: line.maskRect)
-            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
-            for run in runs {
-                let range = glyphRange(run)
-                guard range.length > 0 else { continue }
-                // Runs entirely right of the fade band contribute nothing; skip the draw.
-                if run.rect.minX >= rightEdge && !run.isEmphasis { continue }
-                ctx.saveGState()
-                ctx.setAlpha(input.brightAlpha)
-                if run.isEmphasis, run.scale != 1 {
-                    let cx = run.rect.midX, cy = run.rect.midY
-                    ctx.translateBy(x: cx, y: cy)
-                    ctx.scaleBy(x: run.scale, y: run.scale)
-                    ctx.translateBy(x: -cx, y: -cy)
-                }
-                ctx.translateBy(x: 0, y: run.floatY + (run.isEmphasis ? run.liftY : 0))
-                if run.isEmphasis, run.glowOpacity > 0.001, run.glowRadius > 0 {
-                    ctx.setShadow(
-                        offset: .zero, blur: run.glowRadius,
-                        color: NSColor.white.withAlphaComponent(run.glowOpacity).cgColor
-                    )
-                }
-                layoutManager.drawGlyphs(forGlyphRange: range, at: .zero)
-                ctx.restoreGState()
+    private func ensureRunLayers(_ count: Int) {
+        while dimRunLayers.count < count {
+            let d = CALayer().lyricsInert(), b = CALayer().lyricsInert()
+            for l in [d, b] {
+                l.contentsScale = contentsScale
+                l.contentsGravity = .resize
+                l.magnificationFilter = .linear
+                l.minificationFilter = .linear
+                l.anchorPoint = CGPoint(x: 0.5, y: 0.5)
             }
-            // Destination-in gradient: white up to the wavefront's fade band, clear after it.
-            let width = max(1, line.maskRect.width)
-            let l = max(0, min(1, (leftEdge - line.maskRect.minX) / width))
-            let r = max(l, min(1, (rightEdge - line.maskRect.minX) / width))
-            let colors = [
-                NSColor.white.cgColor, NSColor.white.cgColor,
-                NSColor.white.withAlphaComponent(0).cgColor, NSColor.white.withAlphaComponent(0).cgColor
-            ] as CFArray
-            let locations: [CGFloat] = [0, l, r, 1]
-            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: locations) {
-                ctx.setBlendMode(.destinationIn)
-                ctx.drawLinearGradient(
-                    gradient,
-                    start: CGPoint(x: line.maskRect.minX, y: line.maskRect.midY),
-                    end: CGPoint(x: line.maskRect.maxX, y: line.maskRect.midY),
-                    options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
-                )
-            }
-            ctx.endTransparencyLayer()
-            ctx.restoreGState()
+            dimContainer.addSublayer(d)
+            brightContainer.addSublayer(b)
+            dimRunLayers.append(d)
+            brightRunLayers.append(b)
         }
-        _ = textContainer
+        for i in count..<dimRunLayers.count {
+            dimRunLayers[i].isHidden = true
+            brightRunLayers[i].isHidden = true
+        }
+    }
+
+    private func ensureMaskLineLayers(_ count: Int) {
+        while maskLineLayers.count < count {
+            let l = NativeLyricsSweepMaskLineLayer()
+            l.contentsScale = contentsScale
+            brightMask.addSublayer(l)
+            maskLineLayers.append(l)
+        }
+        for i in count..<maskLineLayers.count { maskLineLayers[i].isHidden = true }
+    }
+
+    func update(_ input: FrameInput) {
+        guard frameInput != input else { return }
+        frameInput = input
+        recentInputs.append((Date().timeIntervalSince1970 * 1000, input.runs.map(\.floatY), input.lines.map(\.wavefrontX), input.dimAlpha, input.brightAlpha))
+        if recentInputs.count > 240 { recentInputs.removeFirst(recentInputs.count - 240) }
+
+        dimContainer.opacity = Float(input.dimAlpha)
+        brightContainer.opacity = Float(input.brightAlpha)
+        ensureRunLayers(input.runs.count)
+        for (i, run) in input.runs.enumerated() {
+            let dim = dimRunLayers[i], bright = brightRunLayers[i]
+            guard let (image, restFrame) = runImage(for: run) else {
+                dim.isHidden = true; bright.isHidden = true; continue
+            }
+            for l in [dim, bright] {
+                if l.contents == nil || (l.contents as! CGImage) !== image { l.contents = image }
+                l.isHidden = false
+                l.bounds = CGRect(origin: .zero, size: restFrame.size)
+            }
+            // Dim carries the float; bright carries the float plus emphasis lift/scale (v2.8).
+            dim.position = CGPoint(x: restFrame.midX, y: restFrame.midY + run.floatY)
+            dim.transform = CATransform3DIdentity
+            let brightY = restFrame.midY + run.floatY + (run.isEmphasis ? run.liftY : 0)
+            bright.position = CGPoint(x: restFrame.midX, y: brightY)
+            bright.transform = (run.isEmphasis && run.scale != 1)
+                ? CATransform3DMakeScale(run.scale, run.scale, 1) : CATransform3DIdentity
+            if run.isEmphasis, run.glowOpacity > 0.001 {
+                bright.shadowColor = NSColor.white.cgColor
+                bright.shadowOpacity = Float(run.glowOpacity)
+                bright.shadowRadius = run.glowRadius
+                bright.shadowOffset = .zero
+            } else if bright.shadowOpacity != 0 {
+                bright.shadowOpacity = 0
+                bright.shadowRadius = 0
+            }
+        }
+        ensureMaskLineLayers(input.lines.count)
+        for (i, line) in input.lines.enumerated() {
+            let m = maskLineLayers[i]
+            m.isHidden = false
+            m.frame = line.maskRect
+            m.apply(wavefrontX: line.wavefrontX - line.maskRect.minX, fadeHalfPoint: input.fadeHalfPoint, width: line.maskRect.width)
+        }
     }
 }
