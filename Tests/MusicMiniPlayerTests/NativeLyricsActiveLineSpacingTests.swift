@@ -149,10 +149,46 @@ final class NativeLyricsActiveLineSpacingTests: XCTestCase {
         CATransaction.flush()
         _ = view.updatePlaybackPhase(configuration: config(rows: [inactive, target], current: 1, mc: mc, width: width))
 
-        XCTAssertNotNil(view.debugMainTextLayerString,
-                        "\(label): activation must keep the whole-line dim base (v2.8 Canvas pass 1)")
-        XCTAssertEqual(view.debugMainTextLayerString, inactiveString,
-                       "\(label): dim string must not be rewritten into a different wrap")
+        // Stage bundle 3m (founder-approved "unify the engine" fix): the dim base no longer keeps
+        // its own text on `mainTextLayer.string` while active — it paints from
+        // `mainUnifiedDimDrawLayer`, which calls `drawGlyphs(forGlyphRange:at:)` against the SAME
+        // `NSLayoutManager` that positions the per-glyph tiles. The 08-27 invariant this test
+        // guards (activation must never change wrap-line count / fragment height+y / glyph x
+        // positions — i.e. never change 行距/字距) is now checked directly against that shared
+        // layout object instead of via the old "string still present" mechanism proxy:
+        //   (a) wrap-line count unchanged
+        //   (b) every visual line's fragment height and y unchanged
+        //   (c) every glyph's x origin unchanged (0.01pt tolerance)
+        //   (d) the dim base draws from the EXACT SAME NSLayoutManager instance (===) that
+        //       produced the per-glyph tile rects — not merely a matching configuration.
+        guard let afterLiveSnap = view.debugActiveLayoutSnapshot else {
+            return XCTFail("\(label): active row must have a live layout snapshot")
+        }
+        XCTAssertEqual(afterLiveSnap.lineCount, beforeSnap.lineCount,
+                       "\(label): activation must not change wrap-line count")
+        XCTAssertEqual(afterLiveSnap.fragmentHeights.count, beforeSnap.fragmentHeights.count,
+                       "\(label): activation must not change the number of line fragments")
+        for (before, after) in zip(beforeSnap.fragmentHeights, afterLiveSnap.fragmentHeights) {
+            XCTAssertEqual(after, before, accuracy: 0.01,
+                           "\(label): a line fragment's height (行高) changed on activation")
+        }
+        for (before, after) in zip(beforeSnap.fragmentMinYs, afterLiveSnap.fragmentMinYs) {
+            XCTAssertEqual(after, before, accuracy: 0.01,
+                           "\(label): a line fragment's y (行距) changed on activation")
+        }
+        XCTAssertEqual(afterLiveSnap.glyphMinXs.count, beforeSnap.glyphMinXs.count,
+                       "\(label): activation must not change the glyph count")
+        for (before, after) in zip(beforeSnap.glyphMinXs, afterLiveSnap.glyphMinXs) {
+            XCTAssertEqual(after, before, accuracy: 0.01,
+                           "\(label): a glyph's x origin (字距) changed on activation")
+        }
+        guard let dimBaseLayoutManager = view.debugActiveDimBaseLayoutManager,
+              let tileLayoutManager = view.debugActiveGlyphTileLayoutManager else {
+            return XCTFail("\(label): active row must expose both layout managers")
+        }
+        XCTAssertTrue(dimBaseLayoutManager === tileLayoutManager,
+                      "\(label): dim base must draw from the EXACT SAME NSLayoutManager instance "
+                          + "that positions the per-glyph tiles, not a separately-built one")
         // Sweep-ghost fix (2026-09-12, founder: "很多歌词重影，集中在 CJK 亮字"): a word can start
         // floating (baseFloatY != 0) from the very first post-activation frame — even syncing the
         // clock to exactly line.startTime, a real Date()-driven clock accrues a sub-millisecond

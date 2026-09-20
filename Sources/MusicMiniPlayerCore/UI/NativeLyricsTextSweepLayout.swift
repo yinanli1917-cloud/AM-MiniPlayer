@@ -38,6 +38,27 @@ struct NativeLyricsTextSweepVisualLinePlan: Equatable {
     let runs: [NativeLyricsTextSweepVisualRun]
 }
 
+/// 2026-09-19 (stage bundle 3m, founder-approved "unify the engine, not the dim base" fix):
+/// the dim base and the per-glyph tiles used to come from TWO SEPARATELY-BUILT layout objects
+/// (`attributedDisplayWrapped`'s own CATextLayer wrap vs this file's `NSLayoutManager`) that were
+/// only guaranteed to agree by matching CONFIGURATION (font/width/paragraph style) — 3k/3l proved
+/// that agreement holds for every synthetic case tried, but real-device font metrics/real YRC
+/// timing/real content width were never verified. `NativeLyricsUnifiedTextBuild` holds the ONE
+/// `NSLayoutManager`/`NSTextContainer`/`NSTextStorage` triple so a caller can draw the dim base by
+/// calling `layoutManager.drawGlyphs(forGlyphRange:at:)` directly against the SAME object that
+/// produced the glyph `rect`s the per-glyph tiles are positioned from — divergence becomes
+/// structurally impossible rather than merely improbable. The dim base still paints as ONE
+/// whole-line pass (never per-glyph, never floating) — this does not touch the banned per-glyph-
+/// float pattern (`.claude/rules/banned-patterns.md`), it only unifies which object computes glyph
+/// geometry for the existing whole-line paint.
+struct NativeLyricsUnifiedTextBuild {
+    let layoutManager: NSLayoutManager
+    let textContainer: NSTextContainer
+    let textStorage: NSTextStorage
+    let glyphRange: NSRange
+    let linePlan: [NativeLyricsTextSweepVisualLinePlan]
+}
+
 private struct NativeLyricsTextLineFragment {
     let rect: CGRect
     let glyphRange: NSRange
@@ -85,15 +106,69 @@ enum NativeLyricsTextSweepLayout {
         fontSize: CGFloat,
         fadeHalfPoint: CGFloat
     ) -> [NativeLyricsTextSweepVisualLinePlan] {
-        guard !displayText.isEmpty, !wordRuns.isEmpty, width > 1 else { return [] }
+        buildLayout(
+            displayText: displayText, wordRuns: wordRuns, width: width,
+            fontSize: fontSize, textColor: nil
+        )?.linePlan ?? []
+    }
 
-        let attributed = NSAttributedString(
-            string: displayText,
-            attributes: [
-                .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
-                .paragraphStyle: NativeLyricsTextSweepLayout.mainParagraphStyle
-            ]
+    /// Same layout as `makePlan`, but returns the underlying `NSLayoutManager`/`NSTextContainer`/
+    /// `NSTextStorage` triple too, so a caller can paint the dim base by calling
+    /// `layoutManager.drawGlyphs(forGlyphRange:at:)` against the EXACT object that produced the
+    /// per-glyph tile `rect`s — see `NativeLyricsUnifiedTextBuild`'s doc comment.
+    static func makeUnifiedBuild(
+        displayText: String,
+        wordRuns: [NativeLyricsWordRunPlan],
+        width: CGFloat,
+        fontSize: CGFloat,
+        textColor: NSColor
+    ) -> NativeLyricsUnifiedTextBuild? {
+        buildLayout(
+            displayText: displayText, wordRuns: wordRuns, width: width,
+            fontSize: fontSize, textColor: textColor
         )
+    }
+
+    /// Character range (in `displayText`, NOT glyph space) for each `wordRuns` order — pure text
+    /// arithmetic, no layout pass. Used to blank a floating word's range in the shared unified
+    /// build's `textStorage` (alpha 0 on that word's `.foregroundColor`) without disturbing the
+    /// wrap/geometry the SAME storage already committed to.
+    static func characterRanges(for wordRuns: [NativeLyricsWordRunPlan], displayText: String) -> [NSRange] {
+        let nsText = displayText as NSString
+        var ranges: [NSRange] = []
+        var location = 0
+        for run in wordRuns {
+            let length = (run.text as NSString).length
+            defer { location += length }
+            guard length > 0, location < nsText.length else {
+                ranges.append(NSRange(location: NSNotFound, length: 0))
+                continue
+            }
+            let clamped = min(length, nsText.length - location)
+            ranges.append(NSRange(location: location, length: clamped))
+        }
+        return ranges
+    }
+
+    private static func buildLayout(
+        displayText: String,
+        wordRuns: [NativeLyricsWordRunPlan],
+        width: CGFloat,
+        fontSize: CGFloat,
+        textColor: NSColor?
+    ) -> NativeLyricsUnifiedTextBuild? {
+        guard !displayText.isEmpty, !wordRuns.isEmpty, width > 1 else { return nil }
+
+        var attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
+            .paragraphStyle: NativeLyricsTextSweepLayout.mainParagraphStyle
+        ]
+        // Color is a paint-time-only attribute (never affects NSLayoutManager's glyph geometry),
+        // so setting it here for the "unified draw" caller cannot perturb the wrap points the
+        // 08-27 constraint (NativeLyricsActiveLineSpacingTests) depends on. `makePlan`'s geometry-
+        // only callers pass nil and inherit the system default color (irrelevant — they never draw).
+        if let textColor { attributes[.foregroundColor] = textColor }
+        let attributed = NSAttributedString(string: displayText, attributes: attributes)
         let storage = NSTextStorage(attributedString: attributed)
         let layoutManager = NSLayoutManager()
         let textContainer = NSTextContainer(size: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude))
@@ -109,7 +184,7 @@ enum NativeLyricsTextSweepLayout {
         layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, lineGlyphRange, _ in
             fragments.append(NativeLyricsTextLineFragment(rect: usedRect, glyphRange: lineGlyphRange))
         }
-        guard !fragments.isEmpty else { return [] }
+        guard !fragments.isEmpty else { return nil }
 
         var visualRunsByLine: [Int: [NativeLyricsTextSweepVisualRun]] = [:]
         let nsText = displayText as NSString
@@ -177,7 +252,7 @@ enum NativeLyricsTextSweepLayout {
             ))
         }
 
-        return visualRunsByLine.keys.sorted().compactMap { lineIndex in
+        let linePlan = visualRunsByLine.keys.sorted().compactMap { lineIndex -> NativeLyricsTextSweepVisualLinePlan? in
             guard var visualRuns = visualRunsByLine[lineIndex], !visualRuns.isEmpty else { return nil }
             visualRuns.sort {
                 if $0.order == $1.order {
@@ -193,6 +268,13 @@ enum NativeLyricsTextSweepLayout {
             maskRect = maskRect.insetBy(dx: -20, dy: -4)
             return NativeLyricsTextSweepVisualLinePlan(maskRect: maskRect, runs: visualRuns)
         }
+        return NativeLyricsUnifiedTextBuild(
+            layoutManager: layoutManager,
+            textContainer: textContainer,
+            textStorage: storage,
+            glyphRange: glyphRange,
+            linePlan: linePlan
+        )
     }
 
     static func maskLines(
@@ -336,13 +418,23 @@ enum NativeLyricsTextSweepLayout {
         width: CGFloat,
         fontSize: CGFloat
     ) -> LayoutSnapshot {
-        let plan = makePlan(
+        layoutSnapshot(from: makePlan(
             displayText: displayText,
             wordRuns: wordRuns,
             width: width,
             fontSize: fontSize,
             fadeHalfPoint: 12
-        )
+        ))
+    }
+
+    /// Same reduction as the `displayText`-taking overload, but from an ALREADY-BUILT plan — so a
+    /// caller holding the row's actual active-frame `linePlan` (built from the shared
+    /// `NativeLyricsUnifiedTextBuild` the dim base itself draws from) can snapshot exactly what
+    /// was rendered, instead of rebuilding a second, separately-constructed plan to compare
+    /// against. Stage bundle 3m: `NativeLyricsActiveLineSpacingTests` uses this to compare the
+    /// row's live active-frame geometry against a pre-activation baseline built from this SAME
+    /// reduction, in place of the old `mainTextLayer.string != nil` mechanism check.
+    static func layoutSnapshot(from plan: [NativeLyricsTextSweepVisualLinePlan]) -> LayoutSnapshot {
         var heights: [CGFloat] = []
         var minYs: [CGFloat] = []
         var glyphMinXs: [CGFloat] = []
