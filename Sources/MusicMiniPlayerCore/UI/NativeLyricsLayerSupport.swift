@@ -221,12 +221,138 @@ private extension CGImage {
 /// returns before any file access — the same production-default guarantee as before, just
 /// reachable by one more path. Output path unchanged: /tmp/nanopod_mask_trace.jsonl.
 enum NativeLyricsMaskTrace {
+    /// Cheap fixed-point formatter used on the hot record-call path instead of
+    /// `String(format:)`, whose NSString-backed formatter measurably dominated the
+    /// per-call cost once the file-I/O cost above it was removed (2026-09-20, 3q).
+    private static func fixedPoint(_ value: Double, decimals: Int) -> String {
+        guard value.isFinite else { return "0" }
+        let scale = pow(10.0, Double(decimals))
+        let scaled = (value * scale).rounded()
+        let isNegative = scaled < 0
+        let magnitude = Int64(abs(scaled))
+        let divisor = Int64(scale)
+        let whole = magnitude / divisor
+        let fraction = magnitude % divisor
+        var fractionString = String(fraction)
+        while fractionString.count < decimals {
+            fractionString = "0" + fractionString
+        }
+        return "\(isNegative ? "-" : "")\(whole).\(fractionString)"
+    }
+
     /// UserDefaults key the founder can set from a plist/`defaults write` without a terminal
     /// environment variable. Public so Settings/diagnostics UI could someday expose a toggle.
     static let userDefaultsKey = "NanoPodMaskTraceEnabled"
 
     private static let lock = NSLock()
     private static var lastKey: String = ""
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Batched I/O (2026-09-20, stage bundle 3q)
+    //
+    // `sample nanoPod 5` across a real line switch showed presentationTick (main thread) spending
+    // ~8% of its samples in `NativeLyricsMaskTrace.recordRowPosition` → `NSFileHandle(forWritingTo:)`
+    // → `open()` — every single record opened, seeked, wrote, and closed the file SYNCHRONOUSLY on
+    // the main thread. Switch-frame events (row_position/mask_state) arrive in a burst, so that
+    // burst of opens landed inside the same frame as the geometry work — the "卡一下" the founder
+    // reported. Same class of bug as the earlier per-frame-probe lesson (see MEMORY.md
+    // lyrics_scroll_cpu_root / lyrics_rerender_churn_diagnosis): a probe must never put I/O on the
+    // hot path it is trying to observe.
+    //
+    // Fix: every `record*` call still runs its (cheap) dedupe-key computation and string
+    // formatting on the caller's thread, but instead of touching the filesystem it appends the
+    // formatted line to an in-memory buffer and returns. A single background serial queue owns ONE
+    // persistent FileHandle for the process lifetime and drains the buffer either when it crosses a
+    // byte threshold or after a short coalescing delay — so a burst of switch-frame events becomes
+    // ONE open + ONE write instead of N opens. Order is preserved because the buffer is a plain
+    // array drained FIFO and the queue is serial.
+    private static let ioQueue = DispatchQueue(label: "com.nanopod.masktrace.io", qos: .utility)
+    private static var pendingLines: [String] = []
+    private static var pendingByteCount = 0
+    private static var flushScheduled = false
+    private static var fileHandle: FileHandle?
+    private static let outputPath = "/tmp/nanopod_mask_trace.jsonl"
+    private static let flushByteThreshold = 4096
+    private static let flushCoalesceDelay: DispatchTimeInterval = .milliseconds(50)
+
+    /// Main-thread-cheap: format + lock + array append only. Never touches the filesystem.
+    private static func enqueue(_ line: String) {
+        var shouldFlushNow = false
+        var shouldScheduleFlush = false
+        lock.lock()
+        pendingLines.append(line)
+        pendingByteCount += line.utf8.count
+        if pendingByteCount >= flushByteThreshold {
+            shouldFlushNow = true
+        } else if !flushScheduled {
+            flushScheduled = true
+            shouldScheduleFlush = true
+        }
+        lock.unlock()
+
+        if shouldFlushNow {
+            ioQueue.async { performFlush() }
+        } else if shouldScheduleFlush {
+            ioQueue.asyncAfter(deadline: .now() + flushCoalesceDelay) { performFlush() }
+        }
+    }
+
+    /// Runs on `ioQueue` only. Drains the buffer FIFO into one write, reusing the cached
+    /// FileHandle (opened once, kept open) — never per-line open/close.
+    private static func performFlush() {
+        lock.lock()
+        flushScheduled = false
+        guard !pendingLines.isEmpty else { lock.unlock(); return }
+        let lines = pendingLines
+        pendingLines.removeAll(keepingCapacity: true)
+        pendingByteCount = 0
+        lock.unlock()
+
+        guard let data = lines.joined().data(using: .utf8) else { return }
+        writeToDisk(data)
+    }
+
+    /// Runs on `ioQueue` only. Recreates the handle only if the target path no longer exists
+    /// (e.g. a test removed it), so steady-state operation costs one `write()` — no per-call
+    /// `open()`/`close()`.
+    private static func writeToDisk(_ data: Data) {
+        if fileHandle == nil || !FileManager.default.fileExists(atPath: outputPath) {
+            try? fileHandle?.close()
+            fileHandle = nil
+            if !FileManager.default.fileExists(atPath: outputPath) {
+                FileManager.default.createFile(atPath: outputPath, contents: nil)
+            }
+            fileHandle = try? FileHandle(forWritingTo: URL(fileURLWithPath: outputPath))
+            _ = try? fileHandle?.seekToEnd()
+        }
+        guard let handle = fileHandle else { return }
+        try? handle.write(contentsOf: data)
+    }
+
+    /// Test-only: blocks until every buffered line as of this call has been written to disk.
+    static func flushForTesting() {
+        ioQueue.sync { performFlush() }
+    }
+
+    /// Test-only: drops the cached handle and buffer so a fresh test run (usually after removing
+    /// the output file) starts clean, and resets the dedupe keys so the next `record*` call is
+    /// always treated as a transition.
+    static func resetForTesting() {
+        ioQueue.sync {
+            lock.lock()
+            pendingLines.removeAll()
+            pendingByteCount = 0
+            flushScheduled = false
+            lock.unlock()
+            try? fileHandle?.close()
+            fileHandle = nil
+        }
+        lock.lock()
+        lastKey = ""
+        lastPositionKey = ""
+        lastWordFloatDesyncKey = ""
+        lock.unlock()
+    }
 
     private static var isArmed: Bool {
         if UserDefaults.standard.bool(forKey: userDefaultsKey) { return true }
@@ -275,26 +401,8 @@ enum NativeLyricsMaskTrace {
         if changed { lastKey = key }
         lock.unlock()
         guard changed else { return }
-        let line = String(
-            format: "{\"event\":\"mask_state\",\"row\":\"%@\",\"word\":%d,\"wholeLineHighlight\":%@,\"perRunSweep\":%@,\"expected\":%.3f,\"applied\":%.3f,\"brightUnmaskedIncomplete\":%@,\"brightOpacity\":%.3f,\"brightHiddenWhileSweeping\":%@}\n",
-            rowID, wordIndex,
-            wholeLineHighlight ? "true" : "false",
-            perRunSweep ? "true" : "false",
-            Double(expected), Double(applied),
-            brightUnmaskedIncomplete ? "true" : "false",
-            Double(mainBrightOpacity),
-            brightHiddenWhileSweeping ? "true" : "false"
-        )
-        let url = URL(fileURLWithPath: "/tmp/nanopod_mask_trace.jsonl")
-        if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(atPath: url.path, contents: nil)
-        }
-        guard let handle = try? FileHandle(forWritingTo: url) else { return }
-        defer { try? handle.close() }
-        _ = try? handle.seekToEnd()
-        if let data = line.data(using: .utf8) {
-            try? handle.write(contentsOf: data)
-        }
+        let line = "{\"event\":\"mask_state\",\"row\":\"\(rowID)\",\"word\":\(wordIndex),\"wholeLineHighlight\":\(wholeLineHighlight),\"perRunSweep\":\(perRunSweep),\"expected\":\(fixedPoint(Double(expected), decimals: 3)),\"applied\":\(fixedPoint(Double(applied), decimals: 3)),\"brightUnmaskedIncomplete\":\(brightUnmaskedIncomplete),\"brightOpacity\":\(fixedPoint(Double(mainBrightOpacity), decimals: 3)),\"brightHiddenWhileSweeping\":\(brightHiddenWhileSweeping)}\n"
+        enqueue(line)
     }
 
     /// Row-position probe (founder 2026-09-17, defect C investigation: "刚变为非激活的那一行又
@@ -318,28 +426,14 @@ enum NativeLyricsMaskTrace {
         shouldRasterize: Bool
     ) {
         guard isArmed else { return }
-        let key = "\(rowID)|\(role)|\(String(format: "%.2f", y))|\(isSettled)|\(shouldRasterize)"
+        let key = "\(rowID)|\(role)|\(fixedPoint(Double(y), decimals: 2))|\(isSettled)|\(shouldRasterize)"
         lock.lock()
         let changed = key != lastPositionKey
         if changed { lastPositionKey = key }
         lock.unlock()
         guard changed else { return }
-        let line = String(
-            format: "{\"event\":\"row_position\",\"row\":\"%@\",\"role\":\"%@\",\"y\":%.2f,\"isSettled\":%@,\"shouldRasterize\":%@}\n",
-            rowID, role, Double(y),
-            isSettled ? "true" : "false",
-            shouldRasterize ? "true" : "false"
-        )
-        let url = URL(fileURLWithPath: "/tmp/nanopod_mask_trace.jsonl")
-        if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(atPath: url.path, contents: nil)
-        }
-        guard let handle = try? FileHandle(forWritingTo: url) else { return }
-        defer { try? handle.close() }
-        _ = try? handle.seekToEnd()
-        if let data = line.data(using: .utf8) {
-            try? handle.write(contentsOf: data)
-        }
+        let line = "{\"event\":\"row_position\",\"row\":\"\(rowID)\",\"role\":\"\(role)\",\"y\":\(fixedPoint(Double(y), decimals: 2)),\"isSettled\":\(isSettled),\"shouldRasterize\":\(shouldRasterize)}\n"
+        enqueue(line)
     }
 
     // 2026-09-18 (stage bundle 3g item 3): see the call site's doc comment in
@@ -358,25 +452,13 @@ enum NativeLyricsMaskTrace {
         floatY: CGFloat
     ) {
         guard isArmed else { return }
-        let key = "\(rowID)|\(glyphIndex)|\(String(format: "%.2f", floatY))"
+        let key = "\(rowID)|\(glyphIndex)|\(fixedPoint(Double(floatY), decimals: 2))"
         lock.lock()
         let changed = key != lastWordFloatDesyncKey
         if changed { lastWordFloatDesyncKey = key }
         lock.unlock()
         guard changed else { return }
-        let line = String(
-            format: "{\"event\":\"word_float_desync\",\"row\":\"%@\",\"glyphIndex\":%d,\"glyphText\":\"%@\",\"floatY\":%.3f}\n",
-            rowID, glyphIndex, glyphText, Double(floatY)
-        )
-        let url = URL(fileURLWithPath: "/tmp/nanopod_mask_trace.jsonl")
-        if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(atPath: url.path, contents: nil)
-        }
-        guard let handle = try? FileHandle(forWritingTo: url) else { return }
-        defer { try? handle.close() }
-        _ = try? handle.seekToEnd()
-        if let data = line.data(using: .utf8) {
-            try? handle.write(contentsOf: data)
-        }
+        let line = "{\"event\":\"word_float_desync\",\"row\":\"\(rowID)\",\"glyphIndex\":\(glyphIndex),\"glyphText\":\"\(glyphText)\",\"floatY\":\(fixedPoint(Double(floatY), decimals: 3))}\n"
+        enqueue(line)
     }
 }
