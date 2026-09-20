@@ -150,6 +150,23 @@ public class LyricsService: ObservableObject {
     private lazy var translationRequestStream: AsyncStream<Void> = AsyncStream { [weak self] continuation in
         self?.translationRequestContinuation = continuation
     }
+    /// Explicit-source Korean `TranslationSession`, warmed by a second,
+    /// invisible `.translationTask(Configuration(source: "ko", target:))`
+    /// host in LyricsView (`TranslationTaskHostCore`). Used only for Hangul
+    /// script runs inside mixed-script lines (`ScriptRunSegmenter`) — every
+    /// other run keeps going through `source: nil` auto-detection exactly as
+    /// before. `nil` until that second session has warmed, or on macOS < 15;
+    /// `performSystemTranslation` degrades gracefully to auto-detect for
+    /// Korean runs too when it's absent.
+    private var koreanRunTranslationExecutor: (any LyricsTranslationExecuting)?
+
+    /// Called from `TranslationTaskHostCore`'s ko-source `.translationTask`
+    /// action once its session is available (and with `nil` when that task
+    /// is torn down/cancelled).
+    @MainActor
+    public func updateKoreanRunTranslationExecutor(_ executor: (any LyricsTranslationExecuting)?) {
+        koreanRunTranslationExecutor = executor
+    }
     @Published public var isTranslating: Bool = false
     @Published public var translationFailed: Bool = false
     @Published public private(set) var canTranslate: Bool = false
@@ -2441,9 +2458,15 @@ public class LyricsService: ObservableObject {
         } else {
             let textsToTranslate = remainingIndices.map { lyrics[$0].text }
             var anyChunkLanded = false
-            await ChunkedTranslationRunner.run(
+            // executorsByLanguage: only Hangul runs get an explicit-source
+            // executor (when the second ko-source session has warmed);
+            // every other script run — including ja/th/unknown — falls back
+            // to `session` (source: nil, auto-detect), unchanged from before.
+            let koExecutor = koreanRunTranslationExecutor
+            await ChunkedTranslationRunner.runMultiScript(
                 lines: textsToTranslate,
-                executor: session
+                defaultExecutor: session,
+                executorsByLanguage: koExecutor.map { ["ko": $0] } ?? [:]
             ) { [weak self] chunkResult in
                 guard let self else { return }
                 // chunkResult keys are indices into `textsToTranslate`; map back
