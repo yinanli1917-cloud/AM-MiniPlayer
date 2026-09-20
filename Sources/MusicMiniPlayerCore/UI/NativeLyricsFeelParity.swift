@@ -16,6 +16,30 @@ import Foundation
 public enum NativeLyricsFeelParity {
     public static let appearDefaultsKey = "nanoPodFeelAppearWindow"
     public static let blurDefaultsKey = "nanoPodFeelBlur"
+    public static let activeLineDefaultsKey = "nanoPodFeelActiveLine"
+
+    /// 2026-09-20: how the ACTIVE syllable-synced line is rendered. `singlePass` = one CALayer
+    /// drawing dim + bright + mask from one layout every frame (v2.8/AMLL model, shipping
+    /// default). `tiles` = the 2026-07 per-glyph CATextLayer tile + hollowed-base path, kept for
+    /// A/B (`nanopod://debug/feel/activeline/tiles`) and for the tile-era unit tests.
+    public enum ActiveLineRenderer: String, CaseIterable {
+        case singlePass = "singlepass"
+        case tiles = "tiles"
+        public static func resolve(from raw: String?) -> ActiveLineRenderer {
+            guard let raw else { return .singlePass }
+            return ActiveLineRenderer(rawValue: raw.lowercased()) ?? .singlePass
+        }
+    }
+    #if DEBUG
+    nonisolated(unsafe) public static var testingActiveLine: ActiveLineRenderer?
+    #endif
+    public static var activeLineRenderer: ActiveLineRenderer {
+        #if DEBUG
+        if let testingActiveLine { return testingActiveLine }
+        if isRunningTests { return .tiles }
+        #endif
+        return ActiveLineRenderer.resolve(from: UserDefaults.standard.string(forKey: activeLineDefaultsKey))
+    }
     public static let sweepDefaultsKey = "nanoPodFeelSweep"
     public static let waveDefaultsKey = "nanoPodFeelWave"
     public static let emphasisDefaultsKey = "nanoPodFeelEmphasis"
@@ -220,6 +244,9 @@ public enum NativeLyricsFeelParity {
             return true
         case "blur":
             UserDefaults.standard.set(BlurMode.resolve(from: value).rawValue, forKey: blurDefaultsKey)
+            return true
+        case "activeline":
+            UserDefaults.standard.set(ActiveLineRenderer.resolve(from: value).rawValue, forKey: activeLineDefaultsKey)
             return true
         case "sweep":
             UserDefaults.standard.set(SweepPathMode.resolve(from: value).rawValue, forKey: sweepDefaultsKey)

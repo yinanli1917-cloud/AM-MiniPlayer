@@ -236,6 +236,9 @@ final class NativeLyricsRowView: NSView {
         return NSFont.systemFont(ofSize: fallbackSize, weight: .semibold)
     }
 
+    /// v2.8-style single-pass active line renderer (see NativeLyricsActiveLineDrawLayer).
+    let activeLineDrawLayer = NativeLyricsActiveLineDrawLayer()
+    private var singlePassActive = false
     private var cachedStaticTextPlanKey: StaticTextPlanCacheKey?
     private var cachedStaticTextPlan: NativeLyricsStaticTextRenderPlan?
 
@@ -915,6 +918,7 @@ final class NativeLyricsRowView: NSView {
         describe("mainTextLayer(dim-base)", mainTextLayer)
         describe("mainBrightTextLayer(line-level-bright)", mainBrightTextLayer)
         describe("mainEmphasisLayer", mainEmphasisLayer)
+        describe("activeLineDrawLayer", activeLineDrawLayer)
         for (i, l) in mainDimWordGlyphLayers.enumerated() where !l.isHidden {
             describe("mainDimWordGlyphLayers[\(i)]", l)
         }
@@ -1160,6 +1164,7 @@ final class NativeLyricsRowView: NSView {
             font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
         )
         mainTextLayer.frame = CGRect(x: textX, y: y, width: textWidth, height: mainHeight + Self.textBottomClipPad)
+        activeLineDrawLayer.frame = mainTextLayer.frame
         mainBrightTextLayer.frame = mainTextLayer.frame
         mainSweepMaskLayer.frame = mainBrightTextLayer.bounds
         mainBaseRevealMaskLayer.frame = mainTextLayer.bounds
@@ -1358,6 +1363,8 @@ final class NativeLyricsRowView: NSView {
             $0.masksToBounds = false
             layer?.addSublayer($0)
         }
+        activeLineDrawLayer.isHidden = true
+        layer?.addSublayer(activeLineDrawLayer)
         dotLayers.forEach { dot in
             dot.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
             dot.cornerRadius = NativeLyricsDotPhasePlan.baseDotSize / 2
@@ -1873,6 +1880,7 @@ final class NativeLyricsRowView: NSView {
     }
 
     private func applyInactivePlaybackLayerState() {
+        leaveSinglePassActiveLine()
         // Leaving the active word-cascade: the whole-line base must come back
         // before the per-word/emphasis glyphs hide, or the row goes blank.
         if mainTextLayer.string == nil, let wholeLineMainString {
@@ -1972,6 +1980,9 @@ final class NativeLyricsRowView: NSView {
             && mainBrightTextLayer.bounds.height > 1
             && !linePlan.isEmpty
         let keepWholeLineDim = NativeLyricsFeelParity.keepsWholeLineDimBase
+        if geometryReady, NativeLyricsFeelParity.activeLineRenderer == .singlePass {
+            return applySinglePassActiveLine(plan: plan, currentTime: currentTime, linePlan: linePlan, sweepBounds: sweepBounds)
+        }
         let wordFloatResult: MainWordFloatAppliedMetrics
         // Sweep-ghost fix: non-emphasis words that are ACTUALLY floating (baseFloatY != 0)
         // must not also show through the whole-line dim base — that second, unfloated copy
@@ -2237,6 +2248,7 @@ final class NativeLyricsRowView: NSView {
     }
 
     private func applyStaticActiveTextPhase(plan: NativeLyricsTextRenderPlan) -> MainTextPhaseAppliedMetrics {
+        leaveSinglePassActiveLine()
         hideMainWordGlyphLayers()
         mainTextLayer.setAffineTransform(.identity)
         mainBrightTextLayer.setAffineTransform(.identity)
@@ -2824,6 +2836,124 @@ final class NativeLyricsRowView: NSView {
             rawText: plan.displayText,
             width: contentTextWidth(configuration),
             font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
+        )
+    }
+
+    // MARK: - Single-pass active line (v2.8 model)
+
+    private func leaveSinglePassActiveLine() {
+        guard singlePassActive else { return }
+        singlePassActive = false
+        activeLineDrawLayer.isHidden = true
+        mainTextLayer.isHidden = false
+    }
+
+    private func applySinglePassActiveLine(
+        plan: NativeLyricsTextRenderPlan,
+        currentTime: TimeInterval,
+        linePlan: [NativeLyricsTextSweepVisualLinePlan],
+        sweepBounds: CGRect
+    ) -> MainTextPhaseAppliedMetrics {
+        singlePassActive = true
+        // Everything the tile path would have shown is off: one layer owns the active line.
+        if mainTextLayer.string == nil, let wholeLineMainString { mainTextLayer.string = wholeLineMainString }
+        mainTextLayer.isHidden = true
+        mainBrightTextLayer.isHidden = true
+        mainBrightTextLayer.mask = nil
+        hideMainWordGlyphLayers()
+        hideEmphasisGlyphLayers()
+        hidePerRunSweepMaskLayers()
+        hideBaseRevealMaskLayers()
+        activeHiddenEmphasisSignature = nil
+        activeFloatingHiddenSignature = nil
+        activeLineDrawLayer.isHidden = false
+        activeLineDrawLayer.frame = mainTextLayer.frame
+
+        // Karaoke post-line fade floor: inside the line's own span the overlay is always fully
+        // lit; it only ratchets down after the last word ends (2026-09-19 founder-verified rule).
+        let mainLineEnd = plan.wordRuns.last?.endTime ?? currentTime
+        if currentTime <= mainLineEnd {
+            mainPostLineFadeFloor = 1
+        } else {
+            mainPostLineFadeFloor = min(mainPostLineFadeFloor, plan.mainPostLineFade)
+        }
+
+        activeLineDrawLayer.prepareLayout(
+            text: plan.displayText,
+            width: sweepBounds.width,
+            fontSize: plan.constants.mainFontSize
+        )
+        let maskLines = NativeLyricsTextSweepLayout.maskLines(
+            from: linePlan,
+            fadeHalfPoint: plan.constants.fadeHalfPoint,
+            currentTime: currentTime
+        )
+        var runs: [NativeLyricsActiveLineDrawLayer.RunInput] = []
+        for (lineIndex, line) in linePlan.enumerated() {
+            for visualRun in line.runs {
+                guard let first = visualRun.glyphs.first, let last = visualRun.glyphs.last else { continue }
+                let charRange = NSRange(location: first.characterIndex, length: last.characterIndex - first.characterIndex + 1)
+                let wordRun = visualRun.order < plan.wordRuns.count ? plan.wordRuns[visualRun.order] : nil
+                let emphasis = wordRun?.emphasis ?? .inactive
+                let isEmphasis = wordRun.map { $0.isEmphasis || $0.emphasis != .inactive } ?? false
+                runs.append(.init(
+                    lineIndex: lineIndex,
+                    charRange: charRange,
+                    rect: visualRun.rect,
+                    floatY: wordRun?.baseFloatY ?? 0,
+                    isEmphasis: isEmphasis,
+                    scale: isEmphasis ? emphasis.scale : 1,
+                    liftY: isEmphasis ? emphasis.liftY : 0,
+                    glowOpacity: isEmphasis ? emphasis.glowOpacity : 0,
+                    glowRadius: isEmphasis ? min(0.3 * plan.constants.mainFontSize, emphasis.blurLevel * 0.3 * plan.constants.mainFontSize) : 0
+                ))
+            }
+        }
+        let lines = maskLines.map { NativeLyricsActiveLineDrawLayer.LineInput(maskRect: $0.maskRect, wavefrontX: $0.wavefrontX) }
+        // Dim alpha rides the same compensated channel the whole-line base uses (0.35 tier ÷ row
+        // opacity), so brightness stays continuous across the activation spring.
+        let dimAlpha = CGFloat(mainTextLayer.opacity)
+        activeLineDrawLayer.update(.init(
+            runs: runs,
+            lines: lines,
+            dimAlpha: dimAlpha,
+            brightAlpha: plan.constants.brightAlpha * mainPostLineFadeFloor,
+            fadeHalfPoint: plan.constants.fadeHalfPoint
+        ))
+        return MainTextPhaseAppliedMetrics(
+            progress: plan.mainSweepProgress,
+            appliedPerRunSweep: true,
+            appliedBaseReveal: false,
+            appliedPerGlyphEmphasis: runs.contains { $0.isEmphasis },
+            expectedEmphasisGlyphCount: 0,
+            appliedEmphasisGlyphCount: 0,
+            appliedEmphasisGlyphMotionCount: 0,
+            maxAppliedEmphasisScale: runs.map(\.scale).max() ?? 1,
+            maxAppliedEmphasisLiftMagnitude: runs.map { abs($0.liftY) }.max() ?? 0,
+            maxAppliedEmphasisGlowOpacity: runs.map(\.glowOpacity).max() ?? 0,
+            maxAppliedEmphasisAlpha: plan.constants.brightAlpha * mainPostLineFadeFloor,
+            textLayoutCoverageGapCount: 0,
+            expectedSweepLineCount: linePlan.count,
+            appliedSweepLineCount: lines.count,
+            sweepLineCoverageGapCount: max(0, linePlan.count - lines.count),
+            sweepWavefrontErrorMax: 0,
+            baseRevealLineCoverageGapCount: 0,
+            baseRevealWavefrontErrorMax: 0,
+            emphasisGlyphPositionSampleCount: 0,
+            emphasisGlyphPositionErrorMax: 0,
+            emphasisGlyphScaleErrorMax: 0,
+            emphasisGlyphAlphaErrorMax: 0,
+            emphasisGlyphGlowErrorMax: 0,
+            textGlyphGeometrySampleCount: 0,
+            textGlyphGeometryCoverageGapCount: 0,
+            textGlyphGeometryPositionErrorMax: 0,
+            lineLayoutSampleCount: 0,
+            lineLayoutHeightErrorMax: 0,
+            lineLayoutWidthErrorMax: 0,
+            mainTextFrameHeightErrorMax: 0,
+            translationTextFrameHeightErrorMax: 0,
+            mainWordFloatSampleCount: 0,
+            mainWordFloatSpread: 0
         )
     }
 
