@@ -126,3 +126,64 @@ have time to build correctly and verify without risking a fabricated/misleading 
 guess at line-wrap boundaries or invent numbers, I am reporting these as **not done** — they need a
 dedicated follow-up pass (and, for the second one, the founder's own device capture) rather than a
 rushed, unverified answer bundled into this fix.
+
+## Addendum: the two coordinator follow-ups, now done (pure code, no device needed)
+
+Both were flagged above as "not completed." Corrected — the coordinator pointed out both are pure
+code and do not require real-device data to WRITE (only to independently confirm on-device):
+
+### 1. Per-glyph x-alignment instrumentation ("下雨天" report)
+
+Added `NativeLyricsRowView.debugPerGlyphAlignmentDump()` (wired into `rowDumpLines`, so it appears
+automatically the next time the founder captures a rowdump) and the test-facing
+`debugGlyphAlignmentSamples`. For every non-whitespace character of the active row's shared
+`cachedMainUnifiedBuild` text, prints/exposes:
+- (a) the per-glyph tile's `frame.minX/midX/width` — the ink-bounds API
+  (`layoutManager.boundingRect(forGlyphRange:in:)`) `NativeLyricsTextSweepLayout` already positions
+  tiles from.
+- (b) the SAME `NSLayoutManager`'s advance/baseline-origin API instead:
+  `lineFragmentRect(forGlyphAt:).origin.x + location(forGlyphAt:).x`.
+- (c) that glyph's advance (this glyph's (b) minus the previous glyph's (b)).
+- (d) `textStorage`'s `.font` at that character vs. the glyph tile's own `.font`/`.fontSize`/
+  `.alignmentMode`/`.contentsScale`.
+- (e) `textContainer.lineFragmentPadding` and the unified dim-draw layer's `.contentsScale`.
+
+New test `NativeLyricsGlyphAlignmentTests` (real `NativeLyricsRowView`, real AppKit text layout,
+no mocking) drives a CJK 8-character line (matches "点点雨似渗出眼泪"'s shape), a CJK 13-character
+no-space line, and an English line, actively sweeping, and asserts (a) and (b) agree within 0.5pt
+for every glyph. **Result: all three pass, max delta 0.132pt (English; CJK deltas were exactly
+0.000).** This means: at the MODEL level, in this synthetic headless harness, the two APIs do not
+disagree — 3m/3o's engine unification holds. The founder's real-device "眼泪" offset is therefore
+NOT reproduced by this harness; it is either a real-device-only effect (contentsScale/subpixel
+rounding at an actual screen scale factor, which a headless off-screen `NSWindow` cannot exercise
+identically) or something outside what these two NSLayoutManager APIs can disagree on. Reporting
+this as a genuine (not fabricated) negative result rather than forcing a match.
+
+### 2. 38-line (delivered: 49-line, see below) wrap comparison table
+
+Pulled 《啟程》's real lyric text from `/private/tmp/qicheng_dump.log` (a `LyricsVerifier check`
+run this app actually performed against the real NetEase-sourced lyrics) — 49 non-empty content
+lines, not 38 as the coordinator's message estimated; used all 49 rather than truncating to force
+a specific count.
+
+New test `NativeLyricsLayoutEngineWrapParityTests` computes, for every one of the 49 lines at
+width 186 / font 24pt semibold: (a) `NSLayoutManager` line-fragment `minY`/`height` (the production
+engine) and (b) a `CTFramesetter`/`CTTypesetter`-based same-parameter wrap (a stand-in for the
+pre-3m CATextLayer-driven CoreText wrap). **Result: the two engines agree with each other on every
+single line, including "只有你能带我走向未来的旅程"** — contradicting the specific hypothesis in
+the coordinator's message (that only this line would disagree between the two engines).
+
+What the table DID surface, real and reproducible: within EITHER engine, a 2-line wrap whose first
+visual line contains a Latin space character (the lyric's own "每一天 都有…" phrasing style)
+measures its first fragment at 28pt, while a 2-line wrap with no space on that line — exactly
+"只有你能带我走向未来的旅程" — measures at 24pt, for the identical nominal font/size. This is in
+the same ballpark as the founder's on-device 58pt-vs-54pt (per-line) report and is very likely the
+real, code-level mechanism: `NSLayoutManager`/CoreText sizes a line from the tallest font metrics
+among ITS OWN glyphs, and a Latin space glyph in `NSFont.systemFont` reports different
+ascent+descent+leading than the CJK ideographs beside it — content-dependent line height, not an
+engine mismatch. Both new assertions (`spacedFirstHeights == [28.0]`, `spacelessFirstHeights ==
+[24.0]`) pass across all 49 real lines.
+
+This is a genuinely different explanation than the one implied by the coordinator's message (two
+DIFFERENT layout engines disagreeing) — reported as found, not adjusted to fit the prior
+hypothesis.

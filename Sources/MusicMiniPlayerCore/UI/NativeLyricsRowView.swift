@@ -751,6 +751,51 @@ final class NativeLyricsRowView: NSView {
 
     var debugMainTextLayerHidden: Bool { mainTextLayer.isHidden }
 
+    /// Test-facing structured form of `debugPerGlyphAlignmentDump`'s per-glyph row — see that
+    /// function's doc comment for what (a)/(b) mean and why they can legitimately disagree.
+    struct DebugGlyphAlignmentSample {
+        let char: String
+        let tileFrameMinX: CGFloat
+        let layoutManagerX: CGFloat
+    }
+
+    /// Real-layout (no mocking) per-glyph alignment: index-aligned to
+    /// `mainDimWordGlyphLayers`/`mainBrightWordGlyphLayers`. Returns `nil` if this row has no
+    /// active per-glyph sweep laid out (no `cachedMainUnifiedBuild`).
+    var debugGlyphAlignmentSamples: [DebugGlyphAlignmentSample]? {
+        guard let build = cachedMainUnifiedBuild else { return nil }
+        let storage = build.textStorage
+        let fullText = storage.string as NSString
+        guard fullText.length > 0 else { return [] }
+        var samples: [DebugGlyphAlignmentSample] = []
+        var tileIndex = 0
+        for charIndex in 0..<fullText.length {
+            let ch = fullText.substring(with: NSRange(location: charIndex, length: 1))
+            guard !ch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            guard tileIndex < mainBrightWordGlyphLayers.count else { break }
+            let brightLayer = mainBrightWordGlyphLayers[tileIndex]
+            var actualCharRange = NSRange(location: NSNotFound, length: 0)
+            let glyphRange = build.layoutManager.glyphRange(
+                forCharacterRange: NSRange(location: charIndex, length: 1),
+                actualCharacterRange: &actualCharRange
+            )
+            var layoutManagerX: CGFloat = .nan
+            if glyphRange.location != NSNotFound, glyphRange.length > 0 {
+                var fragmentRange = NSRange(location: 0, length: 0)
+                let fragmentRect = build.layoutManager.lineFragmentRect(
+                    forGlyphAt: glyphRange.location, effectiveRange: &fragmentRange
+                )
+                let glyphLocation = build.layoutManager.location(forGlyphAt: glyphRange.location)
+                layoutManagerX = fragmentRect.origin.x + glyphLocation.x
+            }
+            samples.append(DebugGlyphAlignmentSample(
+                char: ch, tileFrameMinX: brightLayer.frame.minX, layoutManagerX: layoutManagerX
+            ))
+            tileIndex += 1
+        }
+        return samples
+    }
+
     /// 3o red/green tests: the eased 1→0 float-return progress (see `mainWordFloatReturnFloor`'s
     /// declaration). 1 while the line is active/still bright-fading; eases toward 0 only once this
     /// row has gone fully inactive; reaching (near) 0 is exactly the frame the per-glyph tiles
@@ -1170,6 +1215,85 @@ final class NativeLyricsRowView: NSView {
         for (i, l) in mainEmphasisGlowLayers.enumerated() where !l.isHidden {
             describe("mainEmphasisGlowLayers[\(i)]", l)
         }
+        lines += debugPerGlyphAlignmentDump()
+        return lines
+    }
+
+    /// 2026-09-19 coordinator follow-up ("下雨天" real-device report: dim ink for "眼泪" reads
+    /// ~1/3 character to the RIGHT of the bright glyph, worst at the end of the line — drift
+    /// accumulating with glyph order). Pure-code instrumentation, no device needed to WRITE this
+    /// — only to READ it against a real render. For every non-whitespace character of the active
+    /// row's shared `cachedMainUnifiedBuild` text (the same `NSLayoutManager` both the per-glyph
+    /// tiles and the whole-line dim base draw from), prints, index-aligned to
+    /// `mainDimWordGlyphLayers`/`mainBrightWordGlyphLayers`:
+    ///   (a) the glyph tile's own `frame.minX/midX/width` (what the per-glyph tile is positioned
+    ///       from — `NativeLyricsTextSweepLayout`'s `layoutManager.boundingRect(forGlyphRange:in:)`)
+    ///   (b) the SAME layoutManager's `lineFragmentRect(forGlyphAt:).origin.x + location(forGlyphAt:).x`
+    ///       — a DIFFERENT NSLayoutManager API than (a) (advance/baseline origin vs ink bounding
+    ///       box) that can legitimately disagree for glyphs with side bearings, which is exactly
+    ///       the kind of drift the founder describes accumulating across a line
+    ///   (c) that glyph's advance (this glyph's (b) minus the previous glyph's (b))
+    ///   (d) `textStorage`'s `.font` at that character vs the glyph tile CATextLayer's own
+    ///       `.font`/`.fontSize`/`.alignmentMode`/`.contentsScale`
+    ///   (e) `textContainer.lineFragmentPadding` and the unified dim-draw layer's `contentsScale`
+    /// printed once per row dump (not per frame — this only runs when `rowDumpLines` is invoked,
+    /// same discipline as every other on-demand probe in this file).
+    private func debugPerGlyphAlignmentDump() -> [String] {
+        guard let build = cachedMainUnifiedBuild else {
+            return ["  glyphAlign: (no cachedMainUnifiedBuild — row not laid out as active per-glyph sweep)"]
+        }
+        let storage = build.textStorage
+        let fullText = storage.string as NSString
+        guard fullText.length > 0 else { return ["  glyphAlign: (empty text storage)"] }
+        var lines: [String] = []
+        var tileIndex = 0
+        var lastLayoutManagerX: CGFloat?
+        for charIndex in 0..<fullText.length {
+            let ch = fullText.substring(with: NSRange(location: charIndex, length: 1))
+            guard !ch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            guard tileIndex < mainDimWordGlyphLayers.count, tileIndex < mainBrightWordGlyphLayers.count else { break }
+            let dimLayer = mainDimWordGlyphLayers[tileIndex]
+            let brightLayer = mainBrightWordGlyphLayers[tileIndex]
+
+            var actualCharRange = NSRange(location: NSNotFound, length: 0)
+            let glyphRange = build.layoutManager.glyphRange(
+                forCharacterRange: NSRange(location: charIndex, length: 1),
+                actualCharacterRange: &actualCharRange
+            )
+            var layoutManagerX: CGFloat = .nan
+            if glyphRange.location != NSNotFound, glyphRange.length > 0 {
+                var fragmentRange = NSRange(location: 0, length: 0)
+                let fragmentRect = build.layoutManager.lineFragmentRect(
+                    forGlyphAt: glyphRange.location, effectiveRange: &fragmentRange
+                )
+                let glyphLocation = build.layoutManager.location(forGlyphAt: glyphRange.location)
+                layoutManagerX = fragmentRect.origin.x + glyphLocation.x
+            }
+            let advance = lastLayoutManagerX.map { layoutManagerX - $0 } ?? .nan
+            lastLayoutManagerX = layoutManagerX
+
+            let storageFont = storage.attribute(.font, at: charIndex, effectiveRange: nil) as? NSFont
+            let tileFont = brightLayer.font as? NSFont
+            let matches = abs(brightLayer.frame.minX - layoutManagerX) <= 0.05
+
+            lines.append(
+                "  glyphAlign[\(tileIndex)] char=\"\(ch)\" "
+                    + "tileFrame(minX:\(brightLayer.frame.minX) midX:\(brightLayer.frame.midX) width:\(brightLayer.frame.width)) "
+                    + "dimTileFrame(minX:\(dimLayer.frame.minX) midX:\(dimLayer.frame.midX)) "
+                    + "layoutManagerX=\(layoutManagerX) advance=\(advance) "
+                    + "aEqualsB=\(matches) "
+                    + "storageFont=\(storageFont?.fontName ?? "nil"):\(storageFont?.pointSize ?? -1) "
+                    + "tileFont=\(tileFont?.fontName ?? "nil"):\(brightLayer.fontSize) "
+                    + "tileAlignmentMode=\(brightLayer.alignmentMode.rawValue) "
+                    + "tileContentsScale=\(brightLayer.contentsScale)"
+            )
+            tileIndex += 1
+        }
+        lines.append(
+            "  glyphAlign: textContainer.lineFragmentPadding=\(build.textContainer.lineFragmentPadding) "
+                + "unifiedDimDrawLayer.contentsScale=\(mainUnifiedDimDrawLayer.contentsScale) "
+                + "mainTextLayer.contentsScale=\(mainTextLayer.contentsScale)"
+        )
         return lines
     }
 
