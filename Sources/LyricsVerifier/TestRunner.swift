@@ -391,6 +391,13 @@ private func checkExpectation(
                 failures.append("尾部时间缺口 \(String(format: "%.1f", tailGap))s 超过 \(String(format: "%.1f", maxTailGap))s")
             }
         }
+        if let maxDenseLines = exp.maxImplausibleDenseLines,
+           classification == "synced" {
+            let denseCount = lyrics.filter { isRealLyricText($0.text) && LyricsScorer.isImplausiblyDenseLine($0) }.count
+            if denseCount > maxDenseLines {
+                failures.append("朗读速率不合理行数 \(denseCount) 超过期望上限 \(maxDenseLines)（可能是断裂时间轴）")
+            }
+        }
     } else {
         if !lyrics.isEmpty {
             failures.append("期望无歌词，但找到了 \(source?.rawValue ?? "unknown")")

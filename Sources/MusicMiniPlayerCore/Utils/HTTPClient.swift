@@ -81,6 +81,23 @@ public final class NetworkOutcomeLedger: @unchecked Sendable {
         lock.withLock { protocolResponseCount += 1 }
     }
 
+    /// Record an app-level envelope failure: the HTTP request itself got a
+    /// real response (already counted via `recordProtocolResponse`), but
+    /// the JSON envelope's own status code was non-zero, or an expected
+    /// shape (e.g. a candidate list) was missing — the provider answered
+    /// but declined or garbled the request (rate limiting, transient
+    /// upstream error, A/B'd response shape). This payload is NOT evidence
+    /// the requested song has no results, so it must count the same as a
+    /// transport failure for negative-verdict quorum purposes, without
+    /// claiming the network itself was unreachable.
+    /// (2026-09-20: every QQ query — even artist-only — silently returned
+    /// 0 candidates for one session while the identical request succeeded
+    /// moments later; nothing distinguished a real miss from a declined
+    /// envelope.)
+    func recordEnvelopeFailure() {
+        lock.withLock { transportFailureCount += 1 }
+    }
+
     /// Record a thrown request error according to the classification table.
     func record(failure error: Error) {
         guard Self.classify(failure: error) == .transportFailure else { return }

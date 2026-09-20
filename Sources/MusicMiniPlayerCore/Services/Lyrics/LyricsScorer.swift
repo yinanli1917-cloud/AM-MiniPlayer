@@ -28,6 +28,10 @@ public final class LyricsScorer {
         public let shortLineRatio: Double
         public let realLyricCount: Int
         public let issues: [String]
+        /// Lines whose reading-rate (text density / window) exceeds what a
+        /// human voice can physically sing — see `implausibleDensityCeiling`.
+        public let implausibleDenseLineCount: Int
+        public let implausibleDenseLineRatio: Double
 
         /// 计算质量评分因子 (0-100)
         public var qualityScore: Double {
@@ -37,6 +41,53 @@ public final class LyricsScorer {
             score -= min(shortLineRatio * 80, 30)
             return max(0, score)
         }
+    }
+
+    // MARK: - 朗读速率合理性 (implausible density)
+
+    /// Latin-equivalent characters/second ceiling no sung human voice
+    /// crosses. Reference points: ordinary sung speech tops out around
+    /// 20-25 latin chars/s; the fastest rap verses on record (e.g. Eminem's
+    /// "Rap God", Twista) peak near 30-35 chars/s over short bursts. 40 sets
+    /// a margin above even those extremes, so only lines that are timing
+    /// artifacts (a whole verse packed into a fraction of a second by a
+    /// broken timeline) trip it — never a genuinely fast but human line.
+    public static let implausibleDensityCeiling: Double = 40.0
+
+    /// Minimum window (seconds) below which the density check applies.
+    /// Short-but-plausible ad-libs/backing vocals (e.g. a 0.5s "yeah") sit
+    /// well under the character ceiling anyway; this only exists as a
+    /// second gate so a merely-short line with sane text never counts.
+    public static let implausibleDensityMinWindow: TimeInterval = 0.6
+
+    /// Latin-equivalent visible character count for one line's text.
+    /// CJK glyphs read/sing slower per-character than Latin letters but
+    /// carry more information per glyph — weight each CJK character as
+    /// ~2.5 Latin characters (a documented, simple stand-in for syllable
+    /// density; not a claim of exact phonetic equivalence). Spaces and
+    /// punctuation are excluded since they carry no sung duration.
+    public static func latinEquivalentDensityWeight(_ text: String) -> Double {
+        var weight = 0.0
+        for scalar in text.unicodeScalars {
+            if LanguageUtils.isCJKScalar(scalar) {
+                weight += 2.5
+            } else if CharacterSet.letters.contains(scalar) || CharacterSet.decimalDigits.contains(scalar) {
+                weight += 1.0
+            }
+            // punctuation/whitespace/symbols: 0
+        }
+        return weight
+    }
+
+    /// True when a single line's reading rate exceeds what any human voice
+    /// can sing — a signature of a broken/misaligned timeline (many words
+    /// crammed into a near-zero window), not a fast performance.
+    public static func isImplausiblyDenseLine(_ line: LyricLine) -> Bool {
+        let window = max(line.endTime - line.startTime, 0.05)
+        guard window < implausibleDensityMinWindow else { return false }
+        let weight = latinEquivalentDensityWeight(line.text)
+        guard weight > 0 else { return false }
+        return (weight / window) > implausibleDensityCeiling
     }
 
     // MARK: - 综合评分
@@ -172,6 +223,16 @@ public final class LyricsScorer {
             }
         }
 
+        // 6b. Implausible reading-rate penalty (applies to ALL sources
+        // uniformly, mirrors the analyzeQuality density check). Proportional
+        // to how much of the timeline is affected, capped so a couple of
+        // stray fast lines never dominate the score the way a fully broken
+        // timeline should.
+        let denseLineRatio = qualityAnalysis.implausibleDenseLineRatio
+        if denseLineRatio > 0 {
+            score -= min(denseLineRatio * 400, 15)
+        }
+
         // 7. Mixed translation penalty
         let mixPenalty = mixedTranslationPenalty(lyrics)
         score -= mixPenalty
@@ -213,7 +274,9 @@ public final class LyricsScorer {
                 timeOverlapRatio: 1.0,
                 shortLineRatio: 1.0,
                 realLyricCount: realLyricCount,
-                issues: ["太少歌词行(\(realLyricCount))"]
+                issues: ["太少歌词行(\(realLyricCount))"],
+                implausibleDenseLineCount: 0,
+                implausibleDenseLineRatio: 0
             )
         }
 
@@ -258,13 +321,21 @@ public final class LyricsScorer {
             issues.append("太短行(\(tooShortLineCount)/\(realLyricCount)=\(String(format: "%.1f", shortLineRatio * 100))%)")
         }
 
+        let implausibleDenseLineCount = realLyrics.filter { LyricsScorer.isImplausiblyDenseLine($0) }.count
+        let implausibleDenseLineRatio = Double(implausibleDenseLineCount) / Double(realLyricCount)
+        if implausibleDenseLineCount >= 3 || implausibleDenseLineRatio >= 0.03 {
+            issues.append("朗读速率不合理(\(implausibleDenseLineCount)/\(realLyricCount)=\(String(format: "%.1f", implausibleDenseLineRatio * 100))%)")
+        }
+
         return QualityAnalysis(
             isValid: issues.isEmpty,
             timeReverseRatio: timeReverseRatio,
             timeOverlapRatio: timeOverlapRatio,
             shortLineRatio: shortLineRatio,
             realLyricCount: realLyricCount,
-            issues: issues
+            issues: issues,
+            implausibleDenseLineCount: implausibleDenseLineCount,
+            implausibleDenseLineRatio: implausibleDenseLineRatio
         )
     }
 

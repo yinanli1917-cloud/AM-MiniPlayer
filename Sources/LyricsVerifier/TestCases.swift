@@ -32,6 +32,12 @@ struct TestExpectation: Codable {
     let firstLineStartMinS: Double?
     let firstLineStartMaxS: Double?
     let maxTailGapS: Double?
+    /// Upper bound on how many real lyric lines may have an implausible
+    /// reading-rate window (see `LyricsScorer.isImplausiblyDenseLine`) —
+    /// a signature of a broken/misaligned source timeline, not a fast
+    /// performance. `0` (H07's expectation) means the selected candidate's
+    /// timeline must be clean.
+    let maxImplausibleDenseLines: Int?
 }
 
 struct LibraryTrack {

@@ -2959,3 +2959,114 @@ private extension LyricsFetcher.LyricsFetchResult {
         lyrics.first?.text
     }
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Implausible-density selection (2026-09-20 NewJeans "How Sweet")
+//
+// NetEase LRC (id 3328905844, chorus 5 lines at 0.16-0.38s each, a broken
+// timeline) previously beat LRCLIB (id 9417341, a clean synced timeline)
+// under the "human-curated source preferred ±12" rule because no existing
+// check saw the crammed chorus. Real fixture data lives in
+// Tests/MusicMiniPlayerTests/Fixtures/.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+final class LyricsImplausibleDensitySelectionTests: XCTestCase {
+
+    private func loadFixtureJSON(_ name: String) -> [String: Any] {
+        guard let url = Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures"),
+              let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            XCTFail("missing/unreadable fixture \(name).json")
+            return [:]
+        }
+        return json
+    }
+
+    private func netEaseHowSweetLyrics() -> [LyricLine] {
+        let json = loadFixtureJSON("netease_newjeans_howsweet_3328905844")
+        guard let lrc = json["lrc"] as? [String: Any], let text = lrc["lyric"] as? String else {
+            XCTFail("netease fixture missing lrc.lyric")
+            return []
+        }
+        // Density is offset-invariant (it only depends on each line's own
+        // window), so this test intentionally does not apply the fetcher's
+        // +0.7s NetEase offset.
+        return LyricsParser.shared.parseLRC(text)
+    }
+
+    private func lrclibHowSweetLyrics() -> [LyricLine] {
+        let json = loadFixtureJSON("lrclib_newjeans_howsweet_9417341")
+        guard let text = json["syncedLyrics"] as? String else {
+            XCTFail("lrclib fixture missing syncedLyrics")
+            return []
+        }
+        return LyricsParser.shared.parseLRC(text)
+    }
+
+    /// Sanity: the real NetEase fixture must actually contain the broken
+    /// chorus this whole check exists for, so the test can't silently pass
+    /// on a re-fetched/edited fixture that no longer reproduces the bug.
+    func testNetEaseFixture_containsKnownBrokenChorus() {
+        let lines = netEaseHowSweetLyrics()
+        let dense = lines.filter { LyricsScorer.isImplausiblyDenseLine($0) }
+        XCTAssertGreaterThanOrEqual(dense.count, 3,
+            "fixture must still reproduce the 2026-09-20 broken chorus; re-verify the fixture if this fails")
+    }
+
+    func testHowSweet_lrclibWinsOverBrokenNetEaseChorus() {
+        let fetcher = LyricsFetcher.shared
+        let netEase = LyricsFetcher.LyricsFetchResult(
+            lyrics: netEaseHowSweetLyrics(),
+            source: .netEase,
+            score: 89.8,
+            kind: .synced,
+            albumMatched: true,
+            titleMatched: true
+        )
+        let lrclib = LyricsFetcher.LyricsFetchResult(
+            lyrics: lrclibHowSweetLyrics(),
+            source: .lrclib,
+            score: 78.6,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 1.0
+        )
+
+        let selected = fetcher.selectBestResult(from: [netEase, lrclib], songDuration: 219)
+
+        XCTAssertEqual(selected?.source, .lrclib,
+            "a candidate with an implausibly-dense (broken) chorus timeline must lose the human-curated tolerance and lose outright on raw score")
+    }
+
+    /// Control: when the human-curated candidate's OWN timeline is sane
+    /// (no implausible-density lines), the ±12 tolerance must still apply
+    /// normally and NetEase must still win over a lower-scoring fallback —
+    /// this check must not become a blanket "library fallback always wins".
+    func testHowSweet_saneNetEaseTimeline_stillWinsWithinTolerance() {
+        let fetcher = LyricsFetcher.shared
+        // Same LRCLIB clean timeline, reused as a stand-in "sane" candidate
+        // for the human-curated slot — proves the tolerance mechanism is
+        // untouched when there's no density defect.
+        let saneCurated = LyricsFetcher.LyricsFetchResult(
+            lyrics: lrclibHowSweetLyrics(),
+            source: .netEase,
+            score: 78.6,
+            kind: .synced,
+            albumMatched: true,
+            titleMatched: true
+        )
+        let fallback = LyricsFetcher.LyricsFetchResult(
+            lyrics: lrclibHowSweetLyrics(),
+            source: .lrclibSearch,
+            score: 85.0,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 1.0
+        )
+
+        let selected = fetcher.selectBestResult(from: [saneCurated, fallback], songDuration: 219)
+
+        XCTAssertEqual(selected?.source, .netEase,
+            "sane human-curated timeline within the ±12 tolerance must still be preferred over a library fallback")
+    }
+}

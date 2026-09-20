@@ -569,4 +569,94 @@ final class LyricsScorerTests: XCTestCase {
         XCTAssertFalse(scorer.isLikelyRomaji(germanLines),
             "German lyrics with ü/ä must not be classified as romaji")
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - 朗读速率合理性 (implausible density)
+    // 2026-09-20: NewJeans "How Sweet" NetEase chorus — 5 lines holding
+    // 3-9 words each inside 0.16-0.38s windows (broken timeline), scored
+    // above a clean LRCLIB candidate because no existing check saw it.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    func testLatinEquivalentDensityWeight_asciiCountsPerLetter() {
+        XCTAssertEqual(LyricsScorer.latinEquivalentDensityWeight("How sweet"), 8.0, accuracy: 0.001)
+    }
+
+    func testLatinEquivalentDensityWeight_cjkWeightedHigher() {
+        // 4 CJK chars * 2.5 = 10.0
+        XCTAssertEqual(LyricsScorer.latinEquivalentDensityWeight("我相信你"), 10.0, accuracy: 0.001)
+    }
+
+    func testLatinEquivalentDensityWeight_ignoresPunctuationAndSpaces() {
+        XCTAssertEqual(LyricsScorer.latinEquivalentDensityWeight("Hi, you!"), 5.0, accuracy: 0.001)
+    }
+
+    func testIsImplausiblyDenseLine_belowCeiling_notDense() {
+        // "How sweet it tastes" = 16 latin chars over 1.0s = 16 chars/s, well under the 40 ceiling
+        let line = LyricLine(text: "How sweet it tastes", startTime: 0, endTime: 1.0)
+        XCTAssertFalse(LyricsScorer.isImplausiblyDenseLine(line))
+    }
+
+    func testIsImplausiblyDenseLine_realRepro_flagsBrokenTimeline() {
+        // Real 2026-09-20 repro line: "Wow don't you know how sweet it tastes" in 0.94s window
+        let line = LyricLine(text: "Wow don't you know how sweet it tastes", startTime: 81.71, endTime: 82.65)
+        // ~32 latin chars / 0.94s ≈ 34 chars/s — under 40, so widen with the tighter real case:
+        let denseLine = LyricLine(text: "So I've been praying so hard for a miracle", startTime: 83.04, endTime: 83.21)
+        XCTAssertFalse(LyricsScorer.isImplausiblyDenseLine(line), "sanity: this line alone is plausible")
+        XCTAssertTrue(LyricsScorer.isImplausiblyDenseLine(denseLine),
+            "~43 latin chars in 0.17s (~250 chars/s) must be flagged as implausible")
+    }
+
+    func testIsImplausiblyDenseLine_shortButSaneLine_notFlagged() {
+        // A short ad-lib ("yeah") in a short window is plausible — must not trip the check.
+        let line = LyricLine(text: "yeah", startTime: 10.0, endTime: 10.3)
+        XCTAssertFalse(LyricsScorer.isImplausiblyDenseLine(line))
+    }
+
+    func testIsImplausiblyDenseLine_longWindow_neverFlagged() {
+        // Same dense text but a normal-length window is never implausible,
+        // regardless of character count, because the min-window gate excludes it.
+        let line = LyricLine(text: "So I've been praying so hard for a miracle and it came", startTime: 0, endTime: 3.0)
+        XCTAssertFalse(LyricsScorer.isImplausiblyDenseLine(line))
+    }
+
+    func testAnalyzeQuality_denseLines_reportedAndFlagged() {
+        // 84-line pool mimicking NetEase's How Sweet candidate: 5 implausibly
+        // dense lines (>= 3% of 84 ≈ 2.52, and >= 3 absolute) among otherwise
+        // normal lines.
+        var lyrics: [LyricLine] = (0..<79).map { i in
+            LyricLine(text: "normal line number \(i) here", startTime: Double(i) * 2.0, endTime: Double(i) * 2.0 + 1.8)
+        }
+        let denseStarts: [TimeInterval] = [81.33, 81.71, 82.65, 82.88, 83.04]
+        let denseTexts = [
+            "How sweet it tastes",
+            "Wow don't you know how sweet it tastes",
+            "Now that I'm without you",
+            "모든 게 typical",
+            "So I've been praying so hard for a miracle",
+        ]
+        let denseEnds: [TimeInterval] = [81.71, 82.65, 82.88, 83.04, 84.32]
+        for i in 0..<denseStarts.count {
+            lyrics.append(LyricLine(text: denseTexts[i], startTime: denseStarts[i], endTime: denseEnds[i]))
+        }
+
+        let analysis = scorer.analyzeQuality(lyrics)
+        XCTAssertGreaterThanOrEqual(analysis.implausibleDenseLineCount, 3)
+        XCTAssertTrue(analysis.issues.contains { $0.contains("朗读速率") })
+    }
+
+    func testCalculateScore_denseLines_penalized() {
+        let clean = (0..<20).map { i in
+            LyricLine(text: "a normal sung line here today", startTime: Double(i) * 3.0, endTime: Double(i) * 3.0 + 2.5)
+        }
+        var dense = clean
+        // Replace the last 3 lines with implausibly dense ones (0.15s windows).
+        dense.removeLast(3)
+        for i in 17..<20 {
+            dense.append(LyricLine(text: "a very long line crammed into a tiny window somehow", startTime: Double(i) * 3.0, endTime: Double(i) * 3.0 + 0.15))
+        }
+
+        let cleanScore = scorer.calculateScore(clean, source: .netEase, duration: 60, translationEnabled: false)
+        let denseScore = scorer.calculateScore(dense, source: .netEase, duration: 60, translationEnabled: false)
+        XCTAssertLessThan(denseScore, cleanScore, "implausibly dense lines must cost score vs. a clean timeline")
+    }
 }

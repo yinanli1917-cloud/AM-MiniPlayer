@@ -91,7 +91,10 @@ let package = Package(
         ),
         .testTarget(
             name: "MusicMiniPlayerTests",
-            dependencies: ["MusicMiniPlayerCore", "KeyboardShortcuts"]
+            dependencies: ["MusicMiniPlayerCore", "KeyboardShortcuts"],
+            resources: [
+                .copy("Fixtures")
+            ]
         ),
     ]
 )

@@ -709,6 +709,17 @@ extension LyricsFetcher {
             let gapThreshold = max(45, songDuration * 0.15)
             if maxGap > gapThreshold { return true }
         }
+
+        // Mirrors LyricsScorer 6b / analyzeQuality's implausible-density
+        // check: a broken timeline that crams several lines' worth of text
+        // into near-zero windows (2026-09-20 repro: NewJeans "How Sweet"
+        // NetEase chorus, 5 lines at 0.16-0.38s each) is a real hole even
+        // though head/tail/internal-gap all look clean.
+        let realLyrics = result.lyrics.filter { LyricsParser.shared.isRealLyricLine($0.text) }
+        guard realLyrics.count >= 3 else { return false }
+        let denseCount = realLyrics.filter { LyricsScorer.isImplausiblyDenseLine($0) }.count
+        let denseRatio = Double(denseCount) / Double(realLyrics.count)
+        if denseCount >= 3 || denseRatio >= 0.03 { return true }
         return false
     }
 
