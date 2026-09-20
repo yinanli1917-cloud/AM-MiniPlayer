@@ -53,6 +53,14 @@ final class NativeLyricsActiveLineDrawLayer: CALayer {
     #if DEBUG
     private(set) var debugRasterizations = 0
     #endif
+    #if DEBUG
+    /// Test seam: the exact bitmap a run is drawn from (same rasterizer as production).
+    func debugRunImage(text: String, width: CGFloat, fontSize: CGFloat, charRange: NSRange, rect: CGRect) -> CGImage? {
+        prepareLayout(text: text, width: width, fontSize: fontSize)
+        return runImage(for: .init(lineIndex: 0, charRange: charRange, rect: rect, floatY: 0,
+                                   isEmphasis: false, scale: 1, liftY: 0, glowOpacity: 0, glowRadius: 0))?.image
+    }
+    #endif
 
     override func action(forKey event: String) -> CAAction? { NSNull() }
 
@@ -133,8 +141,12 @@ final class NativeLyricsActiveLineDrawLayer: CALayer {
         ctx.translateBy(x: -frame.minX, y: -frame.minY)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
-        ctx.setShouldSmoothFonts(true)
-        ctx.setAllowsFontSmoothing(true)
+        // 2026-09-20 (founder: 切行时字变粗、亮度跳变): CATextLayer draws the inactive base
+        // WITHOUT font smoothing; a smoothed bitmap carries ~15% more ink on the same glyphs
+        // (NativeLyricsActiveLineInkParityTests), so the row read bolder and brighter the
+        // frame it activated. Match the CATextLayer rasterizer: no smoothing dilation.
+        ctx.setShouldSmoothFonts(false)
+        ctx.setAllowsFontSmoothing(false)
         ctx.setShouldAntialias(true)
         ctx.setAllowsAntialiasing(true)
         layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: .zero)
