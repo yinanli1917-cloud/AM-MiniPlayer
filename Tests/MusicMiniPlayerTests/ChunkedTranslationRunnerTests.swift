@@ -140,3 +140,89 @@ final class ChunkedTranslationRunnerTests: XCTestCase {
         XCTAssertEqual(calls, 0)
     }
 }
+
+// ============================================================================
+// MARK: - runMultiScript (mixed Hangul+Latin lines, 2026-09-20 evidence)
+// ============================================================================
+
+private final class TaggingExecutor: LyricsTranslationExecuting {
+    let tag: String
+    init(tag: String) { self.tag = tag }
+    func translateBatch(_ texts: [String]) async throws -> [String] {
+        texts.map { "[\(tag)]\($0)" }
+    }
+}
+
+final class ChunkedTranslationRunnerMultiScriptTests: XCTestCase {
+
+    func test_singleRunLines_takeTheSamePathAsRun_neverTouchKoExecutor() async {
+        let defaultExecutor = FakeExecutor()
+        let koExecutor = TaggingExecutor(tag: "ko")
+        var publishes: [[Int: String]] = []
+        await ChunkedTranslationRunner.runMultiScript(
+            lines: ["hello there", "goodbye now"],
+            defaultExecutor: defaultExecutor,
+            executorsByLanguage: ["ko": koExecutor]
+        ) { publishes.append($0) }
+
+        XCTAssertEqual(publishes.count, 1)
+        XCTAssertEqual(publishes[0][0], "T:hello there")
+        XCTAssertEqual(publishes[0][1], "T:goodbye now")
+    }
+
+    func test_mixedKoreanLatinLine_routesKoreanRunToKoExecutor_andReassembles() async {
+        // Mirrors the evidence line: "더는 안 봐 drama it's good karma"
+        let defaultExecutor = TaggingExecutor(tag: "auto")
+        let koExecutor = TaggingExecutor(tag: "ko")
+        var publishes: [[Int: String]] = []
+        await ChunkedTranslationRunner.runMultiScript(
+            lines: ["더는 안 봐 drama it's good karma"],
+            defaultExecutor: defaultExecutor,
+            executorsByLanguage: ["ko": koExecutor]
+        ) { publishes.append($0) }
+
+        let merged = publishes.reduce(into: [Int: String]()) { acc, chunk in acc.merge(chunk) { _, new in new } }
+        XCTAssertEqual(merged[0], "[ko]더는 안 봐 [auto]drama it's good karma")
+    }
+
+    func test_noKoExecutorRegistered_koreanRunFallsBackToDefault() async {
+        // Graceful degradation: before the second session has warmed
+        // (or on macOS < 15), the whole line still comes back translated
+        // via auto-detect on each run, never silently dropped.
+        let defaultExecutor = TaggingExecutor(tag: "auto")
+        var publishes: [[Int: String]] = []
+        await ChunkedTranslationRunner.runMultiScript(
+            lines: ["그만해 cus it's clear"],
+            defaultExecutor: defaultExecutor,
+            executorsByLanguage: [:]
+        ) { publishes.append($0) }
+
+        let merged = publishes.reduce(into: [Int: String]()) { acc, chunk in acc.merge(chunk) { _, new in new } }
+        XCTAssertEqual(merged[0], "[auto]그만해 [auto]cus it's clear")
+    }
+
+    func test_singleAndMultiRunLinesTogether_bothLand() async {
+        let defaultExecutor = TaggingExecutor(tag: "auto")
+        let koExecutor = TaggingExecutor(tag: "ko")
+        var publishes: [[Int: String]] = []
+        await ChunkedTranslationRunner.runMultiScript(
+            lines: ["pure english line", "모든 게 typical"],
+            defaultExecutor: defaultExecutor,
+            executorsByLanguage: ["ko": koExecutor]
+        ) { publishes.append($0) }
+
+        let merged = publishes.reduce(into: [Int: String]()) { acc, chunk in acc.merge(chunk) { _, new in new } }
+        XCTAssertEqual(merged[0], "[auto]pure english line")
+        XCTAssertEqual(merged[1], "[ko]모든 게 [auto]typical")
+    }
+
+    func test_emptyInput_publishesNothing() async {
+        let defaultExecutor = FakeExecutor()
+        var publishes: [[Int: String]] = []
+        await ChunkedTranslationRunner.runMultiScript(
+            lines: [],
+            defaultExecutor: defaultExecutor
+        ) { publishes.append($0) }
+        XCTAssertTrue(publishes.isEmpty)
+    }
+}

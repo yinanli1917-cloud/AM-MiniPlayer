@@ -2721,6 +2721,24 @@ private struct TranslationTaskHostCore: View {
                 // re-checks showTranslation/lyrics on every request already.
                 await lyricsService.serveTranslationRequests(with: session)
             })
+            // Second, invisible session with an EXPLICIT Korean source —
+            // script-determined (ScriptRunSegmenter classifies Hangul), not
+            // NLLanguageRecognizer-guessed, so this does not repeat the
+            // banned `source: detectLanguage()` pattern. Used only for
+            // Hangul runs inside mixed-script lines (2026-09-20 NewJeans
+            // "How Sweet" evidence: whole-line auto-detect only translates
+            // the dominant script, leaving Korean or English half untouched).
+            // This task just warms/holds the session; the main loop above
+            // (serveTranslationRequests, driven by translation requests)
+            // is what actually issues work through it via
+            // LyricsService.koreanRunTranslationExecutor.
+            .translationTask(koreanRunConfig, action: { session in
+                await lyricsService.updateKoreanRunTranslationExecutor(session)
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 3_600_000_000_000)
+                }
+                await lyricsService.updateKoreanRunTranslationExecutor(nil)
+            })
     }
 
     private var activeConfig: TranslationSession.Configuration {
@@ -2728,6 +2746,13 @@ private struct TranslationTaskHostCore: View {
             return config
         }
         return TranslationSession.Configuration(target: Locale.Language(identifier: "zh-Hans"))
+    }
+
+    private var koreanRunConfig: TranslationSession.Configuration {
+        TranslationSession.Configuration(
+            source: Locale.Language(identifier: "ko"),
+            target: activeConfig.target
+        )
     }
 }
 
