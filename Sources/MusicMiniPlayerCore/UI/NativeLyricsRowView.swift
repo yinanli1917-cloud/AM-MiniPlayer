@@ -239,6 +239,7 @@ final class NativeLyricsRowView: NSView {
     /// v2.8-style single-pass active line renderer (see NativeLyricsActiveLineDrawLayer).
     let activeLineDrawLayer = NativeLyricsActiveLineDrawLayer()
     private var singlePassActive = false
+    private var singlePassPrewarmKey: String?
     private var cachedStaticTextPlanKey: StaticTextPlanCacheKey?
     private var cachedStaticTextPlan: NativeLyricsStaticTextRenderPlan?
 
@@ -352,6 +353,7 @@ final class NativeLyricsRowView: NSView {
     }
 
     func updateDeactivationFade(progress: CGFloat) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["updateDeactivationFade", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let f = Float(max(0, min(1, progress)))
         if let base = mainDeactivationOverlayBaseline {
             mainBrightTextLayer.opacity = base * f
@@ -1641,6 +1643,7 @@ final class NativeLyricsRowView: NSView {
         configuration: LyricsLayerRendererConfiguration,
         managesTransaction: Bool = true
     ) -> NativeLyricsTextPhaseSample? {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["updatePlaybackPhase", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         guard let row else { return nil }
         #if DEBUG
         debugPlaybackPhaseUpdateCount += 1
@@ -1885,6 +1888,7 @@ final class NativeLyricsRowView: NSView {
     }
 
     private func applyInactivePlaybackLayerState() {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["applyInactivePlaybackLayerState", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         leaveSinglePassActiveLine()
         // Leaving the active word-cascade: the whole-line base must come back
         // before the per-word/emphasis glyphs hide, or the row goes blank.
@@ -1948,6 +1952,7 @@ final class NativeLyricsRowView: NSView {
         plan: NativeLyricsTextRenderPlan,
         currentTime: TimeInterval
     ) -> MainTextPhaseAppliedMetrics {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["applyActiveMainPhase", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let activeRun = plan.wordRuns.last { $0.startTime <= currentTime }
             ?? plan.wordRuns.first
         // 2026-09-18 (stage bundle 3i, item 3 — CJK trailing-line ghost): the dim base
@@ -2846,6 +2851,31 @@ final class NativeLyricsRowView: NSView {
 
     // MARK: - Single-pass active line (v2.8 model)
 
+    /// 2026-09-20 line-switch hitch (tick probe: the activation frame cost 5–9ms + 2 dropped
+    /// frames): the surface calls this on the row AFTER the active one every tick, so the next
+    /// line's layout, run bitmaps and layers exist before activation; the activation frame only
+    /// toggles visibility and positions cached images.
+    func prewarmSinglePassIfNeeded() {
+        guard let row, let configuration,
+              row.displayLine.line.hasSyllableSync,
+              NativeLyricsFeelParity.activeLineRenderer == .singlePass else { return }
+        let width = contentTextWidth(configuration)
+        guard width > 1 else { return }
+        let prewarmKey = "\(row.id)|\(width)"
+        guard singlePassPrewarmKey != prewarmKey else { return }
+        singlePassPrewarmKey = prewarmKey
+        let plan = textRenderPlan(row: row, configuration: configuration)
+        let linePlan = mainSweepLinePlan(for: plan, bounds: CGRect(x: 0, y: 0, width: width, height: max(1, mainTextLayer.bounds.height)))
+        var runs: [(charRange: NSRange, rect: CGRect)] = []
+        for line in linePlan {
+            for visualRun in line.runs {
+                guard let first = visualRun.glyphs.first, let last = visualRun.glyphs.last else { continue }
+                runs.append((NSRange(location: first.characterIndex, length: last.characterIndex - first.characterIndex + 1), visualRun.rect))
+            }
+        }
+        activeLineDrawLayer.prewarm(text: plan.displayText, width: width, fontSize: plan.constants.mainFontSize, runs: runs)
+    }
+
     private func leaveSinglePassActiveLine() {
         guard singlePassActive else { return }
         singlePassActive = false
@@ -2859,6 +2889,7 @@ final class NativeLyricsRowView: NSView {
         linePlan: [NativeLyricsTextSweepVisualLinePlan],
         sweepBounds: CGRect
     ) -> MainTextPhaseAppliedMetrics {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["applySinglePassActiveLine", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         singlePassActive = true
         // Everything the tile path would have shown is off: one layer owns the active line.
         if mainTextLayer.string == nil, let wholeLineMainString { mainTextLayer.string = wholeLineMainString }
@@ -3522,6 +3553,7 @@ final class NativeLyricsRowView: NSView {
         for plan: NativeLyricsTextRenderPlan,
         bounds: CGRect
     ) -> [NativeLyricsTextSweepVisualLinePlan] {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["mainSweepLinePlan", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let key = SweepLayoutCacheKey(rowID: row?.id, plan: plan, width: bounds.width)
         if cachedMainSweepLayoutKey == key {
             return cachedMainSweepLinePlan

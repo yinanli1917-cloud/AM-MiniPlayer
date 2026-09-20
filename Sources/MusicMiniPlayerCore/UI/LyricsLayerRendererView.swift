@@ -607,6 +607,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     // activation (~1.2s after it settles) and at most twice per manual-scroll gesture (start/end)
     // — never per frame. A no-op file write when DebugLogger's runtime switch is off.
     private func logLineGapsProbe(phase: String?, activeIndex: Int, anchorY: CGFloat) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["logLineGapsProbe", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         struct RowGeometry {
             let index: Int
             let minY: CGFloat
@@ -806,6 +807,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         configuration: LyricsLayerRendererConfiguration,
         snap: Bool
     ) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["updateSurfaceInterludeDots", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         guard let interludeIndex = configuration.interludeAfterIndex,
               let row = configuration.rows.first(where: { $0.index == interludeIndex }),
               let interlude = row.interlude else {
@@ -1237,6 +1239,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         snapPositions: Bool,
         snapVisuals: Bool
     ) -> Bool {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["reconcileVisibleRowViews", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let visibleRows = visibleRows(for: runtimeConfiguration)
         let nextIDs = Set(visibleRows.map(\.id))
         var unmountedCount = 0
@@ -1437,6 +1440,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     private func runtimeConfiguration(
         from configuration: LyricsLayerRendererConfiguration
     ) -> LyricsLayerRendererConfiguration {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["runtimeConfiguration", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         var runtimeConfiguration = configuration
         // ROOT FIX for the track-switch bloom (verified via the bloom probe: rows=42, ySpread=0,
         // maxBlur=9 on the first frame after a switch). A configure can arrive with `rows`
@@ -1917,6 +1921,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         visibleRows: [LayerBackedLyricRow]? = nil,
         snap: Bool
     ) -> Bool {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["syncVisualTargets", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let rows = visualRowsToSync(
             visibleRows: visibleRows ?? self.visibleRows(for: runtimeConfiguration),
             configuration: runtimeConfiguration
@@ -2000,6 +2005,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
 
     @discardableResult
     private func advanceVisualStates(delta: TimeInterval) -> Bool {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["advanceVisualStates", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         // Drive blur/scale/opacity on the SAME spring as line position so the depth-of-field stays
         // locked to the scroll (no past-sharper-than-upcoming lag during transitions).
         let spring = presentationEngine.currentVisualSpringParameters
@@ -2122,6 +2128,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     private func refreshTextActivation(
         runtimeConfiguration: LyricsLayerRendererConfiguration
     ) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["refreshTextActivation", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let visibleRows = visibleRows(for: runtimeConfiguration)
         let liveIndices = Set(runtimeConfiguration.rows.map(\.index))
         textActiveByRowIndex = textActiveByRowIndex.filter { liveIndices.contains($0.key) }
@@ -2573,6 +2580,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     private func sampleNativeLineMotionDuringPresentationTickIfNeeded(
         runtimeConfiguration: LyricsLayerRendererConfiguration
     ) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["sampleNativeLineMotionDuringPresentationTickIfNeeded", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         guard runtimeConfiguration.lineMotionSamplingEnabled,
               presentationEngine.hasActiveMotion else { return }
 
@@ -2712,6 +2720,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         snap: Bool,
         managesTransaction: Bool = true
     ) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["applyFrames", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let applyFrames = {
             #if DEBUG
             if self.debugCensusEnabled {
@@ -2944,7 +2953,30 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         #endif
     }
 
+    nonisolated(unsafe) static var tickPhaseAccum: [String: Double] = [:]
+    private var singlePassPrewarmArmedFor: Int?
+    private var singlePassPrewarmDoneFor: Set<Int> = []
     private func presentationTick(
+        displayInterval: TimeInterval?,
+        displayTimestamp: TimeInterval?
+    ) {
+        Self.tickPhaseAccum.removeAll(keepingCapacity: true)
+        // Frame-cost probe (2026-09-20): whole-tick main-thread time to the batched trace (no I/O
+        // here; `recordTick` returns immediately when the trace is disarmed).
+        let tickStart = CFAbsoluteTimeGetCurrent()
+        let activeBefore = nativeSemanticCurrentIndex
+        presentationTickBody(displayInterval: displayInterval, displayTimestamp: displayTimestamp)
+        NativeLyricsMaskTrace.recordTick(
+            dtMs: (CFAbsoluteTimeGetCurrent() - tickStart) * 1000,
+            intervalMs: (displayInterval ?? 0) * 1000,
+            activeBefore: activeBefore,
+            activeAfter: nativeSemanticCurrentIndex,
+            mountedRows: rowViews.count,
+            phases: Self.tickPhaseAccum
+        )
+    }
+
+    private func presentationTickBody(
         displayInterval: TimeInterval?,
         displayTimestamp: TimeInterval?
     ) {
@@ -3441,6 +3473,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     }
 
     private func finalizeDeferredDeactivation(runtimeConfiguration: LyricsLayerRendererConfiguration) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["finalizeDeferredDeactivation", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         guard let idx = deferredDeactivationIndex else { return }
         if NativeLyricsLoopIdleDecision.shouldCancelDeferredDeactivation(
             deferredIndex: idx,
@@ -3993,6 +4026,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     }
 
     private func checkPendingTapToLineSettleTiming(now: CFTimeInterval) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["checkPendingTapToLineSettleTiming", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         guard let pending = pendingTapToLineSettleTiming else { return }
         guard let configuration else { return }
         var runtimeConfiguration = runtimeConfiguration(from: configuration)
@@ -4086,6 +4120,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         previousTimelineState: NativeLyricsTimelinePolicy.AMLLState?,
         runtimeConfiguration: LyricsLayerRendererConfiguration
     ) -> Bool {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["updateNativeTimelineForCurrentPlaybackIfNeeded", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         guard runtimeConfiguration.playbackMode == .natural else {
             scheduleNativeLineAdvanceTimerIfNeeded(configuration: runtimeConfiguration)
             return false
@@ -4180,6 +4215,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     private func engineConfiguration(
         from configuration: LyricsLayerRendererConfiguration
     ) -> LyricsPresentationEngineConfiguration {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["engineConfiguration", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let currentIndex = configuration.effectiveCurrentIndex
         let scrollTargetIndex = configuration.effectiveScrollTargetIndex
         let snapMode = frameSnapMode(for: configuration)
@@ -4387,6 +4423,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     private func updateTextPhasesForCurrentConfiguration(
         runtimeConfiguration: LyricsLayerRendererConfiguration
     ) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["updateTextPhasesForCurrentConfiguration", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let visibleRows = visibleRows(for: runtimeConfiguration)
         let presentationSnapshot = nativePresentationSnapshot(
             lineIndices: visibleRows.map(\.index),
@@ -4411,6 +4448,17 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         // ordering fix as the reconcile path.
         if view.frame.size != .zero {
             view.layoutSubtreeIfNeeded()
+        }
+        // Prewarm the NEXT line (single-pass renderer): layout + run bitmaps + layers ready before
+        // activation, so the switch frame does no rasterization or layer creation.
+        // Never on the switch frame itself: arm on the first tick of a new active line, run on
+        // the following tick, so the (one-off) layout + rasterization lands in a quiet frame.
+        if singlePassPrewarmArmedFor != row.index {
+            singlePassPrewarmArmedFor = row.index
+        } else if !singlePassPrewarmDoneFor.contains(row.index),
+                  let nextID = rowIDByIndex[row.index + 1], let nextView = rowViews[nextID] {
+            singlePassPrewarmDoneFor.insert(row.index)
+            nextView.prewarmSinglePassIfNeeded()
         }
         guard let textSample = view.updatePlaybackPhase(configuration: textConfiguration, managesTransaction: false) else {
             return
@@ -4457,6 +4505,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         now: CFTimeInterval,
         force: Bool
     ) -> Bool {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["shouldUpdateActiveTextPhase", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         if force {
             lastTextPhaseUpdateAt = now
             return true

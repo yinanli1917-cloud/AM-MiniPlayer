@@ -147,6 +147,24 @@ final class NativeLyricsActiveLineDrawLayer: CALayer {
         return (image, frame)
     }
 
+    /// Pre-rasterize this line's run bitmaps ahead of activation (called for the NEXT row during
+    /// idle frames) so the activation frame only positions cached images.
+    func prewarm(text: String, width: CGFloat, fontSize: CGFloat, runs: [(charRange: NSRange, rect: CGRect)]) {
+        prepareLayout(text: text, width: width, fontSize: fontSize)
+        ensureRunLayers(runs.count)
+        for (i, run) in runs.enumerated() {
+            guard let (image, restFrame) = runImage(for: .init(lineIndex: 0, charRange: run.charRange, rect: run.rect, floatY: 0,
+                                                              isEmphasis: false, scale: 1, liftY: 0, glowOpacity: 0, glowRadius: 0))
+            else { continue }
+            for l in [dimRunLayers[i], brightRunLayers[i]] {
+                l.contents = image
+                l.bounds = CGRect(origin: .zero, size: restFrame.size)
+                l.position = CGPoint(x: restFrame.midX, y: restFrame.midY)
+                l.isHidden = true
+            }
+        }
+    }
+
     private func ensureRunLayers(_ count: Int) {
         while dimRunLayers.count < count {
             let d = CALayer().lyricsInert(), b = CALayer().lyricsInert()

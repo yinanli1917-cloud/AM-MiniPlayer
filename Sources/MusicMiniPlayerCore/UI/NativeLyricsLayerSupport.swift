@@ -425,13 +425,15 @@ enum NativeLyricsMaskTrace {
         intervalMs: Double,
         activeBefore: Int?,
         activeAfter: Int?,
-        mountedRows: Int
+        mountedRows: Int,
+        phases: [String: Double] = [:]
     ) {
         guard isArmed else { return }
         let wall = Date().timeIntervalSince1970
+        let phaseText = phases.map { "\"\($0.key)\":\(String(format: "%.2f", $0.value))" }.sorted().joined(separator: ",")
         let line = String(
-            format: "{\"event\":\"tick\",\"wall\":%.3f,\"dt_ms\":%.2f,\"interval_ms\":%.2f,\"activeBefore\":%d,\"activeAfter\":%d,\"mountedRows\":%d}\n",
-            wall, dtMs, intervalMs, activeBefore ?? -1, activeAfter ?? -1, mountedRows
+            format: "{\"event\":\"tick\",\"wall\":%.3f,\"dt_ms\":%.2f,\"interval_ms\":%.2f,\"activeBefore\":%d,\"activeAfter\":%d,\"mountedRows\":%d,\"phases\":{%@}}\n",
+            wall, dtMs, intervalMs, activeBefore ?? -1, activeAfter ?? -1, mountedRows, phaseText
         )
         enqueue(line)
     }

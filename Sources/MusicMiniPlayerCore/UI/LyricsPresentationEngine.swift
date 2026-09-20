@@ -80,6 +80,7 @@ final class LyricsPresentationEngine {
         _ configuration: LyricsPresentationEngineConfiguration,
         onTargetsChanged: @escaping () -> Void
     ) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["update", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         latestConfiguration = configuration
         updateSpringParameters(for: configuration)
         let newIndex = configuration.effectiveScrollTargetIndex
@@ -199,6 +200,7 @@ final class LyricsPresentationEngine {
 
     @discardableResult
     func advance(delta: TimeInterval) -> Bool {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["advance", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         guard let configuration = latestConfiguration else { return false }
         updateSpringParameters(for: configuration)
         var changed = advancePendingWave(delta: delta, configuration: configuration)
