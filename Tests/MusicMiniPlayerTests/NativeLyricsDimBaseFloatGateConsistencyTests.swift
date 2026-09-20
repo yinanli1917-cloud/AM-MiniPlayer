@@ -10,16 +10,25 @@ import AppKit
 // day by a founder-dictated architecture change (research/repro-2026-09-19-lyrics-render-3n.md):
 // a later real-device rowdump caught the hollow-and-restore machinery itself causing a HARDER bug
 // — every swept word's ink snapping 2pt the instant the line deactivated, because the whole-line
-// base's un-hollow and the per-glyph tiles' teardown were not in lockstep. The fix: the whole-line
-// dim base is now NEVER hollowed for an ordinary (non-emphasis) word — it always paints the FULL
-// line, unconditionally — and only the bright per-glyph tile floats, drawn on top of that always-
-// present dim ink (`NativeLyricsRowView.swift`, the `floatingOrders` doc comment above the
-// property). The per-glyph DIM tile this file exercises is therefore never used for an ordinary
-// word any more: it always stays hidden, coincident with the (also always-visible) whole-line
-// base, regardless of whether the bright tile above it has floated away. The exhaustive per-frame
-// invariant this file still checks, updated for that architecture:
+// base's un-hollow and the per-glyph tiles' teardown were not in lockstep.
 //
-//   dimHidden == true, for every ordinary (non-emphasis) glyph, every frame — no exceptions.
+// 3n's OWN fix (dim base never hollows/floats for an ordinary word) was itself SUPERSEDED the
+// same day by 3o (research/repro-2026-09-19-lyrics-render-3o.md), after a founder-dictated restore
+// back toward the real v2.8 reference: 3n made dim and bright legitimately DISAGREE on geometry
+// while a word actively floats (bright at −2pt, dim frozen at rest) and, on deactivation, the
+// bright tile's opacity fade finished first while still floated — reading as the word's ink
+// "dropping" once the vanishing bright revealed the always-static dim underneath. 3o restores the
+// ORIGINAL invariant (hollow + float the dim tile in lockstep with bright) and fixes the ACTUAL
+// teardown-ordering bug directly: `mainWordFloatReturnFloor` eases the held float back to 0 over a
+// short window strictly AFTER the bright opacity fade has bottomed out, and the whole-line base
+// only un-hollows the same frame that eased float reaches (near) 0. The exhaustive per-frame
+// invariant this file checks, updated for 3o:
+//
+//   For every ordinary (non-emphasis) glyph, every frame: dimHidden == false whenever the word is
+//   genuinely displaced from rest (|bright−dim from a same-index rest reference| would be nonzero
+//   if dim didn't move) — but since dim and bright now share ONE geometry, the operative
+//   assertion is simpler and stricter: whenever the dim tile IS visible, its Y must equal the
+//   bright tile's Y (they are one geometry, never two independently-moving copies).
 //
 // (Emphasis words are a different code path — `applyEmphasisGlowOnSharedTile` / the hollow-cut
 // tested by `NativeLyricsEmphasisHollowContainmentTests` — and are excluded from this line's
@@ -143,11 +152,11 @@ final class NativeLyricsDimBaseFloatGateConsistencyTests: XCTestCase {
             guard current == 0, let view = surface.debugRowView(forIndex: 0) else { t += stepSeconds; continue }
             sampledFrames += 1
             for (index, pair) in view.debugMainWordGlyphPairs.enumerated() {
-                // 2026-09-19 architecture change (see the file header comment): an ordinary word's
-                // per-glyph DIM tile is never the visible copy any more — the whole-line dim base
-                // always paints the full line, so the tile must stay hidden every frame,
-                // regardless of where the bright tile above it has floated to.
-                if !pair.dimHidden {
+                // 3o (see the file header comment): whenever the per-glyph DIM tile is visible, it
+                // must be Y-locked to its BRIGHT twin — they share one geometry, never two
+                // independently-moving copies (the exact defect this gate exists to catch,
+                // regardless of which direction the desync would run).
+                if !pair.dimHidden, abs(pair.dimPositionY - pair.brightPositionY) > 0.25 {
                     violations.append(Violation(
                         t: t, glyphIndex: index, dimHidden: pair.dimHidden,
                         dimY: pair.dimPositionY, brightY: pair.brightPositionY

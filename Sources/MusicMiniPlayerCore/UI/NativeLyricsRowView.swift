@@ -238,6 +238,8 @@ final class NativeLyricsRowView: NSView {
             translationPostLineFadeFloor = 1
             mainWasTextActiveLastPhase = false
             mainWordFloatFloor.removeAll()
+            mainWordFloatReturnFloor = 1
+            mainWordFloatReturnStartTime = nil
         }
         self.row = row
         self.configuration = configuration
@@ -319,6 +321,25 @@ final class NativeLyricsRowView: NSView {
     // activation edge) so a genuinely new line or a real seek starts each word fresh at 0.
     // ───────────────────────────────────────────────────────────────────────────
     private var mainWordFloatFloor: [Int: CGFloat] = [:]
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // 2026-09-19 3o (founder-dictated v2.8 restore, "dim 与 bright 一起浮"): once the post-line
+    // BRIGHT fade (`mainPostLineFadeFloor`) has fully bottomed out, this row's still-floating DIM
+    // tiles (see `floatingOrders` in `applyActiveMainPhase`) must not snap back to the whole-line
+    // rest position in the same frame that fade finishes — that INSTANT un-hollow was exactly the
+    // "字慢慢下落" defect (3n's fix addressed the wrong layer: bright opacity, when the actually-
+    // visible geometry jump was the dim tile's position). This floor eases the held float target
+    // (−2pt) back to 0 over its own short window, separate from and AFTER the opacity fade — 1 =
+    // still fully floated (safe to keep hollowed), 0 = returned to rest (safe to un-hollow, same
+    // frame the glyph tiles hide). Approximates the row's own scale-recede spring (1→0.95,
+    // damping 20) with a fixed-duration ease-out on the render clock, since the true spring value
+    // lives one layer up in `LyricsLayerRendererView.visualStates` and plumbing it through here
+    // would introduce a second, independently-driven clock for the same visual event — the exact
+    // "two systems, one drifts" class of bug this codebase's postmortems warn against.
+    // ───────────────────────────────────────────────────────────────────────────
+    private var mainWordFloatReturnFloor: CGFloat = 1
+    private var mainWordFloatReturnStartTime: TimeInterval?
+    private static let mainWordFloatReturnDuration: TimeInterval = 0.35
     // Tracks the text-activation state `updatePlaybackPhase` observed LAST TIME it ran on this
     // view (regardless of role/config churn in between) — the activation-edge detector the fade
     // floor reset above relies on. Never true after `prepareForReuse`/a fresh mount, so a
@@ -433,6 +454,8 @@ final class NativeLyricsRowView: NSView {
         translationPostLineFadeFloor = 1
         mainWasTextActiveLastPhase = false
         mainWordFloatFloor.removeAll()
+        mainWordFloatReturnFloor = 1
+        mainWordFloatReturnStartTime = nil
         // Clear the scale/position transform too. layout() re-asserts positioningTransform on every
         // commit; if a recycled row keeps the previous row's scale, the next mount flashes that old
         // size for one frame before applyFrame writes the new scale (the seek size-pop).
@@ -727,6 +750,12 @@ final class NativeLyricsRowView: NSView {
     var debugMainTextLayerFrame: CGRect { mainTextLayer.frame }
 
     var debugMainTextLayerHidden: Bool { mainTextLayer.isHidden }
+
+    /// 3o red/green tests: the eased 1→0 float-return progress (see `mainWordFloatReturnFloor`'s
+    /// declaration). 1 while the line is active/still bright-fading; eases toward 0 only once this
+    /// row has gone fully inactive; reaching (near) 0 is exactly the frame the per-glyph tiles
+    /// hide and the whole-line dim base un-hollows.
+    var debugMainWordFloatReturnFloor: CGFloat { mainWordFloatReturnFloor }
 
     var debugVisibleDimWordGlyphCount: Int {
         mainDimWordGlyphLayers.filter { !$0.isHidden }.count
@@ -1866,6 +1895,8 @@ final class NativeLyricsRowView: NSView {
             mainPostLineFadeFloor = 1
             translationPostLineFadeFloor = 1
             mainWordFloatFloor.removeAll()
+            mainWordFloatReturnFloor = 1
+            mainWordFloatReturnStartTime = nil
         }
         // Phase timing MUST come from the shared monotonic clock (phaseRenderTime), never the raw
         // SB clock: a backward resync dip at line start collapses the active plan to progress 0
@@ -1899,6 +1930,8 @@ final class NativeLyricsRowView: NSView {
                 mainPostLineFadeFloor = 1
                 translationPostLineFadeFloor = 1
                 mainWordFloatFloor.removeAll()
+                mainWordFloatReturnFloor = 1
+                mainWordFloatReturnStartTime = nil
             }
         }
         mainWasTextActiveLastPhase = isActive
@@ -1914,7 +1947,27 @@ final class NativeLyricsRowView: NSView {
         // as the fade floor hasn't reached (approximately) zero, so the bright overlay's OWN
         // opacity fade is what removes it from the screen, never a position/visibility snap.
         let stillFadingOut = !isActive && mainPostLineFadeFloor > 0.001
-        let renderAsActive = isActive || stillFadingOut
+        // 2026-09-19 3o: after the bright fade above has fully bottomed out, the still-floating
+        // dim tiles (see `floatingOrders`/`applyMainWordFloatGlyphLayers`) get ONE more window to
+        // ease their held float target back to 0 before `applyInactivePlaybackLayerState` swaps
+        // back to the un-hollowed whole-line dim base — see `mainWordFloatReturnFloor`'s doc
+        // comment. Only starts once the bright fade is done and this row is genuinely inactive;
+        // resets (elsewhere) on every activation edge / seek / line change / reuse.
+        if isActive {
+            mainWordFloatReturnFloor = 1
+            mainWordFloatReturnStartTime = nil
+        } else if mainPostLineFadeFloor <= 0.001 && mainWordFloatReturnFloor > 0.001 {
+            if mainWordFloatReturnStartTime == nil {
+                mainWordFloatReturnStartTime = renderTime
+            }
+            let elapsed = max(0, renderTime - (mainWordFloatReturnStartTime ?? renderTime))
+            let t = min(1, elapsed / Self.mainWordFloatReturnDuration)
+            // Same ease-out shape as `postLineFadeOut` (1 − t²) — monotonic, no overshoot, so the
+            // float can only ever move TOWARD 0, matching the word-float monotonic-floor contract.
+            mainWordFloatReturnFloor = CGFloat(1 - t * t)
+        }
+        let stillReturningFloat = !isActive && mainPostLineFadeFloor <= 0.001 && mainWordFloatReturnFloor > 0.001
+        let renderAsActive = isActive || stillFadingOut || stillReturningFloat
 
         var sample: NativeLyricsTextPhaseSample?
         if managesTransaction {
@@ -1936,7 +1989,7 @@ final class NativeLyricsRowView: NSView {
                 row: row,
                 configuration: configuration,
                 currentTime: renderTime,
-                forceActive: stillFadingOut
+                forceActive: stillFadingOut || stillReturningFloat
             )
             let expectsPerRunSweep = row.displayLine.line.hasSyllableSync && !plan.wordRuns.isEmpty
             // 2026-09-19 real-device repro (rowdump "想爱 就不能害怕会有伤痕"): the dim-base
@@ -2209,27 +2262,32 @@ final class NativeLyricsRowView: NSView {
             && !linePlan.isEmpty
         let keepWholeLineDim = NativeLyricsFeelParity.keepsWholeLineDimBase
         let wordFloatResult: MainWordFloatAppliedMetrics
-        // 2026-09-19 real-device rowdump ("未来的旅程"): an ordinary (non-emphasis) word used to
-        // ALSO get hollowed out of the whole-line dim base while its bright tile floated (the
-        // "Sweep-ghost fix" this comment used to describe) — but the whole-line dim base is drawn
-        // by ONE unified layout pass per `keepWholeLineDim`'s own doc comment above, and that pass
-        // repaints only when `activeUnifiedBlankedSignature` changes. The moment this row's line
-        // deactivated, `applyInactivePlaybackLayerState` snapped straight back to the un-hollowed
-        // whole-line string with NO fade — every previously-floated, previously-hollowed word
-        // visibly dropped 2pt in the same frame its dim ink reappeared (banned-patterns.md's v2.8
-        // model: "dim 整行保留、只让亮层 float" — dim must never move OR blank for an ordinary
-        // word). Founder-dictated fix (2026-09-19, after real-device rowdump evidence): ordinary
-        // words are no longer hollowed here at all — the dim base always paints the FULL line,
-        // unconditionally, for the entire time this row is mounted, active or not. Only the bright
-        // per-glyph tile (still floated by `applyMainWordFloatGlyphLayers`, still fading via
-        // `mainPostLineFadeFloor`, see `updatePlaybackPhase`) moves; it draws on top of the dim
-        // ink and never gets torn down before its own fade completes, so there is no frame where
-        // an ordinary word's ink jumps, blanks, or reappears anywhere but exactly at rest.
+        // 2026-09-19 3o (founder-dictated v2.8 restore, "dim 与 bright 一起浮"): 3n's fix (dim never
+        // hollows/floats for an ordinary word) targeted the wrong layer — it kept the whole-line
+        // dim ink STATIC while only the bright overlay floated, so during a word's active sweep
+        // the two channels disagreed on geometry (bright at −2pt, dim at 0) and, worse, the
+        // founder's actual v2.8 reference (`LyricsTextRenderer.draw`, `Sources/.../v28_LyricLineView.swift`
+        // — every non-emphasis run's DIM pass also does `ctx.translateBy(y: baseFloat(for: attr))`)
+        // floats dim and bright TOGETHER at one shared geometry. Restored here: a word that is
+        // actually floating (`baseFloatY` scaled by `mainWordFloatReturnFloor` below is nonzero)
+        // gets its whole-line-dim ink hollowed out and stands in with its OWN dim tile, floated to
+        // the exact same y as its bright tile (`applyMainWordFloatGlyphLayers`'s `dimCenterY`) — one
+        // geometry per glyph, never two.
         //
-        // Emphasis words keep the SAME hollow-cut this comment used to describe for the ordinary
-        // case, unchanged: their bright tile can SCALE beyond its static footprint (glow bleed),
-        // which the plain top-of-stack blending above cannot hide, so it still needs the dim ink
-        // physically removed underneath. See the next comment block.
+        // The 3n regression this restore must NOT reintroduce: hollowing must not un-hollow
+        // instantly the moment the line deactivates (that was the "字慢慢下落"/reappearing-dim
+        // "hard drop" 3n's commit message described). Fixed at the actual root this time: the
+        // FLOAT ITSELF (not just bright's opacity) now eases back to 0 over `mainWordFloatReturnFloor`
+        // (`updatePlaybackPhase`) before this row is ever allowed to reach `applyInactivePlaybackLayerState`
+        // — a word only leaves `floatingOrders` (and un-hollows) once its OWN effective float has
+        // already eased to (near) 0, so the un-hollow and the tile's return-to-rest land in the
+        // same frame with no observable geometry jump either direction.
+        //
+        // Emphasis words keep their pre-existing hollow-cut rule unchanged (liftY/floatY/scale
+        // nonzero, plus the immediate neighbour while scale > 1 — see the 2026-09-18/2026-09-14
+        // history below) — their bright tile can scale beyond its static footprint (glow bleed),
+        // which plain top-of-stack blending cannot hide, so the dim ink still needs physically
+        // removing underneath regardless of the return-floor gating below.
         //
         // 2026-09-14 founder report: the SAME double image on emphasis words ("WHAT IT'S ALL
         // ABOU[T]") — applyEmphasisGlyphLayers draws a separate scale/lift/glow glyph for
@@ -2253,6 +2311,7 @@ final class NativeLyricsRowView: NSView {
         // widening `floatingOrders` to include the neighbour makes its dim tile become VISIBLE at
         // its own REST position (`floatY` is 0 for a word that hasn't started), which is exactly
         // where the whole-line base was drawing it — a clean 1:1 ink replacement, not a new gap.
+        let mainFloatsForOrdering = plan.perWordFloatY(at: currentTime)
         let floatingOrders: Set<Int> = keepWholeLineDim
             ? Set(plan.wordRuns.enumerated().flatMap { order, run -> [Int] in
                   if emphasisOrders.contains(order) {
@@ -2267,10 +2326,16 @@ final class NativeLyricsRowView: NSView {
                       }
                       return orders
                   }
-                  // Ordinary (non-emphasis) words are never hollowed — see the doc comment above
-                  // this property (2026-09-19 founder-dictated fix): the whole-line dim base
-                  // always paints the FULL line, unconditionally, for every non-emphasis word.
-                  return []
+                  // Ordinary (non-emphasis) word: hollow it (and float its own dim tile in
+                  // lockstep with its bright tile) exactly while its EFFECTIVE float — the
+                  // monotone-floored raw float scaled by the deactivation return ease — is still
+                  // nonzero. `mainWordFloatReturnFloor` is 1 for the entire active/still-fading
+                  // window and only starts easing toward 0 after this row has gone fully inactive
+                  // (see `updatePlaybackPhase`), so this is a no-op change while the line is live.
+                  let rawFloat = order < mainFloatsForOrdering.count ? mainFloatsForOrdering[order] : 0
+                  let flooredFloat = min(rawFloat, mainWordFloatFloor[order] ?? 0)
+                  let effectiveFloat = flooredFloat * mainWordFloatReturnFloor
+                  return effectiveFloat != 0 ? [order] : []
               })
             : []
         if geometryReady {
@@ -2335,7 +2400,8 @@ final class NativeLyricsRowView: NSView {
                 emphasisOrders: emphasisOrders,
                 floatsDimBase: !keepWholeLineDim,
                 floatingOrders: floatingOrders,
-                postLineFadeOpacity: Float(mainPostLineFadeFloor)
+                postLineFadeOpacity: Float(mainPostLineFadeFloor),
+                floatReturnFloor: mainWordFloatReturnFloor
             )
         } else {
             // Geometry is not ready (fresh/pooled/offscreen row). A whole-line bright
@@ -3220,7 +3286,8 @@ final class NativeLyricsRowView: NSView {
         emphasisOrders: Set<Int>,
         floatsDimBase: Bool,
         floatingOrders: Set<Int> = [],
-        postLineFadeOpacity: Float = 1
+        postLineFadeOpacity: Float = 1,
+        floatReturnFloor: CGFloat = 1
     ) -> MainWordFloatAppliedMetrics {
         let floats = plan.perWordFloatY(at: currentTime)
         let tilesOwnEmphasis = !emphasisOrders.isEmpty && NativeLyricsFeelParity.emphasisMode != .current
@@ -3244,7 +3311,14 @@ final class NativeLyricsRowView: NSView {
                 // clock tick must not raise it back toward 0 mid-hold.
                 let flooredFloatY = min(rawFloatY, mainWordFloatFloor[run.order] ?? 0)
                 mainWordFloatFloor[run.order] = flooredFloatY
-                let floatY = flooredFloatY
+                // 2026-09-19 3o: `floatReturnFloor` eases 1→0 only AFTER this row has gone fully
+                // inactive (see `updatePlaybackPhase`'s `mainWordFloatReturnFloor`) — 1 for the
+                // entire active/still-fading-out window, so this is a no-op scale while the line
+                // is live. It is what lets the ordinary (non-emphasis) per-glyph tile — and its
+                // paired dim tile, which shares this same `floatY` at `dimCenterY` below — ease
+                // back to the whole-line rest position instead of snapping the instant
+                // `floatingOrders` drops the word.
+                let floatY = flooredFloatY * floatReturnFloor
                 // `floatsDimBase` (the `layer` A/B arm) always tessellates every non-emphasis word as
                 // a dim tile. The default (whole-line dim base) arm shows a dim tile ONLY for a word
                 // that is actually floating — `applyFloatingHiddenBase` blanks that same word's range

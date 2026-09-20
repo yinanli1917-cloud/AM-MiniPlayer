@@ -22,7 +22,7 @@ default renderer since 2026-05-31; SwiftUI remains the explicit fallback (`Lyric
 2. The whole line is **always visible** (dim base never masked away); only the **bright overlay** sweeps.
 3. Multi-line lyrics sweep **line-by-line** on the per-word timeline — never one mask across all lines at once.
 4. **Layout is identical before/after scroll**; characters never squashed.
-5. The swept character **floats** upward (−2pt shipped; AMLL `0.05em`).
+5. The swept character **floats** upward (−2pt shipped; AMLL `0.05em`). The dim (unswept) copy and the bright (swept) copy of a floating character share ONE geometry — dim floats WITH bright, to the same y, never left behind at rest while only the bright copy moves (v2.8's own `LyricsTextRenderer.draw` translates its dim pass by the SAME `baseFloat` as the bright pass; see 3o, research/repro-2026-09-19-lyrics-render-3o.md).
 6. Scroll uses **Y-offset**, never `ScrollView`; `animation` goes on the container, not per row.
 7. All animation params reference **AMLL**; "never repeat the same mistake."
 
@@ -36,7 +36,7 @@ default renderer since 2026-05-31; SwiftUI remains the explicit fallback (`Lyric
 | Translation font | 16pt regular, `.white.opacity(0.6)`, lineSpacing 4 (≈0.65×) | TD §12.5 |
 | Bright / dim sweep alpha | **0.85 / dim = inactive tier (0.35; 0.6 manual)** — dim is NOT a baked alpha: the unswept base rides `mainTextLayer.opacity` compensated per frame against the row-opacity spring (`dimBaseBrightness / rowOpacity`), so the effective brightness is continuous through handoffs and EQUALS an inactive row. Supersedes the old 0.25 bake (user decision 2026-07-12; the 0.25×springing-row-opacity product dipped to ≈0.09 at the activation frame = the residual handoff flash). | user 2026-07-12; `NativeLyricsDimBaseContinuityTests` |
 | Sweep fade band (half) | **12pt** (= word.height/2 at 24pt) | v2.8 |
-| Per-char float | **−2pt**, over `max(1.0s, wordDuration)`, ease-out `cubic-bezier(0,0,0.58,1)`, holds | v2.8 / RE |
+| Per-char float | **−2pt**, over `max(1.0s, wordDuration)`, ease-out `cubic-bezier(0,0,0.58,1)`, holds; dim floats WITH bright to the same y (never static while bright moves); on deactivation the held float eases back to 0 (`NativeLyricsRowView.mainWordFloatReturnFloor`, ~0.35s ease-out) AFTER the bright opacity fade has finished, never an instant snap | v2.8 / RE / 3o |
 | Post-line bright fade-out | **1.5s**, `1−t²` | v2.8 |
 | Inactive row | opacity **0.35**, scale **0.95**, blur **`|dist|×1.5` (uncapped)** | RE / PERF 🔴 |
 | Active row | opacity 1.0, scale 1.0, blur 0 | RE |
