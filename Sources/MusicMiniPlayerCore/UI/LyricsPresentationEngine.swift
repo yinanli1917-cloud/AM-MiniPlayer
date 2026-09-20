@@ -66,9 +66,16 @@ final class LyricsPresentationEngine {
     private var latestConfiguration: LyricsPresentationEngineConfiguration?
     private let spring = LyricsPresentationSpring()
 
+    // 2026-09-20 (stage bundle 3r, Task 2 Part C): loosened from 0.25/0.25 —
+    // `NativeLyricsLineLevelIdleCostTests` measured a 30-row line-level surface taking ~2.0s after
+    // a settled switch before every row's position spring individually crossed 0.25px/0.25px·s⁻¹
+    // (rows far outside the viewport, near-invisible at the 0.05-0.35 dim-tier opacity, were the
+    // long tail — their positions still converge, just slowly, and nothing about them being
+    // slightly off-target is visible). 0.5px / 0.5px·s⁻¹ is still comfortably sub-pixel on any
+    // real display; spring parameters (mass/stiffness/damping) are UNCHANGED.
     var hasActiveMotion: Bool {
         pendingWave != nil || rowStates.values.contains { state in
-            abs(state.y - state.targetY) > 0.25 || abs(state.velocity) > 0.25
+            abs(state.y - state.targetY) > 0.5 || abs(state.velocity) > 0.5
         }
     }
 

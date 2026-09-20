@@ -458,13 +458,23 @@ struct NativeLyricsVisualMotionState: Equatable {
         self.target = target
     }
 
+    // 2026-09-20 (stage bundle 3r, Task 2 Part C): loosened from 0.002/0.001/0.03 — the founder's
+    // real-device trace (line-level song, `/tmp/nanopod_mask_trace.jsonl`) showed the presentation
+    // loop unable to reach an idle "may stop" decision for over a second after a settled line
+    // switch, keeping the display link (and its ~2ms/tick main-thread cost) alive continuously.
+    // `NativeLyricsLineLevelIdleCostTests.test_lineLevelSwitch_settlesWithinPinnedBudget` measured
+    // the shipping springs converging well inside these looser tolerances long before a viewer can
+    // perceive any residual delta — 0.005 opacity / 0.002 scale is still sub-1% of full range and
+    // 0.05 blur is under a fifth of a point of Gaussian radius, both below single-pixel visibility.
+    // Spring parameters (mass/stiffness/damping) are UNCHANGED; only the "are we there yet"
+    // epsilon moved.
     var isSettled: Bool {
-        abs(opacity - target.opacity) < 0.002
-            && abs(scale - target.scale) < 0.001
-            && abs(blur - target.blur) < 0.03
-            && abs(opacityVelocity) < 0.002
-            && abs(scaleVelocity) < 0.001
-            && abs(blurVelocity) < 0.03
+        abs(opacity - target.opacity) < 0.005
+            && abs(scale - target.scale) < 0.002
+            && abs(blur - target.blur) < 0.05
+            && abs(opacityVelocity) < 0.005
+            && abs(scaleVelocity) < 0.002
+            && abs(blurVelocity) < 0.05
     }
 
     mutating func setTarget(_ nextTarget: NativeLyricsVisualTarget) -> Bool {
