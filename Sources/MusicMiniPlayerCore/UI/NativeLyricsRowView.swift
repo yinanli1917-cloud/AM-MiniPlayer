@@ -279,6 +279,17 @@ final class NativeLyricsRowView: NSView {
     private var translationDeactivationOverlayBaseline: Float?
     private var parkedMainBrightOpacity: Float?
     private var parkedTranslationBrightOpacity: Float?
+    // 2026-09-19 real-device rowdump ("未来的旅程"): the four methods above (freeze/begin/update/
+    // end) were written when the karaoke overlay was ALWAYS `mainBrightTextLayer` — but for any
+    // hasSyllableSync line (the common case) that layer's `.string` is nilled out and the ACTUAL
+    // visible ink is the per-glyph tile pool (`mainBrightWordGlyphLayers`, `applyMainWordFloat-
+    // GlyphLayers`). Freezing/fading only the (invisible, stringless) whole-line layer left the
+    // per-glyph tiles fully lit and un-managed until `finalizeDeactivationState` hard-hid them —
+    // the exact "swept words drop 2pt in one frame" shape from the rowdump. This baseline mirrors
+    // `parkedMainBrightOpacity`/`mainDeactivationOverlayBaseline` for the glyph tile pool so it
+    // fades in the SAME step as the row's own opacity recede, never snaps.
+    private var parkedMainWordGlyphOpacity: Float?
+    private var mainWordGlyphDeactivationOverlayBaseline: Float?
 
     // ───────────────────────────────────────────────────────────────────────────
     // Monotonic post-line karaoke fade floor. postLineFadeOut is a pure function of
@@ -322,17 +333,29 @@ final class NativeLyricsRowView: NSView {
         if parkedTranslationBrightOpacity == nil {
             parkedTranslationBrightOpacity = translationBrightTextLayer.isHidden ? 0 : translationBrightTextLayer.opacity
         }
+        // Per-glyph tile pool (see the property's doc comment): captured from the first VISIBLE
+        // tile — a hasSyllableSync line's actual on-screen ink — falling back to 1 (fully lit) if
+        // every tile happens to be hidden right when parking begins.
+        if parkedMainWordGlyphOpacity == nil {
+            parkedMainWordGlyphOpacity = mainBrightWordGlyphLayers.first(where: { !$0.isHidden })?.opacity ?? 1
+        }
         if let parkedMainBrightOpacity {
             mainBrightTextLayer.opacity = parkedMainBrightOpacity
         }
         if let parkedTranslationBrightOpacity {
             translationBrightTextLayer.opacity = parkedTranslationBrightOpacity
         }
+        if let parkedMainWordGlyphOpacity {
+            for layer in mainBrightWordGlyphLayers where !layer.isHidden {
+                layer.opacity = parkedMainWordGlyphOpacity
+            }
+        }
     }
 
     func clearParkedTextPhaseOpacity() {
         parkedMainBrightOpacity = nil
         parkedTranslationBrightOpacity = nil
+        parkedMainWordGlyphOpacity = nil
     }
 
     func beginDeactivationFade() {
@@ -340,6 +363,8 @@ final class NativeLyricsRowView: NSView {
             ?? (mainBrightTextLayer.isHidden ? 0 : mainBrightTextLayer.opacity)
         translationDeactivationOverlayBaseline = parkedTranslationBrightOpacity
             ?? (translationBrightTextLayer.isHidden ? 0 : translationBrightTextLayer.opacity)
+        mainWordGlyphDeactivationOverlayBaseline = parkedMainWordGlyphOpacity
+            ?? (mainBrightWordGlyphLayers.first(where: { !$0.isHidden })?.opacity ?? 1)
         clearParkedTextPhaseOpacity()
     }
 
@@ -351,11 +376,21 @@ final class NativeLyricsRowView: NSView {
         if let base = translationDeactivationOverlayBaseline {
             translationBrightTextLayer.opacity = base * f
         }
+        // Same step, same baseline mechanism, applied to the per-glyph tiles that are the line's
+        // ACTUAL visible ink for a hasSyllableSync row — this is the fix for the rowdump-evidenced
+        // 2pt hard drop: the tiles now fade to invisible smoothly instead of staying fully lit
+        // until `finalizeDeactivationState` hides them outright.
+        if let base = mainWordGlyphDeactivationOverlayBaseline {
+            for layer in mainBrightWordGlyphLayers where !layer.isHidden {
+                layer.opacity = base * f
+            }
+        }
     }
 
     func endDeactivationFade() {
         mainDeactivationOverlayBaseline = nil
         translationDeactivationOverlayBaseline = nil
+        mainWordGlyphDeactivationOverlayBaseline = nil
         clearParkedTextPhaseOpacity()
         // Restore the resting opacity. updateDeactivationFade scaled the bright overlays toward 0 as
         // the line receded; leaving them at that residual fraction made a still-mounted row relight
@@ -363,6 +398,9 @@ final class NativeLyricsRowView: NSView {
         // value prepareForReuse uses, and updatePlaybackPhase assumes it on re-activation.
         mainBrightTextLayer.opacity = 1
         translationBrightTextLayer.opacity = 1
+        for layer in mainBrightWordGlyphLayers {
+            layer.opacity = 1
+        }
     }
 
     func finalizeDeactivationState(renderTime: TimeInterval) {
@@ -389,6 +427,7 @@ final class NativeLyricsRowView: NSView {
         onTap = nil
         mainDeactivationOverlayBaseline = nil
         translationDeactivationOverlayBaseline = nil
+        mainWordGlyphDeactivationOverlayBaseline = nil
         clearParkedTextPhaseOpacity()
         mainPostLineFadeFloor = 1
         translationPostLineFadeFloor = 1
@@ -656,6 +695,14 @@ final class NativeLyricsRowView: NSView {
     /// (`mainSweepLinePlan`'s cached build) — see `debugActiveDimBaseLayoutManager`.
     var debugActiveGlyphTileLayoutManager: NSLayoutManager? { cachedMainUnifiedBuild?.layoutManager }
 
+    /// The signature `applyUnifiedDimBase` last painted the whole-line dim base with — encodes
+    /// which word orders (if any) currently have their whole-line ink blanked (hollowed) to make
+    /// way for a per-glyph tile drawn on top. 2026-09-19 fix: ordinary (non-emphasis) words are
+    /// never hollowed any more — only an emphasis word (and, while its scale > 1, its immediate
+    /// neighbour) can appear in the `|float|<orders>` suffix. `nil` means geometry was never
+    /// ready / nothing painted yet.
+    var debugActiveUnifiedBlankedSignature: String? { activeUnifiedBlankedSignature }
+
     /// Wrap-fragment/glyph-origin snapshot of the row's LIVE active-frame layout (built from the
     /// same shared object the dim base itself draws from) — see
     /// `NativeLyricsTextSweepLayout.layoutSnapshot(from:)`. `NativeLyricsActiveLineSpacingTests`
@@ -746,6 +793,16 @@ final class NativeLyricsRowView: NSView {
     var debugMainBrightWordGlyphShadowOpacities: [Float] {
         mainBrightWordGlyphLayers.map(\.shadowOpacity)
     }
+
+    /// Per-glyph bright tile `layer.opacity` (2026-09-19 founder-dictated fix): this now rides
+    /// `mainPostLineFadeFloor` in lockstep with `mainBrightTextLayer.opacity` — reports 1 while a
+    /// word is fully lit/held, ramps down through the post-line fade window, and only the glyph
+    /// itself goes `isHidden` once this reaches ~0. Treats a hidden tile as opacity 0 (matching
+    /// `debugMainBrightOpacity`'s convention) so a caller doesn't have to separately check hidden.
+    var debugMainBrightWordGlyphOpacities: [Float] {
+        mainBrightWordGlyphLayers.map { $0.isHidden ? 0 : $0.opacity }
+    }
+
 
     /// feel/emphasis `amll`: true only if NONE of the glow sibling layers carry a live
     /// `layer.filters` entry — the glow bitmap must be `layer.contents` (a cached, offline-
@@ -1813,6 +1870,19 @@ final class NativeLyricsRowView: NSView {
         }
         mainWasTextActiveLastPhase = isActive
 
+        // 2026-09-19 real-device rowdump ("未来的旅程"): the text-active index can move to the
+        // NEXT row before this row's `mainPostLineFadeFloor` has finished its 1.5s fade — the
+        // `if isActive` branch below used to flip straight to `applyInactivePlaybackLayerState()`
+        // the instant that happened, which INSTANTLY hides the still-floated bright glyph tiles
+        // and restores the whole-line rest string with no transition — every swept word's bright
+        // overlay (and, before the dim-hollow fix above, its dim tile too) visibly snapped back by
+        // its full float offset in one frame. Keep rendering through the active word-cascade path
+        // — sweep held at its finished (progress 1) state, float held at its target — for as long
+        // as the fade floor hasn't reached (approximately) zero, so the bright overlay's OWN
+        // opacity fade is what removes it from the screen, never a position/visibility snap.
+        let stillFadingOut = !isActive && mainPostLineFadeFloor > 0.001
+        let renderAsActive = isActive || stillFadingOut
+
         var sample: NativeLyricsTextPhaseSample?
         if managesTransaction {
             CATransaction.begin()
@@ -1828,11 +1898,12 @@ final class NativeLyricsRowView: NSView {
             }
         }
         #endif
-        if isActive {
+        if renderAsActive {
             let plan = textRenderPlan(
                 row: row,
                 configuration: configuration,
-                currentTime: renderTime
+                currentTime: renderTime,
+                forceActive: stillFadingOut
             )
             let expectsPerRunSweep = row.displayLine.line.hasSyllableSync && !plan.wordRuns.isEmpty
             // 2026-09-19 real-device repro (rowdump "想爱 就不能害怕会有伤痕"): the dim-base
@@ -2105,12 +2176,27 @@ final class NativeLyricsRowView: NSView {
             && !linePlan.isEmpty
         let keepWholeLineDim = NativeLyricsFeelParity.keepsWholeLineDimBase
         let wordFloatResult: MainWordFloatAppliedMetrics
-        // Sweep-ghost fix: non-emphasis words that are ACTUALLY floating (baseFloatY != 0)
-        // must not also show through the whole-line dim base — that second, unfloated copy
-        // is the reported double image on swept CJK glyphs. A word at floatY == 0 (not yet
-        // started) is left alone: it coincides exactly with the whole-line glyph already, so
-        // there is nothing to hide and no tile needed (also keeps the activation-instant
-        // layout tests, which sample at floatY == 0, unaffected).
+        // 2026-09-19 real-device rowdump ("未来的旅程"): an ordinary (non-emphasis) word used to
+        // ALSO get hollowed out of the whole-line dim base while its bright tile floated (the
+        // "Sweep-ghost fix" this comment used to describe) — but the whole-line dim base is drawn
+        // by ONE unified layout pass per `keepWholeLineDim`'s own doc comment above, and that pass
+        // repaints only when `activeUnifiedBlankedSignature` changes. The moment this row's line
+        // deactivated, `applyInactivePlaybackLayerState` snapped straight back to the un-hollowed
+        // whole-line string with NO fade — every previously-floated, previously-hollowed word
+        // visibly dropped 2pt in the same frame its dim ink reappeared (banned-patterns.md's v2.8
+        // model: "dim 整行保留、只让亮层 float" — dim must never move OR blank for an ordinary
+        // word). Founder-dictated fix (2026-09-19, after real-device rowdump evidence): ordinary
+        // words are no longer hollowed here at all — the dim base always paints the FULL line,
+        // unconditionally, for the entire time this row is mounted, active or not. Only the bright
+        // per-glyph tile (still floated by `applyMainWordFloatGlyphLayers`, still fading via
+        // `mainPostLineFadeFloor`, see `updatePlaybackPhase`) moves; it draws on top of the dim
+        // ink and never gets torn down before its own fade completes, so there is no frame where
+        // an ordinary word's ink jumps, blanks, or reappears anywhere but exactly at rest.
+        //
+        // Emphasis words keep the SAME hollow-cut this comment used to describe for the ordinary
+        // case, unchanged: their bright tile can SCALE beyond its static footprint (glow bleed),
+        // which the plain top-of-stack blending above cannot hide, so it still needs the dim ink
+        // physically removed underneath. See the next comment block.
         //
         // 2026-09-14 founder report: the SAME double image on emphasis words ("WHAT IT'S ALL
         // ABOU[T]") — applyEmphasisGlyphLayers draws a separate scale/lift/glow glyph for
@@ -2148,7 +2234,10 @@ final class NativeLyricsRowView: NSView {
                       }
                       return orders
                   }
-                  return run.baseFloatY != 0 ? [order] : []
+                  // Ordinary (non-emphasis) words are never hollowed — see the doc comment above
+                  // this property (2026-09-19 founder-dictated fix): the whole-line dim base
+                  // always paints the FULL line, unconditionally, for every non-emphasis word.
+                  return []
               })
             : []
         if geometryReady {
@@ -2169,13 +2258,19 @@ final class NativeLyricsRowView: NSView {
             if mainBrightTextLayer.affineTransform() != .identity {
                 mainBrightTextLayer.setAffineTransform(.identity)
             }
+            // Pin the post-line fade monotone BEFORE the per-glyph pass (moved up from below,
+            // 2026-09-19 founder-dictated fix) so the bright tiles it paints this SAME frame use
+            // the floored value too — a backward clock step can't re-light them, and their fade
+            // stays in lockstep with `mainBrightTextLayer`'s own opacity.
+            mainPostLineFadeFloor = min(mainPostLineFadeFloor, plan.mainPostLineFade)
             wordFloatResult = applyMainWordFloatGlyphLayers(
                 plan: plan,
                 currentTime: currentTime,
                 linePlan: linePlan,
                 emphasisOrders: emphasisOrders,
                 floatsDimBase: !keepWholeLineDim,
-                floatingOrders: floatingOrders
+                floatingOrders: floatingOrders,
+                postLineFadeOpacity: Float(mainPostLineFadeFloor)
             )
         } else {
             // Geometry is not ready (fresh/pooled/offscreen row). A whole-line bright
@@ -2227,8 +2322,10 @@ final class NativeLyricsRowView: NSView {
                 mainWordFloatSpread: 0
             )
         }
-        // Pin the post-line fade monotone so a backward clock step can't re-light the overlay. The
-        // floor only falls here; it is reset solely by the line-key / explicit-seek guard at the top.
+        // Floor already pinned above (before the per-glyph pass) when geometryReady; the
+        // non-geometry-ready branch returns early and never reaches here, so this is a no-op
+        // re-assertion in that case, kept for clarity and as a safety net if a future call path
+        // reaches this line without having gone through the pin above.
         mainPostLineFadeFloor = min(mainPostLineFadeFloor, plan.mainPostLineFade)
         mainBrightTextLayer.opacity = Float(mainPostLineFadeFloor)
         mainBrightTextLayer.isHidden = plan.mainSweepProgress <= 0.001 || mainPostLineFadeFloor <= 0.001
@@ -3045,7 +3142,8 @@ final class NativeLyricsRowView: NSView {
         linePlan: [NativeLyricsTextSweepVisualLinePlan],
         emphasisOrders: Set<Int>,
         floatsDimBase: Bool,
-        floatingOrders: Set<Int> = []
+        floatingOrders: Set<Int> = [],
+        postLineFadeOpacity: Float = 1
     ) -> MainWordFloatAppliedMetrics {
         let floats = plan.perWordFloatY(at: currentTime)
         let tilesOwnEmphasis = !emphasisOrders.isEmpty && NativeLyricsFeelParity.emphasisMode != .current
@@ -3117,7 +3215,14 @@ final class NativeLyricsRowView: NSView {
             let brightLayer = mainBrightWordGlyphLayers[index]
             let glowLayer = mainEmphasisGlowLayers[index]
             dimLayer.isHidden = !isFloatingWord
-            brightLayer.isHidden = false
+            // Bright tile fade (2026-09-19 founder-dictated fix): rides the SAME floored
+            // post-line fade value `mainBrightTextLayer.opacity` uses, so a word that is still
+            // sweeping/held gets full opacity (postLineFadeOpacity == 1) and a word whose line has
+            // ended fades in lockstep with the rest of the row instead of vanishing via `isHidden`
+            // the instant `isActive` flips off. Only truly hidden once the fade has bottomed out —
+            // "淡出到 0 再隐藏，不许在淡出前隐藏或归位".
+            brightLayer.opacity = postLineFadeOpacity
+            brightLayer.isHidden = postLineFadeOpacity <= 0.001
             let signature = EmphasisGlyphLayerSignature(
                 glyph: glyph,
                 fontSize: fontSize,
@@ -3756,13 +3861,15 @@ final class NativeLyricsRowView: NSView {
     private func textRenderPlan(
         row: LayerBackedLyricRow,
         configuration: LyricsLayerRendererConfiguration,
-        currentTime: TimeInterval? = nil
+        currentTime: TimeInterval? = nil,
+        forceActive: Bool = false
     ) -> NativeLyricsTextRenderPlan {
         NativeLyricsTextRenderPlan.make(
             configuration: textConfiguration(
                 row: row,
                 configuration: configuration,
-                currentTime: currentTime
+                currentTime: currentTime,
+                forceActive: forceActive
             ),
             staticPlan: staticTextPlan(for: row)
         )
@@ -3782,12 +3889,18 @@ final class NativeLyricsRowView: NSView {
     private func textConfiguration(
         row: LayerBackedLyricRow,
         configuration: LyricsLayerRendererConfiguration,
-        currentTime: TimeInterval? = nil
+        currentTime: TimeInterval? = nil,
+        forceActive: Bool = false
     ) -> NativeLyricsTextRenderPlan.Configuration {
         NativeLyricsTextRenderPlan.Configuration(
             line: row.displayLine.line,
             currentTime: currentTime ?? configuration.phaseRenderTime(),
-            isActive: NativeLyricsTextActivation.isLineTextActive(
+            // `forceActive`: this row's text-active index has already moved on, but its bright
+            // overlay is still fading via `mainPostLineFadeFloor` (see `updatePlaybackPhase`'s
+            // `renderAsActive` gate) — keep rendering the active word-cascade (sweep held at its
+            // finished position, float held at its target) so the fade has something to fade FROM
+            // instead of an instant snap to the inactive whole-line rest state.
+            isActive: forceActive || NativeLyricsTextActivation.isLineTextActive(
                 rowIndex: row.index,
                 textActiveIndex: configuration.effectiveTextActiveIndex
             ),
