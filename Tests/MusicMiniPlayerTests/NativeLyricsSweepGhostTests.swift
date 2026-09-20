@@ -16,16 +16,20 @@ import AppKit
 // word was floating and floated its per-glyph DIM tile in lockstep with the bright one, so
 // exactly one FULLY-OPAQUE copy of the glyph was ever on screen.
 //
-// SUPERSEDED 2026-09-19 (research/repro-2026-09-19-lyrics-render-3n.md) by a founder-dictated
-// trade-off after a WORSE real-device bug: that hollow-and-resync machinery caused every swept
-// word's ink to snap 2pt the instant its line deactivated (the whole-line base's un-hollow and
-// the per-glyph tiles' teardown were not in lockstep). The founder chose to accept a much
-// smaller cosmetic cost — the whole-line dim base is now NEVER hollowed for an ordinary word, so
-// while a word floats, its at-rest dim ink is visible underneath the floated bright tile — in
-// exchange for eliminating the hard drop. This test now asserts the NEW invariant: the per-glyph
-// DIM tile is never used for an ordinary word (`dimHidden` always true, `dimPositionY` never
-// moves from rest) — there is exactly one dim source (the whole-line base, always at rest) and
-// one bright source (the per-glyph tile, floated), never two independently-moving copies.
+// SUPERSEDED 2026-09-19 by 3n (research/repro-2026-09-19-lyrics-render-3n.md), then SUPERSEDED
+// AGAIN 2026-09-19 by 3o (research/repro-2026-09-19-lyrics-render-3o.md) after 3n's own fix
+// caused a WORSE regression: with the whole-line dim base never hollowed and never floating,
+// during a word's active sweep the two channels legitimately disagreed on geometry (bright at
+// −2pt, dim frozen at rest) — and on deactivation the bright tile's own opacity fade finished
+// FIRST while still floated, so the vanishing bright revealed the always-static dim underneath as
+// a visible "drop". This directly contradicted the actual v2.8 reference this test's original
+// (pre-3n) docstring already quoted above (dim floats WITH bright, always, one shared geometry).
+//
+// 3o restores the ORIGINAL invariant this test first pinned: an ordinary floating word IS
+// hollowed out of the whole-line base and its own per-glyph DIM tile floats in lockstep with its
+// BRIGHT tile — `dimHidden == false` and `dimPositionY == brightPositionY` (Δ == 0) whenever the
+// word is genuinely floating. There is still only ONE visible copy of the glyph — the dim+bright
+// pair share identical geometry, they just aren't the exact same CALayer.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 final class NativeLyricsSweepGhostTests: XCTestCase {
 
@@ -188,13 +192,20 @@ final class NativeLyricsSweepGhostTests: XCTestCase {
             maxDelta = max(maxDelta, delta)
             sampleCount += 1
             print("[NativeLyricsSweepGhostTests] \(label) glyph #\(i) order=\(order) dimHidden=\(pair.dimHidden) baseFloatY=\(run.baseFloatY) Δ=\(delta)pt")
-            // 2026-09-19: an ordinary word's dim tile is never the visible copy any more — it
-            // must stay hidden (the whole-line base is the sole dim source, always at rest)
-            // regardless of how far the bright tile above it has floated.
-            XCTAssertTrue(
-                pair.dimHidden,
-                "\(label): glyph #\(i) (order \(order)) dim tile must stay hidden — the whole-line base is the only dim source now"
-            )
+            // 3o restore: a genuinely floating word (baseFloatY != 0) IS the per-glyph dim tile's
+            // moment to shine — hollowed out of the whole-line base, visible, and Y-locked to its
+            // bright twin (Δ ≈ 0). A word that has not started yet (baseFloatY == 0) is exempt —
+            // it's still coincident with the whole-line base, so no tile is needed for it.
+            if run.baseFloatY != 0 {
+                XCTAssertFalse(
+                    pair.dimHidden,
+                    "\(label): glyph #\(i) (order \(order)) is floating (baseFloatY=\(run.baseFloatY)) — its dim tile must be visible, hollowed out of the whole-line base"
+                )
+                XCTAssertLessThanOrEqual(
+                    delta, 0.05,
+                    "\(label): glyph #\(i) (order \(order)) dim/bright desynced by \(delta)pt — they must share one geometry"
+                )
+            }
         }
         XCTAssertGreaterThan(sampleCount, 0, "\(label): expected at least one active glyph")
         print("[NativeLyricsSweepGhostTests] \(label): sampled \(sampleCount) glyphs, max Δy = \(maxDelta)pt")

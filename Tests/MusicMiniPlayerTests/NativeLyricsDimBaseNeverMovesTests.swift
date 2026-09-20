@@ -3,31 +3,23 @@ import AppKit
 @testable import MusicMiniPlayerCore
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Coordinator correction 2026-09-19, backed by REAL on-device rowdump evidence (0.2s cadence,
-// /private/tmp/.../scratchpad/live/rowdump_floatseq.txt): NativeLyricsWordFloatHoldTests (48863d5)
-// fixed a genuine but SMALLER clock-jitter recede (~0.06pt) — not the bug the founder actually saw.
-// The real defect, from the rowdump timeline:
-//   - row 9 active, swept words' dim AND bright glyph tiles float together to y=22.0 (rest 24.0)
-//   - one frame after deactivation (d05): tiles still at 22.0, whole-line dim base still blanked
-//   - next frame (d06): tiles hidden entirely, whole-line dim base repainted UNBLANKED at 24.0
-//   → every previously-swept word's ink jumps 2pt in ONE frame — a hard drop, not clock jitter.
+// SUPERSEDED 2026-09-19 (3o, founder-dictated v2.8 restore — "dim 与 bright 一起浮"). The 3n
+// design this file originally pinned (dim base NEVER hollows/floats for an ordinary word; only the
+// bright per-glyph tile moves) turned out to be the wrong fix for the real defect: it made the two
+// channels disagree on geometry while a word is actively floating (bright at −2pt, dim frozen at
+// 0), and on deactivation the bright tile's own opacity fade finished FIRST while still floated —
+// visually reading as "the word's ink drops" once the vanishing bright reveals the always-static
+// dim underneath. The founder's real v2.8 reference (`v28_LyricLineView.swift`'s
+// `LyricsTextRenderer.draw`) floats dim WITH bright, always, at one shared geometry — this file's
+// assertions below are updated to pin THAT contract instead. See
+// `research/repro-2026-09-19-lyrics-render-3o.md` and `.claude/rules/banned-patterns.md`.
 //
-// Root cause (reproduced below): `applyInactivePlaybackLayerState` (called the instant
-// `NativeLyricsTextActivation.isLineTextActive` flips this row off) unconditionally restores the
-// whole-line rest string and hides every float-driven glyph tile, with NO regard for
-// `mainPostLineFadeFloor` (which is still mid-fade at that exact moment) — banned-patterns.md's
-// v2.8 model ("dim 整行保留、只让亮层 float") was being violated on the FLOAT axis (dim tiles
-// floated as a "single visual unit" partner to bright) and on the TEARDOWN axis (no fade-then-hide
-// ordering) at once.
-//
-// Fix (on top of 48863d5's monotonic float floor):
-//  1. The whole-line dim base is NEVER hollowed for an ordinary (non-emphasis) word any more — it
-//     always paints the FULL line, unconditionally. Only the bright per-glyph tile floats.
-//  2. `updatePlaybackPhase` keeps routing through the active word-cascade (`forceActive`) for as
-//     long as `mainPostLineFadeFloor > 0` after this row's own deactivation edge — the bright
-//     overlay's OWN opacity fade removes it from the screen; only once fully faded does the row
-//     switch to `applyInactivePlaybackLayerState()`'s instant (but by-then invisible) reset.
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Original defect this file exists to guard (still true, still fixed, just via a different
+// mechanism): a swept word's ink must never jump/snap in a single frame on deactivation. The fix
+// is now: `mainWordFloatReturnFloor` eases the held float (dim AND bright together) back to 0 over
+// a short window AFTER the bright opacity fade has already bottomed out, and the whole-line dim
+// base only un-hollows the same frame that eased float reaches (near) 0 — never before, never
+// instantly.
 final class NativeLyricsDimBaseNeverMovesTests: XCTestCase {
 
     private var hostWindow: NSWindow?
@@ -97,6 +89,109 @@ final class NativeLyricsDimBaseNeverMovesTests: XCTestCase {
         )
     }
 
+    /// `debugActiveUnifiedBlankedSignature` is `"<text>|float|<comma-separated orders>"` (or nil
+    /// before layout). The suffix after the LAST `|float|` is empty when nothing is hollowed and
+    /// non-empty (one or more order indices) when at least one word is — generic across scripts,
+    /// unlike hardcoding a specific order index.
+    private static func signatureHasFloatingOrders(_ signature: String?) -> Bool {
+        guard let signature, let range = signature.range(of: "|float|") else { return false }
+        return !signature[range.upperBound...].isEmpty
+    }
+
+    private func englishPhraseLine(start: TimeInterval) -> LyricLine {
+        let phraseEnd = start + 1.6
+        let end = phraseEnd + 0.6
+        return LyricLine(
+            text: "carry me home",
+            startTime: start, endTime: end,
+            words: [
+                LyricWord(word: "carry me", startTime: start, endTime: phraseEnd),
+                LyricWord(word: "home", startTime: phraseEnd, endTime: end),
+            ]
+        )
+    }
+
+    /// 3o English-line variant of the CJK test below (same assertions, same helpers) — the founder
+    /// asked for both a CJK and an English case; dim/bright unification and the eased float-return
+    /// must hold regardless of script.
+    @MainActor
+    func test_deactivation_englishLine_dimAndBrightStayUnifiedAndEaseToRest() {
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        host(surface, NSSize(width: 360, height: 600))
+        surface.debugSkipDedupe = true
+        let mc = MusicController(preview: true)
+        mc.duration = 240
+        mc.isPlaying = true
+
+        let lineA = englishPhraseLine(start: 0)
+        let lineB = englishPhraseLine(start: lineA.endTime + 0.05)
+        let rows = [row(lineA, index: 0), row(lineB, index: 1)]
+
+        var wall: CFTimeInterval = 20_000
+        surface.debugNowOverride = { wall }
+        defer { surface.debugNowOverride = nil }
+
+        func tick(_ playback: TimeInterval, current: Int) {
+            wall += 1.0 / 60.0
+            mc.syncPlaybackClock(to: playback, playing: true, at: Date())
+            surface.configure(config(rows, current: current, mc: mc))
+            surface.debugTick(displayInterval: 1.0 / 60.0)
+            RunLoop.main.run(until: Date())
+        }
+
+        var t: TimeInterval = 0.02
+        while t < 1.4 {
+            tick(t, current: 0)
+            t += 1.0 / 60.0
+        }
+        guard let activeRow = surface.debugRowView(forIndex: 0) else {
+            return XCTFail("row 0 must be mounted while active")
+        }
+        let pairWhileActive = activeRow.debugMainWordGlyphPairs.first
+        XCTAssertEqual(
+            pairWhileActive?.dimPositionY, pairWhileActive?.brightPositionY,
+            "dim and bright tiles must share the exact same floated Y while active (English line)"
+        )
+
+        var pairYSequence: [(dim: CGFloat, bright: CGFloat)] = []
+        var hollowedSequence: [Bool] = []
+        var tileVisibleSequence: [Bool] = []
+        var sawDesync = false
+
+        var boundaryTime = lineA.endTime + 0.02
+        let endTime = boundaryTime + 2.5
+        while boundaryTime < endTime {
+            tick(boundaryTime, current: 1)
+            guard let stillRow = surface.debugRowView(forIndex: 0) else { break }
+            let pair = stillRow.debugMainWordGlyphPairs.first
+            let dimY = pair?.dimPositionY ?? .nan
+            let brightY = pair?.brightPositionY ?? .nan
+            if !dimY.isNaN, !brightY.isNaN, abs(dimY - brightY) > 0.01 { sawDesync = true }
+            pairYSequence.append((dimY, brightY))
+            hollowedSequence.append(Self.signatureHasFloatingOrders(stillRow.debugActiveUnifiedBlankedSignature))
+            tileVisibleSequence.append(!(pair?.dimHidden ?? true))
+            boundaryTime += 1.0 / 60.0
+        }
+
+        XCTAssertFalse(sawDesync, "dim and bright must never disagree on Y (English line)")
+        guard let restY = pairYSequence.last?.dim else {
+            return XCTFail("expected at least one sampled frame")
+        }
+        guard let lastVisibleIndex = tileVisibleSequence.lastIndex(of: true) else {
+            return XCTFail("the tile must be visible for at least one frame after deactivation begins")
+        }
+        XCTAssertEqual(
+            pairYSequence[lastVisibleIndex].dim, restY, accuracy: 0.1,
+            "the tile must already be at (near) rest the last frame it is visible (English line)"
+        )
+        for i in 0..<hollowedSequence.count {
+            XCTAssertEqual(
+                hollowedSequence[i], tileVisibleSequence[i],
+                "frame \(i): un-hollow and tile-hide must land in the same frame (English line)"
+            )
+        }
+    }
+
     @MainActor
     func test_deactivation_dimBaseNeverBlanksOrMoves_brightOnlyFadesOpacity() {
         let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
@@ -131,90 +226,100 @@ final class NativeLyricsDimBaseNeverMovesTests: XCTestCase {
         guard let activeRow = surface.debugRowView(forIndex: 0) else {
             return XCTFail("row 0 must be mounted while active")
         }
-        let restY = activeRow.debugMainWordGlyphPairs.first?.brightPositionY
-        XCTAssertNotNil(restY)
+        let floatedBrightY = activeRow.debugMainWordGlyphPairs.first?.brightPositionY
+        XCTAssertNotNil(floatedBrightY)
 
-        // Precondition: the word has actually floated (bright tile visibly above rest), and per
-        // the fix the whole-line dim base is NOT hollowed for this ordinary word.
+        // Precondition (3o): the word has actually floated, and the whole-line dim base IS
+        // hollowed for it — dim and bright share one geometry, so the ordinary word's order (0)
+        // appears in the signature's floating-orders suffix.
         let signatureWhileActive = activeRow.debugActiveUnifiedBlankedSignature
         XCTAssertEqual(
-            signatureWhileActive, "\(lineA.text)|float|",
-            "ordinary words must never be hollowed out of the whole-line dim base"
+            signatureWhileActive, "\(lineA.text)|float|0",
+            "a floating ordinary word must be hollowed out of the whole-line dim base (dim floats with bright)"
         )
-        let dimYWhileActive = activeRow.debugMainWordGlyphPairs.first?.dimPositionY
+        let pairWhileActive = activeRow.debugMainWordGlyphPairs.first
+        XCTAssertEqual(
+            pairWhileActive?.dimPositionY, pairWhileActive?.brightPositionY,
+            "dim and bright tiles must share the exact same floated Y while active"
+        )
+        XCTAssertNotEqual(pairWhileActive?.dimPositionY, 0, "the word must genuinely be floating for this assertion to be meaningful")
 
         // Cross the boundary into line B — line A's row (index 0) deactivates. Sample every frame
-        // for 2 seconds (comfortably past the 1.5s postLineFadeOut window) and assert:
-        //  (a) the dim-base blank signature stays exactly the never-hollowed value the whole time;
-        //  (b) the dim tile's own Y (when present at all) never changes from its rest value;
-        //  (c) the bright tile's Y only ever holds or fades via opacity — it must not jump/receded
-        //      in POSITION at any single frame by more than a sub-pixel amount.
-        var brightYSequence: [CGFloat] = []
-        var brightOpacitySequence: [Float] = []
-        var sawAnyHollowForOrdinaryWord = false
-        var sawDimYDrift = false
+        // for 2.5 seconds (comfortably past the 1.5s bright fade + the ~0.35s float-return window)
+        // and assert the 3o contract:
+        //  (a) dim and bright stay Y-locked to each other every single frame (never desync);
+        //  (b) the float (both tiles) only ever eases MONOTONICALLY toward rest — no jump, no
+        //      overshoot, no re-rise;
+        //  (c) the tiles hide and the whole-line dim base un-hollows in the SAME frame — never a
+        //      frame with tiles gone but the base still hollowed, or the base restored but a tile
+        //      still visible.
+        var pairYSequence: [(dim: CGFloat, bright: CGFloat)] = []
+        var hollowedSequence: [Bool] = []
+        var tileVisibleSequence: [Bool] = []
+        var sawDesync = false
 
         var boundaryTime = lineA.endTime + 0.02
-        let endTime = boundaryTime + 2.0
+        let endTime = boundaryTime + 2.5
         while boundaryTime < endTime {
             tick(boundaryTime, current: 1)
             guard let stillRow = surface.debugRowView(forIndex: 0) else { break }
-            if let sig = stillRow.debugActiveUnifiedBlankedSignature, sig != "\(lineA.text)|float|" {
-                sawAnyHollowForOrdinaryWord = true
-            }
-            if let dimY = stillRow.debugMainWordGlyphPairs.first?.dimPositionY,
-               let baseline = dimYWhileActive, abs(dimY - baseline) > 0.01 {
-                sawDimYDrift = true
-            }
-            brightYSequence.append(stillRow.debugMainWordGlyphPairs.first?.brightPositionY ?? .nan)
-            brightOpacitySequence.append(stillRow.debugMainBrightWordGlyphOpacities.first ?? 0)
+            let pair = stillRow.debugMainWordGlyphPairs.first
+            let dimY = pair?.dimPositionY ?? .nan
+            let brightY = pair?.brightPositionY ?? .nan
+            if !dimY.isNaN, !brightY.isNaN, abs(dimY - brightY) > 0.01 { sawDesync = true }
+            pairYSequence.append((dimY, brightY))
+            hollowedSequence.append(Self.signatureHasFloatingOrders(stillRow.debugActiveUnifiedBlankedSignature))
+            tileVisibleSequence.append(!(pair?.dimHidden ?? true))
             boundaryTime += 1.0 / 60.0
         }
 
-        XCTAssertFalse(sawAnyHollowForOrdinaryWord, "an ordinary word's whole-line dim ink must never be blanked")
-        XCTAssertFalse(sawDimYDrift, "the dim tile must never move — only the bright overlay floats")
+        XCTAssertFalse(sawDesync, "dim and bright must never disagree on Y — they are one geometry")
 
-        // The bright overlay's opacity must reach (approximately) 0 within the sample window —
-        // confirms the fade actually ran, not that we sampled too briefly.
-        XCTAssertLessThan(brightOpacitySequence.last ?? 1, 0.05, "post-line fade must complete within 2s")
-
-        // No single-frame Y jump greater than sub-pixel jitter while the bright tile is still
-        // meaningfully visible (opacity > 0.02) — this is the exact "2pt drop in one frame" shape
-        // from the rowdump. Once opacity has dropped below that, position no longer matters (the
-        // glyph reads as invisible) so a subsequent hide is not a "drop".
-        var worstJump: CGFloat = 0
-        for i in 1..<brightYSequence.count {
-            guard brightOpacitySequence[i - 1] > 0.02, !brightYSequence[i].isNaN, !brightYSequence[i - 1].isNaN else { continue }
-            let jump = abs(brightYSequence[i] - brightYSequence[i - 1])
-            worstJump = max(worstJump, jump)
+        // Ground truth for "rest" is read empirically from the tail of the sample window (well
+        // past both the bright fade and the float-return window, where `isFloatingWord` is
+        // definitely false and `dimCenterY` is computed with no float term at all) rather than
+        // assumed from the −2pt contract constant — `dimLayer.position` is written every frame
+        // regardless of `isHidden`, so this is a faithful read even though the tile is hidden by
+        // then.
+        guard let restY = pairYSequence.last?.dim else {
+            return XCTFail("expected at least one sampled frame")
         }
-        XCTAssertLessThanOrEqual(
-            worstJump, 0.05,
-            "bright overlay position jumped \(worstJump)pt in a single frame while still visible — must fade via opacity only, never snap position/visibility"
+        let lastVisibleIndex = tileVisibleSequence.lastIndex(of: true)
+        guard let lastVisibleIndex else {
+            return XCTFail("the tile must be visible for at least one frame after deactivation begins")
+        }
+        XCTAssertEqual(
+            pairYSequence[lastVisibleIndex].dim, restY, accuracy: 0.1,
+            "the tile must already be at (near) rest the last frame it is visible — never hidden while still displaced"
         )
 
-        // Opacity must ease down over MULTIPLE frames, riding the row's own opacity-recede spring
-        // (`updateDeactivationFade`, keyed off `visualStates[idx].opacity` — a faster curve than
-        // the old 1.5s `mainPostLineFadeFloor` window, so the per-frame step is legitimately
-        // larger than a linear 1.5s decay implies) — but an instant `isHidden = true` snap (the
-        // pre-fix teardown, reproduced above as a same-frame drop of ~0.999) must never happen:
-        // no single frame may drop MORE than half the remaining opacity in one step.
-        var worstOpacityDrop: Float = 0
-        for i in 1..<brightOpacitySequence.count {
-            let drop = brightOpacitySequence[i - 1] - brightOpacitySequence[i]
-            if drop > 0 { worstOpacityDrop = max(worstOpacityDrop, drop) }
+        // Monotonic return: once past the bright-opacity fade, the float's DISTANCE FROM REST only
+        // ever shrinks — never grows (no re-rise/overshoot).
+        var worstRise: CGFloat = 0
+        for i in 1..<pairYSequence.count {
+            let prevDist = abs(pairYSequence[i - 1].bright - restY)
+            let curDist = abs(pairYSequence[i].bright - restY)
+            if curDist > prevDist { worstRise = max(worstRise, curDist - prevDist) }
         }
-        XCTAssertLessThanOrEqual(
-            worstOpacityDrop, 0.3,
-            "bright overlay opacity dropped \(worstOpacityDrop) in a single frame — must ease out via the deactivation-fade spring, never snap to hidden"
-        )
-        // The fade must actually span several frames (not collapse to a 2-frame full-to-zero) —
-        // count frames where opacity sits strictly between 0.05 and 0.95 (genuinely "fading",
-        // neither fully lit nor fully gone).
-        let midFadeFrameCount = brightOpacitySequence.filter { $0 > 0.05 && $0 < 0.95 }.count
+        XCTAssertLessThanOrEqual(worstRise, 0.01, "float distance-from-rest grew by \(worstRise)pt in a single frame — must be strictly monotonic toward rest")
+
+        // Hollowed state and tile visibility must change in lockstep, same frame — the exact
+        // "字块已隐藏但暗底仍 blank" / "暗底已恢复但字块仍可见" defect this restore must not
+        // reintroduce.
+        for i in 0..<hollowedSequence.count {
+            XCTAssertEqual(
+                hollowedSequence[i], tileVisibleSequence[i],
+                "frame \(i): hollowed=\(hollowedSequence[i]) but tileVisible=\(tileVisibleSequence[i]) — un-hollow and tile-hide must land in the same frame"
+            )
+        }
+
+        // The un-hollow must not happen instantly on the deactivation edge — there must be at
+        // least a few frames where the row is inactive but still hollowed/floated (the eased
+        // return window actually ran, not collapsed to 0 frames).
+        let stillHollowedWhileInactiveCount = hollowedSequence.filter { $0 }.count
         XCTAssertGreaterThanOrEqual(
-            midFadeFrameCount, 3,
-            "the fade collapsed to too few frames (\(midFadeFrameCount)) — this is the instant-snap shape, not a fade"
+            stillHollowedWhileInactiveCount, 3,
+            "the float-return window collapsed to too few frames (\(stillHollowedWhileInactiveCount)) — this is the instant-unhollow shape, not an eased return"
         )
     }
 }
