@@ -71,17 +71,21 @@ public struct LyricLine: Identifiable, Equatable {
     public let words: [LyricWord]
     /// 翻译文本（如果有的话）- var 以支持系统翻译更新
     public var translation: String?
+    /// 是否为和声/backing vocal 行（founder 2026-09-20：数据模型概念，从属于紧邻的旋律行，
+    /// 渲染层只读此字段，不再用文本括号启发式猜测）
+    public var isBackground: Bool
 
     /// 是否有逐字时间轴
     public var hasSyllableSync: Bool { !words.isEmpty }
     /// 是否有翻译
     public var hasTranslation: Bool { translation != nil && !translation!.isEmpty }
 
-    public init(text: String, startTime: TimeInterval, endTime: TimeInterval, words: [LyricWord] = [], translation: String? = nil) {
+    public init(text: String, startTime: TimeInterval, endTime: TimeInterval, words: [LyricWord] = [], translation: String? = nil, isBackground: Bool = false) {
         self.text = text
         self.startTime = startTime
         self.endTime = endTime
         self.translation = translation
+        self.isBackground = isBackground
 
         // Invariant: words must be consistent with text.
         // If words exist but their concatenation doesn't match text,
