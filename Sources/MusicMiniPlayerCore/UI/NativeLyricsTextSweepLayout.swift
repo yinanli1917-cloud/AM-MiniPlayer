@@ -22,6 +22,23 @@ struct NativeLyricsTextSweepVisualRun: Equatable {
         let index: Int
         let text: String
         let rect: CGRect
+        // 2026-09-20 (3p, founder real-device root cause — 《下雨天》"点点雨似渗出眼泪"): the
+        // per-glyph tile's OWN CATextLayer used to render with a hardcoded
+        // `NSFont.systemFont(weight:.semibold)` while `rect` (and the whole-line dim base, via
+        // `NativeLyricsUnifiedDimDrawLayer`) came from THIS `NSLayoutManager`'s actual glyph
+        // layout — for CJK, AppKit resolves that generic UI font to a DIFFERENT concrete font
+        // (`.PingFangUIDisplaySC-Semibold`) than what a CATextLayer given the same nominal font
+        // resolves to for its own independent Han fallback (`.AppleSystemUIFontDemi`'s own
+        // fallback, a different PingFang optical size/variant) — same advance-origin `rect.minX`,
+        // different glyph OUTLINE/width at that origin, so bright ink never sits exactly on dim
+        // ink underneath: reads as a persistent double-edge/ghost on every swept glyph, worst on
+        // the line's last character (rowdump: layoutManagerX == tile.minX exactly, advance
+        // 22.8496 exactly, only the FONT differed). `characterIndex` is this glyph's location in
+        // the shared `NSTextStorage` (`NativeLyricsUnifiedTextBuild.textStorage`), so a tile
+        // renderer can pull the SAME resolved font AppKit already committed to for this exact
+        // character via `textStorage.attribute(.font, at: characterIndex, ...)` instead of
+        // re-deriving its own generic one. See research/repro-2026-09-20-lyrics-render-3p.md.
+        let characterIndex: Int
     }
 
     let order: Int
@@ -382,7 +399,8 @@ enum NativeLyricsTextSweepLayout {
                 glyph: NativeLyricsTextSweepVisualRun.Glyph(
                     index: glyphs.count,
                     text: tokenCharacter,
-                    rect: rect
+                    rect: rect,
+                    characterIndex: location
                 ),
                 glyphRange: glyphRange
             ))

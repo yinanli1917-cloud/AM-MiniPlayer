@@ -202,14 +202,40 @@ final class NativeLyricsRowView: NSView {
         let height: CGFloat
         let fontSize: CGFloat
         let brightAlpha: CGFloat
+        // 2026-09-20 (3p): the resolved font NAME is part of the signature — when it changes
+        // (a different character resolves to a different concrete font, or the shared layout
+        // rebuilds), the tile must re-set `.font`, not just `.string`/`.bounds`. Included in
+        // Equatable so a signature-unchanged frame is still a true no-op (the common case).
+        let fontName: String
 
-        init(glyph: NativeLyricsTextSweepVisualRun.Glyph, fontSize: CGFloat, brightAlpha: CGFloat = 1) {
+        init(
+            glyph: NativeLyricsTextSweepVisualRun.Glyph, fontSize: CGFloat, brightAlpha: CGFloat = 1,
+            fontName: String
+        ) {
             text = glyph.text
             width = glyph.rect.width.rounded(.toNearestOrAwayFromZero)
             height = glyph.rect.height.rounded(.toNearestOrAwayFromZero)
             self.fontSize = fontSize
             self.brightAlpha = (brightAlpha * 1000).rounded(.toNearestOrAwayFromZero) / 1000
+            self.fontName = fontName
         }
+    }
+
+    /// 2026-09-20 (3p root-cause fix, research/repro-2026-09-20-lyrics-render-3p.md): resolve the
+    /// SAME concrete font `NSLayoutManager` already committed to for this exact character in the
+    /// shared unified layout (`cachedMainUnifiedBuild.textStorage`), instead of independently
+    /// re-deriving a generic system font that AppKit's own Han-fallback resolution can (and on
+    /// CJK real-device content, does) land on a different concrete variant than the SAME nominal
+    /// font resolves to when handed to a layout manager laying out the whole line. Falls back to
+    /// the plain system font only when the shared layout is unavailable (e.g. a stale/lifecycle
+    /// edge before the row's first `configure()`), never as the normal path.
+    private func resolvedGlyphFont(characterIndex: Int, fallbackSize: CGFloat) -> NSFont {
+        if let storage = cachedMainUnifiedBuild?.textStorage,
+           characterIndex >= 0, characterIndex < storage.length,
+           let font = storage.attribute(.font, at: characterIndex, effectiveRange: nil) as? NSFont {
+            return font
+        }
+        return NSFont.systemFont(ofSize: fallbackSize, weight: .semibold)
     }
 
     private var cachedStaticTextPlanKey: StaticTextPlanCacheKey?
@@ -779,6 +805,14 @@ final class NativeLyricsRowView: NSView {
         let char: String
         let tileFrameMinX: CGFloat
         let layoutManagerX: CGFloat
+        // 2026-09-20 (3p): the tile's OWN `.font` (as actually assigned to the CATextLayer that
+        // paints this glyph) vs the SAME character's font as resolved by the shared
+        // `NSLayoutManager`/`NSTextStorage` — must be equal (see `resolvedGlyphFont`'s doc). A
+        // mismatch here, even with `tileFrameMinX == layoutManagerX` (the advance origin can
+        // agree while the OUTLINE at that origin still differs), is the root cause of the
+        // founder's reported persistent double-edge/ghost on swept CJK glyphs.
+        let tileFontName: String?
+        let resolvedFontName: String?
     }
 
     /// Real-layout (no mocking) per-glyph alignment: index-aligned to
@@ -810,8 +844,11 @@ final class NativeLyricsRowView: NSView {
                 let glyphLocation = build.layoutManager.location(forGlyphAt: glyphRange.location)
                 layoutManagerX = fragmentRect.origin.x + glyphLocation.x
             }
+            let resolvedFontName = (storage.attribute(.font, at: charIndex, effectiveRange: nil) as? NSFont)?.fontName
             samples.append(DebugGlyphAlignmentSample(
-                char: ch, tileFrameMinX: brightLayer.frame.minX, layoutManagerX: layoutManagerX
+                char: ch, tileFrameMinX: brightLayer.frame.minX, layoutManagerX: layoutManagerX,
+                tileFontName: (brightLayer.font as? NSFont)?.fontName ?? (brightLayer.font as? String),
+                resolvedFontName: resolvedFontName
             ))
             tileIndex += 1
         }
@@ -840,6 +877,17 @@ final class NativeLyricsRowView: NSView {
         zip(mainDimWordGlyphLayers, mainBrightWordGlyphLayers).map {
             ($0.position.y, $1.position.y, $0.isHidden)
         }
+    }
+
+    /// 2026-09-20 (3p): raw layer accessors for rendering-level tests that need to rasterize the
+    /// ACTUAL tile (font/string/bounds all as painted) rather than read a numeric property off it
+    /// — see `NativeLyricsGlyphAlignmentTests`' dim/bright glyph-outline-agreement tests.
+    func debugFirstVisibleMainDimWordGlyphLayer() -> CATextLayer? {
+        mainDimWordGlyphLayers.first { !$0.isHidden }
+    }
+
+    func debugFirstVisibleMainBrightWordGlyphLayer() -> CATextLayer? {
+        mainBrightWordGlyphLayers.first { !$0.isHidden }
     }
 
     /// Presentation-vs-model drift diagnostic (research/repro-2026-09-19-lyrics-render-3l.md step
@@ -3515,10 +3563,16 @@ final class NativeLyricsRowView: NSView {
             // "淡出到 0 再隐藏，不许在淡出前隐藏或归位".
             brightLayer.opacity = postLineFadeOpacity
             brightLayer.isHidden = postLineFadeOpacity <= 0.001
+            // 2026-09-20 (3p): pull the SAME concrete font the shared NSLayoutManager already
+            // resolved for THIS character, instead of an independently re-derived generic system
+            // font — see `resolvedGlyphFont`'s doc comment for the founder-reported real-device
+            // root cause (persistent double-edge ghost on every swept CJK glyph).
+            let resolvedFont = resolvedGlyphFont(characterIndex: glyph.characterIndex, fallbackSize: fontSize)
             let signature = EmphasisGlyphLayerSignature(
                 glyph: glyph,
                 fontSize: fontSize,
-                brightAlpha: plan.constants.brightAlpha
+                brightAlpha: plan.constants.brightAlpha,
+                fontName: resolvedFont.fontName
             )
             if mainWordGlyphLayerSignatures.indices.contains(index),
                mainWordGlyphLayerSignatures[index] != signature {
@@ -3529,9 +3583,12 @@ final class NativeLyricsRowView: NSView {
                 // DOWNWARD by textBottomClipPad (keeping the top edge fixed) for room below the glyph.
                 // Always write BOTH layers here (even though the dim tile may render hidden this
                 // frame): the dim tile can become visible on a LATER frame without this signature
-                // changing (same glyph/size/alpha), and it must already carry the right text/color.
+                // changing (same glyph/size/alpha/font), and it must already carry the right
+                // text/color/font.
                 for layer in [dimLayer, brightLayer] {
                     layer.string = glyph.text
+                    layer.font = resolvedFont
+                    layer.fontSize = fontSize
                     layer.bounds = CGRect(
                         origin: .zero,
                         size: CGSize(width: glyph.rect.width, height: glyph.rect.height + Self.textBottomClipPad)
@@ -3757,16 +3814,23 @@ final class NativeLyricsRowView: NSView {
         )
         layer.isHidden = false
         let fontSize = NativeLyricsTextConstants().mainFontSize
-        let signature = EmphasisGlyphLayerSignature(glyph: glyph, fontSize: fontSize)
+        // 2026-09-20 (3p): same fix as the main word-tile pool — pull the concrete font the
+        // shared layout already resolved for this character (see `resolvedGlyphFont`'s doc).
+        let resolvedFont = resolvedGlyphFont(characterIndex: glyph.characterIndex, fallbackSize: fontSize)
+        let signature = EmphasisGlyphLayerSignature(
+            glyph: glyph, fontSize: fontSize, fontName: resolvedFont.fontName
+        )
         if emphasisGlyphLayerSignatures.indices.contains(layerIndex),
            emphasisGlyphLayerSignatures[layerIndex] != signature {
             emphasisGlyphLayerSignatures[layerIndex] = signature
             layer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
-            layer.font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+            layer.font = resolvedFont
             layer.fontSize = fontSize
             layer.string = glyph.text
             layer.bounds = CGRect(origin: .zero, size: glyph.rect.size)
         } else if layer.string == nil {
+            layer.font = resolvedFont
+            layer.fontSize = fontSize
             layer.string = glyph.text
             layer.bounds = CGRect(origin: .zero, size: glyph.rect.size)
         }

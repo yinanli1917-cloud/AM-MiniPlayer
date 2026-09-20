@@ -172,4 +172,137 @@ final class NativeLyricsGlyphAlignmentTests: XCTestCase {
     func test_englishLine_tileFrameMatchesLayoutManagerAdvance() {
         assertGlyphAlignment(line: englishLine(), width: 250, label: "EN")
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 2026-09-20 (3p, founder real-device root cause on top of the above): the two APIs agreeing
+    // on the advance ORIGIN (`tileFrameMinX == layoutManagerX`, proven above) does not mean the
+    // two glyph renderers agree on the OUTLINE painted at that origin — a CATextLayer handed a
+    // generic `NSFont.systemFont(weight:.semibold)` can (and for CJK, does) resolve its own Han
+    // fallback to a DIFFERENT concrete font than what `NSLayoutManager` already resolved for the
+    // SAME character while laying out the whole line. `resolvedGlyphFont` fixes this by pulling
+    // the font straight from the shared `NSTextStorage` instead of re-deriving one. These tests
+    // pin that the tile's actual `.font` now equals the layout-resolved font, by name, for every
+    // glyph of an actively-sweeping line — CJK (where the divergence was real, per the rowdump)
+    // and English (where the fix must be a no-op, not a regression).
+    // ─────────────────────────────────────────────────────────────────────
+    @MainActor
+    private func assertGlyphFontMatchesLayoutResolution(line: LyricLine, width: CGFloat, label: String) {
+        let currentTime = (line.words.last?.startTime ?? line.startTime) + 0.05
+        let samples = glyphAlignmentSamples(line: line, width: width, atTime: currentTime)
+        XCTAssertFalse(samples.isEmpty, "\(label): expected at least one glyph sample")
+        for sample in samples {
+            XCTAssertNotNil(sample.resolvedFontName, "\(label): char \"\(sample.char)\" has no resolvable layout font")
+            XCTAssertEqual(
+                sample.tileFontName, sample.resolvedFontName,
+                "\(label): char \"\(sample.char)\" tile font \"\(sample.tileFontName ?? "nil")\" != "
+                    + "layout-resolved font \"\(sample.resolvedFontName ?? "nil")\" — the glyph tile is "
+                    + "painting a DIFFERENT concrete font than the one the shared layout committed to for "
+                    + "this character, which is the founder's reported persistent double-edge/ghost root cause"
+            )
+        }
+    }
+
+    @MainActor
+    func test_cjk8CharLine_tileFontMatchesLayoutResolvedFont() {
+        assertGlyphFontMatchesLayoutResolution(line: cjk8Line(), width: 250, label: "CJK-8")
+    }
+
+    @MainActor
+    func test_cjk13CharNoSpaceLine_tileFontMatchesLayoutResolvedFont() {
+        assertGlyphFontMatchesLayoutResolution(line: cjk13Line(), width: 186, label: "CJK-13-nospace")
+    }
+
+    @MainActor
+    func test_englishLine_tileFontMatchesLayoutResolvedFont() {
+        assertGlyphFontMatchesLayoutResolution(line: englishLine(), width: 250, label: "EN")
+    }
+
+    /// Rendering-level proof, not just a font-name string comparison: rasterize the per-glyph
+    /// BRIGHT tile and the whole-line dim base's `NativeLyricsUnifiedDimDrawLayer` into two
+    /// bitmaps of the SAME size/origin/scale (the tile's own frame) and compare their non-
+    /// transparent (ink) pixel masks. Before the fix, a font mismatch at an identical advance
+    /// origin produces materially different glyph outlines — the masks disagree by more than a
+    /// sliver of anti-aliasing noise at the edges. After the fix (both painting from the exact
+    /// same resolved font), the masks must agree almost everywhere.
+    @MainActor
+    private func rasterize(_ layer: CALayer, in rect: CGRect, scale: CGFloat) -> NSBitmapImageRep? {
+        let pixelWidth = max(1, Int((rect.width * scale).rounded()))
+        let pixelHeight = max(1, Int((rect.height * scale).rounded()))
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: pixelWidth, pixelsHigh: pixelHeight,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ) else { return nil }
+        guard let context = NSGraphicsContext(bitmapImageRep: rep)?.cgContext else { return nil }
+        context.clear(CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight))
+        context.scaleBy(x: scale, y: scale)
+        context.translateBy(x: -rect.minX, y: -rect.minY)
+        layer.render(in: context)
+        return rep
+    }
+
+    private func alphaCoverageMask(_ rep: NSBitmapImageRep, threshold: Int = 10) -> [Bool] {
+        var mask: [Bool] = []
+        mask.reserveCapacity(rep.pixelsWide * rep.pixelsHigh)
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide {
+                let alpha = rep.colorAt(x: x, y: y)?.alphaComponent ?? 0
+                mask.append(Int(alpha * 255) > threshold)
+            }
+        }
+        return mask
+    }
+
+    @MainActor
+    private func assertDimAndBrightRenderSameGlyphOutline(line: LyricLine, width: CGFloat, label: String) {
+        let currentTime = (line.words.last?.startTime ?? line.startTime) + 0.05
+        let target = row(for: line, index: 0)
+        let view = NativeLyricsRowView(frame: NSRect(x: 0, y: 0, width: width, height: 96))
+        host(view, NSSize(width: width, height: 96))
+        let mc = MusicController(preview: true)
+        mc.isPlaying = true
+        mc.duration = 240
+        mc.syncPlaybackClock(to: currentTime, playing: true)
+        let cfg = config(rows: [target], current: 0, mc: mc, width: width)
+        view.configure(row: target, configuration: cfg)
+        view.frame = NSRect(x: 0, y: 0, width: width, height: view.measuredHeight(width: width))
+        view.layoutSubtreeIfNeeded()
+        CATransaction.flush()
+        _ = view.updatePlaybackPhase(configuration: cfg)
+
+        guard let dimLayer = view.debugFirstVisibleMainDimWordGlyphLayer() else {
+            return XCTFail("\(label): expected at least one visible dim word-glyph tile")
+        }
+        let scale: CGFloat = 4 // supersample well past hinting noise for a small glyph box
+        // Compare the DIM tile against itself vs the BRIGHT tile at the tile's own bounds — both
+        // now must originate from `resolvedGlyphFont`, so their painted outlines should coincide
+        // (previously the bright tile could legitimately differ from the dim base's font).
+        guard let brightLayer = view.debugFirstVisibleMainBrightWordGlyphLayer(),
+              let dimRep = rasterize(dimLayer, in: dimLayer.bounds, scale: scale),
+              let brightRep = rasterize(brightLayer, in: brightLayer.bounds, scale: scale)
+        else {
+            return XCTFail("\(label): expected both dim and bright tiles to rasterize")
+        }
+        let dimMask = alphaCoverageMask(dimRep)
+        let brightMask = alphaCoverageMask(brightRep)
+        XCTAssertEqual(dimMask.count, brightMask.count, "\(label): dim/bright tiles must rasterize to the same pixel grid (same bounds/scale)")
+        guard dimMask.count == brightMask.count, !dimMask.isEmpty else { return }
+        let agree = zip(dimMask, brightMask).filter { $0 == $1 }.count
+        let ratio = Double(agree) / Double(dimMask.count)
+        XCTAssertGreaterThanOrEqual(
+            ratio, 0.99,
+            "\(label): dim/bright glyph-coverage masks agree on only \(String(format: "%.1f%%", ratio * 100)) of pixels — "
+                + "same font is required for the two tiles to paint the identical outline"
+        )
+    }
+
+    @MainActor
+    func test_cjk8CharLine_dimAndBrightTilesRenderIdenticalGlyphOutline() {
+        assertDimAndBrightRenderSameGlyphOutline(line: cjk8Line(), width: 250, label: "CJK-8")
+    }
+
+    @MainActor
+    func test_englishLine_dimAndBrightTilesRenderIdenticalGlyphOutline() {
+        assertDimAndBrightRenderSameGlyphOutline(line: englishLine(), width: 250, label: "EN")
+    }
 }
