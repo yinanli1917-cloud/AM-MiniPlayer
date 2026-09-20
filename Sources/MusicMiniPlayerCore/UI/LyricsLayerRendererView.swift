@@ -258,6 +258,34 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     nonisolated(unsafe) private let displayLinkScheduler = NativeLyricsDisplayLinkScheduler()
     private var rowTapHandlers: [Int: () -> Void] = [:]
     private var measuredHeightsByIndex: [Int: CGFloat] = [:]
+    // 2026-09-20 (stage bundle 3r, Task 2 Part A): bumped at every site that mutates
+    // `measuredHeightsByIndex` (seed-estimate insert, real-measurement update, both `removeAll`
+    // resets). `runtimeConfiguration(from:)`'s accumulated-heights recomputation is keyed on this
+    // — a line-level song sitting idle between switches never touches
+    // `measuredHeightsByIndex`, so the version stays flat and the recomputation can be skipped.
+    private var measuredHeightsVersion: Int = 0
+    // Memoizes the ONE genuinely expensive part of `runtimeConfiguration(from:)` — the
+    // `NativeLyricsHeightAccumulator.accumulatedHeights(...)` O(rows) recomputation, which used
+    // to run unconditionally on every call (several calls per presentation tick, per the founder's
+    // `/tmp/nanopod_mask_trace.jsonl` phase totals: runtimeConfiguration alone billed 6.9s over a
+    // 200s idle-heavy session). Keyed on `RuntimeConfigHeightsCacheKey`; a cache hit skips the
+    // accumulator call and reuses the last result. Everything else in `runtimeConfiguration(from:)`
+    // — including `synchronizeNativeSemanticIndex`'s side effects — still runs on every call
+    // unchanged.
+    private struct RuntimeConfigHeightsCacheKey: Equatable {
+        let renderedIndices: [Int]
+        let interludeAfterIndex: Int?
+        let measuredHeightsVersion: Int
+        let configuredAccumulatedHeightsCount: Int
+    }
+    private var lastRuntimeConfigHeightsKey: RuntimeConfigHeightsCacheKey?
+    private var lastRuntimeConfigAccumulatedHeights: [Int: CGFloat]?
+    #if DEBUG || LOCAL_DEVELOPER_BUILD
+    /// Test/diagnostic only: incremented on every accumulated-heights memo hit so a test can
+    /// assert the idle path is actually skipping the recomputation rather than just measuring a
+    /// timing threshold (which is noisy on CI/shared machines).
+    private(set) var runtimeConfigHeightsMemoHitCount: Int = 0
+    #endif
     /// The `accumulatedHeights` most recently fed to `presentationEngine.update(...)`, from
     /// EITHER call site (`configure()`'s always-runs call, or the same-cycle height correction in
     /// `reconcileVisibleRowViews`) — see `updatePresentationEngine(...)`. `nil` means "never fed",
@@ -403,6 +431,10 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     var debugReusePoolCount: Int { rowViewReusePool.count }
     var debugIsPresentationLoopRunning: Bool { displayLink != nil }
     var debugPresentationEngineHasActiveMotion: Bool { presentationEngine.hasActiveMotion }
+    /// Stage bundle 3r, Task 2 Part C: the visual-motion-state loop-idle veto (blur/scale/opacity
+    /// springs), exposed so a test can pin how long after a line switch it clears without needing
+    /// `stopPresentationLoopIfIdle`'s other, unrelated vetoes (appear window, text animation, …).
+    var debugHasActiveVisualMotion: Bool { hasActiveVisualMotion }
     /// Counts actual re-feeds of `presentationEngine.update(...)` from the same-cycle height
     /// correction (`updatePresentationEngineIfHeightsChanged`) ONLY — not the unconditional
     /// top-of-configure() feed, which is expected to fire every reaching cycle regardless of
@@ -996,6 +1028,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
             forceSnapUntil = NativeLyricsFeelParity.forceSnapDeadline(now: currentMediaTime())
             visualStates.removeAll()
             measuredHeightsByIndex.removeAll()
+            measuredHeightsVersion += 1
             lastAppliedYByIndex.removeAll()
             nativeSemanticCurrentIndex = nil
             nativeTimelineState = nil
@@ -1483,13 +1516,40 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
                 isTranslating: runtimeConfiguration.isTranslating,
                 pendingTranslationLineIndices: runtimeConfiguration.pendingTranslationLineIndices
             )
+            measuredHeightsVersion += 1
         }
-        runtimeConfiguration.accumulatedHeights = NativeLyricsHeightAccumulator.accumulatedHeights(
+        // 2026-09-20 (stage bundle 3r, Task 2 Part A): `NativeLyricsHeightAccumulator
+        // .accumulatedHeights` recomputes an O(rows) running sum on EVERY call to
+        // `runtimeConfiguration(from:)` — several calls per presentation tick — even when nothing
+        // that could change its output has changed since the last call (the common case: a
+        // line-level song sitting idle between line switches). The only inputs that can change
+        // its output are `renderedIndices`, `interludeAfterIndex`, and `measuredHeightsByIndex`
+        // (tracked via `measuredHeightsVersion`, bumped at every mutation site); the seed loop
+        // just above guarantees every rendered row already has a `measuredHeightsByIndex` entry
+        // by the time this runs, so `configuredAccumulatedHeights`'s fallback branch is inert here
+        // and safe to leave out of the cache key. A key match reuses the last result outright.
+        let heightsKey = RuntimeConfigHeightsCacheKey(
             renderedIndices: runtimeConfiguration.renderedIndices,
-            configuredAccumulatedHeights: runtimeConfiguration.accumulatedHeights,
-            measuredHeights: measuredHeightsByIndex,
-            interludeAfterIndex: runtimeConfiguration.interludeAfterIndex
+            interludeAfterIndex: runtimeConfiguration.interludeAfterIndex,
+            measuredHeightsVersion: measuredHeightsVersion,
+            configuredAccumulatedHeightsCount: runtimeConfiguration.accumulatedHeights.count
         )
+        if heightsKey == lastRuntimeConfigHeightsKey, let cached = lastRuntimeConfigAccumulatedHeights {
+            runtimeConfiguration.accumulatedHeights = cached
+            #if DEBUG || LOCAL_DEVELOPER_BUILD
+            runtimeConfigHeightsMemoHitCount += 1
+            #endif
+        } else {
+            let recomputed = NativeLyricsHeightAccumulator.accumulatedHeights(
+                renderedIndices: runtimeConfiguration.renderedIndices,
+                configuredAccumulatedHeights: runtimeConfiguration.accumulatedHeights,
+                measuredHeights: measuredHeightsByIndex,
+                interludeAfterIndex: runtimeConfiguration.interludeAfterIndex
+            )
+            runtimeConfiguration.accumulatedHeights = recomputed
+            lastRuntimeConfigHeightsKey = heightsKey
+            lastRuntimeConfigAccumulatedHeights = recomputed
+        }
         // Interlude scroll advance — makes the interlude behave like a real lyric line. While an
         // interlude is active, advance the anchor so the gap reserved after the preceding line
         // reaches the active centre: the three dots take the centre, the preceding line recedes
@@ -1864,6 +1924,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         pendingTapToLineSettleTiming = nil
         visualStates.removeAll()
         measuredHeightsByIndex.removeAll()
+        measuredHeightsVersion += 1
         stopNativeLineMotionSamplingTimer()
         presentationEngine.stop()
         stopPresentationLoop()
@@ -1904,6 +1965,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         if heightChanged {
 
             measuredHeightsByIndex[row.index] = height
+            measuredHeightsVersion += 1
             DispatchQueue.main.async {
                 configuration.onHeightMeasured(row.index, height)
             }
