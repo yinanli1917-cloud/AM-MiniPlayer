@@ -1095,12 +1095,45 @@ final class NativeLyricsRowView: NSView {
             )
         }
         describe("mainBrightTextLayer(line-level-bright)", mainBrightTextLayer)
+        // 2026-09-19 coordinator follow-up (item B, "整行全亮" class of report): the sweep MASK
+        // itself is the one piece of state every prior dump line was silent about — a mask that
+        // never got assigned, or a gradient parked at full-reveal locations, reads on screen as
+        // "the whole line is lit" with every OTHER field in this dump looking perfectly normal
+        // (opacity 1, string present, not hidden). Print the mask CLASS/frame (confirms it is
+        // actually mounted as `mainBrightTextLayer.mask`, not nil or some stray object) and, when
+        // it is the sweep gradient, its raw `.locations` — the wavefront position IS those
+        // numbers, no separate formula to get out of sync with the real one.
+        if let mask = mainBrightTextLayer.mask {
+            let locationsText = (mask as? CAGradientLayer)?.locations
+                .map { locations in locations.map(\.stringValue).joined(separator: ",") } ?? "n/a"
+            lines.append(
+                "  mainBrightTextLayer.mask class=\(type(of: mask)) frame=\(mask.frame) hidden=\(mask.isHidden) "
+                    + "locations=[\(locationsText)]"
+            )
+        } else {
+            lines.append("  mainBrightTextLayer.mask = nil")
+        }
+        // Per-run (multi-line wrap) sweep mask layers — the mask actually in effect once a line
+        // wraps to 2+ visual rows (`updatePerRunSweepMask`); `lastMainSweepWavefrontX` is the same
+        // per-visual-line wavefront X this file's own sweep math already computes, keyed by
+        // visual-line index, so this reads the SAME number the renderer used, not a re-derivation.
+        for (i, l) in mainPerRunSweepLineLayers.enumerated() where !l.isHidden {
+            let wavefrontX = lastMainSweepWavefrontX[i].map { $0.description } ?? "n/a"
+            lines.append(
+                "  mainPerRunSweepLineLayers[\(i)] frame=\(l.frame) hidden=\(l.isHidden) wavefrontX=\(wavefrontX)"
+            )
+        }
         describe("mainEmphasisLayer", mainEmphasisLayer)
         for (i, l) in mainDimWordGlyphLayers.enumerated() where !l.isHidden {
             describe("mainDimWordGlyphLayers[\(i)]", l)
         }
         for (i, l) in mainBrightWordGlyphLayers.enumerated() where !l.isHidden {
             describe("mainBrightWordGlyphLayers[\(i)]", l)
+            // Every bright word-glyph tile's OWN mask — these are expected to always be nil (the
+            // per-glyph pipeline positions/hides tiles directly, it never masks them), so a
+            // non-nil entry here is itself the anomaly a future "整行全亮" report would need.
+            let tileMaskText = l.mask.map { "class=\(type(of: $0)) frame=\($0.frame)" } ?? "nil"
+            lines.append("  mainBrightWordGlyphLayers[\(i)].mask = \(tileMaskText)")
         }
         for (i, l) in emphasisGlyphLayers.enumerated() where !l.isHidden {
             describe("emphasisGlyphLayers[\(i)](legacy-current-arm)", l)

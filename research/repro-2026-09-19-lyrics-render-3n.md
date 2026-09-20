@@ -258,6 +258,20 @@ deferred-deactivation 淡出」的信号，本次范围外）——**这条需�
 
 ## 追加任务 B：rowdump 加 mask 层信息
 
-见对应 commit（`NativeLyricsRowDump.swift`）——为 `mainBrightTextLayer` 的 mask 层
-（类名/frame/若为 sweep mask 的当前 wavefront x 与进度）和每个 bright 字块自身的 mask
-状态各加一行 dump 输出，供下次「整行全亮」类现场直接读 mask 状态，不需要再临时加日志。
+`NativeLyricsRowView.rowDumpLines(role:)` 新增三类输出：
+1. `mainBrightTextLayer.mask` 本身——类名、frame、若能转成 `CAGradientLayer` 则打印
+   `.locations`（wavefront 的原始数字，不额外算一遍公式，不会跟真正驱动渲染的那份算法
+   打架）；mask 为 nil 时明确打印 `mask = nil`。
+2. 每个可见的 `mainPerRunSweepLineLayers[i]`（多行换行后的逐行 sweep mask）——frame +
+   `lastMainSweepWavefrontX[i]`（同一份渲染器自己用的 wavefront 值，非重新推导）。
+3. 每个可见 `mainBrightWordGlyphLayers[i]` 自身的 `.mask`——预期恒为 nil（逐字管线从不
+   给单字块加 mask），非 nil 本身就是异常信号。
+
+新增 `Tests/MusicMiniPlayerTests/NativeLyricsRowDumpMaskInfoTests.swift`：真
+`NativeLyricsRowView`，断言 dump 文本包含 `mainBrightTextLayer.mask` 与逐字块 `.mask`
+输出行。回归：`NativeLyricsRowDumpMaskInfoTests`、`LyricsRenderDefects20260918RowDumpTests`、
+`NativeLyricsCJKTrailingGhostExhaustiveTests` 全绿。
+
+**顺带发现、未修**：`NativeLyricsTrailingLineWidthRaceTests.test_reconfigureAtNarrowerWidthWithoutLayoutPass_dimBaseWrapsButBrightGlyphsDoNot`
+在本次任何改动之前（`git stash` 隔离到本 commit 之前的状态验证）已经是红的，属预存失败
+非本次回归，未顺手修（任务范围外，超出「暗底不动/亮字淡出」与「地板重置」两个主题）。
