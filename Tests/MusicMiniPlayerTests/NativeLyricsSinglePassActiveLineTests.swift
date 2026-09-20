@@ -73,7 +73,7 @@ final class NativeLyricsSinglePassActiveLineTests: XCTestCase {
     }
 
     /// Renders a layer into a grayscale luminance grid (top-left origin).
-    private func luminance(of layer: CALayer) -> [[CGFloat]] {
+    func luminance(of layer: CALayer) -> [[CGFloat]] {
         let w = Int(layer.bounds.width.rounded(.up)), h = Int(layer.bounds.height.rounded(.up))
         guard w > 0, h > 0,
               let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
@@ -157,5 +157,42 @@ final class NativeLyricsSinglePassActiveLineTests: XCTestCase {
         for i in 0..<6 { tick(4.2 + TimeInterval(i) * step, current: 1) }
         XCTAssertTrue(active.activeLineDrawLayer.isHidden)
         XCTAssertFalse(active.debugMainTextLayerHidden)
+    }
+}
+
+extension NativeLyricsSinglePassActiveLineTests {
+    /// The float must move ink FRACTIONALLY between frames (no whole-pixel snapping): render the
+    /// same run at floatY 0 and −0.5 and require the ink centroid to move by about half a pixel
+    /// at 1× scale — neither 0 (snapped, invisible) nor 1 (snapped, a full-pixel jump).
+    @MainActor
+    func test_fractionalFloat_movesInkFractionally_noPixelSnapping() {
+        // Host under a flipped view exactly like the row view does, so CA hands draw(in:) the
+        // same (flipped) context orientation the device path gets.
+        final class FlippedHost: NSView { override var isFlipped: Bool { true } }
+        let hostView = FlippedHost(frame: NSRect(x: 0, y: 0, width: 200, height: 40))
+        hostView.wantsLayer = true
+        host(hostView, NSSize(width: 200, height: 40))
+        let layer = NativeLyricsActiveLineDrawLayer()
+        layer.contentsScale = 1
+        layer.frame = CGRect(x: 0, y: 0, width: 200, height: 40)
+        hostView.layer?.addSublayer(layer)
+        layer.prepareLayout(text: "hello", width: 200, fontSize: 24)
+        func centroidY(floatY: CGFloat) -> CGFloat {
+            layer.update(.init(
+                runs: [.init(lineIndex: 0, charRange: NSRange(location: 0, length: 5), rect: CGRect(x: 0, y: 0, width: 60, height: 30),
+                             floatY: floatY, isEmphasis: false, scale: 1, liftY: 0, glowOpacity: 0, glowRadius: 0)],
+                lines: [.init(maskRect: CGRect(x: -20, y: 0, width: 240, height: 40), wavefrontX: -100)],
+                dimAlpha: 1, brightAlpha: 1, fadeHalfPoint: 12))
+            layer.displayIfNeeded()
+            let lum = luminance(of: layer)
+            var s: CGFloat = 0, n: CGFloat = 0
+            for (y, row) in lum.enumerated() { for v in row { s += CGFloat(y) * v; n += v } }
+            return n > 0 ? s / n : -1
+        }
+        let a = centroidY(floatY: 0), b = centroidY(floatY: -0.5)
+        XCTAssertGreaterThan(a, 0)
+        let delta = a - b
+        XCTAssertGreaterThan(delta, 0.2, "ink did not move for a 0.5pt float (snapped)")
+        XCTAssertLessThan(delta, 0.8, "ink moved a whole pixel for a 0.5pt float (quantized)")
     }
 }
