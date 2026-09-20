@@ -352,9 +352,39 @@ enum NativeLyricsMaskTrace {
         lastPositionKey = ""
         lastWordFloatDesyncKey = ""
         lock.unlock()
+        tickLock.lock()
+        tickAggCount = 0
+        tickAggDtSum = 0
+        tickAggDtMax = 0
+        tickAggPhaseSums.removeAll()
+        tickLock.unlock()
+        resetArmedForTesting()
     }
 
+    // 2026-09-20 (stage bundle 3r): `isArmed` was re-reading `UserDefaults.standard.bool` on
+    // EVERY call — recordTick once per frame plus recordRowPosition per row per frame — which
+    // is itself a hot-path cost even in the (overwhelmingly common) disarmed case, since
+    // `UserDefaults` synchronizes through a lock. Compute the answer once per process and cache
+    // it; `resetArmedForTesting()` clears the cache so a test that flips the UserDefaults key
+    // between setUp/tearDown observes the new value on its next call.
+    private static let armedLock = NSLock()
+    private static var cachedArmed: Bool?
+
     private static var isArmed: Bool {
+        armedLock.lock()
+        if let cached = cachedArmed {
+            armedLock.unlock()
+            return cached
+        }
+        armedLock.unlock()
+        let computed = computeArmed()
+        armedLock.lock()
+        cachedArmed = computed
+        armedLock.unlock()
+        return computed
+    }
+
+    private static func computeArmed() -> Bool {
         if UserDefaults.standard.bool(forKey: userDefaultsKey) { return true }
         #if DEBUG || LOCAL_DEVELOPER_BUILD
         if ProcessInfo.processInfo.environment["NANOPOD_MASK_TRACE"] == "1" { return true }
@@ -366,6 +396,15 @@ enum NativeLyricsMaskTrace {
         #else
         return false
         #endif
+    }
+
+    /// Test-only: drops the cached armed decision so the next `isArmed` call re-reads
+    /// UserDefaults/environment. `resetForTesting()` calls this too so existing test setUp/
+    /// tearDown pairs (which flip the UserDefaults key per test) keep working unchanged.
+    static func resetArmedForTesting() {
+        armedLock.lock()
+        cachedArmed = nil
+        armedLock.unlock()
     }
 
     // 2026-09-18 addition (stage bundle 3g item 2, research/repro-2026-09-18-lyrics-render-3g.md):
@@ -418,7 +457,32 @@ enum NativeLyricsMaskTrace {
     /// Instrumentation only; does not read or alter any positioning/rasterization decision.
     private static var lastPositionKey: String = ""
 
-    /// Frame-cost probe (2026-09-20): one line per presentation tick while armed. `dtMs` is the
+    // 2026-09-20 (stage bundle 3r): `recordTick` used to write ONE `tick` event line per
+    // presentation tick unconditionally — 209,673 lines across a 200s founder session (120Hz *
+    // 200s ≈ 24000 actual ticks measured, but every one of them formatted + enqueued a line
+    // regardless of whether anything happened). A line-level (no syllable) song spends the
+    // overwhelming majority of its ticks completely idle between line switches: nothing to
+    // report. Only two cases are worth a full `tick` line:
+    //   - a line switch (`activeBefore != activeAfter`)
+    //   - a real hitch (`dtMs` over `tickHitchThresholdMs`)
+    // Every OTHER tick still needs to be visible in the trace for cost accounting, so it folds
+    // into a cheap running aggregate (count/sum/max dt + per-phase sums) that gets flushed as
+    // ONE `tick_summary` line every `tickAggregateFlushEvery` ticks — the analysis scripts that
+    // computed "phase totals over 200s" from summed `dt_ms`/`phases` fields can sum the
+    // `tick_summary` lines instead of every individual `tick` line. Field names on the `tick`
+    // event itself are unchanged so any script that greps for `"event":"tick"` still parses the
+    // (now rarer) lines it does see.
+    private static let tickHitchThresholdMs = 4.0
+    private static let tickAggregateFlushEvery = 600
+    private static let tickLock = NSLock()
+    private static var tickAggCount = 0
+    private static var tickAggDtSum: Double = 0
+    private static var tickAggDtMax: Double = 0
+    private static var tickAggPhaseSums: [String: Double] = [:]
+
+    /// Frame-cost probe (2026-09-20): records a `tick` line only on a line switch or a real
+    /// hitch (>`tickHitchThresholdMs`); every other tick is folded into a running aggregate
+    /// flushed as one `tick_summary` line every `tickAggregateFlushEvery` ticks. `dtMs` is the
     /// main-thread time spent inside the tick; `intervalMs` the display link interval.
     static func recordTick(
         dtMs: Double,
@@ -429,13 +493,44 @@ enum NativeLyricsMaskTrace {
         phases: [String: Double] = [:]
     ) {
         guard isArmed else { return }
-        let wall = Date().timeIntervalSince1970
-        let phaseText = phases.map { "\"\($0.key)\":\(String(format: "%.2f", $0.value))" }.sorted().joined(separator: ",")
-        let line = String(
-            format: "{\"event\":\"tick\",\"wall\":%.3f,\"dt_ms\":%.2f,\"interval_ms\":%.2f,\"activeBefore\":%d,\"activeAfter\":%d,\"mountedRows\":%d,\"phases\":{%@}}\n",
-            wall, dtMs, intervalMs, activeBefore ?? -1, activeAfter ?? -1, mountedRows, phaseText
-        )
-        enqueue(line)
+        let didSwitch = activeBefore != activeAfter
+        let isHitch = dtMs > tickHitchThresholdMs
+
+        if didSwitch || isHitch {
+            let wall = Date().timeIntervalSince1970
+            let phaseText = phases.map { "\"\($0.key)\":\(String(format: "%.2f", $0.value))" }.sorted().joined(separator: ",")
+            let line = String(
+                format: "{\"event\":\"tick\",\"wall\":%.3f,\"dt_ms\":%.2f,\"interval_ms\":%.2f,\"activeBefore\":%d,\"activeAfter\":%d,\"mountedRows\":%d,\"phases\":{%@}}\n",
+                wall, dtMs, intervalMs, activeBefore ?? -1, activeAfter ?? -1, mountedRows, phaseText
+            )
+            enqueue(line)
+        }
+
+        var summaryLine: String?
+        tickLock.lock()
+        tickAggCount += 1
+        tickAggDtSum += dtMs
+        if dtMs > tickAggDtMax { tickAggDtMax = dtMs }
+        for (key, value) in phases {
+            tickAggPhaseSums[key, default: 0] += value
+        }
+        if tickAggCount >= tickAggregateFlushEvery {
+            let wall = Date().timeIntervalSince1970
+            let phaseText = tickAggPhaseSums.map { "\"\($0.key)\":\(String(format: "%.2f", $0.value))" }.sorted().joined(separator: ",")
+            summaryLine = String(
+                format: "{\"event\":\"tick_summary\",\"wall\":%.3f,\"count\":%d,\"dt_ms_sum\":%.2f,\"dt_ms_max\":%.2f,\"phases\":{%@}}\n",
+                wall, tickAggCount, tickAggDtSum, tickAggDtMax, phaseText
+            )
+            tickAggCount = 0
+            tickAggDtSum = 0
+            tickAggDtMax = 0
+            tickAggPhaseSums.removeAll()
+        }
+        tickLock.unlock()
+
+        if let summaryLine {
+            enqueue(summaryLine)
+        }
     }
 
     static func recordRowPosition(
