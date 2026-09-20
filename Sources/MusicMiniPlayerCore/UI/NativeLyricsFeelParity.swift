@@ -36,7 +36,9 @@ public enum NativeLyricsFeelParity {
     public static var activeLineRenderer: ActiveLineRenderer {
         #if DEBUG
         if let testingActiveLine { return testingActiveLine }
-        if isRunningTests { return .tiles }
+        // Tile-era unit tests observe per-glyph tiles directly; they keep that path unless a test
+        // opts into single-pass explicitly (NativeLyricsSinglePassActiveLineTests).
+        if isRunningTests || NSClassFromString("XCTestCase") != nil { return .tiles }
         #endif
         return ActiveLineRenderer.resolve(from: UserDefaults.standard.string(forKey: activeLineDefaultsKey))
     }

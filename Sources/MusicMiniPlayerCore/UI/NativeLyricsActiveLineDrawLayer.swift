@@ -9,7 +9,7 @@ import QuartzCore
 /// No per-glyph tiles, no hollowed base string, no mask sublayers, no second font resolution:
 /// there is exactly one glyph geometry, so nothing can double, drift, or hand off between layers.
 final class NativeLyricsActiveLineDrawLayer: CALayer {
-    struct RunInput {
+    struct RunInput: Equatable {
         let lineIndex: Int
         let charRange: NSRange
         let rect: CGRect
@@ -20,11 +20,11 @@ final class NativeLyricsActiveLineDrawLayer: CALayer {
         let glowOpacity: CGFloat
         let glowRadius: CGFloat
     }
-    struct LineInput {
+    struct LineInput: Equatable {
         let maskRect: CGRect
         let wavefrontX: CGFloat
     }
-    struct FrameInput {
+    struct FrameInput: Equatable {
         let runs: [RunInput]
         let lines: [LineInput]
         let dimAlpha: CGFloat
@@ -82,6 +82,9 @@ final class NativeLyricsActiveLineDrawLayer: CALayer {
     }
 
     func update(_ input: FrameInput) {
+        // Redraw only when something visible changed (a held float + unchanged wavefront is a
+        // no-op frame); the compositor keeps the last bitmap.
+        guard frameInput != input else { return }
         frameInput = input
         setNeedsDisplay()
     }
@@ -103,6 +106,13 @@ final class NativeLyricsActiveLineDrawLayer: CALayer {
         ctx.setAllowsFontSmoothing(true)
         ctx.setShouldAntialias(true)
         ctx.setAllowsAntialiasing(true)
+        // v2.8 drew with `.disablesSubpixelQuantization`: glyph origins must NOT snap to whole
+        // pixels, otherwise a 2pt float rendered over ~60 frames steps one pixel at a time
+        // (founder: "每一行都是抖的"). Fractional positioning keeps the float continuous.
+        ctx.setAllowsFontSubpixelPositioning(true)
+        ctx.setShouldSubpixelPositionFonts(true)
+        ctx.setAllowsFontSubpixelQuantization(false)
+        ctx.setShouldSubpixelQuantizeFonts(false)
 
         func glyphRange(_ run: RunInput) -> NSRange {
             layoutManager.glyphRange(forCharacterRange: run.charRange, actualCharacterRange: nil)
