@@ -418,6 +418,24 @@ enum NativeLyricsMaskTrace {
     /// Instrumentation only; does not read or alter any positioning/rasterization decision.
     private static var lastPositionKey: String = ""
 
+    /// Frame-cost probe (2026-09-20): one line per presentation tick while armed. `dtMs` is the
+    /// main-thread time spent inside the tick; `intervalMs` the display link interval.
+    static func recordTick(
+        dtMs: Double,
+        intervalMs: Double,
+        activeBefore: Int?,
+        activeAfter: Int?,
+        mountedRows: Int
+    ) {
+        guard isArmed else { return }
+        let wall = Date().timeIntervalSince1970
+        let line = String(
+            format: "{\"event\":\"tick\",\"wall\":%.3f,\"dt_ms\":%.2f,\"interval_ms\":%.2f,\"activeBefore\":%d,\"activeAfter\":%d,\"mountedRows\":%d}\n",
+            wall, dtMs, intervalMs, activeBefore ?? -1, activeAfter ?? -1, mountedRows
+        )
+        enqueue(line)
+    }
+
     static func recordRowPosition(
         rowID: String,
         role: String,

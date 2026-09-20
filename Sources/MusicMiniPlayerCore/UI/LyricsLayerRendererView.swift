@@ -375,45 +375,22 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     // and this function does no I/O of its own — `LyricsLayerRendererView.dumpActiveRows`
     // wires it to a file write only when the URL handler invokes it.
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 2026-09-19 coordinator follow-up: the original dump only ever looked at the active row and
-    // the one immediately before it — a real-device "blurred duplicate ~10pt below 未来的旅程"
-    // report has NO reason to live in either of those two rows; it could be ANY mounted row whose
-    // own frame happens to sit close enough to the active row's to visually read as "attached to
-    // it". Expand coverage to: active, previous(-1), next(+1) (unconditionally, since those are
-    // the structurally adjacent rows every prior dump already implicitly assumed were "enough"),
-    // PLUS every other currently-mounted row whose FRAME vertically intersects the active row's
-    // frame expanded by ±40pt — a blurred copy sitting a few points off the active line's own
-    // frame is exactly the shape this catches that a fixed "active + previous" pair cannot.
     func rowDumpLines() -> [String] {
         guard let activeIndex = nativeSemanticCurrentIndex else {
             return ["(no active row — nothing playing)"]
         }
         var lines: [String] = []
-        var describedIndices: Set<Int> = []
-        func describe(index: Int, role: String) {
-            guard !describedIndices.contains(index) else { return }
-            describedIndices.insert(index)
-            if let id = rowIDByIndex[index], let view = rowViews[id] {
-                lines += view.rowDumpLines(role: role)
-            } else {
-                lines.append("\(role) idx=\(index) not mounted")
-            }
-        }
-        describe(index: activeIndex, role: "active(idx=\(activeIndex))")
-        if activeIndex - 1 >= 0 {
-            describe(index: activeIndex - 1, role: "previous(idx=\(activeIndex - 1))")
-        }
-        describe(index: activeIndex + 1, role: "next(idx=\(activeIndex + 1))")
         if let activeID = rowIDByIndex[activeIndex], let activeView = rowViews[activeID] {
-            let expandedActiveVerticalRange = (activeView.frame.minY - 40)...(activeView.frame.maxY + 40)
-            let nearbyIndices = rowIDByIndex.keys
-                .filter { !describedIndices.contains($0) }
-                .sorted()
-            for index in nearbyIndices {
-                guard let id = rowIDByIndex[index], let view = rowViews[id] else { continue }
-                let rowVerticalRange = view.frame.minY...view.frame.maxY
-                guard rowVerticalRange.overlaps(expandedActiveVerticalRange) else { continue }
-                describe(index: index, role: "nearby(idx=\(index),±40pt-overlap)")
+            lines += activeView.rowDumpLines(role: "active(idx=\(activeIndex))")
+        } else {
+            lines.append("active row idx=\(activeIndex) not mounted")
+        }
+        let previousIndex = activeIndex - 1
+        if previousIndex >= 0 {
+            if let prevID = rowIDByIndex[previousIndex], let prevView = rowViews[prevID] {
+                lines += prevView.rowDumpLines(role: "previous(idx=\(previousIndex))")
+            } else {
+                lines.append("previous row idx=\(previousIndex) not mounted")
             }
         }
         return lines
@@ -1960,26 +1937,14 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
                 changed = true
             } else if snap {
                 let before = visualStates[row.index]
-                let wasActive = before?.target.isActive ?? false
                 visualStates[row.index]?.snap(to: target)
                 changed = changed || before != visualStates[row.index]
-                if wasActive && !target.isActive {
-                    rowViews[row.id]?.collapseWordFloatForDeactivation()
-                }
             } else {
                 let wasActive = visualStates[row.index]?.target.isActive ?? false
                 let isNowActive = target.isActive
                 if wasActive != isNowActive {
                     visualStates[row.index]?.quickRetarget(to: target)
                     changed = true
-                    // 2026-09-19 post-3o: the row's word-float geometry and tile visibility must
-                    // collapse to rest in the EXACT SAME FRAME this visual target flips inactive
-                    // — the same frame `quickRetarget` kicks the scale/blur/opacity spring toward
-                    // its new (receded) target — so that much larger motion masks the ~2pt float
-                    // release instead of trailing it via a separate clock (research/repro-2026-09-20-lyrics-render-3p.md).
-                    if wasActive && !isNowActive {
-                        rowViews[row.id]?.collapseWordFloatForDeactivation()
-                    }
                 } else {
                     changed = visualStates[row.index]?.setTarget(target) == true || changed
                 }

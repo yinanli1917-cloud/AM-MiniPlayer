@@ -856,10 +856,6 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
         view.frame = NSRect(x: 0, y: 0, width: 300, height: view.measuredHeight(width: 300))
         view.layoutSubtreeIfNeeded()
         _ = view.updatePlaybackPhase(configuration: cfg)
-        // 2026-09-20 (3q): record() now only appends to an in-memory buffer on the caller's
-        // thread — a background queue owns the actual file I/O. Block until that buffer is
-        // drained before asserting on the file.
-        NativeLyricsMaskTrace.flushForTesting()
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: Self.maskTraceOutputPath),
             "arming via UserDefaults should have made NativeLyricsMaskTrace write its output file")
@@ -894,7 +890,6 @@ final class LyricsRenderDefects20260914ReproTests: XCTestCase {
         view.frame = NSRect(x: 0, y: 0, width: 300, height: view.measuredHeight(width: 300))
         view.layoutSubtreeIfNeeded()
         _ = view.updatePlaybackPhase(configuration: cfg)
-        NativeLyricsMaskTrace.flushForTesting()
 
         // Without LOCAL_DEVELOPER_BUILD/NANOPOD_MASK_TRACE/UserDefaults, nothing should be
         // written — this test runs in a DEBUG test build, so NANOPOD_MASK_TRACE could still arm

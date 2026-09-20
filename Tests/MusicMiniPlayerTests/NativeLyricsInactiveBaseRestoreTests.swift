@@ -96,13 +96,8 @@ final class NativeLyricsInactiveBaseRestoreTests: XCTestCase {
         // string (pass 1); only the bright overlay is per-glyph. The old native
         // path niled the string — that was the activation 行距 jump.
         _ = view.updatePlaybackPhase(configuration: cfg)
-        // Stage bundle 3m: the default `keepWholeLineDim` active path now paints the whole-line
-        // dim base from `mainUnifiedDimDrawLayer` (drawGlyphs against the SAME NSLayoutManager
-        // that positions the per-glyph tiles) instead of keeping the text on
-        // `mainTextLayer.string` — `debugMainTextLayerString` being nil here is expected, not a
-        // regression; `debugWholeLineDimBaseIsRendering` is the mechanism-agnostic check.
-        XCTAssertTrue(view.debugWholeLineDimBaseIsRendering,
-                     "activation must keep the whole-line dim base")
+        XCTAssertNotNil(view.debugMainTextLayerString,
+                        "activation must keep the whole-line dim base")
         XCTAssertEqual(view.debugVisibleDimWordGlyphCount, 0,
                        "dim tiles stay hidden on the shipping Canvas-aligned path")
 

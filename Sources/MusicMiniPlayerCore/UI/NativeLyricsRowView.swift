@@ -15,12 +15,6 @@ final class NativeLyricsRowView: NSView {
 
     private let backgroundLayer = CALayer().lyricsInert()
     private let mainTextLayer = CATextLayer().lyricsInert()
-    /// Stage bundle 3m: sublayer of `mainTextLayer` (inherits its 0.35-compensated opacity via
-    /// group opacity, exactly like the existing dim word-glyph tiles) that paints the ACTIVE row's
-    /// whole-line dim base via the SAME `NSLayoutManager` used to position the per-glyph tiles,
-    /// instead of `mainTextLayer`'s own independent CATextLayer string-wrap. Only shown while a
-    /// row is in the per-run-sweep active path; `mainTextLayer.string` stays nil while it draws.
-    private let mainUnifiedDimDrawLayer = NativeLyricsUnifiedDimDrawLayer().lyricsInert()
     private let mainBrightTextLayer = CATextLayer().lyricsInert()
     private let mainBaseRevealMaskLayer = CALayer().lyricsInert()
     private let mainSweepMaskLayer = CAGradientLayer().lyricsInert()
@@ -48,12 +42,6 @@ final class NativeLyricsRowView: NSView {
     private var mainBaseRevealLineLayers: [NativeLyricsSweepMaskLineLayer] = []
     private var cachedMainSweepLayoutKey: SweepLayoutCacheKey?
     private var cachedMainSweepLinePlan: [NativeLyricsTextSweepVisualLinePlan] = []
-    /// Stage bundle 3m: the SAME `NSLayoutManager`/`NSTextContainer`/`NSTextStorage` triple that
-    /// produced `cachedMainSweepLinePlan`'s glyph rects — kept alive so the active row's dim base
-    /// can be drawn from it directly (`NativeLyricsUnifiedDimDrawLayer`) instead of a second,
-    /// independently-built CATextLayer wrap. Recomputed in lockstep with the sweep plan (same
-    /// cache key), never separately.
-    private var cachedMainUnifiedBuild: NativeLyricsUnifiedTextBuild?
     private var cachedTextGlyphGeometryBounds: CGRect?
     private var cachedTextGlyphGeometryMetrics: TextGlyphGeometryMetrics?
     private var cachedTranslationSweepLayoutKey: TranslationSweepLayoutCacheKey?
@@ -77,7 +65,7 @@ final class NativeLyricsRowView: NSView {
     // Sweep-ghost fix (2026-09-12): mirrors activeHiddenEmphasisSignature but tracks which
     // NON-emphasis word orders are currently blanked out of the whole-line dim base because
     // they are floating (see applyFloatingHiddenBase / applyMainWordFloatGlyphLayers).
-    private var activeUnifiedBlankedSignature: String?
+    private var activeFloatingHiddenSignature: String?
     // v2.8 per-word cascade: non-emphasis words render as per-glyph layers so each WORD can float by
     // its own baseFloatY (rolling rise), while brightness still comes from the shared sweep mask. The
     // dim glyphs parent to mainTextLayer (always visible), the bright glyphs to mainBrightTextLayer
@@ -221,16 +209,26 @@ final class NativeLyricsRowView: NSView {
         }
     }
 
-    /// 2026-09-20 (3p root-cause fix, research/repro-2026-09-20-lyrics-render-3p.md): resolve the
-    /// SAME concrete font `NSLayoutManager` already committed to for this exact character in the
-    /// shared unified layout (`cachedMainUnifiedBuild.textStorage`), instead of independently
-    /// re-deriving a generic system font that AppKit's own Han-fallback resolution can (and on
-    /// CJK real-device content, does) land on a different concrete variant than the SAME nominal
-    /// font resolves to when handed to a layout manager laying out the whole line. Falls back to
-    /// the plain system font only when the shared layout is unavailable (e.g. a stale/lifecycle
-    /// edge before the row's first `configure()`), never as the normal path.
-    private func resolvedGlyphFont(characterIndex: Int, fallbackSize: CGFloat) -> NSFont {
-        if let storage = cachedMainUnifiedBuild?.textStorage,
+    /// 2026-09-20 (3p root-cause fix, verified on the founder's machine): the per-glyph tiles must
+    /// paint with the SAME concrete font AppKit's layout resolved for that character (CJK fallback
+    /// lands on `.PingFangUIDisplaySC-Semibold`), not the generic system font, or the bright
+    /// outline never coincides with the dim outline beneath it (persistent double edge on every
+    /// swept glyph). `NSTextStorage.fixAttributes` performs exactly that font substitution and
+    /// writes the resolved font back into the attribute; cached per (text, size) per row.
+    private var resolvedFontStorageKey: String?
+    private var resolvedFontStorage: NSTextStorage?
+    private func resolvedGlyphFont(text: String, characterIndex: Int, fallbackSize: CGFloat) -> NSFont {
+        let key = "\(fallbackSize)|\(text)"
+        if resolvedFontStorageKey != key {
+            let storage = NSTextStorage(
+                string: text,
+                attributes: [.font: NSFont.systemFont(ofSize: fallbackSize, weight: .semibold)]
+            )
+            storage.fixAttributes(in: NSRange(location: 0, length: storage.length))
+            resolvedFontStorage = storage
+            resolvedFontStorageKey = key
+        }
+        if let storage = resolvedFontStorage,
            characterIndex >= 0, characterIndex < storage.length,
            let font = storage.attribute(.font, at: characterIndex, effectiveRange: nil) as? NSFont {
             return font
@@ -263,8 +261,6 @@ final class NativeLyricsRowView: NSView {
             mainPostLineFadeFloor = 1
             translationPostLineFadeFloor = 1
             mainWasTextActiveLastPhase = false
-            mainWordFloatFloor.removeAll()
-            mainWordFloatReturnFloor = 1
         }
         self.row = row
         self.configuration = configuration
@@ -306,17 +302,6 @@ final class NativeLyricsRowView: NSView {
     private var translationDeactivationOverlayBaseline: Float?
     private var parkedMainBrightOpacity: Float?
     private var parkedTranslationBrightOpacity: Float?
-    // 2026-09-19 real-device rowdump ("未来的旅程"): the four methods above (freeze/begin/update/
-    // end) were written when the karaoke overlay was ALWAYS `mainBrightTextLayer` — but for any
-    // hasSyllableSync line (the common case) that layer's `.string` is nilled out and the ACTUAL
-    // visible ink is the per-glyph tile pool (`mainBrightWordGlyphLayers`, `applyMainWordFloat-
-    // GlyphLayers`). Freezing/fading only the (invisible, stringless) whole-line layer left the
-    // per-glyph tiles fully lit and un-managed until `finalizeDeactivationState` hard-hid them —
-    // the exact "swept words drop 2pt in one frame" shape from the rowdump. This baseline mirrors
-    // `parkedMainBrightOpacity`/`mainDeactivationOverlayBaseline` for the glyph tile pool so it
-    // fades in the SAME step as the row's own opacity recede, never snaps.
-    private var parkedMainWordGlyphOpacity: Float?
-    private var mainWordGlyphDeactivationOverlayBaseline: Float?
 
     // ───────────────────────────────────────────────────────────────────────────
     // Monotonic post-line karaoke fade floor. postLineFadeOut is a pure function of
@@ -328,41 +313,6 @@ final class NativeLyricsRowView: NSView {
     // ───────────────────────────────────────────────────────────────────────────
     private var mainPostLineFadeFloor: CGFloat = 1
     private var translationPostLineFadeFloor: CGFloat = 1
-
-    // ───────────────────────────────────────────────────────────────────────────
-    // Monotonic per-word sweep-float floor (contract lyrics-ux-contract.md line 25/39:
-    // a swept character floats to −2pt over max(1.0s, wordDuration) and HOLDS — it must
-    // never fall back toward its rest position while its line stays active). `baseFloat`
-    // in NativeLyricsTextRenderPlan is a PURE function of `currentTime - word.startTime`;
-    // it is correctly monotonic for a strictly-increasing clock, but `updatePlaybackPhase`
-    // reads the raw render clock (see `mainPostLineFadeFloor` above for the same class of
-    // bug on the fade), so a backward poll-resync/drift-correction tick shrinks `elapsed`
-    // and RAISES `baseFloatY` back toward 0 for a frame — the swept word visibly rises then
-    // drops back before continuing, most noticeable on longer multi-character runs (founder
-    // report, "未来的旅程" 2026-09-19: floats up, drops back, unlike shorter neighbouring
-    // words where the same dip is imperceptible). Keyed by word order (not word identity) so
-    // it naturally spans this row's ENTIRE current line; reset alongside `mainPostLineFadeFloor`
-    // on every trigger that also re-arms that floor (line change / seek discontinuity /
-    // activation edge) so a genuinely new line or a real seek starts each word fresh at 0.
-    // ───────────────────────────────────────────────────────────────────────────
-    private var mainWordFloatFloor: [Int: CGFloat] = [:]
-
-    // ───────────────────────────────────────────────────────────────────────────
-    // 2026-09-19 3o (founder-dictated v2.8 restore, "dim 与 bright 一起浮"): once the post-line
-    // BRIGHT fade (`mainPostLineFadeFloor`) has fully bottomed out, this row's still-floating DIM
-    // tiles (see `floatingOrders` in `applyActiveMainPhase`) must not snap back to the whole-line
-    // rest position in the same frame that fade finishes — that INSTANT un-hollow was exactly the
-    // "字慢慢下落" defect (3n's fix addressed the wrong layer: bright opacity, when the actually-
-    // visible geometry jump was the dim tile's position). This floor eases the held float target
-    // (−2pt) back to 0 over its own short window, separate from and AFTER the opacity fade — 1 =
-    // still fully floated (safe to keep hollowed), 0 = returned to rest (safe to un-hollow, same
-    // frame the glyph tiles hide). Approximates the row's own scale-recede spring (1→0.95,
-    // damping 20) with a fixed-duration ease-out on the render clock, since the true spring value
-    // lives one layer up in `LyricsLayerRendererView.visualStates` and plumbing it through here
-    // would introduce a second, independently-driven clock for the same visual event — the exact
-    // "two systems, one drifts" class of bug this codebase's postmortems warn against.
-    // ───────────────────────────────────────────────────────────────────────────
-    private var mainWordFloatReturnFloor: CGFloat = 1
     // Tracks the text-activation state `updatePlaybackPhase` observed LAST TIME it ran on this
     // view (regardless of role/config churn in between) — the activation-edge detector the fade
     // floor reset above relies on. Never true after `prepareForReuse`/a fresh mount, so a
@@ -377,29 +327,17 @@ final class NativeLyricsRowView: NSView {
         if parkedTranslationBrightOpacity == nil {
             parkedTranslationBrightOpacity = translationBrightTextLayer.isHidden ? 0 : translationBrightTextLayer.opacity
         }
-        // Per-glyph tile pool (see the property's doc comment): captured from the first VISIBLE
-        // tile — a hasSyllableSync line's actual on-screen ink — falling back to 1 (fully lit) if
-        // every tile happens to be hidden right when parking begins.
-        if parkedMainWordGlyphOpacity == nil {
-            parkedMainWordGlyphOpacity = mainBrightWordGlyphLayers.first(where: { !$0.isHidden })?.opacity ?? 1
-        }
         if let parkedMainBrightOpacity {
             mainBrightTextLayer.opacity = parkedMainBrightOpacity
         }
         if let parkedTranslationBrightOpacity {
             translationBrightTextLayer.opacity = parkedTranslationBrightOpacity
         }
-        if let parkedMainWordGlyphOpacity {
-            for layer in mainBrightWordGlyphLayers where !layer.isHidden {
-                layer.opacity = parkedMainWordGlyphOpacity
-            }
-        }
     }
 
     func clearParkedTextPhaseOpacity() {
         parkedMainBrightOpacity = nil
         parkedTranslationBrightOpacity = nil
-        parkedMainWordGlyphOpacity = nil
     }
 
     func beginDeactivationFade() {
@@ -407,8 +345,6 @@ final class NativeLyricsRowView: NSView {
             ?? (mainBrightTextLayer.isHidden ? 0 : mainBrightTextLayer.opacity)
         translationDeactivationOverlayBaseline = parkedTranslationBrightOpacity
             ?? (translationBrightTextLayer.isHidden ? 0 : translationBrightTextLayer.opacity)
-        mainWordGlyphDeactivationOverlayBaseline = parkedMainWordGlyphOpacity
-            ?? (mainBrightWordGlyphLayers.first(where: { !$0.isHidden })?.opacity ?? 1)
         clearParkedTextPhaseOpacity()
     }
 
@@ -420,21 +356,11 @@ final class NativeLyricsRowView: NSView {
         if let base = translationDeactivationOverlayBaseline {
             translationBrightTextLayer.opacity = base * f
         }
-        // Same step, same baseline mechanism, applied to the per-glyph tiles that are the line's
-        // ACTUAL visible ink for a hasSyllableSync row — this is the fix for the rowdump-evidenced
-        // 2pt hard drop: the tiles now fade to invisible smoothly instead of staying fully lit
-        // until `finalizeDeactivationState` hides them outright.
-        if let base = mainWordGlyphDeactivationOverlayBaseline {
-            for layer in mainBrightWordGlyphLayers where !layer.isHidden {
-                layer.opacity = base * f
-            }
-        }
     }
 
     func endDeactivationFade() {
         mainDeactivationOverlayBaseline = nil
         translationDeactivationOverlayBaseline = nil
-        mainWordGlyphDeactivationOverlayBaseline = nil
         clearParkedTextPhaseOpacity()
         // Restore the resting opacity. updateDeactivationFade scaled the bright overlays toward 0 as
         // the line receded; leaving them at that residual fraction made a still-mounted row relight
@@ -442,9 +368,6 @@ final class NativeLyricsRowView: NSView {
         // value prepareForReuse uses, and updatePlaybackPhase assumes it on re-activation.
         mainBrightTextLayer.opacity = 1
         translationBrightTextLayer.opacity = 1
-        for layer in mainBrightWordGlyphLayers {
-            layer.opacity = 1
-        }
     }
 
     func finalizeDeactivationState(renderTime: TimeInterval) {
@@ -454,32 +377,6 @@ final class NativeLyricsRowView: NSView {
         if let row {
             updateDotsPhase(row: row, currentTime: renderTime)
         }
-    }
-
-    /// 2026-09-19 post-3o correction (founder real-device report: every line visibly sank TWICE
-    /// — once as the karaoke bright overlay's own 1.5s `mainPostLineFadeFloor` fade ran, then
-    /// AGAIN half a second later as 3o's now-deleted `mainWordFloatReturnFloor` timer let the
-    /// float go with nothing else moving on screen to mask the ~2pt drop). The real v2.8
-    /// reference never has an independent float-release clock: the row's word tiles snap to
-    /// static (float 0, tiles hidden, whole-line dim base restored) in the EXACT SAME FRAME its
-    /// `NativeLyricsVisualMotionState` target flips inactive — i.e. the same frame the row's own
-    /// scale (1→0.95) / blur / opacity spring starts retargeting via `quickRetarget`. That much
-    /// larger, already-moving spring is what visually covers the small geometry snap.
-    /// `LyricsLayerRendererView.syncVisualTargets` calls this in lockstep with that exact
-    /// `quickRetarget` call — never on a delay, never eased. See
-    /// research/repro-2026-09-20-lyrics-render-3p.md.
-    func collapseWordFloatForDeactivation() {
-        guard mainWordFloatReturnFloor > 0 || mainPostLineFadeFloor > 0 else { return }
-        mainWordFloatReturnFloor = 0
-        mainPostLineFadeFloor = 0
-        translationPostLineFadeFloor = 0
-        mainWordFloatFloor.removeAll()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        endDeactivationFade()
-        clearSweepState()
-        applyInactivePlaybackLayerState()
-        CATransaction.commit()
     }
 
     override func prepareForReuse() {
@@ -497,13 +394,10 @@ final class NativeLyricsRowView: NSView {
         onTap = nil
         mainDeactivationOverlayBaseline = nil
         translationDeactivationOverlayBaseline = nil
-        mainWordGlyphDeactivationOverlayBaseline = nil
         clearParkedTextPhaseOpacity()
         mainPostLineFadeFloor = 1
         translationPostLineFadeFloor = 1
         mainWasTextActiveLastPhase = false
-        mainWordFloatFloor.removeAll()
-        mainWordFloatReturnFloor = 1
         // Clear the scale/position transform too. layout() re-asserts positioningTransform on every
         // commit; if a recycled row keeps the previous row's scale, the next mount flashes that old
         // size for one frame before applyFrame writes the new scale (the seek size-pop).
@@ -529,7 +423,7 @@ final class NativeLyricsRowView: NSView {
         cachedStaticTextPlan = nil
         lastLineLayoutCacheKey = nil
         activeHiddenEmphasisSignature = nil
-        activeUnifiedBlankedSignature = nil
+        activeFloatingHiddenSignature = nil
         // The base-layer opacity reset below (opacity = 1) is only safe because the
         // compensation flags reset with it — a recycled row must start uncompensated.
         mainDimCompensationActive = false
@@ -551,11 +445,6 @@ final class NativeLyricsRowView: NSView {
             textLayer.shadowOffset = .zero
         }
         mainTextLayer.mask = nil
-        mainUnifiedDimDrawLayer.isHidden = true
-        mainUnifiedDimDrawLayer.textLayoutManager = nil
-        mainUnifiedDimDrawLayer.textContainer = nil
-        mainUnifiedDimDrawLayer.glyphRange = NSRange(location: 0, length: 0)
-        cachedMainUnifiedBuild = nil
         mainBrightTextLayer.mask = mainSweepMaskLayer
         translationBrightTextLayer.mask = translationSweepMaskLayer
         mainSweepMaskLayer.locations = [0, 0, 0, 1]
@@ -753,113 +642,9 @@ final class NativeLyricsRowView: NSView {
         return mainTextLayer.string as? String
     }
 
-    /// Stage bundle 3m: the `NSLayoutManager` `mainUnifiedDimDrawLayer` is CURRENTLY drawing the
-    /// dim base from (nil when inactive / hidden). Compare against
-    /// `debugActiveGlyphTileLayoutManager` by IDENTITY (`===`) — they must be the exact same
-    /// object, not merely matching configuration, for the dim base and the per-glyph tiles to be
-    /// structurally incapable of disagreeing on glyph geometry.
-    var debugActiveDimBaseLayoutManager: NSLayoutManager? {
-        mainUnifiedDimDrawLayer.isHidden ? nil : mainUnifiedDimDrawLayer.textLayoutManager
-    }
-
-    /// The `NSLayoutManager` that produced THIS FRAME's per-glyph tile `rect`s
-    /// (`mainSweepLinePlan`'s cached build) — see `debugActiveDimBaseLayoutManager`.
-    var debugActiveGlyphTileLayoutManager: NSLayoutManager? { cachedMainUnifiedBuild?.layoutManager }
-
-    /// The signature `applyUnifiedDimBase` last painted the whole-line dim base with — encodes
-    /// which word orders (if any) currently have their whole-line ink blanked (hollowed) to make
-    /// way for a per-glyph tile drawn on top. 2026-09-19 fix: ordinary (non-emphasis) words are
-    /// never hollowed any more — only an emphasis word (and, while its scale > 1, its immediate
-    /// neighbour) can appear in the `|float|<orders>` suffix. `nil` means geometry was never
-    /// ready / nothing painted yet.
-    var debugActiveUnifiedBlankedSignature: String? { activeUnifiedBlankedSignature }
-
-    /// Wrap-fragment/glyph-origin snapshot of the row's LIVE active-frame layout (built from the
-    /// same shared object the dim base itself draws from) — see
-    /// `NativeLyricsTextSweepLayout.layoutSnapshot(from:)`. `NativeLyricsActiveLineSpacingTests`
-    /// compares this against a pre-activation baseline in place of the old
-    /// `mainTextLayer.string != nil` mechanism check.
-    var debugActiveLayoutSnapshot: NativeLyricsTextSweepLayout.LayoutSnapshot? {
-        guard cachedMainUnifiedBuild != nil else { return nil }
-        return NativeLyricsTextSweepLayout.layoutSnapshot(from: cachedMainSweepLinePlan)
-    }
-
-    /// True when SOME whole-line dim-base painter is actively showing the row's dim text — either
-    /// `mainTextLayer.string` (inactive rows, and the `layer` A/B arm's own per-glyph path is a
-    /// separate concern not covered by this flag) or `mainUnifiedDimDrawLayer` (stage bundle 3m:
-    /// the default `keepWholeLineDim` active-per-run-sweep path). Tests that only care "is the
-    /// whole-line dim base being rendered at all" (as opposed to "which object renders it") should
-    /// use this instead of reading `debugMainTextLayerString` directly.
-    var debugWholeLineDimBaseIsRendering: Bool {
-        mainTextLayer.string != nil
-            || (!mainUnifiedDimDrawLayer.isHidden && mainUnifiedDimDrawLayer.textLayoutManager != nil)
-    }
-
     var debugMainTextLayerFrame: CGRect { mainTextLayer.frame }
 
     var debugMainTextLayerHidden: Bool { mainTextLayer.isHidden }
-
-    /// Test-facing structured form of `debugPerGlyphAlignmentDump`'s per-glyph row — see that
-    /// function's doc comment for what (a)/(b) mean and why they can legitimately disagree.
-    struct DebugGlyphAlignmentSample {
-        let char: String
-        let tileFrameMinX: CGFloat
-        let layoutManagerX: CGFloat
-        // 2026-09-20 (3p): the tile's OWN `.font` (as actually assigned to the CATextLayer that
-        // paints this glyph) vs the SAME character's font as resolved by the shared
-        // `NSLayoutManager`/`NSTextStorage` — must be equal (see `resolvedGlyphFont`'s doc). A
-        // mismatch here, even with `tileFrameMinX == layoutManagerX` (the advance origin can
-        // agree while the OUTLINE at that origin still differs), is the root cause of the
-        // founder's reported persistent double-edge/ghost on swept CJK glyphs.
-        let tileFontName: String?
-        let resolvedFontName: String?
-    }
-
-    /// Real-layout (no mocking) per-glyph alignment: index-aligned to
-    /// `mainDimWordGlyphLayers`/`mainBrightWordGlyphLayers`. Returns `nil` if this row has no
-    /// active per-glyph sweep laid out (no `cachedMainUnifiedBuild`).
-    var debugGlyphAlignmentSamples: [DebugGlyphAlignmentSample]? {
-        guard let build = cachedMainUnifiedBuild else { return nil }
-        let storage = build.textStorage
-        let fullText = storage.string as NSString
-        guard fullText.length > 0 else { return [] }
-        var samples: [DebugGlyphAlignmentSample] = []
-        var tileIndex = 0
-        for charIndex in 0..<fullText.length {
-            let ch = fullText.substring(with: NSRange(location: charIndex, length: 1))
-            guard !ch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
-            guard tileIndex < mainBrightWordGlyphLayers.count else { break }
-            let brightLayer = mainBrightWordGlyphLayers[tileIndex]
-            var actualCharRange = NSRange(location: NSNotFound, length: 0)
-            let glyphRange = build.layoutManager.glyphRange(
-                forCharacterRange: NSRange(location: charIndex, length: 1),
-                actualCharacterRange: &actualCharRange
-            )
-            var layoutManagerX: CGFloat = .nan
-            if glyphRange.location != NSNotFound, glyphRange.length > 0 {
-                var fragmentRange = NSRange(location: 0, length: 0)
-                let fragmentRect = build.layoutManager.lineFragmentRect(
-                    forGlyphAt: glyphRange.location, effectiveRange: &fragmentRange
-                )
-                let glyphLocation = build.layoutManager.location(forGlyphAt: glyphRange.location)
-                layoutManagerX = fragmentRect.origin.x + glyphLocation.x
-            }
-            let resolvedFontName = (storage.attribute(.font, at: charIndex, effectiveRange: nil) as? NSFont)?.fontName
-            samples.append(DebugGlyphAlignmentSample(
-                char: ch, tileFrameMinX: brightLayer.frame.minX, layoutManagerX: layoutManagerX,
-                tileFontName: (brightLayer.font as? NSFont)?.fontName ?? (brightLayer.font as? String),
-                resolvedFontName: resolvedFontName
-            ))
-            tileIndex += 1
-        }
-        return samples
-    }
-
-    /// 3o red/green tests: the eased 1→0 float-return progress (see `mainWordFloatReturnFloor`'s
-    /// declaration). 1 while the line is active/still bright-fading; eases toward 0 only once this
-    /// row has gone fully inactive; reaching (near) 0 is exactly the frame the per-glyph tiles
-    /// hide and the whole-line dim base un-hollows.
-    var debugMainWordFloatReturnFloor: CGFloat { mainWordFloatReturnFloor }
 
     var debugVisibleDimWordGlyphCount: Int {
         mainDimWordGlyphLayers.filter { !$0.isHidden }.count
@@ -876,34 +661,6 @@ final class NativeLyricsRowView: NSView {
     var debugMainWordGlyphPairs: [(dimPositionY: CGFloat, brightPositionY: CGFloat, dimHidden: Bool)] {
         zip(mainDimWordGlyphLayers, mainBrightWordGlyphLayers).map {
             ($0.position.y, $1.position.y, $0.isHidden)
-        }
-    }
-
-    /// 2026-09-20 (3p): raw layer accessors for rendering-level tests that need to rasterize the
-    /// ACTUAL tile (font/string/bounds all as painted) rather than read a numeric property off it
-    /// — see `NativeLyricsGlyphAlignmentTests`' dim/bright glyph-outline-agreement tests.
-    func debugFirstVisibleMainDimWordGlyphLayer() -> CATextLayer? {
-        mainDimWordGlyphLayers.first { !$0.isHidden }
-    }
-
-    func debugFirstVisibleMainBrightWordGlyphLayer() -> CATextLayer? {
-        mainBrightWordGlyphLayers.first { !$0.isHidden }
-    }
-
-    /// Presentation-vs-model drift diagnostic (research/repro-2026-09-19-lyrics-render-3l.md step
-    /// 3): every renderer-created layer is expected to be `.lyricsInert()` (implicit actions
-    /// killed) AND never carry a resident explicit `CAAnimation` on `position`, so `layer.position`
-    /// (the MODEL value this file assigns every frame) and `layer.presentation()?.position` (what
-    /// the compositor is ACTUALLY drawing, which lags the model while any animation is in flight)
-    /// must be identical every frame. A nonzero delta here — not a difference in the two float
-    /// FORMULAS `NativeLyricsDimBaseFloatGateConsistencyTests` checks — is the CA-level "the number
-    /// is right but the pixel hasn't caught up yet" ghost: a stray implicit action on an ancestor,
-    /// or an explicit spring left running from a superseded code path.
-    var debugMainWordGlyphPresentationDeltas: [(dimDeltaY: CGFloat, brightDeltaY: CGFloat)] {
-        zip(mainDimWordGlyphLayers, mainBrightWordGlyphLayers).map { dim, bright in
-            let dimDelta = abs((dim.presentation()?.position.y ?? dim.position.y) - dim.position.y)
-            let brightDelta = abs((bright.presentation()?.position.y ?? bright.position.y) - bright.position.y)
-            return (dimDelta, brightDelta)
         }
     }
 
@@ -938,16 +695,6 @@ final class NativeLyricsRowView: NSView {
         mainBrightWordGlyphLayers.map(\.shadowOpacity)
     }
 
-    /// Per-glyph bright tile `layer.opacity` (2026-09-19 founder-dictated fix): this now rides
-    /// `mainPostLineFadeFloor` in lockstep with `mainBrightTextLayer.opacity` — reports 1 while a
-    /// word is fully lit/held, ramps down through the post-line fade window, and only the glyph
-    /// itself goes `isHidden` once this reaches ~0. Treats a hidden tile as opacity 0 (matching
-    /// `debugMainBrightOpacity`'s convention) so a caller doesn't have to separately check hidden.
-    var debugMainBrightWordGlyphOpacities: [Float] {
-        mainBrightWordGlyphLayers.map { $0.isHidden ? 0 : $0.opacity }
-    }
-
-
     /// feel/emphasis `amll`: true only if NONE of the glow sibling layers carry a live
     /// `layer.filters` entry — the glow bitmap must be `layer.contents` (a cached, offline-
     /// rendered CGImage), never a resident CIFilter attached to the layer.
@@ -976,20 +723,14 @@ final class NativeLyricsRowView: NSView {
         }
     }
 
-    /// True when the dim base has BLANKED the character range belonging to word `order` — i.e.
-    /// something subtracted it the way `applyUnifiedDimBase` subtracts an ordinary floating word.
-    /// `nil` when there is no attributed content to check or the order is out of range. Character
-    /// offset is derived the same way `NativeLyricsHiddenTextMask.ranges` locates a word's range:
-    /// sequential concatenation of `plan.wordRuns[i].text`.
-    ///
-    /// Stage bundle 3m: `mainTextLayer.string` is nil for the whole active-per-run-sweep duration
-    /// (the dim base paints from `mainUnifiedDimDrawLayer`'s shared `textStorage` instead) — fall
-    /// back to that storage's `.foregroundColor` attribute, the SAME mechanism
-    /// `applyUnifiedDimBase` writes to blank a floating word's ink.
+    /// True when `mainTextLayer.string` (the whole-line dim base) has BLANKED the character range
+    /// belonging to word `order` — i.e. something subtracted it the way `applyFloatingHiddenBase`
+    /// subtracts an ordinary floating word. `nil` when the layer has no attributed string or the
+    /// order is out of range. Character offset is derived the same way
+    /// `NativeLyricsHiddenTextMask.ranges` locates a word's range: sequential concatenation of
+    /// `plan.wordRuns[i].text`.
     func debugMainTextLayerIsWordHidden(order: Int, plan: NativeLyricsTextRenderPlan) -> Bool? {
-        let attributed: NSAttributedString? = (mainTextLayer.string as? NSAttributedString)
-            ?? cachedMainUnifiedBuild?.textStorage as NSAttributedString?
-        guard let attributed else { return nil }
+        guard let attributed = mainTextLayer.string as? NSAttributedString else { return nil }
         guard plan.wordRuns.indices.contains(order) else { return nil }
         var location = 0
         for (index, run) in plan.wordRuns.enumerated() {
@@ -1121,6 +862,7 @@ final class NativeLyricsRowView: NSView {
     /// advance shows whether the recede is monotonic (clean) or has a brighten-then-dim
     /// step (blink).
     var debugMainBrightOpacity: Float { mainBrightTextLayer.isHidden ? 0 : mainBrightTextLayer.opacity }
+    var debugMainBrightWordGlyphOpacities: [Float] { mainBrightWordGlyphLayers.map { $0.isHidden ? 0 : $0.opacity } }
 
     /// The CIGaussianBlur radius actually applied to this row's layer (the depth-of-field blur).
     /// Compiled into every build for the same reason as `debugMainBrightOpacity` above — the
@@ -1143,26 +885,6 @@ final class NativeLyricsRowView: NSView {
         let rowText = row?.displayLine.line.text ?? "?"
         let rowID = row?.displayLine.id ?? "?"
         lines.append("row role=\(role) id=\(rowID) text=\"\(rowText.prefix(12))\"")
-        // 2026-09-19 coordinator follow-up ("未来的旅程" blurred duplicate ~10pt below the
-        // active line): the row ROOT layer's own frame/transform/opacity is the thing the
-        // surface positions every frame (`applyFrame`/`setPositioning`/`setRowOpacity`) — a
-        // duplicate sitting a fixed few points BELOW the real row would most simply be this
-        // row's own root layer landing at the wrong Y (stale presentation transform), not a
-        // sublayer issue at all. Print model AND presentation side by side for the same
-        // model/presentation-timing reason `describe` below does per sublayer.
-        if let rootLayer = layer {
-            let modelTransform = rootLayer.affineTransform()
-            let presentationTransform = rootLayer.presentation()?.affineTransform()
-            let presentationOpacity = rootLayer.presentation()?.opacity
-            lines.append(
-                "  ROOT frame=\(frame) opacity=\(rootLayer.opacity) "
-                    + "presentationOpacity=\(presentationOpacity.map { String($0) } ?? "nil(no-presentation)") "
-                    + "transform=(tx:\(modelTransform.tx) ty:\(modelTransform.ty) "
-                    + "a:\(modelTransform.a) d:\(modelTransform.d)) "
-                    + "presentationTransform=(tx:\(presentationTransform?.tx.description ?? "nil") "
-                    + "ty:\(presentationTransform?.ty.description ?? "nil"))"
-            )
-        }
         func describe(_ label: String, _ layer: CALayer?) {
             guard let layer else { return }
             let string = (layer as? CATextLayer)?.string as? NSAttributedString
@@ -1182,102 +904,22 @@ final class NativeLyricsRowView: NSView {
             let presentationOpacity = layer.presentation()?.opacity
             let presentationOpacityText = presentationOpacity.map { String($0) } ?? "nil(no-presentation)"
             let superlayerName = layer.superlayer.map { "\(type(of: $0))" } ?? "nil"
-            // 2026-09-19 coordinator follow-up: a blurred/rasterized copy is the fingerprint of
-            // EITHER a resident CIFilter (banned-patterns.md's "resident CIGaussianBlur" trap) OR
-            // a stale rasterized bitmap that never got invalidated (`shouldRasterize` +
-            // `rasterizationScale`) — the existing dump had neither, so a filtered/rasterized
-            // duplicate was structurally invisible to it even when mounted and printed.
-            let filtersDescription: String
-            if let filters = layer.filters, !filters.isEmpty {
-                filtersDescription = filters.map { filter -> String in
-                    guard let ciFilter = filter as? CIFilter else { return "\(type(of: filter))" }
-                    let radius = ciFilter.value(forKey: "inputRadius")
-                    return "\(ciFilter.name)(inputRadius:\(radius.map { "\($0)" } ?? "n/a"))"
-                }.joined(separator: ",")
-            } else {
-                filtersDescription = "none"
-            }
             lines.append(
                 "  \(label) class=\(type(of: layer)) frame=\(layer.frame) opacity=\(layer.opacity) "
                     + "presentationOpacity=\(presentationOpacityText) superlayer=\(superlayerName) "
                     + "hidden=\(layer.isHidden) string=\(stringPrefix.map { "\"\($0)\"" } ?? "nil") "
                     + "contentsIsBitmap=\(isBitmapContents) shouldRasterize=\(layer.shouldRasterize) "
-                    + "rasterizationScale=\(layer.rasterizationScale) filters=\(filtersDescription) "
                     + "transform=(a:\(t.a) b:\(t.b) c:\(t.c) d:\(t.d) tx:\(t.tx) ty:\(t.ty))"
             )
         }
         describe("mainTextLayer(dim-base)", mainTextLayer)
-        describe("mainUnifiedDimDrawLayer(dim-base-unified-draw)", mainUnifiedDimDrawLayer)
-        // Stage bundle 3m: the whole-line dim base now paints from `mainUnifiedDimDrawLayer`
-        // (drawGlyphs against the SAME NSLayoutManager that positions the per-glyph tiles) instead
-        // of `mainTextLayer`'s own string — `mainTextLayer.string == nil` for the WHOLE active-
-        // per-run-sweep duration is the expected, correct state (`activeBaseStringEmpty=true`),
-        // not evidence of a bug on its own. A duplicate/ghost report now needs BOTH: this flag
-        // true AND `mainUnifiedDimDrawLayer.isHidden == true` (nothing painting the dim base at
-        // all) — that combination is what "invisible dim base" looks like from this dump.
-        lines.append(
-            "  mainTextLayer(dim-base) activeBaseStringEmpty=\(mainTextLayer.string == nil) "
-                + "unifiedDrawHidden=\(mainUnifiedDimDrawLayer.isHidden)"
-        )
-        // The shared textStorage's per-CHARACTER foreground alpha (which characters are blanked
-        // to make room for a floating word's own tile — see `applyUnifiedDimBase`) is exactly the
-        // state a duplicate/ghost report needs: a character that reads as VISIBLE here (alpha > 0)
-        // while its own word is ALSO floating (a separate bright/dim tile drawn elsewhere) is two
-        // copies of the same glyph on screen at once.
-        if let storage = cachedMainUnifiedBuild?.textStorage, storage.length > 0 {
-            var segments: [String] = []
-            storage.enumerateAttribute(
-                .foregroundColor, in: NSRange(location: 0, length: storage.length)
-            ) { value, range, _ in
-                let alpha = (value as? NSColor)?.alphaComponent ?? 1
-                guard alpha < 0.99 else { return }
-                let text = (storage.string as NSString).substring(with: range)
-                segments.append("\"\(text)\"@\(range)=alpha:\(alpha)")
-            }
-            lines.append(
-                "  mainTextLayer(dim-base) unifiedBlankedRanges=\(segments.isEmpty ? "none" : segments.joined(separator: ","))"
-            )
-        }
         describe("mainBrightTextLayer(line-level-bright)", mainBrightTextLayer)
-        // 2026-09-19 coordinator follow-up (item B, "整行全亮" class of report): the sweep MASK
-        // itself is the one piece of state every prior dump line was silent about — a mask that
-        // never got assigned, or a gradient parked at full-reveal locations, reads on screen as
-        // "the whole line is lit" with every OTHER field in this dump looking perfectly normal
-        // (opacity 1, string present, not hidden). Print the mask CLASS/frame (confirms it is
-        // actually mounted as `mainBrightTextLayer.mask`, not nil or some stray object) and, when
-        // it is the sweep gradient, its raw `.locations` — the wavefront position IS those
-        // numbers, no separate formula to get out of sync with the real one.
-        if let mask = mainBrightTextLayer.mask {
-            let locationsText = (mask as? CAGradientLayer)?.locations
-                .map { locations in locations.map(\.stringValue).joined(separator: ",") } ?? "n/a"
-            lines.append(
-                "  mainBrightTextLayer.mask class=\(type(of: mask)) frame=\(mask.frame) hidden=\(mask.isHidden) "
-                    + "locations=[\(locationsText)]"
-            )
-        } else {
-            lines.append("  mainBrightTextLayer.mask = nil")
-        }
-        // Per-run (multi-line wrap) sweep mask layers — the mask actually in effect once a line
-        // wraps to 2+ visual rows (`updatePerRunSweepMask`); `lastMainSweepWavefrontX` is the same
-        // per-visual-line wavefront X this file's own sweep math already computes, keyed by
-        // visual-line index, so this reads the SAME number the renderer used, not a re-derivation.
-        for (i, l) in mainPerRunSweepLineLayers.enumerated() where !l.isHidden {
-            let wavefrontX = lastMainSweepWavefrontX[i].map { $0.description } ?? "n/a"
-            lines.append(
-                "  mainPerRunSweepLineLayers[\(i)] frame=\(l.frame) hidden=\(l.isHidden) wavefrontX=\(wavefrontX)"
-            )
-        }
         describe("mainEmphasisLayer", mainEmphasisLayer)
         for (i, l) in mainDimWordGlyphLayers.enumerated() where !l.isHidden {
             describe("mainDimWordGlyphLayers[\(i)]", l)
         }
         for (i, l) in mainBrightWordGlyphLayers.enumerated() where !l.isHidden {
             describe("mainBrightWordGlyphLayers[\(i)]", l)
-            // Every bright word-glyph tile's OWN mask — these are expected to always be nil (the
-            // per-glyph pipeline positions/hides tiles directly, it never masks them), so a
-            // non-nil entry here is itself the anomaly a future "整行全亮" report would need.
-            let tileMaskText = l.mask.map { "class=\(type(of: $0)) frame=\($0.frame)" } ?? "nil"
-            lines.append("  mainBrightWordGlyphLayers[\(i)].mask = \(tileMaskText)")
         }
         for (i, l) in emphasisGlyphLayers.enumerated() where !l.isHidden {
             describe("emphasisGlyphLayers[\(i)](legacy-current-arm)", l)
@@ -1285,85 +927,6 @@ final class NativeLyricsRowView: NSView {
         for (i, l) in mainEmphasisGlowLayers.enumerated() where !l.isHidden {
             describe("mainEmphasisGlowLayers[\(i)]", l)
         }
-        lines += debugPerGlyphAlignmentDump()
-        return lines
-    }
-
-    /// 2026-09-19 coordinator follow-up ("下雨天" real-device report: dim ink for "眼泪" reads
-    /// ~1/3 character to the RIGHT of the bright glyph, worst at the end of the line — drift
-    /// accumulating with glyph order). Pure-code instrumentation, no device needed to WRITE this
-    /// — only to READ it against a real render. For every non-whitespace character of the active
-    /// row's shared `cachedMainUnifiedBuild` text (the same `NSLayoutManager` both the per-glyph
-    /// tiles and the whole-line dim base draw from), prints, index-aligned to
-    /// `mainDimWordGlyphLayers`/`mainBrightWordGlyphLayers`:
-    ///   (a) the glyph tile's own `frame.minX/midX/width` (what the per-glyph tile is positioned
-    ///       from — `NativeLyricsTextSweepLayout`'s `layoutManager.boundingRect(forGlyphRange:in:)`)
-    ///   (b) the SAME layoutManager's `lineFragmentRect(forGlyphAt:).origin.x + location(forGlyphAt:).x`
-    ///       — a DIFFERENT NSLayoutManager API than (a) (advance/baseline origin vs ink bounding
-    ///       box) that can legitimately disagree for glyphs with side bearings, which is exactly
-    ///       the kind of drift the founder describes accumulating across a line
-    ///   (c) that glyph's advance (this glyph's (b) minus the previous glyph's (b))
-    ///   (d) `textStorage`'s `.font` at that character vs the glyph tile CATextLayer's own
-    ///       `.font`/`.fontSize`/`.alignmentMode`/`.contentsScale`
-    ///   (e) `textContainer.lineFragmentPadding` and the unified dim-draw layer's `contentsScale`
-    /// printed once per row dump (not per frame — this only runs when `rowDumpLines` is invoked,
-    /// same discipline as every other on-demand probe in this file).
-    private func debugPerGlyphAlignmentDump() -> [String] {
-        guard let build = cachedMainUnifiedBuild else {
-            return ["  glyphAlign: (no cachedMainUnifiedBuild — row not laid out as active per-glyph sweep)"]
-        }
-        let storage = build.textStorage
-        let fullText = storage.string as NSString
-        guard fullText.length > 0 else { return ["  glyphAlign: (empty text storage)"] }
-        var lines: [String] = []
-        var tileIndex = 0
-        var lastLayoutManagerX: CGFloat?
-        for charIndex in 0..<fullText.length {
-            let ch = fullText.substring(with: NSRange(location: charIndex, length: 1))
-            guard !ch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
-            guard tileIndex < mainDimWordGlyphLayers.count, tileIndex < mainBrightWordGlyphLayers.count else { break }
-            let dimLayer = mainDimWordGlyphLayers[tileIndex]
-            let brightLayer = mainBrightWordGlyphLayers[tileIndex]
-
-            var actualCharRange = NSRange(location: NSNotFound, length: 0)
-            let glyphRange = build.layoutManager.glyphRange(
-                forCharacterRange: NSRange(location: charIndex, length: 1),
-                actualCharacterRange: &actualCharRange
-            )
-            var layoutManagerX: CGFloat = .nan
-            if glyphRange.location != NSNotFound, glyphRange.length > 0 {
-                var fragmentRange = NSRange(location: 0, length: 0)
-                let fragmentRect = build.layoutManager.lineFragmentRect(
-                    forGlyphAt: glyphRange.location, effectiveRange: &fragmentRange
-                )
-                let glyphLocation = build.layoutManager.location(forGlyphAt: glyphRange.location)
-                layoutManagerX = fragmentRect.origin.x + glyphLocation.x
-            }
-            let advance = lastLayoutManagerX.map { layoutManagerX - $0 } ?? .nan
-            lastLayoutManagerX = layoutManagerX
-
-            let storageFont = storage.attribute(.font, at: charIndex, effectiveRange: nil) as? NSFont
-            let tileFont = brightLayer.font as? NSFont
-            let matches = abs(brightLayer.frame.minX - layoutManagerX) <= 0.05
-
-            lines.append(
-                "  glyphAlign[\(tileIndex)] char=\"\(ch)\" "
-                    + "tileFrame(minX:\(brightLayer.frame.minX) midX:\(brightLayer.frame.midX) width:\(brightLayer.frame.width)) "
-                    + "dimTileFrame(minX:\(dimLayer.frame.minX) midX:\(dimLayer.frame.midX)) "
-                    + "layoutManagerX=\(layoutManagerX) advance=\(advance) "
-                    + "aEqualsB=\(matches) "
-                    + "storageFont=\(storageFont?.fontName ?? "nil"):\(storageFont?.pointSize ?? -1) "
-                    + "tileFont=\(tileFont?.fontName ?? "nil"):\(brightLayer.fontSize) "
-                    + "tileAlignmentMode=\(brightLayer.alignmentMode.rawValue) "
-                    + "tileContentsScale=\(brightLayer.contentsScale)"
-            )
-            tileIndex += 1
-        }
-        lines.append(
-            "  glyphAlign: textContainer.lineFragmentPadding=\(build.textContainer.lineFragmentPadding) "
-                + "unifiedDimDrawLayer.contentsScale=\(mainUnifiedDimDrawLayer.contentsScale) "
-                + "mainTextLayer.contentsScale=\(mainTextLayer.contentsScale)"
-        )
         return lines
     }
 
@@ -1570,7 +1133,6 @@ final class NativeLyricsRowView: NSView {
         var y: CGFloat = Self.mainTextTopInset
         if row.isPrelude {
             mainTextLayer.frame = .zero
-            mainUnifiedDimDrawLayer.frame = mainTextLayer.bounds
             mainBrightTextLayer.frame = mainTextLayer.frame
             mainSweepMaskLayer.frame = mainBrightTextLayer.bounds
             mainBaseRevealMaskLayer.frame = mainTextLayer.bounds
@@ -1598,7 +1160,6 @@ final class NativeLyricsRowView: NSView {
             font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
         )
         mainTextLayer.frame = CGRect(x: textX, y: y, width: textWidth, height: mainHeight + Self.textBottomClipPad)
-        mainUnifiedDimDrawLayer.frame = mainTextLayer.bounds
         mainBrightTextLayer.frame = mainTextLayer.frame
         mainSweepMaskLayer.frame = mainBrightTextLayer.bounds
         mainBaseRevealMaskLayer.frame = mainTextLayer.bounds
@@ -1797,10 +1358,6 @@ final class NativeLyricsRowView: NSView {
             $0.masksToBounds = false
             layer?.addSublayer($0)
         }
-        mainUnifiedDimDrawLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
-        mainUnifiedDimDrawLayer.masksToBounds = false
-        mainUnifiedDimDrawLayer.isHidden = true
-        mainTextLayer.addSublayer(mainUnifiedDimDrawLayer)
         dotLayers.forEach { dot in
             dot.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
             dot.cornerRadius = NativeLyricsDotPhasePlan.baseDotSize / 2
@@ -1864,7 +1421,7 @@ final class NativeLyricsRowView: NSView {
             hideEmphasisGlyphLayers()
             hideMainWordGlyphLayers()
             activeHiddenEmphasisSignature = nil
-            activeUnifiedBlankedSignature = nil
+            activeFloatingHiddenSignature = nil
             translationTextLayer.string = nil
             translationBrightTextLayer.string = nil
             hideTranslationLoadingDots()
@@ -1927,7 +1484,7 @@ final class NativeLyricsRowView: NSView {
             : nil
         mainBrightTextLayer.string = wholeLineBrightString
         activeHiddenEmphasisSignature = nil
-        activeUnifiedBlankedSignature = nil
+        activeFloatingHiddenSignature = nil
         hideEmphasisGlyphLayers()
         if let translation = plan.translation {
             // Sweep the translation ONLY for word-timed songs (match appliesMainSweep's gating).
@@ -2088,8 +1645,6 @@ final class NativeLyricsRowView: NSView {
         if configuration.nativeSeekDiscontinuityOccurred {
             mainPostLineFadeFloor = 1
             translationPostLineFadeFloor = 1
-            mainWordFloatFloor.removeAll()
-            mainWordFloatReturnFloor = 1
         }
         // Phase timing MUST come from the shared monotonic clock (phaseRenderTime), never the raw
         // SB clock: a backward resync dip at line start collapses the active plan to progress 0
@@ -2122,41 +1677,9 @@ final class NativeLyricsRowView: NSView {
             if justEnteredActiveWindow || renderTimeBeforeLineStart {
                 mainPostLineFadeFloor = 1
                 translationPostLineFadeFloor = 1
-                mainWordFloatFloor.removeAll()
-                mainWordFloatReturnFloor = 1
             }
         }
         mainWasTextActiveLastPhase = isActive
-
-        // 2026-09-19 real-device rowdump ("未来的旅程"): the text-active index can move to the
-        // NEXT row before this row's `mainPostLineFadeFloor` has finished its 1.5s fade — the
-        // `if isActive` branch below used to flip straight to `applyInactivePlaybackLayerState()`
-        // the instant that happened, which INSTANTLY hides the still-floated bright glyph tiles
-        // and restores the whole-line rest string with no transition — every swept word's bright
-        // overlay (and, before the dim-hollow fix above, its dim tile too) visibly snapped back by
-        // its full float offset in one frame. Keep rendering through the active word-cascade path
-        // — sweep held at its finished (progress 1) state, float held at its target — for as long
-        // as the fade floor hasn't reached (approximately) zero, so the bright overlay's OWN
-        // opacity fade is what removes it from the screen, never a position/visibility snap.
-        let stillFadingOut = !isActive && mainPostLineFadeFloor > 0.001
-        // 2026-09-19 post-3o correction (founder real-device report: "整行都是下沉的" — every
-        // line visibly sank TWICE, once as `mainPostLineFadeFloor`'s 1.5s bright fade ran, then
-        // AGAIN half a second later as 3o's independent `mainWordFloatReturnFloor` easing let go
-        // of the float with nothing else moving on screen to mask it). 3o's own fix — hollow +
-        // float dim in lockstep with bright — is kept; only its OWN separate eased-return timer
-        // is deleted here. The float now only ever holds at 1 (while `isActive` or
-        // `stillFadingOut`, i.e. this row is still genuinely current) or drops straight to 0 —
-        // never an eased in-between value. The 0 transition is driven by
-        // `collapseWordFloatForDeactivation()`, called by `LyricsLayerRendererView` in the EXACT
-        // same frame this row's own `NativeLyricsVisualMotionState` target flips inactive
-        // (`quickRetarget`) — i.e. the same frame the row's scale/blur/opacity spring starts
-        // retargeting, so the ~2pt geometry snap is masked by that much larger motion instead of
-        // trailing it by a separate clock. See docs/lyrics-ux-contract.md and
-        // research/repro-2026-09-20-lyrics-render-3p.md.
-        if isActive || stillFadingOut {
-            mainWordFloatReturnFloor = 1
-        }
-        let renderAsActive = isActive || stillFadingOut
 
         var sample: NativeLyricsTextPhaseSample?
         if managesTransaction {
@@ -2173,12 +1696,11 @@ final class NativeLyricsRowView: NSView {
             }
         }
         #endif
-        if renderAsActive {
+        if isActive {
             let plan = textRenderPlan(
                 row: row,
                 configuration: configuration,
-                currentTime: renderTime,
-                forceActive: stillFadingOut
+                currentTime: renderTime
             )
             let expectsPerRunSweep = row.displayLine.line.hasSyllableSync && !plan.wordRuns.isEmpty
             // 2026-09-19 real-device repro (rowdump "想爱 就不能害怕会有伤痕"): the dim-base
@@ -2365,7 +1887,7 @@ final class NativeLyricsRowView: NSView {
         hideEmphasisGlyphLayers()
         hideMainWordGlyphLayers()
         activeHiddenEmphasisSignature = nil
-        activeUnifiedBlankedSignature = nil
+        activeFloatingHiddenSignature = nil
         translationBrightTextLayer.isHidden = true
         hideTranslationSweepMaskLayers()
         mainTextLayer.setAffineTransform(.identity)
@@ -2451,32 +1973,12 @@ final class NativeLyricsRowView: NSView {
             && !linePlan.isEmpty
         let keepWholeLineDim = NativeLyricsFeelParity.keepsWholeLineDimBase
         let wordFloatResult: MainWordFloatAppliedMetrics
-        // 2026-09-19 3o (founder-dictated v2.8 restore, "dim 与 bright 一起浮"): 3n's fix (dim never
-        // hollows/floats for an ordinary word) targeted the wrong layer — it kept the whole-line
-        // dim ink STATIC while only the bright overlay floated, so during a word's active sweep
-        // the two channels disagreed on geometry (bright at −2pt, dim at 0) and, worse, the
-        // founder's actual v2.8 reference (`LyricsTextRenderer.draw`, `Sources/.../v28_LyricLineView.swift`
-        // — every non-emphasis run's DIM pass also does `ctx.translateBy(y: baseFloat(for: attr))`)
-        // floats dim and bright TOGETHER at one shared geometry. Restored here: a word that is
-        // actually floating (`baseFloatY` scaled by `mainWordFloatReturnFloor` below is nonzero)
-        // gets its whole-line-dim ink hollowed out and stands in with its OWN dim tile, floated to
-        // the exact same y as its bright tile (`applyMainWordFloatGlyphLayers`'s `dimCenterY`) — one
-        // geometry per glyph, never two.
-        //
-        // The 3n regression this restore must NOT reintroduce: hollowing must not un-hollow
-        // instantly the moment the line deactivates (that was the "字慢慢下落"/reappearing-dim
-        // "hard drop" 3n's commit message described). Fixed at the actual root this time: the
-        // FLOAT ITSELF (not just bright's opacity) now eases back to 0 over `mainWordFloatReturnFloor`
-        // (`updatePlaybackPhase`) before this row is ever allowed to reach `applyInactivePlaybackLayerState`
-        // — a word only leaves `floatingOrders` (and un-hollows) once its OWN effective float has
-        // already eased to (near) 0, so the un-hollow and the tile's return-to-rest land in the
-        // same frame with no observable geometry jump either direction.
-        //
-        // Emphasis words keep their pre-existing hollow-cut rule unchanged (liftY/floatY/scale
-        // nonzero, plus the immediate neighbour while scale > 1 — see the 2026-09-18/2026-09-14
-        // history below) — their bright tile can scale beyond its static footprint (glow bleed),
-        // which plain top-of-stack blending cannot hide, so the dim ink still needs physically
-        // removing underneath regardless of the return-floor gating below.
+        // Sweep-ghost fix: non-emphasis words that are ACTUALLY floating (baseFloatY != 0)
+        // must not also show through the whole-line dim base — that second, unfloated copy
+        // is the reported double image on swept CJK glyphs. A word at floatY == 0 (not yet
+        // started) is left alone: it coincides exactly with the whole-line glyph already, so
+        // there is nothing to hide and no tile needed (also keeps the activation-instant
+        // layout tests, which sample at floatY == 0, unaffected).
         //
         // 2026-09-14 founder report: the SAME double image on emphasis words ("WHAT IT'S ALL
         // ABOU[T]") — applyEmphasisGlyphLayers draws a separate scale/lift/glow glyph for
@@ -2500,7 +2002,6 @@ final class NativeLyricsRowView: NSView {
         // widening `floatingOrders` to include the neighbour makes its dim tile become VISIBLE at
         // its own REST position (`floatY` is 0 for a word that hasn't started), which is exactly
         // where the whole-line base was drawing it — a clean 1:1 ink replacement, not a new gap.
-        let mainFloatsForOrdering = plan.perWordFloatY(at: currentTime)
         let floatingOrders: Set<Int> = keepWholeLineDim
             ? Set(plan.wordRuns.enumerated().flatMap { order, run -> [Int] in
                   if emphasisOrders.contains(order) {
@@ -2515,27 +2016,15 @@ final class NativeLyricsRowView: NSView {
                       }
                       return orders
                   }
-                  // Ordinary (non-emphasis) word: hollow it (and float its own dim tile in
-                  // lockstep with its bright tile) exactly while its EFFECTIVE float — the
-                  // monotone-floored raw float scaled by the deactivation return ease — is still
-                  // nonzero. `mainWordFloatReturnFloor` is 1 for the entire active/still-fading
-                  // window and only starts easing toward 0 after this row has gone fully inactive
-                  // (see `updatePlaybackPhase`), so this is a no-op change while the line is live.
-                  let rawFloat = order < mainFloatsForOrdering.count ? mainFloatsForOrdering[order] : 0
-                  let flooredFloat = min(rawFloat, mainWordFloatFloor[order] ?? 0)
-                  let effectiveFloat = flooredFloat * mainWordFloatReturnFloor
-                  return effectiveFloat != 0 ? [order] : []
+                  return run.baseFloatY != 0 ? [order] : []
               })
             : []
         if geometryReady {
             if keepWholeLineDim {
-                applyUnifiedDimBase(plan: plan, floatingOrders: floatingOrders)
-            } else {
-                mainUnifiedDimDrawLayer.isHidden = true
-                if mainTextLayer.string != nil {
-                    mainTextLayer.string = nil
-                    activeUnifiedBlankedSignature = nil
-                }
+                applyFloatingHiddenBase(plan: plan, floatingOrders: floatingOrders)
+            } else if mainTextLayer.string != nil {
+                mainTextLayer.string = nil
+                activeFloatingHiddenSignature = nil
             }
             if mainBrightTextLayer.string != nil { mainBrightTextLayer.string = nil }
             activeHiddenEmphasisSignature = nil
@@ -2588,9 +2077,7 @@ final class NativeLyricsRowView: NSView {
                 linePlan: linePlan,
                 emphasisOrders: emphasisOrders,
                 floatsDimBase: !keepWholeLineDim,
-                floatingOrders: floatingOrders,
-                postLineFadeOpacity: Float(mainPostLineFadeFloor),
-                floatReturnFloor: mainWordFloatReturnFloor
+                floatingOrders: floatingOrders
             )
         } else {
             // Geometry is not ready (fresh/pooled/offscreen row). A whole-line bright
@@ -2598,7 +2085,6 @@ final class NativeLyricsRowView: NSView {
             // Keep the dim base, hide the sung overlay, wait for layout.
             hideMainWordGlyphLayers()
             hidePerRunSweepMaskLayers()
-            mainUnifiedDimDrawLayer.isHidden = true
             mainBrightTextLayer.mask = nil
             mainBrightTextLayer.string = nil
             mainBrightTextLayer.isHidden = true
@@ -2752,7 +2238,6 @@ final class NativeLyricsRowView: NSView {
 
     private func applyStaticActiveTextPhase(plan: NativeLyricsTextRenderPlan) -> MainTextPhaseAppliedMetrics {
         hideMainWordGlyphLayers()
-        mainUnifiedDimDrawLayer.isHidden = true
         mainTextLayer.setAffineTransform(.identity)
         mainBrightTextLayer.setAffineTransform(.identity)
         mainBrightTextLayer.isHidden = true
@@ -2762,7 +2247,7 @@ final class NativeLyricsRowView: NSView {
         hidePerRunSweepMaskLayers()
         hideEmphasisGlyphLayers()
         activeHiddenEmphasisSignature = nil
-        activeUnifiedBlankedSignature = nil
+        activeFloatingHiddenSignature = nil
         clearEmphasis(from: mainBrightTextLayer)
         let layoutResult = lastLineLayoutMetrics
         return MainTextPhaseAppliedMetrics(
@@ -3222,6 +2707,7 @@ final class NativeLyricsRowView: NSView {
                 let metrics = applyEmphasisGlyph(
                     layer,
                     layerIndex: currentLayerIndex,
+                    displayText: plan.displayText,
                     glyph: glyph,
                     run: run,
                     glyphCount: glyphCount,
@@ -3291,63 +2777,60 @@ final class NativeLyricsRowView: NSView {
         )
     }
 
-    /// Stage bundle 3m (unify-the-engine fix, supersedes the old `applyFloatingHiddenBase`):
-    /// `mainTextLayer.string` goes nil for the whole active-per-run-sweep duration — the dim base
-    /// paints from `mainUnifiedDimDrawLayer`, which calls `drawGlyphs(forGlyphRange:at:)` against
-    /// `cachedMainUnifiedBuild`'s `NSLayoutManager` — the EXACT SAME object that produced the
-    /// per-glyph tile `rect`s (`mainSweepLinePlan`), not a second, independently-wrapped
-    /// CATextLayer string. Wrap-line height/tracking are therefore governed by ONE layout pass,
-    /// which satisfies the 08-27 constraint (NativeLyricsActiveLineSpacingTests) by construction
-    /// rather than by keeping two configs in sync. This still paints as ONE whole-line pass (never
-    /// per-glyph, never floating) — `.claude/rules/banned-patterns.md`'s per-glyph-float ban is
-    /// untouched.
-    ///
-    /// Currently-displaced words (floating by `baseFloatY`, or an actively-animating emphasis
-    /// word) still need their glyph ink SKIPPED here — their visible ink instead comes from the
-    /// per-glyph dim tile (`applyMainWordFloatGlyphLayers`) or emphasis glyph layer
-    /// (`applyEmphasisGlyphLayers`), exactly as before. Skipping is done by setting
-    /// `.foregroundColor` alpha 0 on those words' character ranges directly on the SHARED
-    /// `textStorage` — color is a paint-time-only attribute that cannot perturb the glyph geometry
-    /// already committed by that object, so this can never desync tile position from draw
-    /// position (they are, structurally, the same numbers). Gated by a signature so the storage is
-    /// only mutated (and the layer repainted) when the set of floating words actually changes.
-    private func applyUnifiedDimBase(
+    /// Sweep-ghost fix: keeps `mainTextLayer` as the ONE laid-out whole-line string (so wrap-line
+    /// height/tracking never change on activation — the 08-27 constraint pinned by
+    /// NativeLyricsActiveLineSpacingTests) while making the glyph ranges of currently-displaced
+    /// words transparent in it — ordinary words floating by `baseFloatY`, AND (as of 2026-09-14)
+    /// emphasis words whose scale/lift/float animation is actively moving them. Those words'
+    /// visible dim ink then comes ONLY from the per-glyph dim tile in
+    /// `applyMainWordFloatGlyphLayers` (ordinary words) or the emphasis glyph layer in
+    /// `applyEmphasisGlyphLayers` (emphasis words) — eliminating the second, undisplaced copy
+    /// underneath (the reported double image, both on swept CJK glyphs and on emphasized English
+    /// words like "about"). Gated by a signature so this only rewrites the string when the set of
+    /// floating words actually changes (once per word boundary), not every frame.
+    private func applyFloatingHiddenBase(
         plan: NativeLyricsTextRenderPlan,
         floatingOrders: Set<Int>
     ) {
-        guard let build = cachedMainUnifiedBuild else {
-            mainUnifiedDimDrawLayer.isHidden = true
-            return
-        }
-        if mainTextLayer.string != nil { mainTextLayer.string = nil }
-        mainUnifiedDimDrawLayer.isHidden = false
-        mainUnifiedDimDrawLayer.textLayoutManager = build.layoutManager
-        mainUnifiedDimDrawLayer.textContainer = build.textContainer
-        mainUnifiedDimDrawLayer.glyphRange = build.glyphRange
-
         let signature = floatingOrders.isEmpty
             ? "\(plan.displayText)|float|"
             : "\(plan.displayText)|float|\(floatingOrders.sorted().map(String.init).joined(separator: ","))"
-        guard activeUnifiedBlankedSignature != signature else { return }
-        activeUnifiedBlankedSignature = signature
-
-        let ranges = NativeLyricsTextSweepLayout.characterRanges(for: plan.wordRuns, displayText: plan.displayText)
-        let visibleColor = NSColor.white
-        let hiddenColor = NSColor.white.withAlphaComponent(0)
-        build.textStorage.beginEditing()
-        for (order, range) in ranges.enumerated() where range.location != NSNotFound {
-            let color = floatingOrders.contains(order) ? hiddenColor : visibleColor
-            build.textStorage.addAttribute(.foregroundColor, value: color, range: range)
+        guard activeFloatingHiddenSignature != signature else { return }
+        activeFloatingHiddenSignature = signature
+        guard !floatingOrders.isEmpty else {
+            if let wholeLineMainString {
+                mainTextLayer.string = wholeLineMainString
+            }
+            return
         }
-        build.textStorage.endEditing()
-        mainUnifiedDimDrawLayer.repaint()
+        // Hidden ranges are computed against the RAW (unwrapped) displayText — matches
+        // NativeLyricsHiddenTextMask's assumption that displayText is exactly the concatenation of
+        // word-run texts. Re-wrap the result with the SAME wrap points `wholeLineMainString` used
+        // (from `configuration`'s known width — never bounds.width, which can be stale/zero) so the
+        // 08-27 constraint (wrap-line count / height / tracking never change on activation) holds.
+        let hiddenRaw = attributedText(
+            plan.displayText,
+            fontSize: plan.constants.mainFontSize,
+            alpha: 1,
+            hiddenOrders: floatingOrders,
+            wordRuns: plan.wordRuns
+        )
+        guard let configuration else {
+            mainTextLayer.string = hiddenRaw
+            return
+        }
+        mainTextLayer.string = Self.attributedDisplayWrapped(
+            hiddenRaw,
+            rawText: plan.displayText,
+            width: contentTextWidth(configuration),
+            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
+        )
     }
 
     private func restoreMainTextIfNeeded(plan: NativeLyricsTextRenderPlan) {
         guard activeHiddenEmphasisSignature != nil else { return }
         activeHiddenEmphasisSignature = nil
-        activeUnifiedBlankedSignature = nil
-        mainUnifiedDimDrawLayer.isHidden = true
+        activeFloatingHiddenSignature = nil
         mainTextLayer.string = attributedText(
             plan.displayText,
             fontSize: plan.constants.mainFontSize,
@@ -3474,9 +2957,7 @@ final class NativeLyricsRowView: NSView {
         linePlan: [NativeLyricsTextSweepVisualLinePlan],
         emphasisOrders: Set<Int>,
         floatsDimBase: Bool,
-        floatingOrders: Set<Int> = [],
-        postLineFadeOpacity: Float = 1,
-        floatReturnFloor: CGFloat = 1
+        floatingOrders: Set<Int> = []
     ) -> MainWordFloatAppliedMetrics {
         let floats = plan.perWordFloatY(at: currentTime)
         let tilesOwnEmphasis = !emphasisOrders.isEmpty && NativeLyricsFeelParity.emphasisMode != .current
@@ -3494,20 +2975,7 @@ final class NativeLyricsRowView: NSView {
                   )
                 : 0
             for run in line.runs where tilesOwnEmphasis || !emphasisOrders.contains(run.order) {
-                let rawFloatY = run.order < floats.count ? floats[run.order] : 0
-                // Monotonic floor (see `mainWordFloatFloor`'s declaration): a swept word's float
-                // only ever moves toward its target (more negative) and holds — a backward render-
-                // clock tick must not raise it back toward 0 mid-hold.
-                let flooredFloatY = min(rawFloatY, mainWordFloatFloor[run.order] ?? 0)
-                mainWordFloatFloor[run.order] = flooredFloatY
-                // 2026-09-19 3o: `floatReturnFloor` eases 1→0 only AFTER this row has gone fully
-                // inactive (see `updatePlaybackPhase`'s `mainWordFloatReturnFloor`) — 1 for the
-                // entire active/still-fading-out window, so this is a no-op scale while the line
-                // is live. It is what lets the ordinary (non-emphasis) per-glyph tile — and its
-                // paired dim tile, which shares this same `floatY` at `dimCenterY` below — ease
-                // back to the whole-line rest position instead of snapping the instant
-                // `floatingOrders` drops the word.
-                let floatY = flooredFloatY * floatReturnFloor
+                let floatY = run.order < floats.count ? floats[run.order] : 0
                 // `floatsDimBase` (the `layer` A/B arm) always tessellates every non-emphasis word as
                 // a dim tile. The default (whole-line dim base) arm shows a dim tile ONLY for a word
                 // that is actually floating — `applyFloatingHiddenBase` blanks that same word's range
@@ -3555,19 +3023,12 @@ final class NativeLyricsRowView: NSView {
             let brightLayer = mainBrightWordGlyphLayers[index]
             let glowLayer = mainEmphasisGlowLayers[index]
             dimLayer.isHidden = !isFloatingWord
-            // Bright tile fade (2026-09-19 founder-dictated fix): rides the SAME floored
-            // post-line fade value `mainBrightTextLayer.opacity` uses, so a word that is still
-            // sweeping/held gets full opacity (postLineFadeOpacity == 1) and a word whose line has
-            // ended fades in lockstep with the rest of the row instead of vanishing via `isHidden`
-            // the instant `isActive` flips off. Only truly hidden once the fade has bottomed out —
-            // "淡出到 0 再隐藏，不许在淡出前隐藏或归位".
-            brightLayer.opacity = postLineFadeOpacity
-            brightLayer.isHidden = postLineFadeOpacity <= 0.001
+            brightLayer.isHidden = false
             // 2026-09-20 (3p): pull the SAME concrete font the shared NSLayoutManager already
             // resolved for THIS character, instead of an independently re-derived generic system
             // font — see `resolvedGlyphFont`'s doc comment for the founder-reported real-device
             // root cause (persistent double-edge ghost on every swept CJK glyph).
-            let resolvedFont = resolvedGlyphFont(characterIndex: glyph.characterIndex, fallbackSize: fontSize)
+            let resolvedFont = resolvedGlyphFont(text: plan.displayText, characterIndex: glyph.characterIndex, fallbackSize: fontSize)
             let signature = EmphasisGlyphLayerSignature(
                 glyph: glyph,
                 fontSize: fontSize,
@@ -3791,6 +3252,7 @@ final class NativeLyricsRowView: NSView {
     private func applyEmphasisGlyph(
         _ layer: CATextLayer,
         layerIndex: Int,
+        displayText: String,
         glyph: NativeLyricsTextSweepVisualRun.Glyph,
         run: NativeLyricsWordRunPlan,
         glyphCount: Int,
@@ -3816,7 +3278,7 @@ final class NativeLyricsRowView: NSView {
         let fontSize = NativeLyricsTextConstants().mainFontSize
         // 2026-09-20 (3p): same fix as the main word-tile pool — pull the concrete font the
         // shared layout already resolved for this character (see `resolvedGlyphFont`'s doc).
-        let resolvedFont = resolvedGlyphFont(characterIndex: glyph.characterIndex, fallbackSize: fontSize)
+        let resolvedFont = resolvedGlyphFont(text: displayText, characterIndex: glyph.characterIndex, fallbackSize: fontSize)
         let signature = EmphasisGlyphLayerSignature(
             glyph: glyph, fontSize: fontSize, fontName: resolvedFont.fontName
         )
@@ -3929,21 +3391,13 @@ final class NativeLyricsRowView: NSView {
         if cachedMainSweepLayoutKey == key {
             return cachedMainSweepLinePlan
         }
-        // Stage bundle 3m: build the unified (layoutManager+container+storage+linePlan) object
-        // ONCE per cache key and derive `linePlan` from it, instead of calling the geometry-only
-        // `makePlan` separately — `cachedMainUnifiedBuild` is what the dim base now draws from, so
-        // it and the per-glyph tiles' rects MUST originate from the identical object, not merely
-        // matching configuration.
-        let build = NativeLyricsTextSweepLayout.makeUnifiedBuild(
+        let linePlan = NativeLyricsTextSweepLayout.makePlan(
             displayText: plan.displayText,
             wordRuns: plan.wordRuns,
             width: bounds.width,
             fontSize: plan.constants.mainFontSize,
-            textColor: .white
+            fadeHalfPoint: plan.constants.fadeHalfPoint
         )
-        let linePlan = build?.linePlan ?? []
-        cachedMainUnifiedBuild = build
-        activeUnifiedBlankedSignature = nil
         cachedMainSweepLayoutKey = key
         cachedMainSweepLinePlan = linePlan
         cachedTextGlyphGeometryBounds = nil
@@ -4217,15 +3671,13 @@ final class NativeLyricsRowView: NSView {
     private func textRenderPlan(
         row: LayerBackedLyricRow,
         configuration: LyricsLayerRendererConfiguration,
-        currentTime: TimeInterval? = nil,
-        forceActive: Bool = false
+        currentTime: TimeInterval? = nil
     ) -> NativeLyricsTextRenderPlan {
         NativeLyricsTextRenderPlan.make(
             configuration: textConfiguration(
                 row: row,
                 configuration: configuration,
-                currentTime: currentTime,
-                forceActive: forceActive
+                currentTime: currentTime
             ),
             staticPlan: staticTextPlan(for: row)
         )
@@ -4245,18 +3697,12 @@ final class NativeLyricsRowView: NSView {
     private func textConfiguration(
         row: LayerBackedLyricRow,
         configuration: LyricsLayerRendererConfiguration,
-        currentTime: TimeInterval? = nil,
-        forceActive: Bool = false
+        currentTime: TimeInterval? = nil
     ) -> NativeLyricsTextRenderPlan.Configuration {
         NativeLyricsTextRenderPlan.Configuration(
             line: row.displayLine.line,
             currentTime: currentTime ?? configuration.phaseRenderTime(),
-            // `forceActive`: this row's text-active index has already moved on, but its bright
-            // overlay is still fading via `mainPostLineFadeFloor` (see `updatePlaybackPhase`'s
-            // `renderAsActive` gate) — keep rendering the active word-cascade (sweep held at its
-            // finished position, float held at its target) so the fade has something to fade FROM
-            // instead of an instant snap to the inactive whole-line rest state.
-            isActive: forceActive || NativeLyricsTextActivation.isLineTextActive(
+            isActive: NativeLyricsTextActivation.isLineTextActive(
                 rowIndex: row.index,
                 textActiveIndex: configuration.effectiveTextActiveIndex
             ),

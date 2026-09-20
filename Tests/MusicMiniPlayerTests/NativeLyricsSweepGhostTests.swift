@@ -4,32 +4,18 @@ import AppKit
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Founder defect (2026-09-12): "很多歌词重影，集中在 CJK 亮字" — a double image on swept
-// CJK glyphs. Original root cause (verified against source at the time):
+// CJK glyphs. Root cause (verified against source, not a hypothesis):
 //
 // v2.8 (git show v2.8:.../LyricLineView.swift :734-746, :905-918, :885-900) floats the DIM
 // base word by the SAME floatY as the BRIGHT word — dim and bright ink always coincide.
 //
 // Native shipping default (NativeLyricsFeelParity.keepsWholeLineDimBase == true) kept the
 // whole-line dim CATextLayer at rest (never floated) while only the per-glyph BRIGHT tile
-// floated -2pt once a word starts. Two copies of every swept glyph, 2pt apart, was the ghost.
-// The original fix (this test's original invariant) hollowed the whole-line base for whatever
-// word was floating and floated its per-glyph DIM tile in lockstep with the bright one, so
-// exactly one FULLY-OPAQUE copy of the glyph was ever on screen.
+// floated -2pt once a word starts. Two copies of every swept glyph, 2pt apart, is the ghost.
 //
-// SUPERSEDED 2026-09-19 by 3n (research/repro-2026-09-19-lyrics-render-3n.md), then SUPERSEDED
-// AGAIN 2026-09-19 by 3o (research/repro-2026-09-19-lyrics-render-3o.md) after 3n's own fix
-// caused a WORSE regression: with the whole-line dim base never hollowed and never floating,
-// during a word's active sweep the two channels legitimately disagreed on geometry (bright at
-// −2pt, dim frozen at rest) — and on deactivation the bright tile's own opacity fade finished
-// FIRST while still floated, so the vanishing bright revealed the always-static dim underneath as
-// a visible "drop". This directly contradicted the actual v2.8 reference this test's original
-// (pre-3n) docstring already quoted above (dim floats WITH bright, always, one shared geometry).
-//
-// 3o restores the ORIGINAL invariant this test first pinned: an ordinary floating word IS
-// hollowed out of the whole-line base and its own per-glyph DIM tile floats in lockstep with its
-// BRIGHT tile — `dimHidden == false` and `dimPositionY == brightPositionY` (Δ == 0) whenever the
-// word is genuinely floating. There is still only ONE visible copy of the glyph — the dim+bright
-// pair share identical geometry, they just aren't the exact same CALayer.
+// This test drives a real NativeLyricsRowView with a frozen clock well past a word's float
+// window (>= 1s, so the float has fully eased to its -2pt target and holds) and asserts the
+// dim ink actually visible for that glyph sits at the SAME y as the bright tile.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 final class NativeLyricsSweepGhostTests: XCTestCase {
 
@@ -188,38 +174,33 @@ final class NativeLyricsSweepGhostTests: XCTestCase {
         for (i, order) in orders.enumerated() {
             let pair = pairs[i]
             let run = plan.wordRuns[order]
-            let delta = abs(pair.brightPositionY - pair.dimPositionY)
+            // The visible dim ink for this glyph is either the floated dim TILE (when one is
+            // drawn) or — if no tile is drawn (the pre-fix model) — the whole-line base, which
+            // never floats. In that case the effective dim y is what the bright tile's y would be
+            // at floatY == 0, i.e. brightPositionY - run.baseFloatY.
+            let effectiveDimY = pair.dimHidden ? (pair.brightPositionY - run.baseFloatY) : pair.dimPositionY
+            let delta = abs(effectiveDimY - pair.brightPositionY)
             maxDelta = max(maxDelta, delta)
             sampleCount += 1
             print("[NativeLyricsSweepGhostTests] \(label) glyph #\(i) order=\(order) dimHidden=\(pair.dimHidden) baseFloatY=\(run.baseFloatY) Δ=\(delta)pt")
-            // 3o restore: a genuinely floating word (baseFloatY != 0) IS the per-glyph dim tile's
-            // moment to shine — hollowed out of the whole-line base, visible, and Y-locked to its
-            // bright twin (Δ ≈ 0). A word that has not started yet (baseFloatY == 0) is exempt —
-            // it's still coincident with the whole-line base, so no tile is needed for it.
-            if run.baseFloatY != 0 {
-                XCTAssertFalse(
-                    pair.dimHidden,
-                    "\(label): glyph #\(i) (order \(order)) is floating (baseFloatY=\(run.baseFloatY)) — its dim tile must be visible, hollowed out of the whole-line base"
-                )
-                XCTAssertLessThanOrEqual(
-                    delta, 0.05,
-                    "\(label): glyph #\(i) (order \(order)) dim/bright desynced by \(delta)pt — they must share one geometry"
-                )
-            }
+            XCTAssertEqual(
+                effectiveDimY, pair.brightPositionY, accuracy: 0.25,
+                "\(label): glyph #\(i) (order \(order)) dim ink and bright tile must coincide (Δ=\(delta)pt, baseFloatY=\(run.baseFloatY)) — a visible gap is the reported double image"
+            )
         }
         XCTAssertGreaterThan(sampleCount, 0, "\(label): expected at least one active glyph")
         print("[NativeLyricsSweepGhostTests] \(label): sampled \(sampleCount) glyphs, max Δy = \(maxDelta)pt")
     }
 
     @MainActor
-    func test_cjkSweptGlyph_dimTileNeverUsed() {
+    func test_cjkSweptGlyph_dimAndBrightCoincide_noGhost() {
         // Word index 3 ("你", starts at t=13) is comfortably mid-line so its baseFloatY has fully
         // settled at -2pt (not the word-0 boundary instant where floatY == 0 for everyone).
         assertNoSweepGhost(line: cjkLine(), width: 186, wordIndex: 3, label: "CJK")
     }
 
     @MainActor
-    func test_englishSweptGlyph_dimTileNeverUsed() {
+    func test_englishSweptGlyph_dimAndBrightCoincide_noGhost() {
         assertNoSweepGhost(line: englishLine(), width: 320, wordIndex: 2, label: "EN")
     }
 }
