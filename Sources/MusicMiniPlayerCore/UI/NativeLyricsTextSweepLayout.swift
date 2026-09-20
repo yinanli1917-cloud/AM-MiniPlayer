@@ -323,11 +323,24 @@ enum NativeLyricsTextSweepLayout {
                 return $0.order < $1.order
             }
 
-            var maskRect = fragments[lineIndex].rect
+            // 2026-09-20 (founder: wrapped rows showed the NEXT visual line partially lit up to the
+            // first line's wavefront). The per-visual-line mask layers are SIBLINGS inside one mask;
+            // wherever two of them overlap, the union reveals. The old `insetBy(dy: -4)` plus the
+            // union with run rects let line N's solid region reach into line N+1's glyph band, so
+            // the unsung line inherited line N's sweep. Rule (v2.8 lineRects): a line's mask spans
+            // that line's fragment band ONLY — never above or below it — and the horizontal reach
+            // (fade slack) comes from the run union.
+            let fragmentRect = fragments[lineIndex].rect
+            var horizontal = fragmentRect
             for visualRun in visualRuns {
-                maskRect = maskRect.union(visualRun.rect)
+                horizontal = horizontal.union(visualRun.rect)
             }
-            maskRect = maskRect.insetBy(dx: -20, dy: -4)
+            let maskRect = CGRect(
+                x: horizontal.minX - 20,
+                y: fragmentRect.minY,
+                width: horizontal.width + 40,
+                height: fragmentRect.height
+            )
             return NativeLyricsTextSweepVisualLinePlan(maskRect: maskRect, runs: visualRuns)
         }
         return NativeLyricsUnifiedTextBuild(

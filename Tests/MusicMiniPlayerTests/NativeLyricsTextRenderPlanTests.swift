@@ -286,6 +286,15 @@ final class NativeLyricsTextRenderPlanTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(masks.count, 2)
         XCTAssertEqual(masks.map(\.maskRect.minY), masks.map(\.maskRect.minY).sorted())
         XCTAssertTrue(masks.allSatisfy { $0.maskRect.width > 0 && $0.maskRect.height > 0 })
+        // 2026-09-20 founder report: the unsung second visual line lit up to the first line's
+        // wavefront. Sibling per-line mask layers union wherever they overlap, so adjacent lines'
+        // mask bands must be vertically disjoint — line N's solid region can never reach line N+1.
+        for (upper, lower) in zip(masks, masks.dropFirst()) {
+            XCTAssertLessThanOrEqual(
+                upper.maskRect.maxY, lower.maskRect.minY + 0.001,
+                "mask band of visual line overlaps the next line: \(upper.maskRect) vs \(lower.maskRect)"
+            )
+        }
     }
 
     func testNativeSweepLayoutSplitsWrappedSingleTokenAcrossVisualLines() {
