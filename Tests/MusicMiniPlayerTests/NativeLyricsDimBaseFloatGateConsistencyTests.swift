@@ -5,27 +5,25 @@ import AppKit
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // research/repro-2026-09-19-lyrics-render-3l.md — 《啟程》real-device rowdump (founder: a blurred
 // duplicate of "未来的旅程" sitting a few pt below the real text, worst on the LAST character of
-// the wrapped line). The rowdump (rowdump_ghost3.txt) samples ~1s apart — far too coarse to catch
-// a transient — so this test drives the REAL per-frame invariant the rowdump's own two channels
-// must satisfy every tick:
+// the wrapped line). The ORIGINAL fix here (hollow the whole-line dim base for whatever word is
+// currently floating, so exactly one copy of that glyph is ever visible) was superseded the SAME
+// day by a founder-dictated architecture change (research/repro-2026-09-19-lyrics-render-3n.md):
+// a later real-device rowdump caught the hollow-and-restore machinery itself causing a HARDER bug
+// — every swept word's ink snapping 2pt the instant the line deactivated, because the whole-line
+// base's un-hollow and the per-glyph tiles' teardown were not in lockstep. The fix: the whole-line
+// dim base is now NEVER hollowed for an ordinary (non-emphasis) word — it always paints the FULL
+// line, unconditionally — and only the bright per-glyph tile floats, drawn on top of that always-
+// present dim ink (`NativeLyricsRowView.swift`, the `floatingOrders` doc comment above the
+// property). The per-glyph DIM tile this file exercises is therefore never used for an ordinary
+// word any more: it always stays hidden, coincident with the (also always-visible) whole-line
+// base, regardless of whether the bright tile above it has floated away. The exhaustive per-frame
+// invariant this file still checks, updated for that architecture:
 //
-//   For word `order`, `applyFloatingHiddenBase`'s `floatingOrders` gate (built from
-//   `run.baseFloatY != 0`, `NativeLyricsRowView.swift` ~2025-2040) decides whether the whole-line
-//   dim-base CATextLayer hollows that word's characters out (alpha 0, "the per-glyph tile is now
-//   the only visible copy") or leaves them at full alpha ("the whole-line base IS the visible
-//   copy, at REST — nothing must be drawn floated on top of it").
+//   dimHidden == true, for every ordinary (non-emphasis) glyph, every frame — no exceptions.
 //
-//   `applyMainWordFloatGlyphLayers` draws BOTH a dim and a bright per-glyph tile for EVERY word,
-//   every frame, regardless of the gate; only `dimLayer.isHidden` and (for the bright tile) the Y
-//   offset it applies are conditioned on that same-frame float state. So the exact frame-level
-//   invariant a ghost-free render must hold, for every glyph, every frame, is:
-//
-//     dimHidden == true  ⇔  the word is floating this frame (its rendered Y differs from rest)
-//
-//   A violation either shows an un-hollowed dim-base character with a floated tile drawn on top of
-//   it (visible duplicate, alpha 0.35 "shadow" under a moving bright/dim copy — the reported
-//   ghost), or a hollowed character with NO floated tile compensating (a gap/flash — the sibling
-//   defect this same gate was built to prevent, per the file's own comments).
+// (Emphasis words are a different code path — `applyEmphasisGlowOnSharedTile` / the hollow-cut
+// tested by `NativeLyricsEmphasisHollowContainmentTests` — and are excluded from this line's
+// non-emphasis fixture entirely, so are not exercised here.)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 final class NativeLyricsDimBaseFloatGateConsistencyTests: XCTestCase {
     private var hostWindow: NSWindow?
@@ -145,19 +143,11 @@ final class NativeLyricsDimBaseFloatGateConsistencyTests: XCTestCase {
             guard current == 0, let view = surface.debugRowView(forIndex: 0) else { t += stepSeconds; continue }
             sampledFrames += 1
             for (index, pair) in view.debugMainWordGlyphPairs.enumerated() {
-                // `dimLayer.isHidden` (`dimHidden == true`) means the whole-line dim-base
-                // CATextLayer is trusted as the sole visible copy of this glyph — the per-glyph
-                // dim tile stands down. That trust is only valid if the glyph's BRIGHT tile
-                // (which is ALWAYS drawn — `applyMainWordFloatGlyphLayers` never hides it) is
-                // ALSO sitting at the same, unfloated rest position as the base. If the bright
-                // tile has drifted away (`brightPositionY != dimPositionY`) while `dimHidden` is
-                // still true, the whole-line base is showing the glyph at rest AND the bright
-                // tile is showing a second, displaced copy at the same time — the reported ghost.
-                // This is precisely the desync `applyMainWordFloatGlyphLayers` already
-                // instruments (`NativeLyricsMaskTrace.recordWordFloatDesync`, `!isFloatingWord &&
-                // input.floatY != 0`), made into a hard per-frame assertion instead of an
-                // opt-in production trace.
-                if pair.dimHidden, abs(pair.brightPositionY - pair.dimPositionY) > 0.25 {
+                // 2026-09-19 architecture change (see the file header comment): an ordinary word's
+                // per-glyph DIM tile is never the visible copy any more — the whole-line dim base
+                // always paints the full line, so the tile must stay hidden every frame,
+                // regardless of where the bright tile above it has floated to.
+                if !pair.dimHidden {
                     violations.append(Violation(
                         t: t, glyphIndex: index, dimHidden: pair.dimHidden,
                         dimY: pair.dimPositionY, brightY: pair.brightPositionY

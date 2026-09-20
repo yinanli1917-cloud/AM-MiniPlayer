@@ -154,12 +154,32 @@ final class NativeLyricsGapHandoffTests: XCTestCase {
         )
     }
 
-    // The HOLE in the floor: a backward jitter that lands at/before the line's end makes postLineFade
-    // read ~1.0, which (wrongly) looks like "re-entered the sung window" and reset the floor → the
-    // faded overlay snapped back to full. A NON-explicit backward jitter must never re-light, even
-    // across the line boundary. Only an explicit seek (or a new line) may re-activate the overlay.
+    // SUPERSEDED 2026-09-19 (research/repro-2026-09-19-lyrics-render-3n.md, item A) — FLAGGED FOR
+    // FOUNDER REVIEW, not a silent regression: this test's original invariant ("a non-explicit
+    // backward jitter across the line boundary must never re-light") directly conflicts with a
+    // separate, later real-device bug fixed the same day. Real trace evidence
+    // (/tmp/nanopod_debug.log 18:10:55 "position jump 215.4s→83.7s" during a pause/play mash;
+    // 18:11:36 `bright=0.000 eff=0.000` on a row whose line was STILL genuinely active minutes
+    // later): a transient bad clock reading briefly past a still-playing line's own end
+    // permanently crushed `mainPostLineFadeFloor` toward 0 with nothing left to re-arm it, because
+    // the existing "never re-light on backward jitter" rule this test pins made the floor
+    // one-way. The fix (`NativeLyricsRowView`'s `mainPostLineFadeFloor`/
+    // `translationPostLineFadeFloor` sites) re-arms the floor to 1 whenever `currentTime` is at or
+    // before the line's own end, full stop — there is no clock-side signal available inside a
+    // single row that distinguishes "the surface has already advanced past this line and is now
+    // parking it through the post-line gap" (this test's scenario: `effectiveCurrentIndex` stays
+    // on this row throughout the gap too, so that is NOT a usable discriminator either) from "this
+    // line is still genuinely playing and a bad sample just glitched". The founder chose (in the
+    // coordinator relay) to fix the newer, worse bug (permanently invisible karaoke overlay for
+    // the rest of a still-playing line) even though it reopens this older, narrower synthetic
+    // case (a non-explicit backward jitter landing before an ALREADY-DEEP-IN-ITS-GAP line's own
+    // end re-lights that line's overlay instead of staying suppressed). This test is updated to
+    // record that traded-off outcome rather than deleted, so a future session can find both sides
+    // of the trade-off; it is not a request to leave this alone — a real fix needs a signal this
+    // row does not have (e.g. whether the surface has already begun/finished
+    // `beginDeferredDeactivation` for this index) plumbed through, out of scope for this pass.
     @MainActor
-    func test_overlayDoesNotRelightOnBackwardJitterAcrossLineEnd() {
+    func test_overlayRelightsOnBackwardJitterAcrossLineEnd_founderAcceptedTradeoff() {
         let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
         hostInWindow(surface, size: NSSize(width: 360, height: 600))
         let mc = MusicController(preview: true)
@@ -185,9 +205,12 @@ final class NativeLyricsGapHandoffTests: XCTestCase {
         let afterCross = overlay2()
         print(String(format: "acrossLineEnd: faded(t8.6)=%.3f afterBackJitter(t6.5)=%.3f", faded, afterCross))
 
-        XCTAssertLessThanOrEqual(
-            afterCross, faded + 0.05,
-            "overlay RE-LIT (\(faded) -> \(afterCross)) on a non-explicit backward jitter across the line end — the floor reset hole"
+        // 2026-09-19: this now DOES relight (the accepted trade-off — see the header comment).
+        // Pinned as a fact, not silently dropped: a future fix that plumbs a "this row has begun
+        // its deferred-deactivation fade" signal into the row could tighten this back up.
+        XCTAssertGreaterThan(
+            afterCross, faded + 0.5,
+            "expected the founder-accepted trade-off: a non-explicit backward jitter landing before the line's own end now re-lights it (\(faded) -> \(afterCross))"
         )
     }
 
