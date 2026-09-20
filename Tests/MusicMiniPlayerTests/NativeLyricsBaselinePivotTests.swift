@@ -23,6 +23,10 @@ import AppKit
 //    duplicated here.
 // 3. Adjacent rows never overlap (LineGaps-probe-equivalent gap >= 0) across the transition.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 2026-09-20: the six `test_baseline_*` displacement pins (first-line-baseline scale pivot,
+// 3f dcd7b6a) were retired — the founder rejected that pivot on device ("下一行激活后行间距会变")
+// and the row scales about its vertical centre again (v2.8 `.scaleEffect(anchor: .leading)`).
+// The no-overlap guarantees below still hold and stay.
 final class NativeLyricsBaselinePivotTests: XCTestCase {
     private var hostWindow: NSWindow?
     @MainActor override func tearDown() { hostWindow?.orderOut(nil); hostWindow = nil; super.tearDown() }
@@ -136,38 +140,6 @@ final class NativeLyricsBaselinePivotTests: XCTestCase {
                      c.label, yActive, yInactive, displacement))
         XCTAssertEqual(displacement, 0, accuracy: 0.001,
                        "\(c.label): first-line baseline must be invariant (in the row's own coordinate space) across active<->inactive")
-    }
-
-    @MainActor func test_baseline_en_singleLine() {
-        assertBaselineInvariant(BaselineCase(label: "EN single-line", text: "hello brave world", translation: nil), panelWidth: 320)
-    }
-
-    @MainActor func test_baseline_en_wrapped3Lines() {
-        assertBaselineInvariant(BaselineCase(
-            label: "EN wrapped (3 lines)",
-            text: "a genuinely long line of lyrics that will definitely wrap across three separate visual lines at this width",
-            translation: nil
-        ), panelWidth: 220)
-    }
-
-    @MainActor func test_baseline_en_withTranslation() {
-        assertBaselineInvariant(BaselineCase(label: "EN + translation", text: "hello brave world", translation: "你好勇敢的世界"), panelWidth: 320)
-    }
-
-    @MainActor func test_baseline_cjk_singleLine() {
-        assertBaselineInvariant(BaselineCase(label: "CJK single-line", text: "你好世界", translation: nil), panelWidth: 320)
-    }
-
-    @MainActor func test_baseline_cjk_wrapped3Lines() {
-        assertBaselineInvariant(BaselineCase(
-            label: "CJK wrapped (3 lines)",
-            text: "這是一句非常長的中文歌詞一定會在這個寬度下換成三行文字內容測試測試測試",
-            translation: nil
-        ), panelWidth: 220)
-    }
-
-    @MainActor func test_baseline_cjk_withTranslation() {
-        assertBaselineInvariant(BaselineCase(label: "CJK + translation", text: "你好世界", translation: "Hello world"), panelWidth: 320)
     }
 
     // MARK: - Requirement 3: adjacent rows never overlap across the transition
