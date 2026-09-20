@@ -1960,14 +1960,26 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
                 changed = true
             } else if snap {
                 let before = visualStates[row.index]
+                let wasActive = before?.target.isActive ?? false
                 visualStates[row.index]?.snap(to: target)
                 changed = changed || before != visualStates[row.index]
+                if wasActive && !target.isActive {
+                    rowViews[row.id]?.collapseWordFloatForDeactivation()
+                }
             } else {
                 let wasActive = visualStates[row.index]?.target.isActive ?? false
                 let isNowActive = target.isActive
                 if wasActive != isNowActive {
                     visualStates[row.index]?.quickRetarget(to: target)
                     changed = true
+                    // 2026-09-19 post-3o: the row's word-float geometry and tile visibility must
+                    // collapse to rest in the EXACT SAME FRAME this visual target flips inactive
+                    // — the same frame `quickRetarget` kicks the scale/blur/opacity spring toward
+                    // its new (receded) target — so that much larger motion masks the ~2pt float
+                    // release instead of trailing it via a separate clock (research/repro-2026-09-20-lyrics-render-3p.md).
+                    if wasActive && !isNowActive {
+                        rowViews[row.id]?.collapseWordFloatForDeactivation()
+                    }
                 } else {
                     changed = visualStates[row.index]?.setTarget(target) == true || changed
                 }

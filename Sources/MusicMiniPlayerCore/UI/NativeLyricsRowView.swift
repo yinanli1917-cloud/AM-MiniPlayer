@@ -239,7 +239,6 @@ final class NativeLyricsRowView: NSView {
             mainWasTextActiveLastPhase = false
             mainWordFloatFloor.removeAll()
             mainWordFloatReturnFloor = 1
-            mainWordFloatReturnStartTime = nil
         }
         self.row = row
         self.configuration = configuration
@@ -338,8 +337,6 @@ final class NativeLyricsRowView: NSView {
     // "two systems, one drifts" class of bug this codebase's postmortems warn against.
     // ───────────────────────────────────────────────────────────────────────────
     private var mainWordFloatReturnFloor: CGFloat = 1
-    private var mainWordFloatReturnStartTime: TimeInterval?
-    private static let mainWordFloatReturnDuration: TimeInterval = 0.35
     // Tracks the text-activation state `updatePlaybackPhase` observed LAST TIME it ran on this
     // view (regardless of role/config churn in between) — the activation-edge detector the fade
     // floor reset above relies on. Never true after `prepareForReuse`/a fresh mount, so a
@@ -433,6 +430,32 @@ final class NativeLyricsRowView: NSView {
         }
     }
 
+    /// 2026-09-19 post-3o correction (founder real-device report: every line visibly sank TWICE
+    /// — once as the karaoke bright overlay's own 1.5s `mainPostLineFadeFloor` fade ran, then
+    /// AGAIN half a second later as 3o's now-deleted `mainWordFloatReturnFloor` timer let the
+    /// float go with nothing else moving on screen to mask the ~2pt drop). The real v2.8
+    /// reference never has an independent float-release clock: the row's word tiles snap to
+    /// static (float 0, tiles hidden, whole-line dim base restored) in the EXACT SAME FRAME its
+    /// `NativeLyricsVisualMotionState` target flips inactive — i.e. the same frame the row's own
+    /// scale (1→0.95) / blur / opacity spring starts retargeting via `quickRetarget`. That much
+    /// larger, already-moving spring is what visually covers the small geometry snap.
+    /// `LyricsLayerRendererView.syncVisualTargets` calls this in lockstep with that exact
+    /// `quickRetarget` call — never on a delay, never eased. See
+    /// research/repro-2026-09-20-lyrics-render-3p.md.
+    func collapseWordFloatForDeactivation() {
+        guard mainWordFloatReturnFloor > 0 || mainPostLineFadeFloor > 0 else { return }
+        mainWordFloatReturnFloor = 0
+        mainPostLineFadeFloor = 0
+        translationPostLineFadeFloor = 0
+        mainWordFloatFloor.removeAll()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        endDeactivationFade()
+        clearSweepState()
+        applyInactivePlaybackLayerState()
+        CATransaction.commit()
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
         #if DEBUG
@@ -455,7 +478,6 @@ final class NativeLyricsRowView: NSView {
         mainWasTextActiveLastPhase = false
         mainWordFloatFloor.removeAll()
         mainWordFloatReturnFloor = 1
-        mainWordFloatReturnStartTime = nil
         // Clear the scale/position transform too. layout() re-asserts positioningTransform on every
         // commit; if a recycled row keeps the previous row's scale, the next mount flashes that old
         // size for one frame before applyFrame writes the new scale (the seek size-pop).
@@ -2020,7 +2042,6 @@ final class NativeLyricsRowView: NSView {
             translationPostLineFadeFloor = 1
             mainWordFloatFloor.removeAll()
             mainWordFloatReturnFloor = 1
-            mainWordFloatReturnStartTime = nil
         }
         // Phase timing MUST come from the shared monotonic clock (phaseRenderTime), never the raw
         // SB clock: a backward resync dip at line start collapses the active plan to progress 0
@@ -2055,7 +2076,6 @@ final class NativeLyricsRowView: NSView {
                 translationPostLineFadeFloor = 1
                 mainWordFloatFloor.removeAll()
                 mainWordFloatReturnFloor = 1
-                mainWordFloatReturnStartTime = nil
             }
         }
         mainWasTextActiveLastPhase = isActive
@@ -2071,27 +2091,24 @@ final class NativeLyricsRowView: NSView {
         // as the fade floor hasn't reached (approximately) zero, so the bright overlay's OWN
         // opacity fade is what removes it from the screen, never a position/visibility snap.
         let stillFadingOut = !isActive && mainPostLineFadeFloor > 0.001
-        // 2026-09-19 3o: after the bright fade above has fully bottomed out, the still-floating
-        // dim tiles (see `floatingOrders`/`applyMainWordFloatGlyphLayers`) get ONE more window to
-        // ease their held float target back to 0 before `applyInactivePlaybackLayerState` swaps
-        // back to the un-hollowed whole-line dim base — see `mainWordFloatReturnFloor`'s doc
-        // comment. Only starts once the bright fade is done and this row is genuinely inactive;
-        // resets (elsewhere) on every activation edge / seek / line change / reuse.
-        if isActive {
+        // 2026-09-19 post-3o correction (founder real-device report: "整行都是下沉的" — every
+        // line visibly sank TWICE, once as `mainPostLineFadeFloor`'s 1.5s bright fade ran, then
+        // AGAIN half a second later as 3o's independent `mainWordFloatReturnFloor` easing let go
+        // of the float with nothing else moving on screen to mask it). 3o's own fix — hollow +
+        // float dim in lockstep with bright — is kept; only its OWN separate eased-return timer
+        // is deleted here. The float now only ever holds at 1 (while `isActive` or
+        // `stillFadingOut`, i.e. this row is still genuinely current) or drops straight to 0 —
+        // never an eased in-between value. The 0 transition is driven by
+        // `collapseWordFloatForDeactivation()`, called by `LyricsLayerRendererView` in the EXACT
+        // same frame this row's own `NativeLyricsVisualMotionState` target flips inactive
+        // (`quickRetarget`) — i.e. the same frame the row's scale/blur/opacity spring starts
+        // retargeting, so the ~2pt geometry snap is masked by that much larger motion instead of
+        // trailing it by a separate clock. See docs/lyrics-ux-contract.md and
+        // research/repro-2026-09-20-lyrics-render-3p.md.
+        if isActive || stillFadingOut {
             mainWordFloatReturnFloor = 1
-            mainWordFloatReturnStartTime = nil
-        } else if mainPostLineFadeFloor <= 0.001 && mainWordFloatReturnFloor > 0.001 {
-            if mainWordFloatReturnStartTime == nil {
-                mainWordFloatReturnStartTime = renderTime
-            }
-            let elapsed = max(0, renderTime - (mainWordFloatReturnStartTime ?? renderTime))
-            let t = min(1, elapsed / Self.mainWordFloatReturnDuration)
-            // Same ease-out shape as `postLineFadeOut` (1 − t²) — monotonic, no overshoot, so the
-            // float can only ever move TOWARD 0, matching the word-float monotonic-floor contract.
-            mainWordFloatReturnFloor = CGFloat(1 - t * t)
         }
-        let stillReturningFloat = !isActive && mainPostLineFadeFloor <= 0.001 && mainWordFloatReturnFloor > 0.001
-        let renderAsActive = isActive || stillFadingOut || stillReturningFloat
+        let renderAsActive = isActive || stillFadingOut
 
         var sample: NativeLyricsTextPhaseSample?
         if managesTransaction {
@@ -2113,7 +2130,7 @@ final class NativeLyricsRowView: NSView {
                 row: row,
                 configuration: configuration,
                 currentTime: renderTime,
-                forceActive: stillFadingOut || stillReturningFloat
+                forceActive: stillFadingOut
             )
             let expectsPerRunSweep = row.displayLine.line.hasSyllableSync && !plan.wordRuns.isEmpty
             // 2026-09-19 real-device repro (rowdump "想爱 就不能害怕会有伤痕"): the dim-base
