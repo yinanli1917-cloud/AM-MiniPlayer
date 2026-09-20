@@ -6,10 +6,7 @@
     "duration": 212,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "无常"
     }
   },
@@ -20,16 +17,9 @@
     "duration": 261,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
       "firstLineSHA256": "6465226a180075c47e5ca9328d3eda9b4ca235feca9b92d1b2605702e21ad155",
-      "acceptableFirstLineSHA256": [
-        "e155b89e29d280124c3ea867640ec6625766d76c3940846a7c8490a9795e9ecd"
-      ],
+      "acceptableFirstLineSHA256": ["e155b89e29d280124c3ea867640ec6625766d76c3940846a7c8490a9795e9ecd"],
       "expectedClassification": "synced",
       "firstLineStartMinS": 10,
       "firstLineStartMaxS": 40,
@@ -44,10 +34,7 @@
     "album": "冬天一個遊 - Single",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "AMLL"
-      ],
+      "acceptableSources": ["NetEase", "AMLL"],
       "firstLineSHA256": "15ce6b4d94c2f2b4f016cbd746a807825b26fa90608465af1dbb623ad645fee9",
       "requiresSyllableSync": true,
       "minRealLineCount": 66,
@@ -64,13 +51,7 @@
     "duration": 252,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "AMLL",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": "封了国境"
     }
   },
@@ -81,10 +62,7 @@
     "duration": 295,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "飞翔"
     }
   },
@@ -95,13 +73,7 @@
     "duration": 269,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "AMLL",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": "小黄花"
     }
   },
@@ -112,10 +84,7 @@
     "duration": 325,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "走走停停"
     }
   },
@@ -126,12 +95,7 @@
     "duration": 229,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": "歩道橋"
     }
   },
@@ -142,11 +106,7 @@
     "duration": 263,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "AMLL",
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["AMLL", "NetEase", "QQ"],
       "firstLineContains": "天使"
     }
   },
@@ -157,19 +117,10 @@
     "duration": 205,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "AMLL",
-        "LRCLIB",
-        "LRCLIB-Search",
-        "QQ",
-        "Genius"
-      ],
+      "acceptableSources": ["NetEase", "AMLL", "LRCLIB", "LRCLIB-Search", "QQ", "Genius"],
       "firstLineContains": null,
       "firstLineSHA256": "9b93ef3241b521862767d296ab4fe692f88b61ec42adb3ed9f01bb8dd1eee50c",
-      "acceptableFirstLineSHA256": [
-        "61841aba1aec13180416e739b77e5d4c1b7f001ec2e80f641d8cc8af4bdf6335"
-      ]
+      "acceptableFirstLineSHA256": ["61841aba1aec13180416e739b77e5d4c1b7f001ec2e80f641d8cc8af4bdf6335"]
     }
   },
   {
@@ -179,12 +130,7 @@
     "duration": 355,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "AMLL",
-        "NetEase",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["AMLL", "NetEase", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": "real life"
     }
   },
@@ -195,11 +141,7 @@
     "duration": 391,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "AMLL",
-        "NetEase",
-        "LRCLIB"
-      ],
+      "acceptableSources": ["AMLL", "NetEase", "LRCLIB"],
       "firstLineContains": "desert highway"
     }
   },
@@ -210,12 +152,7 @@
     "duration": 234,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "AMLL",
-        "NetEase",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["AMLL", "NetEase", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": "club"
     }
   },
@@ -226,12 +163,7 @@
     "duration": 264,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "lyrics.ovh"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "lyrics.ovh"],
       "firstLineContains": "閉じて"
     }
   },
@@ -243,14 +175,7 @@
     "album": "Joepo 1981Khz",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search",
-        "lyrics.ovh",
-        "Genius"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"],
       "firstLineContains": "からっぽ"
     }
   },
@@ -261,11 +186,7 @@
     "duration": 234,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "lyrics.ovh"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "lyrics.ovh"],
       "firstLineContains": "流れる"
     }
   },
@@ -276,12 +197,7 @@
     "duration": 326,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "LRCLIB",
-        "LRCLIB-Search",
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["LRCLIB", "LRCLIB-Search", "NetEase", "QQ"],
       "firstLineContains": "幽霊",
       "expectedClassification": "synced",
       "maxTailGapS": 35
@@ -294,21 +210,10 @@
     "duration": 262,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search",
-        "Genius"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "Genius"],
       "firstLineContains": null,
       "firstLineSHA256": "2e9b12c2b0badcec47b2ac20b9fd9685f539301fe1640573f7a1f243c46bb65b",
-      "acceptableFirstLineSHA256": [
-        "6f0ffa95460fa7fb59be935e02710a068576a3cbb1736b9fdde888623df1c70d",
-        "ae0661cb1799b24e1c65a175644c57b1a5474285f9280c9349b5c61dd2593c87",
-        "06c1f6bbfafb8379c6dbeea6887a7b8fb4e3e328f52f946ae8f0eb17266c51a1",
-        "50185f1422b57951338bd8f218e1fc43e36453732cf8479c04e98aefc9a2a1fc"
-      ]
+      "acceptableFirstLineSHA256": ["6f0ffa95460fa7fb59be935e02710a068576a3cbb1736b9fdde888623df1c70d", "ae0661cb1799b24e1c65a175644c57b1a5474285f9280c9349b5c61dd2593c87", "06c1f6bbfafb8379c6dbeea6887a7b8fb4e3e328f52f946ae8f0eb17266c51a1", "50185f1422b57951338bd8f218e1fc43e36453732cf8479c04e98aefc9a2a1fc"]
     }
   },
   {
@@ -318,13 +223,7 @@
     "duration": 142,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search",
-        "lyrics.ovh"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
       "firstLineContains": "Hier encore"
     }
   },
@@ -335,11 +234,7 @@
     "duration": 225,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "lyrics.ovh"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "lyrics.ovh"],
       "firstLineContains": "五月雨"
     }
   },
@@ -351,13 +246,7 @@
     "expectation": {
       "shouldFindLyrics": false,
       "allowMissingLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search",
-        "lyrics.ovh"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
       "firstLineContains": "picture"
     }
   },
@@ -368,13 +257,7 @@
     "duration": 232,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search",
-        "lyrics.ovh"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
       "firstLineContains": "valse"
     }
   },
@@ -385,12 +268,7 @@
     "duration": 318,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": "闲适的生活",
       "expectedClassification": "synced",
       "maxTailGapS": 90
@@ -403,10 +281,7 @@
     "duration": 213,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "翻风"
     }
   },
@@ -417,15 +292,9 @@
     "duration": 209,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["QQ", "LRCLIB", "LRCLIB-Search"],
       "firstLineSHA256": "20f863f665841a3c69d24b360adc5be3ce2273d66d6a7cfb0ea529409fae23b2",
-      "acceptableFirstLineSHA256": [
-        "71cfe6daff670b0edb3b6d097fc865eaa92b547fea63d97aabfb95606e83a053"
-      ],
+      "acceptableFirstLineSHA256": ["71cfe6daff670b0edb3b6d097fc865eaa92b547fea63d97aabfb95606e83a053"],
       "expectedClassification": "synced",
       "firstLineStartMinS": 20,
       "firstLineStartMaxS": 30,
@@ -439,18 +308,10 @@
     "duration": 186,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "AMLL",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": null,
       "firstLineSHA256": "dff78bf5b4f25fcf57a840c39dff83fe435e2d61ed4f8507d65bf5b30a160035",
-      "acceptableFirstLineSHA256": [
-        "3fcb769bac68c4887d4dc448c5ae2a934e6fbbd940b84792b8406f1a5b4c078b"
-      ]
+      "acceptableFirstLineSHA256": ["3fcb769bac68c4887d4dc448c5ae2a934e6fbbd940b84792b8406f1a5b4c078b"]
     }
   },
   {
@@ -461,13 +322,7 @@
     "duration": 219,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "AMLL",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": "know",
       "maxImplausibleDenseLines": 0
     }
@@ -479,13 +334,7 @@
     "duration": 214,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search",
-        "lyrics.ovh"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
       "firstLineContains": "breaking"
     }
   },
@@ -496,10 +345,7 @@
     "duration": 313,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "那扇"
     }
   },
@@ -510,10 +356,7 @@
     "duration": 233,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "星が"
     }
   },
@@ -524,10 +367,7 @@
     "duration": 229,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "言えなく"
     }
   },
@@ -538,10 +378,7 @@
     "duration": 243,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "Friday Night"
     }
   },
@@ -553,10 +390,7 @@
     "album": "回蔚",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "拒绝"
     }
   },
@@ -568,10 +402,7 @@
     "album": "回蔚",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "跑到哪里逛一逛"
     }
   },
@@ -582,17 +413,10 @@
     "duration": 259,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "AMLL",
-        "Genius"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "AMLL", "Genius"],
       "firstLineContains": null,
       "firstLineSHA256": "e83a0fbc9568c0eda1180ce05a884171ca57175ea61ec07ec4490cb16279c06b",
-      "acceptableFirstLineSHA256": [
-        "de4c360cc61b0deddeec0b57a65da9a091d06998610b193f344fbf6097935393"
-      ]
+      "acceptableFirstLineSHA256": ["de4c360cc61b0deddeec0b57a65da9a091d06998610b193f344fbf6097935393"]
     }
   },
   {
@@ -602,10 +426,7 @@
     "duration": 239,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "逛一逛"
     }
   },
@@ -616,10 +437,7 @@
     "duration": 301,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "飞往"
     }
   },
@@ -630,12 +448,7 @@
     "duration": 378,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
       "firstLineSHA256": "98ca0a709ba49e04c44f02286157ac659690259a0323b44780d0117d3c173021",
       "expectedClassification": "synced",
       "firstLineStartMinS": 30,
@@ -651,12 +464,7 @@
     "album": "Close To You",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": "We've only just begun to live",
       "expectedClassification": "synced",
       "firstLineStartMinS": 8,
@@ -671,10 +479,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "allowMissingLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineSHA256": "547d5148752db9b817d4c05d1abb5b0946c6350ee77629cd5bdcdfe1ab445859",
       "expectedClassification": "synced",
       "firstLineStartMinS": 10,
@@ -689,10 +494,7 @@
     "duration": 277,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "cloudy"
     }
   },
@@ -704,10 +506,7 @@
     "album": "平凡",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "落地"
     }
   },
@@ -718,14 +517,9 @@
     "duration": 257,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineSHA256": "15588c6fdecf58c8166d4e68cb1071145bba57146d87cba2a9b8d67742718824",
-      "acceptableFirstLineSHA256": [
-        "005a02a86816b67770d7a006299b599d6560c348464d31ee71c4ffd8c07d20b1"
-      ],
+      "acceptableFirstLineSHA256": ["005a02a86816b67770d7a006299b599d6560c348464d31ee71c4ffd8c07d20b1"],
       "expectedClassification": "synced",
       "firstLineStartMinS": 20,
       "firstLineStartMaxS": 35,
@@ -739,12 +533,7 @@
     "duration": 165,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": "remember"
     }
   },
@@ -755,10 +544,7 @@
     "duration": 244,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": null,
       "firstLineSHA256": "1f81201ba1b69e69a03f325c3c2f9b6cd3e5298dcc5c5a0ed858482891b188f8"
     }
@@ -770,11 +556,7 @@
     "duration": 239,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "Genius"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "Genius"],
       "firstLineContains": "有时无心的散聚"
     }
   },
@@ -785,10 +567,7 @@
     "duration": 300,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "想"
     }
   },
@@ -800,10 +579,7 @@
     "album": "Sotsugyoukinen, Vol. 2",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineSHA256": "b4930edf6ed6373d8d86ac89f6cc54605301e7ec34b7a9dd4af2b9eaf50f2764",
       "expectedClassification": "synced",
       "firstLineStartMinS": 20,
@@ -818,12 +594,7 @@
     "duration": 236,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": "電話"
     }
   },
@@ -834,12 +605,7 @@
     "duration": 229,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": "歩道橋"
     }
   },
@@ -850,14 +616,7 @@
     "duration": 230,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "AMLL",
-        "LRCLIB",
-        "LRCLIB-Search",
-        "Genius"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB", "LRCLIB-Search", "Genius"],
       "firstLineContains": "始終"
     }
   },
@@ -869,14 +628,7 @@
     "album": "Conversations with the Moon - EP",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search",
-        "lyrics.ovh",
-        "Genius"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"],
       "firstLineContains": "learning to love you less"
     }
   },
@@ -888,14 +640,7 @@
     "album": "The Script of Destiny",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search",
-        "lyrics.ovh",
-        "Genius"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"],
       "firstLineContains": "原谅",
       "expectedClassification": "synced",
       "firstLineStartMinS": 10,
@@ -911,12 +656,7 @@
     "album": "My Lovely Legend: Teresa Carpio & Sandy Lamb",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": "愛神",
       "expectedClassification": "synced",
       "firstLineStartMinS": 15,
@@ -932,12 +672,7 @@
     "album": "The Inner Me",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": "言不由衷",
       "expectedClassification": "synced",
       "firstLineStartMinS": 30,
@@ -953,17 +688,9 @@
     "album": "JINJI KIKKO - Single",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
       "firstLineSHA256": "7716b4658b3db6499bf2be1088a6de5a49132cc44cae3ae19a04715aa7e4f71d",
-      "acceptableFirstLineSHA256": [
-        "2d0ef51c7dcba10de683bd98c10100429a8161b0480f2b4dd2c96f3378fcaa48",
-        "53829dd2d1c00038234286fdbb49f65eac272d675a2d9c8db45c72078b5ed185"
-      ],
+      "acceptableFirstLineSHA256": ["2d0ef51c7dcba10de683bd98c10100429a8161b0480f2b4dd2c96f3378fcaa48", "53829dd2d1c00038234286fdbb49f65eac272d675a2d9c8db45c72078b5ed185"],
       "expectedClassification": "synced",
       "maxTailGapS": 225
     }
@@ -1027,10 +754,7 @@
     "album": "Riding On Faith",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "QQ",
-        "NetEase"
-      ],
+      "acceptableSources": ["QQ", "NetEase"],
       "firstLineSHA256": "a309dfdccb651b3ed83d2734db481e79083a93e60469ef47228b5dfd7f3f953d",
       "expectedClassification": "synced",
       "firstLineStartMinS": 25,
@@ -1076,9 +800,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "allowMissingLyrics": true,
-      "acceptableSources": [
-        "QQ"
-      ],
+      "acceptableSources": ["QQ"],
       "firstLineSHA256": "63aeeccbdc8dbbb22166fcc1006aa89e9d3d174dd2317071387e49fe5ce707d9",
       "expectedClassification": "synced",
       "firstLineStartMinS": 10,
@@ -1095,9 +817,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "allowMissingLyrics": true,
-      "acceptableSources": [
-        "QQ"
-      ],
+      "acceptableSources": ["QQ"],
       "firstLineSHA256": "209dc213a6ebea8065fa26e0a264abe6b8d8f3eea63e3c542e753265967396fe",
       "expectedClassification": "synced",
       "firstLineStartMinS": 5,
@@ -1113,9 +833,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "allowMissingLyrics": true,
-      "acceptableSources": [
-        "QQ"
-      ],
+      "acceptableSources": ["QQ"],
       "firstLineSHA256": "bbb1fd368a31b2c9c7483f2d0ed6730582b37210d1a0de9cc0c53896c63c82cb",
       "expectedClassification": "synced",
       "firstLineStartMaxS": 5,
@@ -1152,9 +870,7 @@
     "album": "Young Stars",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase"
-      ],
+      "acceptableSources": ["NetEase"],
       "firstLineContains": "我近乡情怯",
       "expectedClassification": "synced"
     }
@@ -1167,11 +883,7 @@
     "album": "Shangri-La",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "LRCLIB-Search",
-        "QQ",
-        "NetEase"
-      ],
+      "acceptableSources": ["LRCLIB-Search", "QQ", "NetEase"],
       "firstLineContains": "北風毫不留情",
       "expectedClassification": "synced",
       "maxTailGapS": 35
@@ -1184,12 +896,7 @@
     "duration": 279,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "QQ",
-        "NetEase",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["QQ", "NetEase", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": "蝴蝶眨",
       "expectedClassification": "synced",
       "maxTailGapS": 35
@@ -1203,10 +910,7 @@
     "album": "From M.E. To Myself",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "好好愛自己",
       "expectedClassification": "synced",
       "maxTailGapS": 40
@@ -1221,10 +925,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "allowMissingLyrics": true,
-      "acceptableSources": [
-        "QQ",
-        "NetEase"
-      ],
+      "acceptableSources": ["QQ", "NetEase"],
       "firstLineContains": "你離開",
       "expectedClassification": "synced",
       "maxTailGapS": 40
@@ -1238,16 +939,9 @@
     "album": "Falling In Love At First Sight",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
       "firstLineSHA256": "879fe1980e6dd6f6e546b99fdde5d56c688fa61bc8749e4a0a0b745d839cf9e9",
-      "acceptableFirstLineSHA256": [
-        "6849e10d22193738946fd62697e6b74ea6144c4c25be6b1f862b5ca65f6536af"
-      ],
+      "acceptableFirstLineSHA256": ["6849e10d22193738946fd62697e6b74ea6144c4c25be6b1f862b5ca65f6536af"],
       "expectedClassification": "synced",
       "firstLineStartMinS": 20,
       "firstLineStartMaxS": 40,
@@ -1262,9 +956,7 @@
     "album": "Encore",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase"
-      ],
+      "acceptableSources": ["NetEase"],
       "firstLineSHA256": "678d4a97f009f12a27b7a619ace25a7100398471a15e2836cfb69584887f73e0",
       "expectedClassification": "synced",
       "firstLineStartMinS": 85,
@@ -1280,9 +972,7 @@
     "album": "Love You More & More",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase"
-      ],
+      "acceptableSources": ["NetEase"],
       "firstLineSHA256": "7dbd0ab1a529e142c3057df24f8073bb34d67d548190178947b0936d72d1bfcf",
       "expectedClassification": "synced",
       "firstLineStartMinS": 10,
@@ -1298,12 +988,7 @@
     "album": "The Manhattan Bridge",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ",
-        "LRCLIB",
-        "LRCLIB-Search"
-      ],
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
       "firstLineSHA256": "0b007f897ec4d15b20b03f0357f3832059b7f9a753fed5680e52067f12acc319",
       "expectedClassification": "synced",
       "firstLineStartMinS": 20,
@@ -1331,10 +1016,7 @@
     "album": "Mercury Retrograde",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineSHA256": "a6bcd422d014baa3178682f59076483f6f45d4a71b15a7f13fca5a09394585ea",
       "expectedClassification": "synced",
       "firstLineStartMinS": 20,
@@ -1350,16 +1032,9 @@
     "album": "Lovers - Single",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": [
-        "LRCLIB",
-        "LRCLIB-Search",
-        "NetEase",
-        "QQ"
-      ],
+      "acceptableSources": ["LRCLIB", "LRCLIB-Search", "NetEase", "QQ"],
       "firstLineSHA256": "1f8b25f320b90b4095e554c346e630e0c4f3605aea9697e391509407f7630abb",
-      "acceptableFirstLineSHA256": [
-        "ed9fb87053eb15fba8b431babfaf2aa572ffa9b0019baa706e160f5a41ddea0b"
-      ],
+      "acceptableFirstLineSHA256": ["ed9fb87053eb15fba8b431babfaf2aa572ffa9b0019baa706e160f5a41ddea0b"],
       "expectedClassification": "synced",
       "firstLineStartMinS": 20,
       "firstLineStartMaxS": 30,
