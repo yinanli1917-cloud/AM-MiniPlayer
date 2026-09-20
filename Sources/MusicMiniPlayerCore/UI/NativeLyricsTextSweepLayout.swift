@@ -226,7 +226,27 @@ enum NativeLyricsTextSweepLayout {
                 layoutManager: layoutManager,
                 textContainer: textContainer
             )
-            var matchedFragment = false
+            // 2026-09-20 (3q item 3, founder real-device repro — 《啟程》"只有你能带我走向 /
+            // 未来的旅程"): a word RUN's glyph range can span the wrap boundary between two
+            // VISUAL lines (common for CJK, where the lyric-source "word" segmentation doesn't
+            // align with where NSLayoutManager wraps). The old loop below added a full COPY of
+            // this run — same `run.startTime`/`run.endTime` — into every fragment it touched.
+            // While line 1 was mid-sweep through that run, line 2's duplicate copy independently
+            // evaluated the SAME [startTime, endTime] window against `currentTime` and computed
+            // its own nonzero progress fraction, revealing line 2's (narrower) copy of the run in
+            // lockstep with line 1 — the founder's "第二行「未来的旅」整段半亮" (a whole
+            // not-yet-sung visual line partially lit, tracking line 1's live progress). Fix:
+            // collect every intersecting fragment first, then — when a run spans more than one —
+            // split its time window PROPORTIONALLY by glyph count across the fragments in reading
+            // order, so only the fragment currently under the wavefront has a `startTime` at or
+            // before `currentTime`; a not-yet-reached line's slice always starts strictly later.
+            struct FragmentMatch {
+                let lineIndex: Int
+                let glyphRange: NSRange
+                let glyphs: [NativeLyricsTextSweepVisualRun.Glyph]
+                let rect: CGRect
+            }
+            var matches: [FragmentMatch] = []
             for (lineIndex, fragment) in fragments.enumerated() {
                 let fragmentGlyphRange = NSIntersectionRange(fragment.glyphRange, tokenGlyphRange)
                 guard fragmentGlyphRange.length > 0 else { continue }
@@ -241,19 +261,44 @@ enum NativeLyricsTextSweepLayout {
                     textContainer: textContainer
                 )
                 guard fragmentRect.width > 0, fragmentRect.height > 0 else { continue }
-                matchedFragment = true
-                visualRunsByLine[lineIndex, default: []].append(NativeLyricsTextSweepVisualRun(
-                    order: order,
-                    startTime: run.startTime,
-                    endTime: run.endTime,
-                    text: run.text,
-                    isEmphasis: run.isEmphasis || run.emphasis != .inactive,
-                    rect: fragmentRect,
-                    glyphs: fragmentGlyphs
+                matches.append(FragmentMatch(
+                    lineIndex: lineIndex,
+                    glyphRange: fragmentGlyphRange,
+                    glyphs: fragmentGlyphs,
+                    rect: fragmentRect
                 ))
             }
 
-            if matchedFragment {
+            if !matches.isEmpty {
+                let totalGlyphCount = matches.reduce(0) { $0 + $1.glyphRange.length }
+                let runDuration = run.endTime - run.startTime
+                var sliceStart = run.startTime
+                // `matches` is already in ascending fragment/line order (fragments enumerated in
+                // order), which is reading order — so the earliest visual line gets the earliest
+                // time slice.
+                for match in matches {
+                    let isLastMatch = match.lineIndex == matches.last?.lineIndex
+                    let sliceDuration: TimeInterval
+                    if matches.count == 1 || totalGlyphCount <= 0 {
+                        sliceDuration = runDuration
+                    } else {
+                        let share = Double(match.glyphRange.length) / Double(totalGlyphCount)
+                        sliceDuration = isLastMatch
+                            ? max(0, run.endTime - sliceStart)
+                            : runDuration * share
+                    }
+                    let sliceEnd = isLastMatch ? run.endTime : sliceStart + sliceDuration
+                    visualRunsByLine[match.lineIndex, default: []].append(NativeLyricsTextSweepVisualRun(
+                        order: order,
+                        startTime: sliceStart,
+                        endTime: sliceEnd,
+                        text: run.text,
+                        isEmphasis: run.isEmphasis || run.emphasis != .inactive,
+                        rect: match.rect,
+                        glyphs: match.glyphs
+                    ))
+                    sliceStart = sliceEnd
+                }
                 continue
             }
 
