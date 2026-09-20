@@ -14,12 +14,22 @@ import AppKit
 // assertions below are updated to pin THAT contract instead. See
 // `research/repro-2026-09-19-lyrics-render-3o.md` and `.claude/rules/banned-patterns.md`.
 //
+// SUPERSEDED AGAIN 2026-09-20 (3p, founder real-device report on top of 3o: "完完全全都是下沉的"
+// — every sung line visibly sank TWICE, once as the 1.5s bright-overlay fade ran, then AGAIN as
+// 3o's own independent `mainWordFloatReturnFloor` 0.35s easing let the float go afterward, with
+// nothing else on screen moving to mask that second drop). The real v2.8 reference has no
+// independent float-release clock: the float/tiles/dim-hollow all snap to rest in the EXACT SAME
+// FRAME the row's own scale/blur/opacity spring retargets toward its receded state
+// (`LyricsLayerRendererView.syncVisualTargets`'s `quickRetarget` edge, wired to
+// `NativeLyricsRowView.collapseWordFloatForDeactivation()`) — that much larger, already-moving
+// spring is what covers the small geometry snap. See research/repro-2026-09-20-lyrics-render-3p.md.
+//
 // Original defect this file exists to guard (still true, still fixed, just via a different
-// mechanism): a swept word's ink must never jump/snap in a single frame on deactivation. The fix
-// is now: `mainWordFloatReturnFloor` eases the held float (dim AND bright together) back to 0 over
-// a short window AFTER the bright opacity fade has already bottomed out, and the whole-line dim
-// base only un-hollows the same frame that eased float reaches (near) 0 — never before, never
-// instantly.
+// mechanism): a swept word's ink must never jump/snap independently WHILE the row is still
+// current — the bright overlay's own 1.5s post-line fade (`mainPostLineFadeFloor`) still covers
+// that window, at the floated position, same as before. Only once the row genuinely deactivates
+// (this test's harness has no "still current" gap — it jumps `current` straight from 0 to 1) does
+// everything switch to static, instantly, in that same tick.
 final class NativeLyricsDimBaseNeverMovesTests: XCTestCase {
 
     private var hostWindow: NSWindow?
@@ -275,33 +285,13 @@ final class NativeLyricsDimBaseNeverMovesTests: XCTestCase {
 
         XCTAssertFalse(sawDesync, "dim and bright must never disagree on Y — they are one geometry")
 
-        // Ground truth for "rest" is read empirically from the tail of the sample window (well
-        // past both the bright fade and the float-return window, where `isFloatingWord` is
-        // definitely false and `dimCenterY` is computed with no float term at all) rather than
-        // assumed from the −2pt contract constant — `dimLayer.position` is written every frame
-        // regardless of `isHidden`, so this is a faithful read even though the tile is hidden by
-        // then.
+        // Ground truth for "rest" is read empirically from the tail of the sample window, where
+        // `isFloatingWord` is definitely false and `dimCenterY` is computed with no float term at
+        // all — `dimLayer.position` is written every frame regardless of `isHidden`, so this is a
+        // faithful read even though the tile is hidden by then.
         guard let restY = pairYSequence.last?.dim else {
             return XCTFail("expected at least one sampled frame")
         }
-        let lastVisibleIndex = tileVisibleSequence.lastIndex(of: true)
-        guard let lastVisibleIndex else {
-            return XCTFail("the tile must be visible for at least one frame after deactivation begins")
-        }
-        XCTAssertEqual(
-            pairYSequence[lastVisibleIndex].dim, restY, accuracy: 0.1,
-            "the tile must already be at (near) rest the last frame it is visible — never hidden while still displaced"
-        )
-
-        // Monotonic return: once past the bright-opacity fade, the float's DISTANCE FROM REST only
-        // ever shrinks — never grows (no re-rise/overshoot).
-        var worstRise: CGFloat = 0
-        for i in 1..<pairYSequence.count {
-            let prevDist = abs(pairYSequence[i - 1].bright - restY)
-            let curDist = abs(pairYSequence[i].bright - restY)
-            if curDist > prevDist { worstRise = max(worstRise, curDist - prevDist) }
-        }
-        XCTAssertLessThanOrEqual(worstRise, 0.01, "float distance-from-rest grew by \(worstRise)pt in a single frame — must be strictly monotonic toward rest")
 
         // Hollowed state and tile visibility must change in lockstep, same frame — the exact
         // "字块已隐藏但暗底仍 blank" / "暗底已恢复但字块仍可见" defect this restore must not
@@ -313,13 +303,40 @@ final class NativeLyricsDimBaseNeverMovesTests: XCTestCase {
             )
         }
 
-        // The un-hollow must not happen instantly on the deactivation edge — there must be at
-        // least a few frames where the row is inactive but still hollowed/floated (the eased
-        // return window actually ran, not collapsed to 0 frames).
-        let stillHollowedWhileInactiveCount = hollowedSequence.filter { $0 }.count
-        XCTAssertGreaterThanOrEqual(
-            stillHollowedWhileInactiveCount, 3,
-            "the float-return window collapsed to too few frames (\(stillHollowedWhileInactiveCount)) — this is the instant-unhollow shape, not an eased return"
+        // 3p: this harness jumps `current` straight from 0 (still active) to 1 (row 0 fully
+        // deactivated) with no intervening "still current" gap — so the collapse must land
+        // essentially immediately, not over the 3o timer's ~0.35s (21-frame) eased window. The
+        // renderer's own semantic-index bookkeeping (`nativeSemanticCurrentIndex`, updated by
+        // `updateNativeTimelineForCurrentPlaybackIfNeeded` inside `presentationTick`) takes up to
+        // 2 ticks to catch up to a `currentIndex` change fed straight into `configure` with no
+        // natural gap — real playback always has at least a small gap here, so this bound is a
+        // generous, still-categorically-different upper bound from the deleted eased design,
+        // never the ~21-frame shape 3o produced.
+        let maxLagFrames = 2
+        let firstUnhollowedIndex = hollowedSequence.firstIndex(of: false) ?? hollowedSequence.count
+        let firstTileHiddenIndex = tileVisibleSequence.firstIndex(of: false) ?? tileVisibleSequence.count
+        XCTAssertLessThanOrEqual(
+            firstUnhollowedIndex, maxLagFrames,
+            "the row must un-hollow within \(maxLagFrames) frames of the deactivation edge — no eased release window (3o regression)"
         )
+        XCTAssertLessThanOrEqual(
+            firstTileHiddenIndex, maxLagFrames,
+            "the per-glyph tile must hide within \(maxLagFrames) frames of the deactivation edge — no eased release window (3o regression)"
+        )
+        XCTAssertTrue(
+            hollowedSequence.dropFirst(maxLagFrames).allSatisfy { !$0 },
+            "once collapsed, the row must stay un-hollowed — no re-hollow, no lingering eased window"
+        )
+        XCTAssertTrue(
+            tileVisibleSequence.dropFirst(maxLagFrames).allSatisfy { !$0 },
+            "once collapsed, the tile must stay hidden — no re-show, no lingering eased window"
+        )
+
+        // The float itself must be pinned at rest on every frame once collapsed — never an
+        // intermediate value between the floated offset and rest (the deleted 3o timer's shape).
+        for (dim, bright) in pairYSequence.dropFirst(maxLagFrames) {
+            XCTAssertEqual(dim, restY, accuracy: 0.01, "dim tile must be at rest once collapsed, never an eased intermediate position")
+            XCTAssertEqual(bright, restY, accuracy: 0.01, "bright tile must be at rest once collapsed, never an eased intermediate position")
+        }
     }
 }
