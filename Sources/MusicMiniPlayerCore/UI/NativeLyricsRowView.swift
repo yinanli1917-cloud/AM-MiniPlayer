@@ -3861,10 +3861,14 @@ final class NativeLyricsRowView: NSView {
             .foregroundColor: NSColor.white.withAlphaComponent(alpha),
             .paragraphStyle: paragraph
         ]
-        return NSAttributedString(
-            string: text,
-            attributes: attributes
-        )
+        // 2026-09-20 (founder screen recording: "切行时字突然变粗"): CATextLayer's own CJK
+        // fallback and NSLayoutManager's fallback pick DIFFERENT PingFang variants, so a row's
+        // weight jumped the moment it switched between the whole-line base and the active-line
+        // bitmaps. Resolve the concrete per-character font here (same `fixAttributes` AppKit's
+        // layout performs) so every path draws the identical font.
+        let storage = NSTextStorage(string: text, attributes: attributes)
+        storage.fixAttributes(in: NSRange(location: 0, length: storage.length))
+        return NSAttributedString(attributedString: storage)
     }
 
     private func attributedText(
