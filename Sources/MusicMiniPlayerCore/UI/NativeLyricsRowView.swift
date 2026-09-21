@@ -1410,6 +1410,14 @@ final class NativeLyricsRowView: NSView {
     /// the input unchanged) for single-line text — never touches the single-line geometry pinned
     /// by `NativeLyricsActiveLineSpacingTests`.
     private static func withFixedWrapLineHeight(_ attributed: NSAttributedString) -> NSAttributedString {
+        // 2026-09-21: retired. Both engines are NSLayoutManager now and share one paragraph style
+        // (`mainLineSpacing`); baking min/max line height here OVERRODE that style (it also reset
+        // lineSpacing to 0) and shifted the whole base block by one line-spacing vs the bitmaps
+        // (pin: NativeLyricsIncomingRowGeometryTests wrapped-row swap Δ−3.8). Pass-through.
+        return attributed
+    }
+
+    private static func withFixedWrapLineHeight_retired(_ attributed: NSAttributedString) -> NSAttributedString {
         guard attributed.string.contains("\n"), let height = measuredWrapLineHeight(for: attributed) else {
             return attributed
         }

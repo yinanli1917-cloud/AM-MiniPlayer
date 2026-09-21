@@ -10,7 +10,7 @@ enum NativeLyricsRowMeasurement {
     // interlude-dot x anchor, hover background frame, NativeLyricsRowScale's scale pivot X, and
     // this file's own `textWidth` orphan-avoidance slack).
     static let leadingInset: CGFloat = 20
-    static let trailingInset: CGFloat = 24
+    static let trailingInset: CGFloat = 28
     static let preludeHeight: CGFloat = 46
     static let preludeDotContainerTopInset: CGFloat = 8
     static let preludeDotContainerHeight: CGFloat = 30
@@ -104,7 +104,7 @@ enum NativeLyricsRowMeasurement {
 
     /// A widened row still leaves this much room to the panel's own trailing edge —
     /// never lets orphan-avoidance push text flush against the frame.
-    static let orphanAvoidanceSafetyMargin: CGFloat = 8
+    static let orphanAvoidanceSafetyMargin: CGFloat = 4
 
     private struct WidthMemoKey: Hashable {
         let text: String

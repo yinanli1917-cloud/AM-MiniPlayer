@@ -146,9 +146,9 @@ final class NativeLyricsOrphanAvoidanceTests: XCTestCase {
     // the fixed 24pt slack actually flip the decision (coarse multi-word fillers
     // like "steady steady..." only land within tens of points of the boundary,
     // never inside the slack window).
-    private func latinBoundaryText(trailing: String) -> String {
+    private func latinBoundaryText(trailing: String, shy: Int = 1) -> String {
         let runCapacity = maxRunLength("m", width: normalWidth)
-        return String(repeating: "m", count: runCapacity - 1) + " " + trailing
+        return String(repeating: "m", count: runCapacity - shy) + " " + trailing
     }
 
     // MARK: - (d) Latin short-word orphan (<=3 letters) widens
@@ -169,7 +169,8 @@ final class NativeLyricsOrphanAvoidanceTests: XCTestCase {
     // MARK: - Latin multi-word orphan tail ("of it") is NOT the reported shape — stays normal
 
     func test_latinMultiWordOrphanTail_staysNormalWidth() {
-        let text = latinBoundaryText(trailing: "of it")
+        // shy: 0 — no room for "of" on the first line either, so the whole tail wraps as a pair.
+        let text = latinBoundaryText(trailing: "of it", shy: 0)
 
         let normalMetrics = NativeLyricsTextMeasurement.metrics(text, width: normalWidth, font: font)
         XCTAssertEqual(normalMetrics.lineCount, 2, "setup: the trailing words must wrap to their own line")
