@@ -651,6 +651,8 @@ final class NativeLyricsRowView: NSView {
 
     var debugMainTextLayerHidden: Bool { mainTextLayer.isHidden }
 
+    var debugActiveLineDrawLayerHidden: Bool { activeLineDrawLayer.isHidden }
+
     var debugVisibleDimWordGlyphCount: Int {
         mainDimWordGlyphLayers.filter { !$0.isHidden }.count
     }
