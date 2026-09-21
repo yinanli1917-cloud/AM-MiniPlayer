@@ -2470,8 +2470,17 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         // left for `hasActiveMotion` to protect against — f1b8d8f's own regression test is rewritten
         // under the new contract (`shouldRasterize` must not FLIP during motion, not "must not be
         // rasterized during motion" — see LyricsRenderDefects20260918ReproTests) and stays green.
+        // 2026-09-21: the row that will activate NEXT stays live too. A rasterized layer is
+        // composited from a cached bitmap (pixel-snapped) and the activation tick flips it to live
+        // compositing at the same fractional position — the last ~1px "twitch" on the incoming
+        // row's first line in the founder's 60fps recording after the single-engine fix. Keeping
+        // the next melody row unrasterized removes that raster→live discontinuity from the switch
+        // frame entirely; it costs one live 0.5-radius blur row.
+        let isNextMelodyRow = nativeSemanticCurrentIndex.map {
+            NativeLyricsSeekClassifier.naturalNextIndex(after: $0, rows: configuration.rows) == row.index
+        } ?? false
         view.applyRasterizationPolicy(
-            isActive: visual.target.isActive || isTextPhaseActiveThisFrame
+            isActive: visual.target.isActive || isTextPhaseActiveThisFrame || isNextMelodyRow
         )
         // Defect C instrumentation (founder 2026-09-17): frame.origin.y is the row's REAL carried
         // position (not the layer transform, which AppKit resets on every commit — see the
@@ -3139,9 +3148,9 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
         let now = currentMediaTime()
         let snapMode = frameSnapMode(for: runtimeConfiguration, now: now)
-        let delta = lastPresentationTick.map { max(0, now - $0) }
-            ?? displayInterval
-            ?? 0
+        // Whole-frame steps (NativeLyricsFrameStep): callback jitter must not become uneven motion.
+        let rawDelta = lastPresentationTick.map { max(0, now - $0) } ?? displayInterval ?? 0
+        let delta = NativeLyricsFrameStep.quantizedDelta(raw: rawDelta, nominal: displayInterval)
         lastPresentationTick = now
         // Reveal gate countdown: hold the just-mounted rows hidden until the loop has committed a
         // spread frame, then reveal them already in position (no first-frame stacked flash). The
