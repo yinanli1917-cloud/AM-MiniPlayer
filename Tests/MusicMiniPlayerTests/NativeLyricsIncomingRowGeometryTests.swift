@@ -690,7 +690,8 @@ extension NativeLyricsIncomingRowGeometryTests {
             while t < boundary - 0.3 { step(t); t += tickDt }
             var prev: [Int: CGRect] = [:]
             var p = t
-            while p <= boundary + 0.1 {
+            // Rows above the active one start their topDown wave ≈+0.07s; only the pre-wave window counts.
+            while p <= boundary + 0.06 {
                 step(p)
                 for idx in (target - 2)...(target + 2) {
                     guard let v = surface.debugRowView(forIndex: idx), let r = surfaceInkRect(v) else { continue }
@@ -763,7 +764,8 @@ extension NativeLyricsIncomingRowGeometryTests {
         while p <= boundary + 0.6 {
             step(p)
             if let v = surface.debugRowView(forIndex: target - 1), let r = surfaceInkRect(v) {
-                tops.append((p - boundary, r.rect.minY))
+                // Row-local ink top (surface top minus the row frame) so the scroll wave does not count.
+                tops.append((p - boundary, r.rect.minY - v.frame.origin.y))
                 if p - boundary < 0.06 {
                     print(String(format: "t=%+.3f top=%.2f drawHidden=%d mainHidden=%d", p - boundary, r.rect.minY, v.debugActiveLineDrawLayerHidden ? 1 : 0, v.debugMainTextLayerHidden ? 1 : 0))
                 }
