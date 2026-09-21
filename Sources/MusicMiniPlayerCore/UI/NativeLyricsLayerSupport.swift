@@ -86,6 +86,169 @@ extension CALayer {
     }
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - NativeLyricsLayoutTextLayer (2026-09-21 incoming-row twitch fix)
+//
+// `NativeLyricsRowView.mainTextLayer`/`mainBrightTextLayer` (the whole-line dim/bright base)
+// used to be plain `CATextLayer`s, which lay out and draw text via Core Text/CTFramesetter.
+// `NativeLyricsActiveLineDrawLayer` (the active-line bitmap renderer) lays out the SAME text
+// via `NSLayoutManager`/TextKit. The two engines wrap and pitch multi-line (wrapped) CJK text
+// at a slightly different sub-pixel position, so a wrapped row's ink visibly jumped the instant
+// it swapped from one renderer to the other at line activation — see
+// `NativeLyricsIncomingRowGeometryTests.test_activationDoesNotJumpTransformedInk_wrappedRows`
+// (row 4 ink top -0.48px, bottom -0.95px at the swap tick). A prior attempt (baking a fixed
+// min/max line height into the CATextLayer string, `NativeLyricsRowView.withFixedWrapLineHeight`)
+// did not change the pin's numbers at all — the two engines still disagree.
+//
+// Fix: ONE engine for both states. This CALayer subclass draws its attributed string through
+// the exact same `NSLayoutManager`/`NSTextContainer` recipe (`lineFragmentPadding = 0`,
+// unbounded height, `maximumNumberOfLines = 0`, word-wrap by the layer's own bounds width) that
+// `NativeLyricsActiveLineDrawLayer.prepareLayout`/`runImage` use, with the identical
+// font-smoothing / subpixel-positioning context settings the 2026-09-20 ink-parity fix pinned
+// (`setShouldSmoothFonts(false)`, subpixel positioning on, quantization off) — so the inactive
+// whole-line base and the active-line bitmap tiles agree on glyph placement by construction
+// (same algorithm, same inputs) instead of needing a hand-tuned line-height patch.
+//
+// API surface is kept CATextLayer-shaped (`string`, `isWrapped`, `alignmentMode`,
+// `truncationMode`) purely so the many call sites that read/write `mainTextLayer`/
+// `mainBrightTextLayer` (frame, mask, opacity, isHidden, shadow*, addSublayer, string,
+// presentation()) keep compiling and behaving unchanged — this layer is still a plain CALayer,
+// so all of those inherited properties work exactly as before. `isWrapped`/`alignmentMode`/
+// `truncationMode` are stored but unused: this layer always word-wraps left-aligned with no
+// truncation (the only configuration `NativeLyricsRowView.commonInit` ever applies), matching
+// the NSLayoutManager recipe above.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+final class NativeLyricsLayoutTextLayer: CALayer {
+    var string: NSAttributedString? {
+        didSet {
+            guard string != oldValue else { return }
+            invalidateLayout()
+            setNeedsDisplay()
+        }
+    }
+    var isWrapped: Bool = true
+    var alignmentMode: CATextLayerAlignmentMode = .left
+    var truncationMode: CATextLayerTruncationMode = .none
+
+    private var textLayoutManager: NSLayoutManager?
+    private var textContainer: NSTextContainer?
+    private var textStorage: NSTextStorage?
+    private var layoutSignature: String?
+
+    override func action(forKey event: String) -> CAAction? { NSNull() }
+    // Tells CALayer the context handed to draw(in:) is already in top-left-origin, y-down space
+    // (the convention NSLayoutManager/AppKit text drawing expects) — the standard recipe for
+    // hosting AppKit-style text drawing inside a CALayer subclass.
+    override func contentsAreFlipped() -> Bool { true }
+
+    override init() {
+        super.init()
+        isOpaque = false
+        contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+    }
+
+    override init(layer: Any) {
+        super.init(layer: layer)
+        if let other = layer as? NativeLyricsLayoutTextLayer {
+            string = other.string
+        }
+    }
+
+    required init?(coder: NSCoder) { super.init(coder: coder) }
+
+    override var bounds: CGRect {
+        didSet {
+            guard bounds.width != oldValue.width else { return }
+            invalidateLayout()
+            setNeedsDisplay()
+        }
+    }
+
+    private func invalidateLayout() {
+        textLayoutManager = nil
+        textContainer = nil
+        textStorage = nil
+        layoutSignature = nil
+    }
+
+    private func ensureLayout() {
+        guard let string, bounds.width > 0 else {
+            invalidateLayout()
+            return
+        }
+        let signature = "\(bounds.width)|\(string.length)|\(string.string)"
+        if layoutSignature == signature, let textStorage {
+            // Same characters/width as last time, but attributes (e.g. per-run color/alpha for
+            // hidden-word masking) may have changed — refresh the storage without rebuilding the
+            // layout manager/container.
+            textStorage.setAttributedString(string)
+            return
+        }
+        layoutSignature = signature
+        let storage = NSTextStorage(attributedString: string)
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: bounds.width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        container.maximumNumberOfLines = 0
+        manager.addTextContainer(container)
+        storage.addLayoutManager(manager)
+        manager.ensureLayout(for: container)
+        textLayoutManager = manager
+        textContainer = container
+        textStorage = storage
+    }
+
+    override func draw(in ctx: CGContext) {
+        ensureLayout()
+        guard let textLayoutManager, let textContainer else { return }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
+        // 2026-09-20 ink-parity recipe (NativeLyricsActiveLineInkParityTests): match the
+        // CATextLayer rasterizer's font-smoothing/subpixel settings so this layer's ink density
+        // and glyph placement agree with the active-line bitmap path.
+        ctx.setShouldSmoothFonts(false)
+        ctx.setAllowsFontSmoothing(false)
+        ctx.setShouldAntialias(true)
+        ctx.setAllowsAntialiasing(true)
+        ctx.setShouldSubpixelPositionFonts(true)
+        ctx.setAllowsFontSubpixelPositioning(true)
+        ctx.setShouldSubpixelQuantizeFonts(false)
+        ctx.setAllowsFontSubpixelQuantization(false)
+        let glyphRange = textLayoutManager.glyphRange(for: textContainer)
+        if glyphRange.length > 0 {
+            textLayoutManager.drawGlyphs(forGlyphRange: glyphRange, at: .zero)
+        }
+        NSGraphicsContext.restoreGraphicsState()
+    }
+}
+
+/// Bridges `CATextLayer` and `NativeLyricsLayoutTextLayer` so shared debug/read-back helpers
+/// (`NativeLyricsRowView.firstRunForegroundAlpha`, `rowDumpLines`) can read either layer's
+/// attributed string without caring which rasterizer backs it.
+protocol NativeLyricsTextStringProviding: AnyObject {
+    var attributedStringValue: NSAttributedString? { get }
+}
+
+extension CATextLayer: NativeLyricsTextStringProviding {
+    var attributedStringValue: NSAttributedString? { string as? NSAttributedString }
+}
+
+extension NativeLyricsLayoutTextLayer: NativeLyricsTextStringProviding {
+    var attributedStringValue: NSAttributedString? { string }
+}
+
+/// Lets call sites configure a mixed array of `CATextLayer`/`NativeLyricsLayoutTextLayer`
+/// instances uniformly (`commonInit`'s `isWrapped`/`alignmentMode`/`truncationMode` loop) without
+/// each element needing the same concrete type.
+protocol NativeLyricsWrappableTextLayer: CALayer {
+    var isWrapped: Bool { get set }
+    var alignmentMode: CATextLayerAlignmentMode { get set }
+    var truncationMode: CATextLayerTruncationMode { get set }
+}
+
+extension CATextLayer: NativeLyricsWrappableTextLayer {}
+extension NativeLyricsLayoutTextLayer: NativeLyricsWrappableTextLayer {}
+
 final class NativeLyricsSweepMaskLineLayer: CALayer {
     private let solidLayer = CALayer().lyricsInert()
     private let fadeLayer = CALayer().lyricsInert()

@@ -14,8 +14,8 @@ final class NativeLyricsRowView: NSView {
     }
 
     private let backgroundLayer = CALayer().lyricsInert()
-    private let mainTextLayer = CATextLayer().lyricsInert()
-    private let mainBrightTextLayer = CATextLayer().lyricsInert()
+    private let mainTextLayer = NativeLyricsLayoutTextLayer().lyricsInert()
+    private let mainBrightTextLayer = NativeLyricsLayoutTextLayer().lyricsInert()
     private let mainBaseRevealMaskLayer = CALayer().lyricsInert()
     private let mainSweepMaskLayer = CAGradientLayer().lyricsInert()
     private let mainPerRunSweepMaskLayer = CALayer().lyricsInert()
@@ -434,14 +434,18 @@ final class NativeLyricsRowView: NSView {
         mainDimCompensationActive = false
         translationDimCompensationActive = false
         lastDimBaseTier = 0.35
-        [
+        mainTextLayer.string = nil
+        mainBrightTextLayer.string = nil
+        translationTextLayer.string = nil
+        translationBrightTextLayer.string = nil
+        interludeTextLayer.string = nil
+        ([
             mainTextLayer,
             mainBrightTextLayer,
             translationTextLayer,
             translationBrightTextLayer,
             interludeTextLayer
-        ].forEach { textLayer in
-            textLayer.string = nil
+        ] as [CALayer]).forEach { textLayer in
             textLayer.isHidden = true
             textLayer.opacity = 1
             textLayer.setAffineTransform(.identity)
@@ -895,9 +899,8 @@ final class NativeLyricsRowView: NSView {
         lines.append("row role=\(role) id=\(rowID) text=\"\(rowText.prefix(12))\"")
         func describe(_ label: String, _ layer: CALayer?) {
             guard let layer else { return }
-            let string = (layer as? CATextLayer)?.string as? NSAttributedString
+            let string = (layer as? NativeLyricsTextStringProviding)?.attributedStringValue
             let stringPrefix = string?.string.prefix(8).description
-                ?? (layer as? CATextLayer)?.string as? String
             let isBitmapContents = layer.contents != nil
             let t = layer.affineTransform()
             // 2026-09-19 founder follow-up: the model layer (what this whole dump otherwise
@@ -959,8 +962,8 @@ final class NativeLyricsRowView: NSView {
     var debugTranslationBaseLayerOpacity: Float { translationTextLayer.opacity }
     var debugTranslationBaseAttrAlpha: CGFloat { Self.firstRunForegroundAlpha(translationTextLayer) }
 
-    private static func firstRunForegroundAlpha(_ layer: CATextLayer) -> CGFloat {
-        guard let attributed = layer.string as? NSAttributedString, attributed.length > 0,
+    private static func firstRunForegroundAlpha(_ layer: NativeLyricsTextStringProviding) -> CGFloat {
+        guard let attributed = layer.attributedStringValue, attributed.length > 0,
               let color = attributed.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
         else { return 1 }
         return color.alphaComponent
@@ -1470,7 +1473,7 @@ final class NativeLyricsRowView: NSView {
         backgroundLayer.cornerRadius = Self.hoverBackgroundCornerRadius
         backgroundLayer.backgroundColor = NSColor.white.withAlphaComponent(Self.hoverBackgroundAlpha).cgColor
         backgroundLayer.isHidden = true
-        [mainTextLayer, mainBrightTextLayer, translationTextLayer, translationBrightTextLayer, interludeTextLayer].forEach { textLayer in
+        ([mainTextLayer, mainBrightTextLayer, translationTextLayer, translationBrightTextLayer, interludeTextLayer] as [NativeLyricsWrappableTextLayer]).forEach { textLayer in
             textLayer.isWrapped = true
             textLayer.alignmentMode = .left
             textLayer.truncationMode = .none
