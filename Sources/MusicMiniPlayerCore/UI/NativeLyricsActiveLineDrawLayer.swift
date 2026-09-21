@@ -229,6 +229,32 @@ final class NativeLyricsActiveLineDrawLayer: CALayer {
         for i in count..<maskLineLayers.count { maskLineLayers[i].isHidden = true }
     }
 
+    /// Live dim-tier write, independent of `update(_:)`. The row's dim base is continuously
+    /// re-derived every frame the ROW OPACITY changes (`applyDimBaseCompensation`, defect-3
+    /// class) — while `update(_:)` is only called while this row is the active text-phase row.
+    /// During deferred deactivation (the row keeps rendering through this layer while its
+    /// PARENT layer opacity springs down after the line ends) `update(_:)` stops being called,
+    /// so `dimContainer.opacity` would otherwise stay frozen at whatever it was on the last
+    /// active-phase tick while the compensation the whole-line base silently keeps computing
+    /// drifts away underneath it — the frozen value only catches up in one step when the row
+    /// finalizes and swaps back to the whole-line base (the on-screen brightness "pop"). This
+    /// keeps the visible dim tile in lockstep with that same compensated channel every frame,
+    /// so finalize is a no-op: both paths already agree on the current brightness.
+    func setDimAlpha(_ alpha: CGFloat) {
+        let clamped = Float(max(0, min(1, alpha)))
+        guard dimContainer.opacity != clamped else { return }
+        dimContainer.opacity = clamped
+        if let input = frameInput {
+            frameInput = FrameInput(
+                runs: input.runs,
+                lines: input.lines,
+                dimAlpha: CGFloat(clamped),
+                brightAlpha: input.brightAlpha,
+                fadeHalfPoint: input.fadeHalfPoint
+            )
+        }
+    }
+
     func update(_ input: FrameInput) {
         guard frameInput != input else { return }
         frameInput = input

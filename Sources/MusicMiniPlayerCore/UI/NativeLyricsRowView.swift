@@ -959,6 +959,19 @@ final class NativeLyricsRowView: NSView {
     /// the tests pin that product across handoff frames, so each factor is exposed.
     var debugMainBaseLayerOpacity: Float { mainTextLayer.opacity }
     var debugMainBaseAttrAlpha: CGFloat { Self.firstRunForegroundAlpha(mainTextLayer) }
+
+    /// Whichever dim channel is ACTUALLY on screen right now: the single-pass draw layer's
+    /// dim tile opacity while it is the visible one, `mainTextLayer`'s (compensated) opacity
+    /// once the row has handed back to the whole-line base. Reading `debugMainBaseLayerOpacity`
+    /// alone during single-pass rendering hides the bug this exists for — that layer is
+    /// correctly compensated but INVISIBLE (`mainTextLayer.isHidden == true`), while the
+    /// visible layer (`activeLineDrawLayer.dimContainer`) is the one that can go stale.
+    var debugVisibleDimChannel: Float {
+        if !activeLineDrawLayer.isHidden {
+            return Float(activeLineDrawLayer.frameInput?.dimAlpha ?? 1)
+        }
+        return mainTextLayer.isHidden ? 1 : mainTextLayer.opacity
+    }
     var debugTranslationBaseLayerOpacity: Float { translationTextLayer.opacity }
     var debugTranslationBaseAttrAlpha: CGFloat { Self.firstRunForegroundAlpha(translationTextLayer) }
 
@@ -1106,6 +1119,16 @@ final class NativeLyricsRowView: NSView {
         if translationTextLayer.opacity != translationValue {
             translationTextLayer.opacity = translationValue
             layerMutationCount += 1
+        }
+        // Mirror the SAME compensated value onto the single-pass draw layer's visible dim tile.
+        // `mainTextLayer` itself is hidden while this row renders through `activeLineDrawLayer`
+        // (active text phase, and — the deferred-deactivation case — the recede AFTER text phase
+        // stops driving this row) so writing only to the hidden layer above is invisible; without
+        // this, the draw layer's dim tile stays pinned at whatever `update(_:)` last baked while
+        // the row's own opacity spring keeps moving underneath it — see
+        // `NativeLyricsActiveLineDrawLayer.setDimAlpha`.
+        if singlePassActive {
+            activeLineDrawLayer.setDimAlpha(CGFloat(mainValue))
         }
     }
 
