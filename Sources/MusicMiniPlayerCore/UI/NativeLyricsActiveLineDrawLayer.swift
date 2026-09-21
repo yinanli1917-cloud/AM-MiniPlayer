@@ -126,9 +126,23 @@ final class NativeLyricsActiveLineDrawLayer: CALayer {
         let glyphRange = layoutManager.glyphRange(forCharacterRange: run.charRange, actualCharacterRange: nil)
         guard glyphRange.length > 0 else { return nil }
         let pad: CGFloat = 8
-        let frame = run.rect.insetBy(dx: -pad, dy: -pad)
         let scale = contentsScale
-        let w = Int((frame.width * scale).rounded(.up)), h = Int((frame.height * scale).rounded(.up))
+        // 2026-09-20 (founder recording: 切行前入场行抖 1–2px; headless pin
+        // NativeLyricsIncomingRowGeometryTests): the run bitmap used to be `ceil(w×scale)` pixels
+        // stretched (`contentsGravity = .resize`) into a FRACTIONAL point-size bounds at a
+        // fractional position — every bitmap was resampled by a different sub-pixel remainder,
+        // so its ink edges landed up to 0.5 device-px away from where CATextLayer drew the same
+        // glyphs. Snap the bitmap's frame to this layer's own device-pixel grid (the grid
+        // CATextLayer's backing store is aligned to): the glyphs are still drawn at their exact
+        // fractional layout positions INSIDE the bitmap, but the bitmap itself maps 1:1 onto
+        // device pixels, so both rasterizers round identically and the swap moves nothing.
+        let raw = run.rect.insetBy(dx: -pad, dy: -pad)
+        let minX = (raw.minX * scale).rounded(.down) / scale
+        let minY = (raw.minY * scale).rounded(.down) / scale
+        let maxX = (raw.maxX * scale).rounded(.up) / scale
+        let maxY = (raw.maxY * scale).rounded(.up) / scale
+        let frame = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        let w = Int((frame.width * scale).rounded()), h = Int((frame.height * scale).rounded())
         guard w > 0, h > 0,
               let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
                                   space: CGColorSpaceCreateDeviceRGB(),
@@ -149,6 +163,13 @@ final class NativeLyricsActiveLineDrawLayer: CALayer {
         ctx.setAllowsFontSmoothing(false)
         ctx.setShouldAntialias(true)
         ctx.setAllowsAntialiasing(true)
+        // CATextLayer positions glyphs at fractional advances (allowsFontSubpixelQuantization is
+        // false by default); a fresh CGContext quantizes them. Match, or the two rasterizers
+        // place the same glyph up to 1/4 px apart.
+        ctx.setShouldSubpixelPositionFonts(true)
+        ctx.setAllowsFontSubpixelPositioning(true)
+        ctx.setShouldSubpixelQuantizeFonts(false)
+        ctx.setAllowsFontSubpixelQuantization(false)
         layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: .zero)
         NSGraphicsContext.restoreGraphicsState()
         guard let image = ctx.makeImage() else { return nil }
