@@ -1336,7 +1336,67 @@ final class NativeLyricsRowView: NSView {
             guard range.location + range.length <= attributed.length else { return attributed }
             result.append(attributed.attributedSubstring(from: range))
         }
+        return withFixedWrapLineHeight(result)
+    }
+
+    /// 2026-09-21 (founder recording: wrapped-row "twitch" 1-2px at the CATextLayer→bitmap swap;
+    /// headless: `NativeLyricsIncomingRowGeometryTests.test_activationDoesNotJumpTransformedInk_wrappedRows`):
+    /// `displayWrapped`/`attributedDisplayWrapped` join wrap fragments with a literal "\n" so a
+    /// wrapped row's dim base (`mainTextLayer`, a CATextLayer drawing via CoreText/CTFramesetter)
+    /// stays a SINGLE laid-out string (the 08-27 constraint). But CoreText computes each CTLine's
+    /// typographic height from the MAX ascent/descent of every glyph in that line's range —
+    /// including the "\n" itself, whose control-character glyph is measured against a font whose
+    /// metrics differ from the CJK fallback (PingFang) used for the visible glyphs. That inflates
+    /// the line carrying the break by ~2pt versus `NSLayoutManager`'s own `lineFragmentRect`
+    /// (the layout the sweep/bitmap paths use), so `mainTextLayer`'s wrapped lines sit at a
+    /// different pitch than `NativeLyricsActiveLineDrawLayer`'s bitmap-tile positions — the
+    /// swap moves ink even though neither path's row FRAME changed.
+    /// Fix: measure the ACTUAL per-fragment line height this exact (already-wrapped, per-char
+    /// font-resolved) string lays out to via the same `NSLayoutManager` machinery, then bake that
+    /// as a uniform `minimumLineHeight == maximumLineHeight` into the string's paragraph style so
+    /// CoreText can no longer let the break glyph inflate one line over another. No-op (returns
+    /// the input unchanged) for single-line text — never touches the single-line geometry pinned
+    /// by `NativeLyricsActiveLineSpacingTests`.
+    private static func withFixedWrapLineHeight(_ attributed: NSAttributedString) -> NSAttributedString {
+        guard attributed.string.contains("\n"), let height = measuredWrapLineHeight(for: attributed) else {
+            return attributed
+        }
+        let result = NSMutableAttributedString(attributedString: attributed)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.alignment = .left
+        paragraph.lineSpacing = 0
+        paragraph.minimumLineHeight = height
+        paragraph.maximumLineHeight = height
+        result.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: result.length))
         return result
+    }
+
+    /// The per-line-fragment height `NSLayoutManager` computes for this EXACT already-wrapped,
+    /// per-character font-resolved string (hard "\n" breaks only, no re-wrapping — the container
+    /// is unbounded width). This is the same measurement the sweep layout / active-line bitmap
+    /// path (`NativeLyricsActiveLineDrawLayer.prepareLayout`, `NativeLyricsTextSweepLayout`) uses
+    /// for its line pitch, so baking it into the CATextLayer string's paragraph style makes both
+    /// rasterizers agree by construction instead of by a hand-tuned constant.
+    private static func measuredWrapLineHeight(for attributed: NSAttributedString) -> CGFloat? {
+        let storage = NSTextStorage(attributedString: attributed)
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        container.maximumNumberOfLines = 0
+        manager.addTextContainer(container)
+        storage.addLayoutManager(manager)
+        manager.ensureLayout(for: container)
+        var maxHeight: CGFloat = 0
+        var glyphIndex = 0
+        let glyphCount = manager.numberOfGlyphs
+        while glyphIndex < glyphCount {
+            var lineGlyphRange = NSRange()
+            let rect = manager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineGlyphRange)
+            maxHeight = max(maxHeight, rect.height)
+            glyphIndex = NSMaxRange(lineGlyphRange)
+        }
+        return maxHeight > 0 ? maxHeight : nil
     }
 
     // No per-row tracking area. The surface (NativeLyricsSurfaceView) is the SINGLE hover authority:
@@ -3912,7 +3972,7 @@ final class NativeLyricsRowView: NSView {
         // layout performs) so every path draws the identical font.
         let storage = NSTextStorage(string: text, attributes: attributes)
         storage.fixAttributes(in: NSRange(location: 0, length: storage.length))
-        return NSAttributedString(attributedString: storage)
+        return Self.withFixedWrapLineHeight(NSAttributedString(attributedString: storage))
     }
 
     private func attributedText(
