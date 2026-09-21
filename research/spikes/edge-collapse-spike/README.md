@@ -1,231 +1,318 @@
-# edge-collapse-spike
+# edge-collapse-spike (v2 — native Liquid Glass morph)
 
-Standalone macOS 26 prototype of the redesigned "贴边收起" (edge-collapse)
-animation from `research/edge-collapse-redesign-2026-09-19.md` (sections
-2/3/6/7/8 are the spec this implements). It is **not** wired into nanoPod —
-it's a throwaway SwiftPM app so the founder can look at the real motion on
-screen before any of this touches `Sources/MusicMiniPlayerCore`.
+Standalone macOS 26 prototype of the "贴边收起" (edge-collapse) animation.
+This is a **from-scratch rewrite**: the founder rejected v1
+("completely no glass gradient, no SwiftUI animations, not one continuous
+smooth motion; rough") and `AUDIT-2026-09-20.md` found the code-level reason
+— v1 called `.glassEffect` in exactly one of its five states, and every
+transition was a relay of 2–7 independently-sprung `withAnimation` calls
+glued by `DispatchQueue.main.asyncAfter`, ending in a hard, non-animated
+view-identity swap at every settle boundary. This rewrite follows the
+audit's "correct approach" section and the reference material it names:
+`research/spikes/glass-morph-spike/main.swift` (proof that
+`GlassEffectContainer` + `glassEffectID` + ONE `withAnimation` genuinely
+renders and morphs glass on this exact panel setup) and
+`v3-material-analysis.md`'s frame-by-frame measurement of Apple's own
+capsule→sphere morph (width-only ease-out, no overshoot, ~317ms).
 
-The four files that ARE meant to be app-portable (no spike-only
-dependencies, safe to lift into `Sources/MusicMiniPlayerCore/UI` more or
-less verbatim) are:
+It is **not** wired into nanoPod — it's a throwaway SwiftPM app so the
+founder can look at the real motion on screen before any of this touches
+`Sources/MusicMiniPlayerCore`.
 
-- `Sources/EdgeCollapseSpike/EdgeCollapseTokens.swift` — every §7 timing/
-  spring number + §3 frame geometry.
-- `Sources/EdgeCollapseSpike/EdgeCollapseReducer.swift` — the 5-state ×
-  5-event pure state machine (design §2).
-- `Sources/EdgeCollapseSpike/EdgeCollapseClockScheduler.swift` — pure
-  geometry/hero/material/goo clock planner (design §7).
-- `Sources/EdgeCollapseSpike/CollapseShape.swift` — the `CollapseShape`
-  custom `Shape` + its card→stalk→pill / pill→blob→card keyframe sampler
-  (design §8).
+## Architecture
 
-Everything else under `Sources/EdgeCollapseSpike/` (AppModel, the panel,
-the control window, the SwiftUI content views, the goo Canvas) is spike-only
-wiring — it's there to drive the four portable files on screen, not to be
-copied into the app as-is.
+**One `GlassEffectContainer`, one `@Namespace`, two stable `glassEffectID`s,
+never a structurally different view type swapped in per state.**
 
-## How to run
+- **`body`** (id `"body"`) is the ONE persistently-mounted glass shape across
+  every `EdgePresentation` — never conditionally mounted/unmounted, never a
+  different concrete `Shape` TYPE. It's always a single
+  `RoundedRectangle(cornerRadius:)` whose `.frame(width:height:)` and corner
+  radius are the only things that change between states:
+  - `.card`: 250×316, corner 18.
+  - `.tucked`: 8×96, corner = height/2 (== a true capsule — Apple's own
+    `DefaultGlassEffectShape` docs: "the default shape applied by glass
+    effects, a capsule" IS a rounded rect whose corner radius is half the
+    short side, so this needs no separate `Capsule()` call site).
+  - `.floating` variant H: 100–180×32 info bar, corner = height/2 (capsule).
+  - `.floating` variant V: 32×32 artwork drop, corner 16 (a true capsule
+    would ALSO need corner=16 here since it's already square, so this is
+    identical to a capsule — the task brief's own instruction to use
+    `RoundedRectangle` for this one explicitly rather than `Circle()`/
+    `Capsule()` "to keep the explicit-shape rule" lines up with this file's
+    one-shape-type policy for a different, independent reason).
+  - `.collapsing`/`.expanding` are NOT separate layouts — `EdgeCollapseLayout.visualLayout(for:)`
+    maps them straight to `.tucked`/`.card`, so the single `withAnimation`
+    that starts a collapse/expand moves `body`'s frame+cornerRadius directly
+    to the TARGET state; there is no intermediate "collapsing shape".
+- **`control`** (id `"control"`) exists ONLY in `.floating` — a
+  `RoundedRectangle` (64×28 in H, 28×64 in V, corner 14), mounted/unmounted
+  with `.glassEffectTransition(.matchedGeometry)` so it visibly pinches off
+  from / merges into `body` (the "two drops" effect design §6 describes).
+- **Card content** (fluid gradient, title, play/pause/forward glyphs),
+  **tucked content** (progress fill), and **floating-H content** (title
+  text) are all ALWAYS mounted as sibling layers inside `body`'s content
+  overlay, cross-fading via `.opacity(visualLayout == X ? 1 : 0)` — never a
+  conditional `if`/`switch` that swaps them (that was v1's §2/§4 bug).
+- **Hero artwork** (`HeroArtworkView`, `matchedGeometryEffect(id: "hero")`)
+  is a TOP-LEVEL overlay, sibling to the `GlassEffectContainer`, NOT nested
+  inside either host's own `clipShape` — so a `.floating`→`.card` (expand)
+  flight is never cut mid-transit by either host's bounds. It mounts at
+  `.card` (200pt, near the top of the card) and `.floating` (24pt in H /
+  26pt in V, near the body's leading edge), and is simply ABSENT at
+  `.tucked` (removed via `.transition(.opacity)` — "shrinks into the stalk
+  and fades," per top-level task instruction #1, since tucked genuinely has
+  no hero slot to fly to).
+- **Tint**: `.gradient` = black→clear `LinearGradient` (black at the
+  trailing/edge side), `.black` = flat 0.85 black, `.none` = raw glass — all
+  inset 1.5pt so the tint overlay never paints over the glass rim highlight.
+
+Why a single `RoundedRectangle` instead of literally switching to
+`Capsule()`/`Circle()` per state, per Shape-type identity: whether the
+Liquid Glass system morphs continuously between TWO DIFFERENT concrete
+`Shape` types sharing one `glassEffectID` is undocumented and untested here.
+What IS empirically proven (both by `glass-morph-spike`'s own measurement —
+scenario 2, a single always-mounted pill whose `HStack` spacing changes,
+measured `MORPH=yes` with 23 continuous frame-steps and NO identity change
+at all — and by this spike's own `probe.sh`, see below) is that a single
+persistently-mounted glass view whose frame/cornerRadius change under ONE
+`withAnimation` morphs continuously. So every shape this design needs is
+expressed that way, sidestepping the untested case entirely while still
+producing pixel-identical results to a capsule/circle wherever the design
+calls for one.
+
+## Every transition is exactly one `withAnimation`
+
+No `asyncAfter` chains, no per-channel spring relay (v1's §3 bug), no
+keyframe sampling. `EdgeCollapseAppModel.performTransition` is the ONLY
+place a presentation change happens, and it's always exactly:
+
+```swift
+withAnimation(animation, completionCriteria: .logicallyComplete) {
+    send(event)                 // one @Published write: presentation = next
+} completion: {
+    if let settleEvent { send(settleEvent) }   // reducer bookkeeping only —
+}                                                // no further visual change,
+                                                 // since visualLayout already
+                                                 // reached its target above.
+```
+
+`EdgeCollapseReducer`'s 5×5 table is unchanged from v1 (`collapsing`/
+`expanding` remain real states, entered on request and exited on settle) —
+but visually they are exactly the in-flight animation between two of the
+three real layouts (card/tucked/floating), never a layout of their own.
+Settling is detected via `.logicallyComplete` completion criteria
+(macOS 14+), not a hand-timed `asyncAfter`.
+
+Animation table (top-level task instruction #2 — `EdgeCollapseTokens`):
+
+| Transition | Animation | Bounce-switchable? |
+|---|---|---|
+| collapse (Bounce=Settle) | `.spring(duration: 0.32, bounce: 0.0)` — Apple's measured ease-out | yes |
+| collapse (Bounce=Bouncy) | `.spring(duration: 0.36, bounce: 0.28)` | yes |
+| floating out (hover in) | `.spring(duration: 0.24, bounce: 0.15)` | no |
+| floating retract (hover out) | `.spring(duration: 0.20, bounce: 0.0)` | no |
+| expand | `.spring(duration: 0.36, bounce: 0.12)` | no |
+
+Tempo (1.0×/1.5×) multiplies every duration above, never a bounce fraction
+or a distance.
+
+## Window never resizes
+
+One transparent, borderless, non-activating `NSPanel`, fixed at
+`EdgeCollapseTokens.containerSize` = **320×360**, right edge pinned to the
+screen's right edge, vertically centered — set once at launch
+(`pinnedPanelFrame`/`makeEdgeCollapsePanel`) and never touched again. Every
+layout (card/tucked/floating, and every point in between) is positioned
+WITHIN this fixed canvas via `EdgeCollapseLayout.rects(for:variant:titleWidth:)`,
+a pure function returning `CGRect`s in the container's own top-left-origin
+coordinate space.
+
+Transparent regions pass mouse events through: `EdgeGestureHostingView`
+overrides `hitTest(_:)` to return `nil` outside the CURRENT active
+hit-region (the card's own rect in `.card`; `EdgeCollapseLayout.hoverRegion`
+— body∪control padded by the documented expand amount — in `.tucked`/
+`.floating`), rather than toggling `NSPanel.ignoresMouseEvents`. The same
+region drives an `NSTrackingArea` for hover enter/exit (`updateTrackingAreas`),
+refreshed by `EdgeCollapseAppModel` (`hostingView?.refreshHitRegion()`)
+every time a transition starts.
+
+## Reduce Motion
+
+`EdgeCollapseAppModel.performTransition`, when `reduceMotion` is true:
+wraps the state write in a `Transaction` with `disablesAnimations = true`
+(instant geometry snap straight to the settled target — collapse's
+`settleEvent` fires in the SAME transaction, so there's no lingering
+`.collapsing`/`.expanding` intermediate state), then cross-fades a
+translucent black flash overlay out over a 180ms `.linear` animation on
+opacity alone (top-level task instruction #5's "simplest correct thing").
+
+## Gestures
+
+| Input | Effect |
+|---|---|
+| Two-finger scroll, `.ended` phase, dominant **rightward** `scrollingDeltaX` | `.card` → collapse |
+| Hover the tucked stalk's padded hit-region | `.tucked` → `.floating` |
+| Mouse leaves the floating bodies' padded union | `.floating` → `.tucked` |
+| Click `body` (tucked or floating) | → `.card` (expand) |
+| Click `control` (floating only) | toggle fake play/pause |
+| Control window **Collapse**/**Expand** buttons | same model methods as the gestures above |
+
+Direction fix vs v1: v1's `scrollWheel` only checked `abs(scrollingDeltaX) > abs(scrollingDeltaY)`
+— it would fire on a swipe in EITHER horizontal direction. `EdgeGestureHostingView.scrollWheel`
+now additionally requires `event.scrollingDeltaX > 2` (a documented sign
+convention — see the file's doc comment — since this panel only ever docks
+right).
+
+## Control window
+
+| Control | Effect |
+|---|---|
+| presentation / track labels | live state readout |
+| Collapse / Expand / Next track | same model methods the gestures use |
+| Variant (H/V) | floating layout — info bar above controls, or artwork drop above controls |
+| Tint (Gradient/Black/None) | body+control edge overlay |
+| Bounce (Settle/Bouncy) | collapse-only spring arm (see animation table) |
+| Tempo (1.0×/1.5×) | scales every animation's duration |
+| Reduce Motion override | forces the 180ms crossfade path regardless of the system setting |
+
+## probe.sh — code-level proof of one continuous motion
+
+```bash
+cd research/spikes/edge-collapse-spike
+./probe.sh
+```
+
+Builds `-c release`, launches with `EDGECOLLAPSE_PROBE=1` (which arms
+`EdgeCollapseProbe` — a ~60Hz `Timer` that walks the hosting view's `CALayer`
+tree and logs every layer whose class name contains "glass"/"backdrop",
+reusing `glass-morph-spike/main.swift`'s own `walkLayers`/`recordMorphFrame`
+technique), pokes it to collapse then expand via
+`NSDistributedNotificationCenter` (public API — see
+`SpikeAppDelegate.swift`'s `EdgeCollapseProbeNotification` doc comment for
+why this was chosen over a `nanopodspike://` URL scheme, and why the poster
+is a tiny ad-hoc `swift <script>.swift` process rather than `osascript -l
+JavaScript`: the JXA ObjC-bridge call reported success but silently never
+delivered the notification in testing, confirmed by an A/B against a
+plain-Swift poster using the identical API), waits, quits, then runs
+`probe_analyze.py` against the log.
+
+**Pass criterion**: for each of the `collapse`/`expand` labels, the tracked
+glass layer's `(width, height)` must change over **≥12 distinct consecutive
+frame-steps** with **no single step larger than 25% of the transition's
+total delta** — the code-level signature of one continuous morph, as
+opposed to a snap or a 2–3-step relay.
+
+**Actual result** (this machine, Xcode 26.2 / macOS 26.2, `swift test`
+green beforehand):
+
+```
+PASS: collapse — steps=25 (need >=12, ok); max_single_step=69.72 = 21.6% of total_delta=322.82 (need <=25%, ok) (frames=44)
+PASS: expand — steps=20 (need >=12, ok); max_single_step=42.82 = 13.1% of total_delta=327.05 (need <=25%, ok) (frames=43)
+
+PROBE OVERALL: PASS
+```
+
+The raw log (`collapse`, `label=collapse` lines) shows a single
+`CABackdropLayer` interpolating continuously from the card's 250×316 down
+to the tucked capsule's 8×96 — e.g. `250.0×316.0` → `64.5×147.0` →
+`52.5×136.0` → `43.0×128.0` → `24.5×111.0` → `23.0×110.0` → `16.0×103.0` →
+`11.0×99.0` → `8.0×96.0`, position sliding from `(70, 22)` to `(312, 132)`
+the whole way — monotonic, no reversal, no teleport. This is the SAME
+`CABackdropLayer` class `glass-morph-spike` matched against a
+founder-verified `NSGlassEffectView` control panel, so this is real system
+glass compositing, not an approximation.
+
+`probe.sh` is safe to re-run any time; it never needs the screen (no
+screenshot/recording/computer-use — only launch/quit the binary and read
+its stdout, per the task's rules).
+
+## How to run (eyes on screen)
 
 ```bash
 cd research/spikes/edge-collapse-spike
 ./run.sh
 ```
 
-`run.sh` builds `-c release` and launches the binary directly (it does not
-go through `open`, so stdout stays attached to your terminal and you'll see
-the `[EdgeCollapse] ...` log lines live). Two windows appear:
-
-- A transparent, borderless, non-activating panel docked to the **right**
-  edge of your main screen, vertically centered, starting at the card size
-  (250×316). This is the thing to look at.
-- An ordinary titled window, **"edge-collapse-spike controls"** — see below.
-  **Closing this window quits the app** (`applicationShouldTerminateAfterLastWindowClosed`
-  returns `true`), so don't close it until you're done looking.
-
-To build/test only, without launching:
+Builds `-c release` and launches directly (stdout stays attached so you see
+`[EdgeCollapse] t=<ms> state=<from>→<to> anim=<name> event=start|settle`
+lines live). Two windows appear: the edge panel (fixed 320×360, right edge
+flush with the screen, vertically centered) and the ordinary
+**"edge-collapse-spike controls"** window — closing the control window
+quits the app (`applicationShouldTerminateAfterLastWindowClosed` → `true`).
 
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build          # debug
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build -c release
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test           # 33/33
 ```
 
-No `#if DEBUG`-gated code exists in this target, so there is nothing that
-only the debug build exercises — `-c release` is the one that matters, and
-it's what `run.sh` uses.
+## App-portable files
 
-## Driving it
+No spike-only dependencies — safe to lift into `Sources/MusicMiniPlayerCore/UI/`
+more or less verbatim:
 
-- **Card → tucked**: with the panel in the card state, do a two-finger
-  horizontal trackpad scroll over it (phase `.ended`, dominant `deltaX`).
-  Direction is not checked — see "已知未验证" below.
-- **Tucked → floating**: hover the mouse over the narrow black stalk.
-- **Floating → tucked**: move the mouse off the floating bodies.
-- **Tucked/floating → card**: click the stalk (tucked) or the info body
-  (floating's title/artwork bar in variant H, the round artwork drop in
-  variant V).
-- **Toggle play/pause** without expanding: click the control body while
-  floating (the play/pause + forward glyphs), or the play/pause button on
-  the full card.
-- Or skip the gestures entirely and use the control window's **Collapse** /
-  **Expand** buttons, which call the exact same `EdgeCollapseAppModel`
-  methods the gestures do.
+- `EdgeCollapseReducer.swift` — the 5-state × 5-event pure state machine
+  (unchanged from v1).
+- `EdgeCollapseTokens.swift` — frame geometry + the 5-entry animation table
+  + tempo scaling (rewritten — no more per-channel spring numbers).
+- `EdgeCollapseLayout.swift` — new: pure `rects(for:variant:titleWidth:)` +
+  `hoverRegion(...)` + `visualLayout(for:)`.
 
-## Control window switches
+Everything else (`EdgeCollapseAppModel`, the panel, the control window,
+`RootContentView`, `EdgeCollapseProbe`) is spike-only wiring.
 
-| Control | Effect |
-|---|---|
-| presentation / track (labels) | live state readout — current `EdgePresentation` and the fake track title |
-| **Collapse** button | same as a two-finger swipe; disabled unless state is `.card` |
-| **Expand** button | same as clicking the info body; disabled unless state is `.tucked`/`.floating` |
-| **Next track** button | cycles the 3 fake titles (`Blinding Lights` / `三個人的晚餐` / the long OST title) — also exercises the info bar's text truncation/min-width at the short-CJK-title extreme |
-| **Variant** (H / V) | which floating two-body layout to use — see below |
-| **Tint** (Gradient / Black) | floating bodies' edge overlay: black→clear gradient (edge side black) vs flat black |
-| **Tempo** (1.0× / 1.5×) | `EdgeCollapseTempo` — scales every transition's durations uniformly, never overshoot magnitudes |
-| **Reduce Motion override** | forces every transition to the 180ms opacity-only crossfade (design §8), independent of the system setting |
+## Deleted (v1 files the new architecture made dead)
 
-### Variants
+`CollapseShape.swift` (the hand-drawn 4-channel `Shape` + its keyframe
+sampler — the glass system now does the shape interpolation),
+`GooCanvas.swift` (metaball Canvas blur bridge — no longer needed since
+`body` never has a spatial gap to bridge; the glass container's own
+union/blend handles `body`↔`control` proximity), `EdgeCollapseClockScheduler.swift`
+(multi-clock geometry/hero/material/goo planner — replaced by ONE
+`Animation` per transition + `.logicallyComplete` completion), `AppModel.swift`
+→ replaced by `EdgeCollapseAppModel.swift`, `CardView.swift`/`TuckedStalkView.swift`/
+`FloatingBodiesView.swift` → folded into `RootContentView.swift`'s single
+persistent `body`/`control` glass shapes, and their corresponding test files
+`CollapseShapeTrajectoryTests.swift`/`EdgeCollapseClockSchedulerTests.swift`.
 
-- **H (horizontal)**: info bar (24pt round artwork + title, max width 180,
-  min width 100 so it never collapses below the 3:1 aspect floor) sits
-  above a 64×28 control body (play/pause + forward), both right-aligned,
-  extending leftward from the edge.
-- **V (vertical)**: a 32×32 round artwork drop sits above a 28×64 vertical
-  control body, both hugging the edge, no title (design §6).
+## 已知未验证 / Known unverified
 
-Both bodies live in one `GlassEffectContainer` and each carries its own
-`.glassEffect(.regular.interactive(), in:)` with a stable `glassEffectID` so
-the system blends them as `floatingSeparation` animates 0→8pt (design §6).
-On macOS <26 (not this machine, which is 26.2) the container/glassEffect
-calls are unavailable, so `FloatingBodiesView` falls back to a plain
-`Color.black.opacity(0.6)` background — same shapes, same layout, no
-private API.
-
-## What was verified at the code level (no screen involved)
-
-Per the founder's standing rule (`~/.claude/CLAUDE.md`: 手感类验证只做代码层
-面, 不用 computer use, 不录屏) and this spike's own instructions, verification
-here stopped at:
-
-1. **`swift build` (debug) and `swift build -c release`** both succeed with
-   zero warnings-as-errors issues on Xcode 26.2 / macOS 26.2 SDK.
-2. **`swift test`** — 30/30 tests pass:
-   - `EdgeCollapseReducerTests` (14): every (state, event) pair is exercised;
-     the 7 defined transitions match design §2/§4 exactly; every undefined
-     pair is asserted to no-op; a full card→tucked→floating→expanding→card
-     loop is asserted end to end.
-   - `EdgeCollapseClockSchedulerTests` (9): hero clock settles strictly
-     after the geometry clock for both `collapsing` and `expanding`;
-     `floatingOut`/`floatingRetract` have no hero clock at all (design §7.2
-     never runs the hero flight); `expanding` has no goo clock, the other
-     three kinds do; Reduce Motion collapses every kind to a
-     `hero: nil, goo: nil, geometry.duration == 0, material.duration > 0`
-     shape; tempo 1.5× scales `start`/`duration` on every populated clock,
-     for every kind, including under Reduce Motion.
-   - `CollapseShapeTrajectoryTests` (7): 20-point sampling along both the
-     `collapsing` (card→stalk→pill) and `expanding` (pill→blob→card)
-     keyframe tracks never yields a corner radius exceeding half the short
-     side (also cross-checked against the "aspect ≥3:1 OR corner ≤ half
-     short side" rule directly); endpoints match the card/pill sizes;
-     out-of-range `t` clamps; `CollapseShapeGeometry`'s own constructor
-     clamps an oversized corner radius and a negative neck width as a
-     second, structural line of defense (not just the trajectory table
-     happening to stay in bounds).
-3. **A real launch** (`run.sh`'s binary, unbuffered stdout): confirmed the
-   process starts, positions the panel flush with the right screen edge and
-   vertically centered (`[EdgeCollapse] frame=2310,562,250,316 state=card`
-   on this machine's screen), and exits cleanly on quit. This was a launch/
-   quit check only — no screenshots, no screen recording, no `computer-use`
-   tool, per the standing rule above.
-
-## What remains for the founder to judge by eye
-
-Everything about whether the motion actually *reads* as liquid — this is
-exactly what the spike exists for:
-
-- Whether the height-collapse → stalk → neck-and-absorb → edge-hug sequence
-  in `.collapsing` looks like one continuous liquid gesture or like three
-  visible steps.
-- Whether the hero (artwork) flight timing (spring response 0.32, bounce
-  0.35, starting at 80ms, staggered to land after geometry) actually reads
-  as "last thing to settle" or gets lost/looks late.
-- Whether the goo/metaball Canvas (`GooCanvas.swift`) sells the "melting
-  into the edge" read at all, or is invisible/looks like a smear — see the
-  approximation note below, this is the single biggest visual unknown.
-- Whether `GlassEffectContainer` + per-body `.glassEffect(.regular.interactive())`
-  with `floatingSeparation` animating 0→8pt actually produces a visible neck
-  / blended union at small separations, or whether the two bodies just look
-  like two independent glass pills with no connection. **This was the
-  question the founder explicitly flagged in design §9 as unverified** — it
-  is still unverified here. `glass-morph-spike` (the earlier probe in this
-  same `research/spikes/` directory) found real `CABackdropLayer` instances
-  and could show layer-tree frame changes over time, but that is not the
-  same as confirming a visible melted/blended silhouette at 8pt separation —
-  that reading requires eyes on screen, which this task explicitly
-  disallowed for the implementer.
-- Whether the H vs V variant, and the gradient vs black tint, feel right.
-- Whether 1.0× vs 1.5× tempo is the right overall pace (design §10 item 4 is
-  still open).
-
-## 已知未验证 / Known approximations
-
-Being upfront about where this prototype diverges from a literal reading of
-the design doc, or where I could not confirm something:
-
-1. **GlassEffectContainer blending at 8pt separation is unverified** (see
-   above) — this is the single most important open question and I am not
-   claiming it looks right.
-2. **The "translate to edge" beat (design §7.1, 200–320ms) is implicit, not
-   an explicit offset animation.** The pill is drawn right-aligned
-   (`.frame(maxWidth: .infinity, alignment: .trailing)`) inside a window
-   whose own right edge is already flush with the physical screen edge at
-   every size (`EdgeCollapsePanel.frame(forContentSize:)` always sets
-   `x = screen.maxX - width`). So as the shape's width shrinks, it already
-   hugs the edge — there's no separate translate/offset animation moving it
-   there. This is simpler than the design's literal "宽度猛收成竖杆... 然后
-   胶囊向边平移" two-beat description, and means the goo Canvas during
-   collapsing isn't bridging a real spatial gap (there isn't one) — it's
-   layered purely for the blur/melt visual texture. Whether that reads as
-   intended is one of the "judge by eye" items above.
-3. **The four `CollapseShape` channels are not driven by four *simultaneous*
-   independent springs.** SwiftUI's `animatableData` applies ONE `Animation`
-   curve to a transaction; true independent per-channel springs on one
-   `Shape` aren't directly expressible. Instead, `AppModel` stages sequential
-   `withAnimation(...)` calls, one per channel, timed off
-   `EdgeCollapseTokens` to match design §7.1's phase table (height 0–80ms,
-   width 80–160ms, corner+neck 160–200ms) — each call's spring genuinely
-   only drives the channel(s) whose target it changes at that instant, so in
-   practice each channel DOES get its own spring, just via staggered target
-   changes rather than four concurrently-blended curves. This is a
-   legitimate SwiftUI pattern but is worth the founder knowing about since
-   it's not literally "four springs running at once."
-4. **During `.floating`, the goo Canvas's "body" blob is an approximate
-   size** (`RootContentView.currentBodyApproxSize`: 100×76 for variant H,
-   32×108 for V), not the exact live bounding box of `FloatingBodiesView`'s
-   two glass bodies. Getting the exact bounds would need a `GeometryReader`
-   threaded through the glass container; skipped for spike scope.
-5. **Two-finger-scroll direction is not checked** — `EdgeGestureHostingView`
-   triggers collapse on any `.ended`-phase scroll with a dominant horizontal
-   delta over a small threshold, regardless of sign. The design's "toward
-   the right edge" qualifier matters when a panel can dock either edge; this
-   spike only ever docks right, so there's no wrong direction to filter yet.
-6. **Corner snapping / four-edge docking is out of scope**, per the design
-   doc itself (§2: "贴角仍是纯几何，不进这个状态机") and the top-level task
-   (right edge only).
-7. **The drag-the-stalk and `hideToEdge`/`togglePanel` keyboard-shortcut rows
-   from design §4 are not implemented** — the task's instructions (1–11)
-   don't ask for them, and design §10 items 5/6 are explicitly still
-   undecided by the founder.
-8. **AppleScript/System Events UI-automation of the control window's buttons
-   was attempted during my own verification and abandoned** — `System
-   Events`' `button 1 of window` addressing hit the window's traffic-light
-   close button rather than the SwiftUI "Collapse" button and quit the app
-   (harmless — `applicationShouldTerminateAfterLastWindowClosed` correctly
-   returned `true` — but confirms nothing about the SwiftUI button). I did
-   not pursue this further since it isn't screen-based and isn't one of the
-   required checks; use the control window's buttons directly, or the
-   gestures, to drive the states.
-9. **No real music/lyrics/artwork is wired in** — by design (top-level task
-   point 4: placeholder only). `HeroArtworkView` is a static gradient +
-   SF Symbol; `isPlaying`/track title/progress are all fake local state.
+1. **Whether the container's union/blend at `containerSpacing = 24` produces
+   a visibly melted "neck" between `body` and `control` when they're close
+   together** — `probe.sh` proves continuous BOUNDS interpolation, not what
+   the blended silhouette looks like at small separations. Founder eyes-on
+   judgment call, per the "手感类验证" standing rule.
+2. **Whether the tint overlay dims the glass rim highlight** — inset 1.5pt
+   is a documented guess at how much margin leaves the rim visible; not
+   confirmed against a screenshot.
+3. **Whether transparent click-through genuinely works as documented** —
+   `hitTest` returning `nil` outside the active region is the standard
+   AppKit technique and I've read the window/view hierarchy correctly per
+   the code, but I have not clicked through to a window behind the panel to
+   confirm (no computer-use / screen involvement was used, per the task's
+   rules — this needs the founder's own click-through check).
+4. **Whether the system genuinely morphs between two DIFFERENT concrete
+   `Shape` types under one `glassEffectID`** (e.g. `Capsule()` vs
+   `RoundedRectangle`) is left untested — this file avoids the question
+   entirely (single `RoundedRectangle` type, animated `cornerRadius`), so
+   if the app integration later needs a TRUE `Capsule()`/`Circle()` call
+   site for some other reason, that specific case still needs its own
+   probe.
+5. **Hero flight only happens on `.floating`→`.card` (expand)** — collapsing
+   from `.card` fades the hero out (no flight), because `.tucked` has no
+   hero mount point at all. This matches "shrinks into the stalk and fades"
+   from the task brief, but is a real behavioral asymmetry (collapse never
+   shows the artwork flying anywhere) worth the founder confirming is the
+   intended read, not just this implementer's inference.
+6. **The floating H info bar's width is estimated from character count**
+   (`EdgeCollapseLayout.estimatedTitleWidth`, 7.2pt/character), not measured
+   text metrics — there's no SwiftUI/AppKit text-measurement API reachable
+   from `EdgeCollapseLayout`'s pure/no-import file. The bar's min/max clamp
+   (100–180pt) bounds the error regardless.
+7. **Corner snapping / four-edge docking, drag-the-stalk, and the
+   `hideToEdge`/`togglePanel` keyboard-shortcut rows are out of scope**, same
+   as v1 (design §2/§10 items 5/6 still undecided by the founder; this task
+   didn't ask for them).
+8. **No real music/lyrics/artwork is wired in** — placeholder only, same as
+   v1 (`HeroArtworkView` is a static gradient + SF Symbol).

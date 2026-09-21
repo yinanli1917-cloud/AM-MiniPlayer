@@ -109,15 +109,18 @@ EdgePresentation
 | ~300 | | 封面落回页面封面位 | |
 | 360 | settled，纵横比锁恢复 | | |
 
-## 8. 实现路径（全部公开 API）
+## 8. 实现路径（2026-09-20 改写：系统原生 morph，不自己画形状）
 
-- 形状：一个 `CollapseShape` 自定义 `Shape`，`animatableData` 含宽、高、圆角、颈宽四个通道，各挂独立 Animation：宽 `spring(response 0.22, bounce 0.45)`，高 `spring(response 0.18, bounce 0.1)`，圆角跟宽，颈宽 `spring(response 0.14, bounce 0)`。圆团过冲和竖杆由宽高两根弹簧的相位差自然产生，不手写关键帧。
-- 粘连（胶囊与边、胶囊与卡片接触处）：小 `Canvas`，画两块黑，`context.addFilter(.blur(radius))` + `.alphaThreshold(min: 0.5)`。Canvas 只在 collapsing 200–320ms 与 floating 全程挂载，settled 后卸载，静止零 filter，符合模糊经济。
-- 主角封面：`matchedGeometryEffect` 单一 Namespace，三页封面共享 id `hero`，弹簧参数由 hero 时钟单独给。
-- 材质：黑覆盖层 `Color.black.opacity(x)`，x 在 material 时钟上；floating 胶囊 `.glassEffect(.regular.interactive(), in: Capsule())`（macOS 26 文档确认可用，pointer 有反馈）+ 黑→透明 LinearGradient 覆盖，渐变起点在贴边端；内容无玻璃。
-- 窗口：`SnappablePanel` 新增 `setPresentationFrame(_:animated: false)`，在 settled 边界一次改 frame，动画期间不改；纵横比锁在 collapsing/expanding 期间置 nil。
-- 三时钟：新 `EdgeCollapseClockScheduler`，纯函数出 plan，测试可回放。
-- 不碰 PlaylistView.swift（WT-D 所有）；列表页小封面的 hero id 通过 PlaylistView 现有 matchedGeometry 命名空间接入，如需改该文件与 WT-D 协调。
+第一版样品（自写 Shape 关键帧 + Canvas 液滴 + 多段 withAnimation 接力 + 落定改窗口尺寸）被创始人否决，根因见 `research/spikes/edge-collapse-spike/AUDIT-2026-09-20.md`。材质证据见 scratchpad `v3-material-analysis.md`。
+
+- 一个 `GlassEffectContainer(spacing:)`、一个 `@Namespace`，常驻。所有形体都是里面带固定 `glassEffectID` 的 `.glassEffect(.regular.interactive(), in: 显式形状)`：`body`（卡片 RoundedRectangle 18 → 窄杆 Capsule 8×96 → 浮出长条/封面滴）、`control`（仅浮出态，用 `.glassEffectTransition(.matchedGeometry)` 插拔，从 body 里滴出/被吸回）。collapsing/expanding 没有自己的布局，只是 body 在两个布局之间飞行。
+- 每次过渡只一次 `withAnimation(spring) { presentation = next }`，落定用 completionCriteria 回调喂 reducer。手感只由 token 表里的弹簧决定：收起 `spring(duration 0.32, bounce 0)`（Apple 实测无过冲 ease-out）为默认臂，`bounce 0.28` 为 bouncy 臂。
+- 封面 `matchedGeometryEffect(id: "hero")` 在卡片大图与浮出小图之间共享；窄杆态封面移除，用 `.transition(.opacity)` 缩进杆里淡掉。
+- 材质：本体是系统 regular 玻璃，边缘高光由系统给；黑→透明 LinearGradient 只作 overlay 压在贴边端，opacity token 0.85；对照臂 gradient | black | none。
+- 窗口：一个 320×360 透明非激活 NSPanel 固定贴右边，过渡期间和状态之间都不改尺寸；透明区域点击穿透；hover 用纯函数 `EdgeCollapseLayout.rects(for:)` 算并集外扩 12pt。
+- Reduce Motion：Transaction 禁动画 + 180ms 透明度交叉淡入。
+- 连续性证明（不看屏）：PROBE 模式每帧枚举 CA 层树记录 body bounds，一次过渡 ≥ 12 个连续步、单步不超总位移 25%，`probe.sh` 判 PASS/FAIL。
+- 不碰 PlaylistView.swift（WT-D 所有）。
 
 ## 9. 对照臂与验证
 

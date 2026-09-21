@@ -1,118 +1,348 @@
 /**
- * [INPUT]: EdgeCollapseAppModel (presentation + every published animation value)
- * [OUTPUT]: RootContentView — the panel's whole SwiftUI tree: mounts exactly
- *           the views the current `EdgePresentation` needs, hosts the ONE
- *           shared hero Namespace, and layers the black material overlay +
- *           metaball Canvas on top.
- * [POS]: Standalone spike root view, design §2 state → view mapping.
- * [PROTOCOL]: Only ONE of {CardView, pill overlay, TuckedStalkView,
- *             FloatingBodiesView} may render the "hero" matchedGeometryEffect
- *             id at a time — enforced by `HeroLocation`, never duplicate it.
+ * [INPUT]: EdgeCollapseAppModel (presentation + variant/tint/bounce/tempo/
+ *          isPlaying/trackIndex/fakeProgress/reduceMotionFlashOpacity)
+ * [OUTPUT]: RootContentView — the panel's whole SwiftUI tree, rewritten per
+ *           AUDIT-2026-09-20.md's "correct approach" (§ Correct approach for
+ *           macOS 26 public API) and top-level task instruction #1: ONE
+ *           `GlassEffectContainer` inside ONE `@Namespace`, hosting the
+ *           `body` (card/tucked/floating-info) and `control` (floating-only)
+ *           shapes as stable `glassEffectID`s that persist across states —
+ *           never a structurally different view type swapped in per state
+ *           (that was v1's bug, audited §2/§4).
+ * [POS]: Standalone spike root view.
+ * [PROTOCOL]: `body`'s glass shape is a SINGLE persistently-mounted view
+ *             across every `EdgePresentation` — its `RoundedRectangle`
+ *             corner radius and `.frame` size are the only things that
+ *             change (never its concrete `Shape` TYPE, never conditionally
+ *             mounted/unmounted). See README "shape identity" for why: a
+ *             capsule IS `RoundedRectangle(cornerRadius: height/2)` (Apple's
+ *             own `DefaultGlassEffectShape` docs), so every shape this
+ *             design needs (card/tucked/floating-H-bar/floating-V-drop) is
+ *             expressible as one `RoundedRectangle` with an animated corner
+ *             radius — sidestepping any uncertainty about whether the glass
+ *             system morphs between two DIFFERENT concrete `Shape` types
+ *             under one `glassEffectID` (undocumented; the mechanism this
+ *             file relies on instead — one persistent view, animated frame/
+ *             cornerRadius — is exactly what glass-morph-spike's scenario 2
+ *             already measured MORPH=yes on, 23 continuous frame-steps, see
+ *             research/spikes/glass-morph-spike/results/summary.md).
  */
 
 import SwiftUI
 
 struct RootContentView: View {
     @ObservedObject var model: EdgeCollapseAppModel
-    @Namespace private var heroNS
 
     var body: some View {
-        ZStack(alignment: .trailing) {
-            if showsCard {
-                CardView(model: model, heroNS: heroNS)
-            }
-
-            if showsPill {
-                pillOverlay
-            }
-
-            if model.presentation == .tucked {
-                TuckedStalkView(model: model)
-            }
-
-            if model.presentation == .floating {
-                FloatingBodiesView(model: model, heroNS: heroNS)
-            }
-
-            if model.gooMounted {
-                gooOverlay
-            }
-
-            if showsCard {
-                Color.black
-                    .opacity(model.blackOverlayOpacity)
-                    .allowsHitTesting(false)
-                    .frame(width: EdgeCollapseTokens.cardSize.width, height: EdgeCollapseTokens.cardSize.height)
-                    .clipShape(RoundedRectangle(cornerRadius: EdgeCollapseTokens.cardCornerRadius, style: .continuous))
-            }
+        if #available(macOS 26.0, *) {
+            GlassRootView(model: model)
+        } else {
+            LegacyFallbackView(model: model)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - macOS 26 Liquid Glass tree
+
+@available(macOS 26.0, *)
+private struct GlassRootView: View {
+    @ObservedObject var model: EdgeCollapseAppModel
+    @Namespace private var ns
+
+    private enum HeroLocation { case page, floatingBody, none }
+
+    private var visualLayout: EdgeCollapseLayout.VisualLayout {
+        EdgeCollapseLayout.visualLayout(for: model.presentation)
     }
 
-    /// Card + the two shape-morph states both use the card-sized window, and
-    /// the card's OWN content view underlies the morphing black shape (design
-    /// §7.1: "动画全部在卡片 frame 内画").
-    private var showsCard: Bool {
-        model.presentation == .card || model.presentation == .collapsing || model.presentation == .expanding
+    private var titleWidth: CGFloat {
+        EdgeCollapseLayout.estimatedTitleWidth(model.trackTitle)
     }
 
-    private var showsPill: Bool {
-        model.presentation == .collapsing || model.presentation == .expanding
+    private var frames: EdgeCollapseLayout.Frames {
+        EdgeCollapseLayout.rects(for: model.presentation, variant: model.variant, titleWidth: titleWidth)
     }
 
-    @ViewBuilder private var pillOverlay: some View {
-        ZStack {
-            CollapseShape(model.shape)
-                .fill(Color.black)
-
-            if model.heroLocation == .pill {
-                HeroArtworkView(size: min(20, model.shape.width - 4), cornerRadius: 6)
-                    .matchedGeometryEffect(id: "hero", in: heroNS)
-            }
-        }
-        .frame(width: model.shape.width, height: model.shape.height)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-        .allowsHitTesting(false)
-    }
-
-    /// Bridges the current body to the eventual tucked sliver — see README
-    /// "已知未验证" for how this approximates design §7.1's "两体粘连" beat
-    /// (the window's own trailing alignment already keeps the pill flush
-    /// with the physical edge, so there's no literal gap to bridge; the
-    /// Canvas instead sells the "melting into the edge" read via blur +
-    /// alphaThreshold on two near-overlapping blobs). During `.floating` the
-    /// bridged body is an APPROXIMATE size (`currentBodyApproxSize`), not the
-    /// exact FloatingBodiesView bounds — a documented simplification.
-    @ViewBuilder private var gooOverlay: some View {
-        GeometryReader { proxy in
-            let edgeX = proxy.size.width
-            let midY = proxy.size.height / 2
-            let bodySize = currentBodyApproxSize
-            let sliver = GooBlob(
-                center: CGPoint(x: edgeX - EdgeCollapseTokens.tuckedSize.width / 2, y: midY),
-                size: CGSize(width: EdgeCollapseTokens.tuckedSize.width, height: EdgeCollapseTokens.tuckedSize.height),
-                cornerRadius: EdgeCollapseTokens.tuckedSize.width / 2
-            )
-            let body = GooBlob(
-                center: CGPoint(x: edgeX - bodySize.width / 2 - model.floatingBodyOffset, y: midY),
-                size: bodySize,
-                cornerRadius: min(bodySize.width, bodySize.height) / 2
-            )
-            GooCanvas(blobs: [sliver, body], blurRadius: 8)
-        }
-        .allowsHitTesting(false)
-    }
-
-    private var currentBodyApproxSize: CGSize {
-        switch model.presentation {
-        case .collapsing, .expanding:
-            return CGSize(width: model.shape.width, height: model.shape.height)
-        case .floating, .tucked:
-            return model.variant == .h
-                ? CGSize(width: 100, height: 76)
-                : CGSize(width: 32, height: 108)
+    private var bodyCornerRadius: CGFloat {
+        switch visualLayout {
         case .card:
-            return EdgeCollapseTokens.cardSize
+            return EdgeCollapseTokens.cardCornerRadius
+        case .tucked:
+            // Capsule == RoundedRectangle(cornerRadius: height/2) — see file header.
+            return frames.body.height / 2
+        case .floating:
+            switch model.variant {
+            case .h: return frames.body.height / 2 // capsule bar
+            case .v: return EdgeCollapseTokens.floatingDropCornerRadiusV
+            }
         }
+    }
+
+    private var heroLocation: HeroLocation {
+        switch visualLayout {
+        case .card: return .page
+        case .tucked: return .none
+        case .floating: return .floatingBody
+        }
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color.clear
+
+            GlassEffectContainer(spacing: EdgeCollapseTokens.containerSpacing) {
+                ZStack(alignment: .topLeading) {
+                    bodyShape
+                        .glassEffectID("body", in: ns)
+                        .glassEffectTransition(.matchedGeometry)
+
+                    if visualLayout == .floating {
+                        controlShape
+                            .glassEffectID("control", in: ns)
+                            .glassEffectTransition(.matchedGeometry)
+                    }
+                }
+            }
+
+            // Hero lives OUTSIDE the container/clip stack so a floating<->card
+            // flight is never cut by either host's own clipShape mid-transit
+            // — see file header + top-level task instruction #1's hero bullet.
+            heroOverlay
+        }
+        .frame(width: EdgeCollapseTokens.containerSize.width, height: EdgeCollapseTokens.containerSize.height)
+        .overlay(reduceMotionFlash)
+    }
+
+    // MARK: - Body (glassEffectID "body")
+
+    private var bodyShape: some View {
+        let rect = frames.body
+        return RoundedRectangle(cornerRadius: bodyCornerRadius, style: .continuous)
+            .fill(.clear)
+            .frame(width: rect.width, height: rect.height)
+            .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: bodyCornerRadius, style: .continuous))
+            .overlay(bodyContent(rect: rect))
+            .overlay(tintOverlay(cornerRadius: bodyCornerRadius, size: rect.size))
+            .position(x: rect.midX, y: rect.midY)
+            .contentShape(RoundedRectangle(cornerRadius: bodyCornerRadius, style: .continuous))
+            .onTapGesture {
+                guard visualLayout != .card else { return }
+                model.requestExpand()
+            }
+    }
+
+    /// All three states' content layers stay MOUNTED simultaneously and
+    /// cross-fade via opacity (never a conditional `if`/`switch` swap) so
+    /// the card's fluid gradient genuinely "fades out during collapse"
+    /// (top-level task instruction #1) instead of popping away the instant
+    /// the state enum changes.
+    @ViewBuilder
+    private func bodyContent(rect: CGRect) -> some View {
+        ZStack {
+            cardFluidContent
+                .opacity(visualLayout == .card ? 1 : 0)
+            tuckedProgressContent
+                .opacity(visualLayout == .tucked ? 1 : 0)
+            if model.variant == .h {
+                floatingInfoContent
+                    .opacity(visualLayout == .floating ? 1 : 0)
+            }
+        }
+        .frame(width: rect.width, height: rect.height)
+        .clipShape(RoundedRectangle(cornerRadius: bodyCornerRadius, style: .continuous))
+        .allowsHitTesting(false)
+    }
+
+    private var cardFluidContent: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.20, green: 0.10, blue: 0.28),
+                    Color(red: 0.45, green: 0.18, blue: 0.22),
+                    Color(red: 0.62, green: 0.36, blue: 0.20),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            VStack(spacing: 16) {
+                Spacer(minLength: 132) // clears the 200pt hero overlay above
+                Text(model.trackTitle)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 214)
+
+                HStack(spacing: 30) {
+                    Button(action: { model.toggleIsPlaying() }) {
+                        Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 20, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: { model.nextTrack() }) {
+                        Image(systemName: "forward.fill")
+                            .font(.system(size: 20, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .foregroundStyle(.white)
+
+                Spacer(minLength: 12)
+            }
+        }
+    }
+
+    private var tuckedProgressContent: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            Rectangle()
+                .fill(Color.white.opacity(0.32))
+                .frame(height: EdgeCollapseTokens.tuckedSize.height * model.fakeProgress)
+        }
+    }
+
+    private var floatingInfoContent: some View {
+        HStack(spacing: 8) {
+            Spacer(minLength: 34) // room for the hero overlay's artwork dot
+            Text(model.trackTitle)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 8)
+        }
+    }
+
+    // MARK: - Control (glassEffectID "control", floating-only)
+
+    @ViewBuilder
+    private var controlShape: some View {
+        if let rect = frames.control {
+            RoundedRectangle(cornerRadius: EdgeCollapseTokens.floatingControlCornerRadius, style: .continuous)
+                .fill(.clear)
+                .frame(width: rect.width, height: rect.height)
+                .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: EdgeCollapseTokens.floatingControlCornerRadius, style: .continuous))
+                .overlay(controlContent)
+                .overlay(tintOverlay(cornerRadius: EdgeCollapseTokens.floatingControlCornerRadius, size: rect.size))
+                .position(x: rect.midX, y: rect.midY)
+                .contentShape(RoundedRectangle(cornerRadius: EdgeCollapseTokens.floatingControlCornerRadius, style: .continuous))
+                .onTapGesture { model.toggleIsPlaying() }
+                .transition(.opacity)
+        }
+    }
+
+    private var controlContent: some View {
+        Group {
+            if model.variant == .h {
+                HStack(spacing: 14) {
+                    Image(systemName: model.isPlaying ? "pause.fill" : "play.fill").font(.system(size: 12, weight: .semibold))
+                    Image(systemName: "forward.fill").font(.system(size: 12, weight: .semibold))
+                }
+            } else {
+                VStack(spacing: 10) {
+                    Image(systemName: model.isPlaying ? "pause.fill" : "play.fill").font(.system(size: 12, weight: .semibold))
+                    Image(systemName: "forward.fill").font(.system(size: 12, weight: .semibold))
+                }
+            }
+        }
+        .foregroundStyle(.white)
+        .allowsHitTesting(false)
+    }
+
+    // MARK: - Hero (matchedGeometryEffect, top-level task instruction #1)
+
+    @ViewBuilder
+    private var heroOverlay: some View {
+        switch heroLocation {
+        case .page:
+            HeroArtworkView(size: 200, cornerRadius: 28)
+                .matchedGeometryEffect(id: "hero", in: ns)
+                .position(x: frames.body.midX, y: frames.body.minY + 24 + 100)
+                .transition(.opacity)
+        case .floatingBody:
+            let size: CGFloat = model.variant == .h ? 24 : 26
+            HeroArtworkView(size: size, cornerRadius: size / 2)
+                .clipShape(Circle())
+                .matchedGeometryEffect(id: "hero", in: ns)
+                .position(heroFloatingCenter(size: size))
+                .transition(.opacity)
+        case .none:
+            EmptyView()
+        }
+    }
+
+    private func heroFloatingCenter(size: CGFloat) -> CGPoint {
+        let rect = frames.body
+        switch model.variant {
+        case .h:
+            return CGPoint(x: rect.minX + 10 + size / 2, y: rect.midY)
+        case .v:
+            return CGPoint(x: rect.midX, y: rect.midY)
+        }
+    }
+
+    // MARK: - Tint overlay (top-level task instruction #1)
+
+    @ViewBuilder
+    private func tintOverlay(cornerRadius: CGFloat, size: CGSize) -> some View {
+        let inset = EdgeCollapseTokens.tintInset
+        Group {
+            switch model.tint {
+            case .gradient:
+                LinearGradient(
+                    colors: [Color.black.opacity(EdgeCollapseTokens.tintOpacity), Color.black.opacity(0)],
+                    startPoint: .trailing,
+                    endPoint: .leading
+                )
+            case .black:
+                Color.black.opacity(EdgeCollapseTokens.tintOpacity)
+            case .none:
+                Color.clear
+            }
+        }
+        .frame(width: max(0, size.width - inset * 2), height: max(0, size.height - inset * 2))
+        .clipShape(RoundedRectangle(cornerRadius: max(0, cornerRadius - inset), style: .continuous))
+        .allowsHitTesting(false)
+    }
+
+    // MARK: - Reduce Motion crossfade flash (top-level task instruction #5)
+
+    private var reduceMotionFlash: some View {
+        Color.black
+            .opacity(model.reduceMotionFlashOpacity * 0.6)
+            .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Pre-macOS 26 fallback — solid dark, no private API stand-in for glass.
+
+private struct LegacyFallbackView: View {
+    @ObservedObject var model: EdgeCollapseAppModel
+
+    var body: some View {
+        let layout = EdgeCollapseLayout.visualLayout(for: model.presentation)
+        let frames = EdgeCollapseLayout.rects(
+            for: model.presentation,
+            variant: model.variant,
+            titleWidth: EdgeCollapseLayout.estimatedTitleWidth(model.trackTitle)
+        )
+        let cornerRadius = layout == .card ? EdgeCollapseTokens.cardCornerRadius : frames.body.height / 2
+
+        return ZStack(alignment: .topLeading) {
+            Color.clear
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(Color.black.opacity(0.85))
+                .frame(width: frames.body.width, height: frames.body.height)
+                .position(x: frames.body.midX, y: frames.body.midY)
+            if let control = frames.control {
+                RoundedRectangle(cornerRadius: EdgeCollapseTokens.floatingControlCornerRadius, style: .continuous)
+                    .fill(Color.black.opacity(0.85))
+                    .frame(width: control.width, height: control.height)
+                    .position(x: control.midX, y: control.midY)
+            }
+        }
+        .frame(width: EdgeCollapseTokens.containerSize.width, height: EdgeCollapseTokens.containerSize.height)
     }
 }

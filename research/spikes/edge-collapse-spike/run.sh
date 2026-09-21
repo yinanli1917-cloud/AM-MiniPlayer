@@ -2,11 +2,13 @@
 # edge-collapse-spike — build release and launch the standalone prototype.
 #
 # The app is a menu-bar-less accessory app (no Dock icon): it opens a
-# transparent floating panel docked to the RIGHT edge of the main screen
-# (starting at the 250x316 card size) plus an ordinary "edge-collapse-spike
-# controls" window with the variant/tint/tempo/Reduce-Motion switches and
-# Collapse/Expand/Next-track buttons. Quit with Cmd-Q while the controls
-# window is focused, or `pkill -x EdgeCollapseSpike`.
+# transparent floating panel, FIXED at 320x360 for its whole lifetime, right
+# edge flush with the main screen's right edge and vertically centered (the
+# card/tucked/floating layouts are all positioned within this one fixed
+# canvas — the window itself never resizes), plus an ordinary
+# "edge-collapse-spike controls" window with the variant/tint/bounce/tempo/
+# Reduce-Motion switches and Collapse/Expand/Next-track buttons. Quit with
+# Cmd-Q while the controls window is focused, or `pkill -x EdgeCollapseSpike`.
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

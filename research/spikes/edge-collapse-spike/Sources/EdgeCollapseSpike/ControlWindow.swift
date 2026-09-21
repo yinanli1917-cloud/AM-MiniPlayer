@@ -2,9 +2,9 @@
  * [INPUT]: EdgeCollapseAppModel
  * [OUTPUT]: ControlPanelView (SwiftUI) + makeControlWindow(model:) — an
  *           ORDINARY titled NSWindow (not the floating panel) with the
- *           variant/tint/tempo/reduceMotion switches, Collapse/Expand/Next
- *           track buttons, and a live state label — top-level task
- *           instruction #3.
+ *           variant/tint/bounce/tempo/reduceMotion switches, Collapse/
+ *           Expand/Next-track buttons, and a live state label — top-level
+ *           task instruction #6.
  * [POS]: Standalone spike control surface.
  * [PROTOCOL]: This window never drives EdgePresentation directly — every
  *             button calls an `EdgeCollapseAppModel.request*`/toggle method,
@@ -40,27 +40,40 @@ struct ControlPanelView: View {
                         .disabled(model.presentation != .tucked && model.presentation != .floating)
                     Button("Next track") { model.nextTrack() }
                 }
+                Text("Gestures on the panel: two-finger scroll rightward = collapse; hover the tucked stalk = float; click a body = expand; click the control body = toggle play.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Variant / Tint") {
                 Picker("Variant", selection: $model.variant) {
-                    ForEach(SpikeVariant.allCases) { v in Text(v.rawValue).tag(v) }
+                    ForEach(EdgeCollapseVariant.allCases) { v in Text(v.rawValue).tag(v) }
                 }
                 .pickerStyle(.segmented)
 
                 Picker("Tint", selection: $model.tint) {
-                    ForEach(SpikeTint.allCases) { t in Text(t.rawValue).tag(t) }
+                    ForEach(EdgeCollapseTint.allCases) { t in Text(t.rawValue).tag(t) }
                 }
                 .pickerStyle(.segmented)
             }
 
-            Section("Tempo / Motion") {
+            Section("Bounce / Tempo") {
+                Picker("Bounce", selection: $model.bounce) {
+                    ForEach(EdgeCollapseBounce.allCases) { b in Text(b.rawValue).tag(b) }
+                }
+                .pickerStyle(.segmented)
+                Text("Collapse-only: Settle = spring(duration 0.32, bounce 0) — Apple's measured ease-out. Bouncy = spring(duration 0.36, bounce 0.28).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 Picker("Tempo", selection: $model.tempo) {
                     Text("1.0×").tag(EdgeCollapseTempo.normal)
                     Text("1.5×").tag(EdgeCollapseTempo.slow)
                 }
                 .pickerStyle(.segmented)
+            }
 
+            Section("Motion") {
                 Toggle("Reduce Motion override", isOn: Binding(
                     get: { model.reduceMotionOverride ?? false },
                     set: { model.reduceMotionOverride = $0 ? true : nil }
@@ -73,13 +86,13 @@ struct ControlPanelView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 340, height: 420)
+        .frame(width: 360, height: 480)
     }
 }
 
 func makeControlWindow(model: EdgeCollapseAppModel) -> NSWindow {
     let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 340, height: 420),
+        contentRect: NSRect(x: 0, y: 0, width: 360, height: 480),
         styleMask: [.titled, .closable, .miniaturizable],
         backing: .buffered,
         defer: false
