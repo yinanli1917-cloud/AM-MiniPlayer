@@ -704,19 +704,6 @@ enum NativeLyricsTimelinePolicy {
         let semanticIndex: Int
     }
 
-    /// A line whose whole text is bracket-wrapped is a BACKING-VOCAL part — the convention
-    /// every lyric source uses for background/duet parts (（I want you）, (ooh ooh)). Backing
-    /// parts light up alongside the melody (they stay in hotGroups) but never claim the
-    /// PRIMARY slot: the scroll and the karaoke sweep follow the melody line (user
-    /// 2026-07-13: 和声同时播放，滚动不跳). Structural rule, no per-song lists.
-    static func isBackingVocalText(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count > 2, let first = trimmed.first, let last = trimmed.last else { return false }
-        let opens: Set<Character> = ["(", "（"]
-        let closes: Set<Character> = [")", "）"]
-        return opens.contains(first) && closes.contains(last)
-    }
-
     static func liveDisplayIndex(
         at playbackTime: TimeInterval,
         rows: [LayerBackedLyricRow],
@@ -734,7 +721,11 @@ enum NativeLyricsTimelinePolicy {
                 bestAnyStartTime = startTime
                 bestAnyIndex = row.index
             }
-            guard !isBackingVocalText(row.displayLine.line.text) else { continue }
+            // 和声 (backing vocal) rows light up alongside their melody (they stay in
+            // hotGroups) but never claim the PRIMARY slot: the scroll and the karaoke
+            // sweep follow the melody line (founder 2026-09-20: data-model flag, not a
+            // text heuristic — user 2026-07-13: 和声同时播放，滚动不跳).
+            guard !row.displayLine.line.isBackground else { continue }
             if startTime > bestStartTime || (startTime == bestStartTime && row.index > (bestIndex ?? Int.min)) {
                 bestStartTime = startTime
                 bestIndex = row.index
@@ -767,7 +758,7 @@ enum NativeLyricsTimelinePolicy {
             fallback: fallback
         )
         let backingIndices = Set(
-            sortedRows.filter { isBackingVocalText($0.displayLine.line.text) }.map(\.index)
+            sortedRows.filter { $0.displayLine.line.isBackground }.map(\.index)
         )
         let firstFutureIndex = sortedRows
             .filter {
