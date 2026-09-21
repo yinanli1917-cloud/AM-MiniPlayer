@@ -2484,6 +2484,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         let isNextMelodyRow = nativeSemanticCurrentIndex.map {
             NativeLyricsSeekClassifier.naturalNextIndex(after: $0, rows: configuration.rows) == row.index
         } ?? false
+        view.advanceFloatReturn(renderTime: configuration.phaseRenderTime())
         view.applyRasterizationPolicy(
             isActive: visual.target.isActive || isTextPhaseActiveThisFrame || isNextMelodyRow
         )

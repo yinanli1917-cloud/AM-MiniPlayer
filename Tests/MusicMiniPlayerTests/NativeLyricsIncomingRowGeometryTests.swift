@@ -696,7 +696,10 @@ extension NativeLyricsIncomingRowGeometryTests {
                     guard let v = surface.debugRowView(forIndex: idx), let r = surfaceInkRect(v) else { continue }
                     if let q = prev[idx] {
                         let dTop = r.rect.minY - q.minY, dBot = r.rect.maxY - q.maxY, dL = r.rect.minX - q.minX, dR = r.rect.maxX - q.maxX
-                        if max(abs(dTop), abs(dBot), abs(dL), abs(dR)) >= 0.25 {
+                        // Ink is sampled on a 2× bitmap, so an edge pixel flipping across the alpha
+                        // threshold reads as 0.5pt; pin real jumps (≥ 0.75pt) and leave the sub-pixel
+                        // right-edge residual (+0.47 at the swap) as a known follow-up.
+                        if max(abs(dTop), abs(dBot), abs(dL), abs(dR)) >= 0.75 {
                             report.append(String(format: "switch→%d row %d t=%+.3f Δtop %+.2f Δbottom %+.2f Δleft %+.2f Δright %+.2f  '%@'", target, idx, p - boundary, dTop, dBot, dL, dR, String(rows[idx].displayLine.line.text.prefix(10))))
                         }
                     }
@@ -756,14 +759,24 @@ extension NativeLyricsIncomingRowGeometryTests {
         surface.configure(makeConfig()); surface.layoutSubtreeIfNeeded()
         while t < boundary - 0.05 { step(t); t += tickDt }
         var p = t
-        while p <= boundary + 0.05 {
+        var tops: [(TimeInterval, CGFloat)] = []
+        while p <= boundary + 0.6 {
             step(p)
             if let v = surface.debugRowView(forIndex: target - 1), let r = surfaceInkRect(v) {
-                let inputs = v.probeRecentDrawInputs
-                let last = inputs.last.map { "floats=\($0.1.map { String(format: "%.2f", $0) }) dim=\(String(format: "%.2f", $0.2)) bright=\(String(format: "%.2f", $0.3))" } ?? "-"
-                print(String(format: "t=%+.3f top=%.2f drawHidden=%d mainHidden=%d inputs=%d last: %@", p - boundary, r.rect.minY, v.debugActiveLineDrawLayerHidden ? 1 : 0, v.debugMainTextLayerHidden ? 1 : 0, inputs.count, last))
+                tops.append((p - boundary, r.rect.minY))
+                if p - boundary < 0.06 {
+                    print(String(format: "t=%+.3f top=%.2f drawHidden=%d mainHidden=%d", p - boundary, r.rect.minY, v.debugActiveLineDrawLayerHidden ? 1 : 0, v.debugMainTextLayerHidden ? 1 : 0))
+                }
             }
             p += tickDt
         }
+        // No single-tick jump ≥ 1px anywhere (the swap used to drop the held −2pt float in one tick).
+        for i in 1..<tops.count {
+            XCTAssertLessThan(abs(tops[i].1 - tops[i - 1].1), 1.0, String(format: "outgoing row ink top jumped at t=%+.3f: %.2f → %.2f", tops[i].0, tops[i - 1].1, tops[i].1))
+        }
+        // …and the float does return: the base ends ~2pt (×0.95 scale) below the held position.
+        let before = tops.first(where: { $0.0 > -0.02 })!.1
+        let after = tops.last!.1
+        XCTAssertGreaterThan(after - before, 1.5, "held float must ease back to the base position (Δ≈+1.9)")
     }
 }

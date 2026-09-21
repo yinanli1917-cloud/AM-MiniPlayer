@@ -240,6 +240,16 @@ final class NativeLyricsActiveLineDrawLayer: CALayer {
     /// finalizes and swaps back to the whole-line base (the on-screen brightness "pop"). This
     /// keeps the visible dim tile in lockstep with that same compensated channel every frame,
     /// so finalize is a no-op: both paths already agree on the current brightness.
+    /// Mean per-word float currently applied (words not yet started contribute 0 and are skipped),
+    /// captured by the row when it leaves the single-pass state so the whole-line base can pick
+    /// the ink up at the same height and ease it back (contract: −2pt float returns over ~0.35s).
+    var currentHeldFloat: CGFloat {
+        guard let input = frameInput else { return 0 }
+        let floats = input.runs.map(\.floatY).filter { $0 != 0 }
+        guard !floats.isEmpty else { return 0 }
+        return floats.reduce(0, +) / CGFloat(floats.count)
+    }
+
     var probeRecentInputs: [(Double, [CGFloat], CGFloat, CGFloat)] {
         recentInputs.map { ($0.0, $0.1, $0.3, $0.4) }
     }

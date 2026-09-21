@@ -386,6 +386,7 @@ final class NativeLyricsRowView: NSView {
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        pendingFloatReturn = nil
         #if DEBUG
         debugPrepareForReuseCount += 1
         #endif
@@ -2066,6 +2067,7 @@ final class NativeLyricsRowView: NSView {
         mainTextLayer.setAffineTransform(.identity)
         mainBrightTextLayer.setAffineTransform(.identity)
         clearEmphasis(from: mainBrightTextLayer)
+        if let pending = pendingFloatReturn, pending.start == nil { applyFloatReturnOffset(pending.from) }
     }
 
     private struct MainTextPhaseAppliedMetrics {
@@ -3038,8 +3040,37 @@ final class NativeLyricsRowView: NSView {
     private func leaveSinglePassActiveLine() {
         guard singlePassActive else { return }
         singlePassActive = false
+        // 2026-09-21 (founder: 历史行在切行瞬间动一下, 啟程 '才找到永恒' +1.9px): the bitmaps held
+        // the sung words at −2pt; the base shows them at 0. Carry the held float over and ease it
+        // back (contract row "Per-char float": eases to 0, never an instant snap).
+        let held = activeLineDrawLayer.currentHeldFloat
+        pendingFloatReturn = held != 0 ? (from: held, start: nil) : nil
         activeLineDrawLayer.isHidden = true
         mainTextLayer.isHidden = false
+        applyFloatReturnOffset(held)
+    }
+
+    /// (from, start): the base layer's vertical offset eases from `from` to 0 over
+    /// `floatReturnDuration` starting at the first `advanceFloatReturn` tick after the swap.
+    private var pendingFloatReturn: (from: CGFloat, start: TimeInterval?)?
+    private static let floatReturnDuration: TimeInterval = 0.35
+
+    private func applyFloatReturnOffset(_ offset: CGFloat) {
+        let t = abs(offset) > 0.001 ? CGAffineTransform(translationX: 0, y: offset) : .identity
+        if mainTextLayer.affineTransform() != t { mainTextLayer.setAffineTransform(t) }
+        if mainBrightTextLayer.affineTransform() != t { mainBrightTextLayer.setAffineTransform(t) }
+    }
+
+    /// Called once per presentation tick for every mounted row (cheap no-op when nothing pends).
+    func advanceFloatReturn(renderTime: TimeInterval) {
+        guard var pending = pendingFloatReturn else { return }
+        guard !singlePassActive else { pendingFloatReturn = nil; return }
+        if pending.start == nil { pending.start = renderTime; pendingFloatReturn = pending }
+        let elapsed = max(0, renderTime - (pending.start ?? renderTime))
+        let p = CGFloat(min(1, elapsed / Self.floatReturnDuration))
+        let eased = NativeLyricsEasing.cubicBezier(x1: 0, y1: 0, x2: 0.58, y2: 1, x: p)
+        applyFloatReturnOffset(pending.from * (1 - eased))
+        if p >= 1 { pendingFloatReturn = nil; applyFloatReturnOffset(0) }
     }
 
     private func applySinglePassActiveLine(
