@@ -1,16 +1,21 @@
 /**
- * [INPUT]: EdgeCollapseAppModel.pose (all animatable channels) +
- *          MusicController.shared (real artwork / title / artist / playback).
- * [OUTPUT]: RootContentView v5 — one material for every state: a regular
- *           Liquid Glass body tinted with ONE colour extracted from the
- *           artwork in the panel state, blending to black at the edge; the
- *           tucked state is an island grown out of the screen edge (flat
- *           edge side, round inner side); the control body is always
- *           mounted and drips off the body on a delayed spring; the artwork
- *           is one view that flies. Nothing is ever swapped or inserted.
+ * [INPUT]: EdgeCollapseAppModel.pose + MusicController.shared.
+ * [OUTPUT]: RootContentView v6.
+ *   - Panel state IS the real nanoPod MiniPlayerView (fullscreen-cover mode),
+ *     untouched. Underneath it, at the same rect, sits the glass body.
+ *   - Collapse: MiniPlayerView fades out over the first 100ms revealing the
+ *     glass at the same rect (ref1 material swap), the body morphs into an
+ *     island grown out of the screen edge, the cover (one overlay Image
+ *     crossfaded in place over the real cover) detaches late and lands last
+ *     (ref2).
+ *   - Material: `.clear` glass (HIG: components floating over media) + a
+ *     full-width dimming gradient, black at the edge fading inward (HIG
+ *     dimming layer; Siri panel look). Same Glass value on both bodies.
+ *   - Floating: 72pt info bar (52pt cover, title, artist, progress) + a
+ *     control body carrying nanoPod's own PlayPause/Skip buttons, always
+ *     mounted, parked inside the bar and dripping off on a delayed spring
+ *     (ref4); text blurs in as the shapes settle (ref4).
  * [POS]: Standalone spike root view.
- * [PROTOCOL]: This view only reads `model.pose`; all motion comes from the
- *             model animating pose channels with per-channel springs.
  */
 
 import SwiftUI
@@ -33,24 +38,20 @@ struct RootContentView: View {
 private struct GlassRootView: View {
     @ObservedObject var model: EdgeCollapseAppModel
     @ObservedObject var music = MusicController.shared
+    @StateObject private var edgePresentation = EdgePresentationModel()
     @Namespace private var ns
 
     private var pose: EdgeCollapsePose { model.pose }
+    private var isPanel: Bool { model.presentation == .card }
 
-    /// One colour from the artwork; the whole panel glass is tinted with it.
-    private var artworkColor: Color {
-        model.artworkColor.map { Color(nsColor: $0) } ?? Color(white: 0.3)
-    }
-
-    /// Same Glass value for both bodies so they read as one material.
+    /// One Glass value for both bodies. Clear over the wallpaper; the black
+    /// comes from the dimming layer, not from the material.
     private var glass: Glass {
-        let base: Color
         switch model.tint {
-        case .none: base = .clear
-        case .black, .gradient: base = Color.black.opacity(EdgeCollapseTokens.tintOpacity)
+        case .none: return .clear.interactive()
+        case .black: return .clear.tint(Color.black.opacity(EdgeCollapseTokens.tintOpacity)).interactive()
+        case .gradient: return .clear.interactive()
         }
-        let tint = blend(artworkColor.opacity(EdgeCollapseTokens.cardTintOpacity), base, t: pose.artworkTint)
-        return .regular.tint(tint).interactive()
     }
 
     private var bodyShape: UnevenRoundedRectangle {
@@ -71,51 +72,74 @@ private struct GlassRootView: View {
                 }
             }
 
+            panelView
             heroView
-            cardContent
         }
         .frame(width: EdgeCollapseTokens.containerSize.width, height: EdgeCollapseTokens.containerSize.height)
         .overlay(Color.black.opacity(model.reduceMotionFlashOpacity * 0.6).allowsHitTesting(false))
     }
 
-    // MARK: - Body
+    // MARK: - The real nanoPod panel (fullscreen-cover mode)
+
+    private var panelView: some View {
+        let r = EdgeCollapsePoses.pose(for: .card, variant: model.variant, titleWidth: 0).bodyRect
+        return MiniPlayerView()
+            .environmentObject(music)
+            .environmentObject(edgePresentation)
+            .frame(width: r.width, height: r.height)
+            .clipShape(RoundedRectangle(cornerRadius: EdgeCollapseTokens.cardCornerRadius, style: .continuous))
+            .opacity(pose.cardContentOpacity)
+            .allowsHitTesting(pose.cardContentOpacity > 0.9)
+            .position(x: r.midX, y: r.midY)
+    }
+
+    // MARK: - Glass body: panel rect → island → floating bar
 
     private var bodyView: some View {
         let r = pose.bodyRect
+        let dim = 1 - pose.artworkTint
         return ZStack {
-            // Edge-side dimming layer (HIG dimming layer), only when not the panel.
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                LinearGradient(
-                    colors: [Color.black.opacity(0), Color.black.opacity(EdgeCollapseTokens.edgeDimOpacity)],
-                    startPoint: .leading, endPoint: .trailing)
-                .frame(width: r.width * EdgeCollapseTokens.edgeDimFraction)
-            }
-            .opacity(model.tint == .gradient ? 1 - pose.artworkTint : 0)
+            // Full-width dimming layer: black at the screen edge, lighter inward.
+            LinearGradient(
+                colors: [Color.black.opacity(EdgeCollapseTokens.edgeDimInnerOpacity),
+                         Color.black.opacity(EdgeCollapseTokens.edgeDimOpacity)],
+                startPoint: .leading, endPoint: .trailing)
+            .opacity(model.tint == .gradient ? dim : 0)
 
-            // Island progress line (bottom).
-            VStack(spacing: 0) {
+            // Island: vertical progress line.
+            HStack {
                 Spacer(minLength: 0)
-                Capsule().fill(Color.white.opacity(0.85))
-                    .frame(width: max(0, r.width - 16), height: 3)
-                    .padding(.bottom, 10)
-                    .overlay(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.35)).frame(width: max(0, r.width - 16), height: 3).padding(.bottom, 10)
+                GeometryReader { g in
+                    ZStack(alignment: .bottom) {
+                        Capsule().fill(Color.white.opacity(0.25))
+                        Capsule().fill(Color.white.opacity(0.9)).frame(height: g.size.height * progress)
                     }
-                    .mask(alignment: .leading) { Rectangle().frame(width: max(0, (r.width - 16) * progress)) }
+                }
+                .frame(width: 3)
+                .padding(.vertical, 40)
+                .padding(.trailing, 8)
             }
             .opacity(pose.progressOpacity)
 
-            // Floating bar text (H).
-            HStack(spacing: 10) {
-                Spacer(minLength: EdgeCollapseTokens.floatingBarArtwork + 16)
-                VStack(alignment: .leading, spacing: 2) {
+            // Floating bar: title, artist, progress.
+            HStack(spacing: 12) {
+                Spacer(minLength: EdgeCollapseTokens.floatingBarArtwork + 20)
+                VStack(alignment: .leading, spacing: 3) {
                     Text(model.trackTitle).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                    Text(music.currentArtist).font(.system(size: 11)).opacity(0.75).lineLimit(1)
+                    Text(music.currentArtist).font(.system(size: 11)).opacity(0.72).lineLimit(1)
+                    GeometryReader { g in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.white.opacity(0.25))
+                            Capsule().fill(Color.white.opacity(0.9)).frame(width: g.size.width * progress)
+                        }
+                    }
+                    .frame(height: 2)
+                    .padding(.top, 4)
                 }
                 .foregroundStyle(.white)
-                Spacer(minLength: 12)
+                Spacer(minLength: 14)
             }
+            .blur(radius: pose.contentBlur)
             .opacity(pose.barTextOpacity)
         }
         .allowsHitTesting(false)
@@ -123,39 +147,41 @@ private struct GlassRootView: View {
         .clipShape(bodyShape)
         .glassEffect(glass, in: bodyShape)
         .contentShape(bodyShape)
-        .onTapGesture { if model.presentation != .card { model.requestExpand() } }
+        .onTapGesture { if !isPanel { model.requestExpand() } }
         .position(x: r.midX, y: r.midY)
     }
 
-    // MARK: - Control (always mounted; parked inside body when hidden)
+    // MARK: - Control body: nanoPod's own buttons, always mounted
 
     private var controlView: some View {
         let r = pose.controlRect
         let shape = RoundedRectangle(cornerRadius: EdgeCollapseTokens.floatingControlCornerRadius, style: .continuous)
+        let ink = Color.white
         return Group {
-            if model.variant == .h { HStack(spacing: 16) { controlGlyphs } } else { VStack(spacing: 14) { controlGlyphs } }
+            if model.variant == .h { HStack(spacing: 6) { controlButtons(ink: ink) } } else { VStack(spacing: 6) { controlButtons(ink: ink) } }
         }
-        .foregroundStyle(.white)
+        .blur(radius: pose.contentBlur)
         .opacity(pose.controlContentOpacity)
         .frame(width: r.width, height: r.height)
         .glassEffect(glass, in: shape)
         .contentShape(shape)
-        .allowsHitTesting(pose.controlContentOpacity > 0.5)
+        .allowsHitTesting(pose.controlContentOpacity > 0.9)
         .position(x: r.midX, y: r.midY)
     }
 
-    private var controlGlyphs: some View {
-        Group {
-            Image(systemName: music.isPlaying ? "pause.fill" : "play.fill")
-                .font(.system(size: 14, weight: .semibold)).frame(width: 24, height: 24)
-                .contentShape(Rectangle()).onTapGesture { model.toggleIsPlaying() }
-            Image(systemName: "forward.fill")
-                .font(.system(size: 14, weight: .semibold)).frame(width: 24, height: 24)
-                .contentShape(Rectangle()).onTapGesture { model.nextTrack() }
+    @ViewBuilder
+    private func controlButtons(ink: Color) -> some View {
+        SkipControlButton(action: { music.previousTrack() }, direction: -1, inkColor: ink, hoverFill: ink.opacity(0.18))
+            .frame(width: 30, height: 30)
+        PlayPauseControlButton(isPlaying: music.isPlaying, inkColor: ink, hoverFill: ink.opacity(0.22)) {
+            music.togglePlayPause()
         }
+        .frame(width: 30, height: 30)
+        SkipControlButton(action: { music.nextTrack() }, direction: 1, inkColor: ink, hoverFill: ink.opacity(0.18))
+            .frame(width: 30, height: 30)
     }
 
-    // MARK: - Hero artwork: one view, every state
+    // MARK: - Hero cover: crossfades in place over the real cover, then flies
 
     private var heroView: some View {
         let r = pose.heroRect
@@ -164,38 +190,9 @@ private struct GlassRootView: View {
         }
         .frame(width: r.width, height: r.height)
         .clipShape(RoundedRectangle(cornerRadius: pose.heroCorner, style: .continuous))
+        .opacity(1 - pose.cardContentOpacity)
         .position(x: r.midX, y: r.midY)
         .allowsHitTesting(false)
-    }
-
-    // MARK: - Panel content below the cover (fullscreen-cover layout)
-
-    private var cardContent: some View {
-        let b = pose.bodyRect
-        let top = b.minY + b.width
-        let h = max(0, b.maxY - top)
-        return HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(model.trackTitle).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                Text(music.currentArtist).font(.system(size: 11)).opacity(0.75).lineLimit(1)
-            }
-            Spacer(minLength: 0)
-            HStack(spacing: 14) {
-                Image(systemName: "backward.fill")
-                Image(systemName: music.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 18, weight: .semibold)).frame(width: 28, height: 28)
-                    .contentShape(Rectangle()).onTapGesture { model.toggleIsPlaying() }
-                Image(systemName: "forward.fill").frame(width: 24, height: 24)
-                    .contentShape(Rectangle()).onTapGesture { model.nextTrack() }
-            }
-            .font(.system(size: 14, weight: .semibold))
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 16)
-        .frame(width: b.width, height: h)
-        .position(x: b.midX, y: top + h / 2)
-        .opacity(pose.cardContentOpacity)
-        .allowsHitTesting(pose.cardContentOpacity > 0.5)
     }
 
     private var progress: CGFloat {
@@ -204,18 +201,7 @@ private struct GlassRootView: View {
     }
 }
 
-private func blend(_ a: Color, _ b: Color, t: Double) -> Color {
-    let ca = NSColor(a).usingColorSpace(.sRGB) ?? .black
-    let cb = NSColor(b).usingColorSpace(.sRGB) ?? .black
-    let k = CGFloat(min(max(t, 0), 1))
-    return Color(nsColor: NSColor(
-        red: cb.redComponent + (ca.redComponent - cb.redComponent) * k,
-        green: cb.greenComponent + (ca.greenComponent - cb.greenComponent) * k,
-        blue: cb.blueComponent + (ca.blueComponent - cb.blueComponent) * k,
-        alpha: cb.alphaComponent + (ca.alphaComponent - cb.alphaComponent) * k))
-}
-
-/// Spike-local single-colour extraction (mean of a coarse sample grid).
+/// Spike-local single-colour extraction (kept for the control window readout).
 func edgeCollapseArtworkColor(_ image: NSImage) -> NSColor? {
     guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
     let w = rep.pixelsWide, h = rep.pixelsHigh

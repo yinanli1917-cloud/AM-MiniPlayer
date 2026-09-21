@@ -903,16 +903,23 @@ struct HoverableControlButton: View {
     }
 }
 
-private struct PlayPauseControlButton: View {
+public struct PlayPauseControlButton: View {
     let isPlaying: Bool
     let inkColor: Color
     let hoverFill: Color
     let action: () -> Void
 
+    public init(isPlaying: Bool, inkColor: Color, hoverFill: Color, action: @escaping () -> Void) {
+        self.isPlaying = isPlaying
+        self.inkColor = inkColor
+        self.hoverFill = hoverFill
+        self.action = action
+    }
+
     @State private var isHovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    var body: some View {
+    public var body: some View {
         Button(action: action) {
             ZStack {
                 Circle()
@@ -968,13 +975,30 @@ private struct PlayPausePressStyle: ButtonStyle {
 
 // MARK: - Skip Control Button (Replacement Flow Micro-Interaction)
 
-struct SkipControlButton: View {
+public struct SkipControlButton: View {
     let action: () -> Void
     let direction: CGFloat
     let inkColor: Color
     let hoverFill: Color
     var beginDiagnostics: (() -> UUID?)? = nil
     var finishDiagnostics: ((UUID?, DiagnosticInteractionStatus, String?) -> Void)? = nil
+
+    public init(action: @escaping () -> Void, direction: CGFloat, inkColor: Color, hoverFill: Color) {
+        self.action = action
+        self.direction = direction
+        self.inkColor = inkColor
+        self.hoverFill = hoverFill
+    }
+
+    init(action: @escaping () -> Void, direction: CGFloat, inkColor: Color, hoverFill: Color,
+         beginDiagnostics: (() -> UUID?)?, finishDiagnostics: ((UUID?, DiagnosticInteractionStatus, String?) -> Void)?) {
+        self.action = action
+        self.direction = direction
+        self.inkColor = inkColor
+        self.hoverFill = hoverFill
+        self.beginDiagnostics = beginDiagnostics
+        self.finishDiagnostics = finishDiagnostics
+    }
 
     @State private var isHovering = false
     @State private var replacementStart: Date?
@@ -984,7 +1008,7 @@ struct SkipControlButton: View {
 
     private let replacementDuration: TimeInterval = 0.60
 
-    var body: some View {
+    public var body: some View {
         Button {
             playReplacementAnimation(perform: action)
         } label: {

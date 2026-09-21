@@ -30,6 +30,7 @@ public struct EdgeCollapsePose: Equatable {
     // Content groups
     public var cardContentOpacity: Double
     public var barTextOpacity: Double
+    public var contentBlur: CGFloat   // ref4: content blurs while shapes morph
     public var progressOpacity: Double
 }
 
@@ -48,7 +49,7 @@ public enum EdgeCollapsePoses {
                 bodyRect: body, cornerInner: t.cardCornerRadius, cornerEdge: t.cardCornerRadius,
                 controlRect: parked(in: body), controlContentOpacity: 0,
                 heroRect: hero, heroCorner: t.cardCornerRadius,
-                artworkTint: 1, cardContentOpacity: 1, barTextOpacity: 0, progressOpacity: 0)
+                artworkTint: 1, cardContentOpacity: 1, barTextOpacity: 0, contentBlur: 0, progressOpacity: 0)
 
         case .tucked:
             let s = t.islandSize
@@ -59,7 +60,7 @@ public enum EdgeCollapsePoses {
                 bodyRect: body, cornerInner: t.islandCornerRadius, cornerEdge: 0,
                 controlRect: parked(in: body), controlContentOpacity: 0,
                 heroRect: hero, heroCorner: a / 2,
-                artworkTint: 0, cardContentOpacity: 0, barTextOpacity: 0, progressOpacity: 1)
+                artworkTint: 0, cardContentOpacity: 0, barTextOpacity: 0, contentBlur: 0, progressOpacity: 1)
 
         case .floating:
             let trailingX = container.width - t.floatingEdgeGap
@@ -78,7 +79,7 @@ public enum EdgeCollapsePoses {
                     bodyRect: body, cornerInner: h / 2, cornerEdge: h / 2,
                     controlRect: control, controlContentOpacity: 1,
                     heroRect: hero, heroCorner: 10,
-                    artworkTint: 0, cardContentOpacity: 0, barTextOpacity: 1, progressOpacity: 0)
+                    artworkTint: 0, cardContentOpacity: 0, barTextOpacity: 1, contentBlur: 0, progressOpacity: 0)
             case .v:
                 let d = t.floatingDropSizeV
                 let c = t.floatingControlSizeV
@@ -92,7 +93,7 @@ public enum EdgeCollapsePoses {
                     bodyRect: body, cornerInner: t.floatingDropCornerRadiusV, cornerEdge: t.floatingDropCornerRadiusV,
                     controlRect: control, controlContentOpacity: 1,
                     heroRect: hero, heroCorner: 12,
-                    artworkTint: 0, cardContentOpacity: 0, barTextOpacity: 0, progressOpacity: 0)
+                    artworkTint: 0, cardContentOpacity: 0, barTextOpacity: 0, contentBlur: 0, progressOpacity: 0)
             }
         }
     }
@@ -136,10 +137,10 @@ public struct EdgeCollapsePlan {
             return EdgeCollapsePlan(
                 bodyHeight: spring(0.22, 0.10),
                 bodyWidth: spring(0.30, stalkBounce, delay: 0.06),
-                bodyPosition: spring(0.30, 0.18, delay: 0.12),
+                bodyPosition: spring(0.32, 0.18, delay: 0.16),
                 corners: spring(0.30, 0.0, delay: 0.06),
                 control: spring(0.20, 0),
-                hero: spring(0.36, 0.42, delay: 0.13),
+                hero: spring(0.38, 0.42, delay: 0.18),
                 material: ease(0.10),
                 cardContent: ease(0.08),
                 barText: ease(0.08),
@@ -151,11 +152,11 @@ public struct EdgeCollapsePlan {
                 bodyWidth: spring(0.32, 0.28, delay: 0.02),
                 bodyPosition: spring(0.30, 0.20),
                 corners: spring(0.30, 0.0),
-                control: spring(0.30, 0.32, delay: 0.12),
+                control: spring(0.34, 0.36, delay: 0.20),
                 hero: spring(0.30, 0.25, delay: 0.04),
                 material: ease(0.10),
                 cardContent: ease(0.08),
-                barText: ease(0.12, delay: 0.16),
+                barText: ease(0.14, delay: 0.26),
                 progress: ease(0.08))
         case .retract:
             return EdgeCollapsePlan(

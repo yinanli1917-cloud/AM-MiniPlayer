@@ -178,7 +178,13 @@ public final class EdgeCollapseAppModel: ObservableObject {
         } completion: { completion() }
         withAnimation(plan.material) { pose.artworkTint = target.artworkTint }
         withAnimation(plan.cardContent) { pose.cardContentOpacity = target.cardContentOpacity }
-        withAnimation(plan.barText) { pose.barTextOpacity = target.barTextOpacity }
+        // ref4: content is blurred while the shapes morph, then resolves.
+        var noAnim = Transaction(); noAnim.disablesAnimations = true
+        withTransaction(noAnim) { pose.contentBlur = 6 }
+        withAnimation(plan.barText) {
+            pose.barTextOpacity = target.barTextOpacity
+            pose.contentBlur = 0
+        }
         withAnimation(plan.progress) { pose.progressOpacity = target.progressOpacity }
     }
 }

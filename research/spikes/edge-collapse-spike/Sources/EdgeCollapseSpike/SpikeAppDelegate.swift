@@ -44,6 +44,7 @@ final class SpikeAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Disable the app's old C1 EdgeMorphHost inside the hosted MiniPlayerView.
         UserDefaults.standard.set("v0", forKey: MicroInteractionFeel.edgeMorphDefaultsKey)
+        UserDefaults.standard.set(true, forKey: "fullscreenAlbumCover")
         _ = MusicController.shared
         print("[EdgeCollapse] launch pid=\(ProcessInfo.processInfo.processIdentifier) probe=\(EdgeCollapseProbe.isActive)")
 

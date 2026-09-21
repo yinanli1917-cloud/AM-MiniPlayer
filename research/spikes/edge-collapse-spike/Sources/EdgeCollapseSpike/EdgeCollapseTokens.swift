@@ -66,7 +66,7 @@ public enum EdgeCollapseTokens {
     /// default 24; glass-morph-spike's own scenario 2 measured a real,
     /// continuously-changing blend at this kind of spacing with NO identity
     /// change at all — see research/spikes/glass-morph-spike/results/summary.md).
-    public static let containerSpacing: CGFloat = 10
+    public static let containerSpacing: CGFloat = 20
 
     // MARK: - Card (body id "body" in `.card`)
 
@@ -88,10 +88,10 @@ public enum EdgeCollapseTokens {
     public static let tuckedSize = CGSize(width: 8, height: 96)
     /// v5: the tucked state is an island grown out of the screen edge
     /// (flat side on the edge, round side inward), not a stalk.
-    public static let islandSize = CGSize(width: 44, height: 96)
-    public static let islandCornerRadius: CGFloat = 22
-    public static let islandArtwork: CGFloat = 36
-    public static let floatingBarArtwork: CGFloat = 48
+    public static let islandSize = CGSize(width: 32, height: 112)
+    public static let islandCornerRadius: CGFloat = 16
+    public static let islandArtwork: CGFloat = 24
+    public static let floatingBarArtwork: CGFloat = 52
     public static let floatingDropArtwork: CGFloat = 56
     /// Hover/click hit-region padding beyond the visible 8pt sliver — an 8pt
     /// target is not landable with a cursor (design §6).
@@ -103,17 +103,17 @@ public enum EdgeCollapseTokens {
     public static let floatingEdgeGap: CGFloat = 12
     /// Visual gap between the body and control shapes (VStack spacing) —
     /// distinct from `containerSpacing` (the glass BLEND threshold).
-    public static let floatingBodyControlGap: CGFloat = 12
+    public static let floatingBodyControlGap: CGFloat = 24
     public static let floatingHoverExitExpand: CGFloat = 12
 
-    public static let floatingBarHeight: CGFloat = 64
-    public static let floatingBarMinWidth: CGFloat = 200
-    public static let floatingBarMaxWidth: CGFloat = 260
+    public static let floatingBarHeight: CGFloat = 72
+    public static let floatingBarMinWidth: CGFloat = 220
+    public static let floatingBarMaxWidth: CGFloat = 280
     /// Budget added to the measured title text width to get the bar's
     /// content width (artwork dot + spacing + horizontal padding).
     public static let floatingBarHorizontalPadding: CGFloat = 84
 
-    public static let floatingControlSizeH = CGSize(width: 72, height: 40)
+    public static let floatingControlSizeH = CGSize(width: 116, height: 40)
     public static let floatingControlCornerRadius: CGFloat = 20
 
     /// V variant's artwork drop: task instruction #1 explicitly overrides
@@ -122,7 +122,7 @@ public enum EdgeCollapseTokens {
     /// ≤ half short side — 16 = 32/2, satisfies the corner clause exactly).
     public static let floatingDropSizeV = CGSize(width: 64, height: 64)
     public static let floatingDropCornerRadiusV: CGFloat = 16
-    public static let floatingControlSizeV = CGSize(width: 40, height: 88)
+    public static let floatingControlSizeV = CGSize(width: 40, height: 116)
 
     // MARK: - Tint overlay (top-level task instruction #1)
 
@@ -130,8 +130,9 @@ public enum EdgeCollapseTokens {
     /// Base darkening under the gradient arm (native Glass.tint, keeps rim).
     public static let tintBaseOpacity: Double = 0.45
     /// Edge-side dimming layer (HIG: dark dimming layer ~35%) strength and width fraction.
-    public static let edgeDimOpacity: Double = 0.5
-    public static let edgeDimFraction: CGFloat = 0.4
+    public static let edgeDimOpacity: Double = 0.62
+    public static let edgeDimInnerOpacity: Double = 0.18
+    public static let edgeDimFraction: CGFloat = 1.0
     /// Inset so the tint overlay never paints over the glass rim highlight
     /// (instruction #1: "Overlay must not cover the glass rim... inset by
     /// 1.5pt" — the alternative offered, blendMode .multiply, is NOT used
