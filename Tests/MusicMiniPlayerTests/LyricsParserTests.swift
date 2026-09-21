@@ -180,9 +180,133 @@ final class LyricsParserTests: XCTestCase {
         let lines = parser.parseTTML(ttml)
 
         XCTAssertNotNil(lines)
-        // 只有"歌词"这个 word，roman 和 bg 被过滤
+        // roman 仍被丢弃；bg 不再被丢弃——变成紧随其后的独立 isBackground 行
+        // 旋律行只有"歌词"这个 word
         XCTAssertEqual(lines?[0].words.count, 1)
         XCTAssertEqual(lines?[0].words[0].word, "歌词")
+        XCTAssertEqual(lines?.count, 2)
+        XCTAssertEqual(lines?[1].text, "bg")
+        XCTAssertEqual(lines?[1].isBackground, true)
+        XCTAssertEqual(lines?[1].startTime, 10.0)
+        XCTAssertEqual(lines?[1].endTime, 15.0)
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - 和声 (Backing Vocal / x-bg) — founder 2026-09-20 data-model rule
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// Apple/AMLL wrapper shape: `<span ttm:role="x-bg">` wraps nested
+    /// per-word timed children instead of carrying its own begin/end.
+    /// This exact wrapper shape was not confirmed against a real fetched
+    /// TTML fixture in this repo — it is synthesized from the documented
+    /// AMLL-TTML-DB convention (a role span around timed child spans).
+    func testParseTTML_bgWrapper_collectsNestedTimedWordsAsBackgroundLine() {
+        let ttml = """
+        <p begin="00:10.000" end="00:16.000"><span begin="00:10.000" end="00:12.000">Lead</span><span ttm:role="x-bg"><span begin="00:12.500" end="00:13.500">oh</span><span begin="00:13.600" end="00:14.600">yeah</span></span></p>
+        """
+        let lines = parser.parseTTML(ttml)
+
+        XCTAssertEqual(lines?.count, 2)
+        XCTAssertEqual(lines?[0].text, "Lead")
+        XCTAssertEqual(lines?[0].isBackground, false)
+        let bg = lines?[1]
+        XCTAssertEqual(bg?.isBackground, true)
+        XCTAssertEqual(bg?.text, "oh yeah")
+        XCTAssertEqual(bg?.words.count, 2)
+        XCTAssertEqual(bg?.startTime, 12.5)
+        XCTAssertEqual(bg?.endTime, 14.6)
+    }
+
+    func testParseTTML_bgLeafWithOwnTiming_usesItsOwnWindow() {
+        let ttml = """
+        <p begin="00:10.000" end="00:16.000"><span begin="00:10.000" end="00:12.000">Lead</span><span begin="00:12.200" end="00:13.800" ttm:role="x-bg">echo</span></p>
+        """
+        let lines = parser.parseTTML(ttml)
+
+        XCTAssertEqual(lines?.count, 2)
+        XCTAssertEqual(lines?[1].text, "echo")
+        XCTAssertEqual(lines?[1].isBackground, true)
+        XCTAssertEqual(lines?[1].startTime, 12.2)
+        XCTAssertEqual(lines?[1].endTime, 13.8)
+    }
+
+    func testSplitBackgroundVocalLines_wholeLineBracket_becomesBackgroundOnly() {
+        let raw = [LyricLine(text: "（I want you）", startTime: 10, endTime: 14)]
+        let (result, _) = parser.processLyrics(raw)
+        // index 0 是前奏占位符
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result[1].text, "I want you")
+        XCTAssertEqual(result[1].isBackground, true)
+        XCTAssertEqual(result[1].startTime, 10)
+        XCTAssertEqual(result[1].endTime, 14)
+    }
+
+    func testSplitBackgroundVocalLines_trailingParenthetical_splitsMelodyAndBackground() {
+        let raw = [LyricLine(text: "And don't you know how sweet it tastes? (How sweet it tastes)", startTime: 44.42, endTime: 48.38)]
+        let (result, _) = parser.processLyrics(raw)
+        XCTAssertEqual(result.count, 3)
+        let melody = result[1]
+        let background = result[2]
+        XCTAssertEqual(melody.text, "And don't you know how sweet it tastes?")
+        XCTAssertEqual(melody.isBackground, false)
+        XCTAssertEqual(background.text, "How sweet it tastes")
+        XCTAssertEqual(background.isBackground, true)
+        XCTAssertEqual(melody.startTime, background.startTime)
+        XCTAssertEqual(melody.endTime, background.endTime)
+    }
+
+    func testSplitBackgroundVocalLines_leadingParenthetical_splitsBackgroundAndMelody() {
+        let raw = [LyricLine(text: "(It's simple) it's like biting an apple", startTime: 32.48, endTime: 38.30)]
+        let (result, _) = parser.processLyrics(raw)
+        XCTAssertEqual(result.count, 3)
+        let melody = result[1]
+        let background = result[2]
+        XCTAssertEqual(background.text, "It's simple")
+        XCTAssertEqual(background.isBackground, true)
+        XCTAssertEqual(melody.text, "it's like biting an apple")
+        XCTAssertEqual(melody.isBackground, false)
+        XCTAssertEqual(melody.startTime, background.startTime)
+        XCTAssertEqual(melody.endTime, background.endTime)
+    }
+
+    func testSplitBackgroundVocalLines_middleParenthetical_leftUntouched() {
+        let raw = [LyricLine(text: "she said (softly) hello there", startTime: 1, endTime: 4)]
+        let (result, _) = parser.processLyrics(raw)
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result[1].text, "she said (softly) hello there")
+        XCTAssertEqual(result[1].isBackground, false)
+    }
+
+    /// Real-fixture regression: LRCLIB marks NewJeans "How Sweet" harmony as
+    /// trailing/leading parentheticals on the melody line (no dedicated
+    /// x-bg markup — LRCLIB is plain LRC). Every chorus repetition must
+    /// yield a melody+background pair sharing the same time window.
+    func testProcessLyrics_lrclibHowSweetFixture_choruLinesYieldMelodyBackgroundPairs() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/lrclib_newjeans_howsweet_9417341.json")
+        let data = try Data(contentsOf: fixtureURL)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let syncedLyrics = try XCTUnwrap(json?["syncedLyrics"] as? String)
+
+        let rawLines = parser.parseLRC(syncedLyrics)
+        let (result, _) = parser.processLyrics(rawLines)
+
+        let chorusMelody = result.first { $0.text == "And don't you know how sweet it tastes?" }
+        let chorusBackground = result.first { $0.text == "How sweet it tastes" && $0.isBackground }
+        XCTAssertNotNil(chorusMelody)
+        XCTAssertNotNil(chorusBackground)
+        XCTAssertEqual(chorusMelody?.startTime, chorusBackground?.startTime)
+        XCTAssertEqual(chorusMelody?.endTime, chorusBackground?.endTime)
+
+        let leadingMelody = result.first { $0.text == "it's like biting an apple" }
+        let leadingBackground = result.first { $0.text == "It's simple" && $0.isBackground }
+        XCTAssertNotNil(leadingMelody)
+        XCTAssertNotNil(leadingBackground)
+        XCTAssertEqual(leadingMelody?.startTime, leadingBackground?.startTime)
+
+        // No melody line should still carry the raw unsplit parenthetical text.
+        XCTAssertNil(result.first { $0.text.contains("(") && !$0.isBackground })
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

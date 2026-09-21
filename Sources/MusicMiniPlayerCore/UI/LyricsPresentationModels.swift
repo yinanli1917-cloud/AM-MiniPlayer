@@ -358,7 +358,56 @@ struct NativeLyricsVisualTarget: Equatable {
         )
     }
 
+    /// Ordered brightness tiers this codebase uses across opacity AND
+    /// dimBaseBrightness (1.0 sweeping-bright, 0.85 harmony/duet, 0.6
+    /// manual-scroll all-clear, 0.35 inactive dim base). A backing-vocal
+    /// (和声) row reads ONE STEP LOWER than its melody row's own tier in the
+    /// same state (founder 2026-09-20) — 0.22 extends the ladder one step
+    /// below the lowest existing tier for that case. Needs the founder's
+    /// on-device check like every other value on this ladder.
+    private static let brightnessTierLadder: [CGFloat] = [1.0, 0.85, 0.6, 0.35, 0.22]
+
+    static func nextLowerBrightnessTier(_ value: CGFloat) -> CGFloat {
+        for tier in brightnessTierLadder where tier < value - 0.001 {
+            return tier
+        }
+        return brightnessTierLadder.last ?? value
+    }
+
     static func amllTarget(
+        displayIndex: Int,
+        currentIndex: Int,
+        scrollTargetIndex: Int,
+        hotActiveIndices: Set<Int>,
+        isManualScrolling: Bool,
+        interludeBlend: CGFloat = 0,
+        gapRecedeBlend: CGFloat = 0,
+        isBackground: Bool = false
+    ) -> NativeLyricsVisualTarget {
+        let melody = melodyAmllTarget(
+            displayIndex: displayIndex,
+            currentIndex: currentIndex,
+            scrollTargetIndex: scrollTargetIndex,
+            hotActiveIndices: hotActiveIndices,
+            isManualScrolling: isManualScrolling,
+            interludeBlend: interludeBlend,
+            gapRecedeBlend: gapRecedeBlend
+        )
+        guard isBackground else { return melody }
+        // Subordinate row (founder 2026-09-20): lights up alongside its melody
+        // (isActive carries through so the word sweep still runs when it has
+        // words) at one tier lower brightness, never scales up past the
+        // inactive scale, and is never itself a blur-focus centre.
+        return NativeLyricsVisualTarget(
+            opacity: nextLowerBrightnessTier(melody.opacity),
+            scale: min(melody.scale, 0.95),
+            blur: 0,
+            isActive: melody.isActive,
+            dimBaseBrightness: nextLowerBrightnessTier(melody.dimBaseBrightness)
+        )
+    }
+
+    private static func melodyAmllTarget(
         displayIndex: Int,
         currentIndex: Int,
         scrollTargetIndex: Int,
@@ -714,19 +763,6 @@ enum NativeLyricsTimelinePolicy {
         let semanticIndex: Int
     }
 
-    /// A line whose whole text is bracket-wrapped is a BACKING-VOCAL part — the convention
-    /// every lyric source uses for background/duet parts (（I want you）, (ooh ooh)). Backing
-    /// parts light up alongside the melody (they stay in hotGroups) but never claim the
-    /// PRIMARY slot: the scroll and the karaoke sweep follow the melody line (user
-    /// 2026-07-13: 和声同时播放，滚动不跳). Structural rule, no per-song lists.
-    static func isBackingVocalText(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count > 2, let first = trimmed.first, let last = trimmed.last else { return false }
-        let opens: Set<Character> = ["(", "（"]
-        let closes: Set<Character> = [")", "）"]
-        return opens.contains(first) && closes.contains(last)
-    }
-
     static func liveDisplayIndex(
         at playbackTime: TimeInterval,
         rows: [LayerBackedLyricRow],
@@ -744,7 +780,11 @@ enum NativeLyricsTimelinePolicy {
                 bestAnyStartTime = startTime
                 bestAnyIndex = row.index
             }
-            guard !isBackingVocalText(row.displayLine.line.text) else { continue }
+            // 和声 (backing vocal) rows light up alongside their melody (they stay in
+            // hotGroups) but never claim the PRIMARY slot: the scroll and the karaoke
+            // sweep follow the melody line (founder 2026-09-20: data-model flag, not a
+            // text heuristic — user 2026-07-13: 和声同时播放，滚动不跳).
+            guard !row.displayLine.line.isBackground else { continue }
             if startTime > bestStartTime || (startTime == bestStartTime && row.index > (bestIndex ?? Int.min)) {
                 bestStartTime = startTime
                 bestIndex = row.index
@@ -777,7 +817,7 @@ enum NativeLyricsTimelinePolicy {
             fallback: fallback
         )
         let backingIndices = Set(
-            sortedRows.filter { isBackingVocalText($0.displayLine.line.text) }.map(\.index)
+            sortedRows.filter { $0.displayLine.line.isBackground }.map(\.index)
         )
         let firstFutureIndex = sortedRows
             .filter {

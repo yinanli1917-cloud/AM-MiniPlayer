@@ -158,6 +158,31 @@ public struct CachedLyricLine: Codable, Equatable {
     public let endTime: TimeInterval
     public let words: [CachedLyricWord]
     public let translation: String?
+    public let isBackground: Bool
+
+    public init(text: String, startTime: TimeInterval, endTime: TimeInterval, words: [CachedLyricWord], translation: String?, isBackground: Bool = false) {
+        self.text = text
+        self.startTime = startTime
+        self.endTime = endTime
+        self.words = words
+        self.translation = translation
+        self.isBackground = isBackground
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text, startTime, endTime, words, translation, isBackground
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        text = try container.decode(String.self, forKey: .text)
+        startTime = try container.decode(TimeInterval.self, forKey: .startTime)
+        endTime = try container.decode(TimeInterval.self, forKey: .endTime)
+        words = try container.decode([CachedLyricWord].self, forKey: .words)
+        translation = try container.decodeIfPresent(String.self, forKey: .translation)
+        // Older cache rows predate this field; default to false rather than fail to decode.
+        isBackground = try container.decodeIfPresent(Bool.self, forKey: .isBackground) ?? false
+    }
 }
 
 public struct CachedLyricWord: Codable, Equatable {
@@ -172,10 +197,10 @@ private struct LyricsDiskCacheFile: Codable {
 }
 
 public final class LyricsDiskCache {
-    // 30: provider-level unavailable markers are retryable evidence, not
-    // durable no-lyrics verdicts. Invalidate schema 29 rows that could force
-    // a false miss until manual refresh.
-    public static let schemaVersion = 30
+    // 31: backing-vocal (和声) lines are now a data-model concept (isBackground);
+    // rows cached under schema 30 predate the split/x-bg parsing and must
+    // re-parse so melody/background pairs materialize.
+    public static let schemaVersion = 31
     public static let ttlSeconds: TimeInterval = 30 * 86400
     public static let unavailableTTLSeconds: TimeInterval = 24 * 3600
     public static let defaultMaxEntryCount = 450
@@ -274,7 +299,8 @@ public final class LyricsDiskCache {
                 startTime: line.startTime,
                 endTime: line.endTime,
                 words: line.words.map { CachedLyricWord(word: $0.word, startTime: $0.startTime, endTime: $0.endTime) },
-                translation: line.translation
+                translation: line.translation,
+                isBackground: line.isBackground
             )
         }
         let entry = LyricsDiskCacheEntry(
@@ -315,7 +341,8 @@ public final class LyricsDiskCache {
                 startTime: line.startTime,
                 endTime: line.endTime,
                 words: line.words.map { CachedLyricWord(word: $0.word, startTime: $0.startTime, endTime: $0.endTime) },
-                translation: line.translation
+                translation: line.translation,
+                isBackground: line.isBackground
             )
         }
         let entry = LyricsDiskCacheEntry(
@@ -338,7 +365,8 @@ public final class LyricsDiskCache {
                 startTime: line.startTime,
                 endTime: line.endTime,
                 words: line.words.map { LyricWord(word: $0.word, startTime: $0.startTime, endTime: $0.endTime) },
-                translation: line.translation
+                translation: line.translation,
+                isBackground: line.isBackground
             )
         })
     }

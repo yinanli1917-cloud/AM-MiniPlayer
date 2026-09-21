@@ -9,8 +9,12 @@ struct NativeLyricsStaticTextRenderPlan: Equatable {
 
     static func make(
         line: LyricLine,
-        constants: NativeLyricsTextConstants = NativeLyricsTextConstants()
+        constants: NativeLyricsTextConstants? = nil
     ) -> NativeLyricsStaticTextRenderPlan {
+        // Default constants track the LINE's own isBackground flag, so every
+        // existing call site that doesn't explicitly override picks up the
+        // 0.8× backing-vocal font scale automatically.
+        let constants = constants ?? NativeLyricsTextConstants(scale: NativeLyricsTextConstants.scale(forBackground: line.isBackground))
         let tokens = LyricDisplaySegmenter.displayTokens(forWords: line.words)
         var runs = tokens.map(NativeLyricsStaticWordRunPlan.make(token:))
         // Emphasis is contrast: a line where EVERY word qualifies (held short
@@ -276,9 +280,23 @@ struct NativeLyricsTextRenderPlan: Equatable {
 }
 
 struct NativeLyricsTextConstants: Equatable {
-    let mainFontSize: CGFloat = 24
-    let translationFontSize: CGFloat = 24 * 0.67
+    /// Backing-vocal (和声) rows render at 0.8× the melody row's font size — both main
+    /// and translation text (founder 2026-09-20: subordinate row under its melody line).
+    static let backgroundRowFontScale: CGFloat = 0.8
+
+    let mainFontSize: CGFloat
+    let translationFontSize: CGFloat
     let translationLineSpacing: CGFloat = 2
+
+    init(scale: CGFloat = 1.0) {
+        mainFontSize = 24 * scale
+        translationFontSize = 24 * 0.67 * scale
+    }
+
+    /// Convenience: the scale a render plan should use for `line`.
+    static func scale(forBackground isBackground: Bool) -> CGFloat {
+        isBackground ? backgroundRowFontScale : 1.0
+    }
     let brightAlpha: CGFloat = 0.85
     // The dim tier is no longer a baked alpha: the unswept base reads at the row's
     // dimBaseBrightness (inactive tier 0.35, user decision 2026-07-12) via layer-opacity
