@@ -1,6 +1,6 @@
 /**
  * [INPUT]: EdgeCollapseAppModel.pose + MusicController.shared.
- * [OUTPUT]: RootContentView v6.
+ * [OUTPUT]: RootContentView v7 (vertical only: docked pill with cover + pause ring + next; hover widens and drips the controls off).
  *   - Panel state IS the real nanoPod MiniPlayerView (fullscreen-cover mode),
  *     untouched. Underneath it, at the same rect, sits the glass body.
  *   - Collapse: MiniPlayerView fades out over the first 100ms revealing the
@@ -67,8 +67,9 @@ private struct GlassRootView: View {
 
             GlassEffectContainer(spacing: EdgeCollapseTokens.containerSpacing) {
                 ZStack(alignment: .topLeading) {
-                    controlView.glassEffectID("control", in: ns)
                     bodyView.glassEffectID("body", in: ns)
+                    // Drawn above the body so its buttons stay clickable while parked inside the docked pill.
+                    controlView.glassEffectID("control", in: ns)
                 }
             }
 
@@ -101,44 +102,23 @@ private struct GlassRootView: View {
         return ZStack {
             // Full-width dimming layer: black at the screen edge, lighter inward.
             LinearGradient(
-                colors: [Color.black.opacity(EdgeCollapseTokens.edgeDimInnerOpacity),
-                         Color.black.opacity(EdgeCollapseTokens.edgeDimOpacity)],
+                stops: [
+                    .init(color: Color.black.opacity(EdgeCollapseTokens.edgeDimInnerOpacity), location: 0),
+                    .init(color: Color.black.opacity(EdgeCollapseTokens.edgeDimMidOpacity), location: 0.5),
+                    .init(color: Color.black.opacity(EdgeCollapseTokens.edgeDimOpacity), location: 1),
+                ],
                 startPoint: .leading, endPoint: .trailing)
             .opacity(model.tint == .gradient ? dim : 0)
 
-            // Island: vertical progress line.
-            HStack {
+            // Hover pill: title + artist under the cover.
+            VStack(spacing: 2) {
                 Spacer(minLength: 0)
-                GeometryReader { g in
-                    ZStack(alignment: .bottom) {
-                        Capsule().fill(Color.white.opacity(0.25))
-                        Capsule().fill(Color.white.opacity(0.9)).frame(height: g.size.height * progress)
-                    }
-                }
-                .frame(width: 3)
-                .padding(.vertical, 40)
-                .padding(.trailing, 8)
+                Text(model.trackTitle).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                Text(music.currentArtist).font(.system(size: 10)).opacity(0.72).lineLimit(1)
             }
-            .opacity(pose.progressOpacity)
-
-            // Floating bar: title, artist, progress.
-            HStack(spacing: 12) {
-                Spacer(minLength: EdgeCollapseTokens.floatingBarArtwork + 20)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(model.trackTitle).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                    Text(music.currentArtist).font(.system(size: 11)).opacity(0.72).lineLimit(1)
-                    GeometryReader { g in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(Color.white.opacity(0.25))
-                            Capsule().fill(Color.white.opacity(0.9)).frame(width: g.size.width * progress)
-                        }
-                    }
-                    .frame(height: 2)
-                    .padding(.top, 4)
-                }
-                .foregroundStyle(.white)
-                Spacer(minLength: 14)
-            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 14)
             .blur(radius: pose.contentBlur)
             .opacity(pose.barTextOpacity)
         }
@@ -157,8 +137,9 @@ private struct GlassRootView: View {
         let r = pose.controlRect
         let shape = RoundedRectangle(cornerRadius: EdgeCollapseTokens.floatingControlCornerRadius, style: .continuous)
         let ink = Color.white
+        let vertical = r.height > r.width
         return Group {
-            if model.variant == .h { HStack(spacing: 6) { controlButtons(ink: ink) } } else { VStack(spacing: 6) { controlButtons(ink: ink) } }
+            if vertical { VStack(spacing: 10) { controlButtons(ink: ink) } } else { HStack(spacing: 18) { controlButtons(ink: ink) } }
         }
         .blur(radius: pose.contentBlur)
         .opacity(pose.controlContentOpacity)
@@ -169,14 +150,20 @@ private struct GlassRootView: View {
         .position(x: r.midX, y: r.midY)
     }
 
+    /// Two buttons only: pause/play with a progress ring (Apple Watch Now
+    /// Playing), and next. Both are nanoPod's own buttons.
     @ViewBuilder
     private func controlButtons(ink: Color) -> some View {
-        SkipControlButton(action: { music.previousTrack() }, direction: -1, inkColor: ink, hoverFill: ink.opacity(0.18))
+        ZStack {
+            Circle().stroke(ink.opacity(0.25), lineWidth: 2.5)
+            Circle().trim(from: 0, to: progress).stroke(ink, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            PlayPauseControlButton(isPlaying: music.isPlaying, inkColor: ink, hoverFill: ink.opacity(0.18)) {
+                music.togglePlayPause()
+            }
             .frame(width: 30, height: 30)
-        PlayPauseControlButton(isPlaying: music.isPlaying, inkColor: ink, hoverFill: ink.opacity(0.22)) {
-            music.togglePlayPause()
         }
-        .frame(width: 30, height: 30)
+        .frame(width: 40, height: 40)
         SkipControlButton(action: { music.nextTrack() }, direction: 1, inkColor: ink, hoverFill: ink.opacity(0.18))
             .frame(width: 30, height: 30)
     }

@@ -52,49 +52,37 @@ public enum EdgeCollapsePoses {
                 artworkTint: 1, cardContentOpacity: 1, barTextOpacity: 0, contentBlur: 0, progressOpacity: 0)
 
         case .tucked:
-            let s = t.islandSize
+            // Docked pill (vertical only, v7): cover on top, pause ring + next
+            // inside the same pill (the control body is parked inside it).
+            let s = t.dockSize
             let body = CGRect(x: container.width - s.width, y: (container.height - s.height) / 2, width: s.width, height: s.height)
-            let a = t.islandArtwork
+            let a = t.dockArtwork
             let hero = CGRect(x: body.minX + (s.width - a) / 2, y: body.minY + 8, width: a, height: a)
+            let control = CGRect(x: body.minX + 4, y: hero.maxY + 6, width: s.width - 8, height: body.maxY - hero.maxY - 12)
             return EdgeCollapsePose(
-                bodyRect: body, cornerInner: t.islandCornerRadius, cornerEdge: 0,
-                controlRect: parked(in: body), controlContentOpacity: 0,
-                heroRect: hero, heroCorner: a / 2,
+                bodyRect: body, cornerInner: t.dockCornerRadius, cornerEdge: 0,
+                controlRect: control, controlContentOpacity: 1,
+                heroRect: hero, heroCorner: 12,
                 artworkTint: 0, cardContentOpacity: 0, barTextOpacity: 0, contentBlur: 0, progressOpacity: 1)
 
         case .floating:
+            // Hover: the pill widens off the edge, shows title/artist under a
+            // bigger cover, and the controls drip off into their own body.
+            let w = t.hoverWidth
+            let a = t.hoverArtwork
+            let bodyH = 12 + a + 6 + t.hoverTextHeight + 12
+            let c = t.hoverControlSize
+            let total = bodyH + t.floatingBodyControlGap + c.height
+            let top = (container.height - total) / 2
             let trailingX = container.width - t.floatingEdgeGap
-            switch variant {
-            case .h:
-                let w = min(max(titleWidth + t.floatingBarHorizontalPadding, t.floatingBarMinWidth), t.floatingBarMaxWidth)
-                let h = t.floatingBarHeight
-                let total = h + t.floatingBodyControlGap + t.floatingControlSizeH.height
-                let top = (container.height - total) / 2
-                let body = CGRect(x: trailingX - w, y: top, width: w, height: h)
-                let c = t.floatingControlSizeH
-                let control = CGRect(x: trailingX - c.width, y: body.maxY + t.floatingBodyControlGap, width: c.width, height: c.height)
-                let a = t.floatingBarArtwork
-                let hero = CGRect(x: body.minX + 8, y: body.midY - a / 2, width: a, height: a)
-                return EdgeCollapsePose(
-                    bodyRect: body, cornerInner: h / 2, cornerEdge: h / 2,
-                    controlRect: control, controlContentOpacity: 1,
-                    heroRect: hero, heroCorner: 10,
-                    artworkTint: 0, cardContentOpacity: 0, barTextOpacity: 1, contentBlur: 0, progressOpacity: 0)
-            case .v:
-                let d = t.floatingDropSizeV
-                let c = t.floatingControlSizeV
-                let total = d.height + t.floatingBodyControlGap + c.height
-                let top = (container.height - total) / 2
-                let body = CGRect(x: trailingX - d.width, y: top, width: d.width, height: d.height)
-                let control = CGRect(x: trailingX - c.width, y: body.maxY + t.floatingBodyControlGap, width: c.width, height: c.height)
-                let a = t.floatingDropArtwork
-                let hero = CGRect(x: body.midX - a / 2, y: body.midY - a / 2, width: a, height: a)
-                return EdgeCollapsePose(
-                    bodyRect: body, cornerInner: t.floatingDropCornerRadiusV, cornerEdge: t.floatingDropCornerRadiusV,
-                    controlRect: control, controlContentOpacity: 1,
-                    heroRect: hero, heroCorner: 12,
-                    artworkTint: 0, cardContentOpacity: 0, barTextOpacity: 0, contentBlur: 0, progressOpacity: 0)
-            }
+            let body = CGRect(x: trailingX - w, y: top, width: w, height: bodyH)
+            let hero = CGRect(x: body.midX - a / 2, y: body.minY + 12, width: a, height: a)
+            let control = CGRect(x: trailingX - c.width, y: body.maxY + t.floatingBodyControlGap, width: c.width, height: c.height)
+            return EdgeCollapsePose(
+                bodyRect: body, cornerInner: t.hoverCornerRadius, cornerEdge: t.hoverCornerRadius,
+                controlRect: control, controlContentOpacity: 1,
+                heroRect: hero, heroCorner: 16,
+                artworkTint: 0, cardContentOpacity: 0, barTextOpacity: 1, contentBlur: 0, progressOpacity: 0)
         }
     }
 

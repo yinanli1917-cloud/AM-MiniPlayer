@@ -137,13 +137,25 @@ final class EdgeGestureHostingView<Content: View>: NSHostingView<Content> {
     /// `scrollingDeltaX` is treated as "toward the right edge" — documented
     /// here since AppKit's natural-scrolling sign convention is otherwise
     /// easy to get backwards.
+    private var swipeAccumulatedX: CGFloat = 0
+    private var swipeFired = false
+
+    /// Fire DURING the gesture (accumulated rightward delta > 40pt), not on
+    /// `.ended` — the ended event carries ~0 delta, so v6 only collapsed when
+    /// a momentum event happened to qualify (that was the felt latency).
     override func scrollWheel(with event: NSEvent) {
-        guard event.phase == .ended,
-              event.scrollingDeltaX > 2,
-              abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) else {
-            super.scrollWheel(with: event)
-            return
+        switch event.phase {
+        case .began:
+            swipeAccumulatedX = 0; swipeFired = false
+        case .changed:
+            swipeAccumulatedX += event.scrollingDeltaX
+            if !swipeFired, swipeAccumulatedX > 40, abs(event.scrollingDeltaX) >= abs(event.scrollingDeltaY) {
+                swipeFired = true
+                onHorizontalSwipeToEdge?()
+            }
+        default:
+            break
         }
-        onHorizontalSwipeToEdge?()
+        super.scrollWheel(with: event)
     }
 }

@@ -25,13 +25,14 @@ public final class EdgeCollapseAppModel: ObservableObject {
     @Published public private(set) var artworkColor: NSColor?
     @Published var reduceMotionFlashOpacity: Double = 0
 
-    @Published public var variant: EdgeCollapseVariant = .h { didSet { snapPoseToState() } }
+    @Published public var variant: EdgeCollapseVariant = .v { didSet { snapPoseToState() } }
     @Published public var tint: EdgeCollapseTint = .gradient
     @Published public var bounce: EdgeCollapseBounce = .bouncy
     @Published public var tempo: EdgeCollapseTempo = .normal
     @Published public var reduceMotionOverride: Bool?
 
     private var cancellables = Set<AnyCancellable>()
+    private let frameMeter = EdgeCollapseFrameMeter()
     weak var hostingView: EdgeGestureHostingView<RootContentView>?
 
     public var trackTitle: String { MusicController.shared.currentTrackTitle }
@@ -41,7 +42,7 @@ public final class EdgeCollapseAppModel: ObservableObject {
     }
 
     public init() {
-        pose = EdgeCollapsePoses.pose(for: .card, variant: .h, titleWidth: 0)
+        pose = EdgeCollapsePoses.pose(for: .card, variant: .v, titleWidth: 0)
         let music = MusicController.shared
         music.$currentTrackTitle
             .receive(on: DispatchQueue.main)
@@ -127,6 +128,7 @@ public final class EdgeCollapseAppModel: ObservableObject {
         let target = targetPose(for: next)
         EdgeCollapseLog.event(t0: t0, from: from, to: next, anim: kind.rawValue, event: "start")
         if let hostingView { EdgeCollapseProbe.record(view: hostingView, label: kind.rawValue) }
+        frameMeter.start(label: kind.rawValue)
 
         if reduceMotion {
             var snap = Transaction(); snap.disablesAnimations = true
@@ -187,4 +189,38 @@ public final class EdgeCollapseAppModel: ObservableObject {
         }
         withAnimation(plan.progress) { pose.progressOpacity = target.progressOpacity }
     }
+}
+
+
+/// Logs the worst inter-frame gap during a transition (code-level jank probe).
+@MainActor
+final class EdgeCollapseFrameMeter {
+    private var link: CADisplayLink?
+    private var last: CFTimeInterval = 0
+    private var maxGap: CFTimeInterval = 0
+    private var frames = 0
+    private var label = ""
+    private var startTime: CFTimeInterval = 0
+
+    func start(label: String) {
+        stop()
+        self.label = label; maxGap = 0; frames = 0; last = 0
+        startTime = CACurrentMediaTime()
+        guard let screen = NSScreen.main else { return }
+        let l = screen.displayLink(target: self, selector: #selector(tick(_:)))
+        l.add(to: .main, forMode: .common)
+        link = l
+    }
+
+    @objc private func tick(_ l: CADisplayLink) {
+        let now = CACurrentMediaTime()
+        if last > 0 { maxGap = max(maxGap, now - last); frames += 1 }
+        last = now
+        if now - startTime > 0.9 {
+            print(String(format: "[EdgeCollapse] frames anim=%@ frames=%d maxGapMs=%.1f", label, frames, maxGap * 1000))
+            stop()
+        }
+    }
+
+    private func stop() { link?.invalidate(); link = nil }
 }

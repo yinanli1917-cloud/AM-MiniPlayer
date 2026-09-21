@@ -88,7 +88,7 @@ public enum EdgeCollapseLayout {
             return Frames(body: rect, control: parkedControl(in: rect))
 
         case .tucked:
-            let size = EdgeCollapseTokens.islandSize
+            let size = EdgeCollapseTokens.dockSize
             let rect = CGRect(
                 x: containerSize.width - size.width,
                 y: (containerSize.height - size.height) / 2,

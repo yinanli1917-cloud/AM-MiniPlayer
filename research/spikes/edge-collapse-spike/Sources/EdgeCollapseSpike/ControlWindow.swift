@@ -46,10 +46,7 @@ struct ControlPanelView: View {
             }
 
             Section("Variant / Tint") {
-                Picker("Variant", selection: $model.variant) {
-                    ForEach(EdgeCollapseVariant.allCases) { v in Text(v.rawValue).tag(v) }
-                }
-                .pickerStyle(.segmented)
+                Text("Variant: vertical only (v7)")
 
                 Picker("Tint", selection: $model.tint) {
                     ForEach(EdgeCollapseTint.allCases) { t in Text(t.rawValue).tag(t) }

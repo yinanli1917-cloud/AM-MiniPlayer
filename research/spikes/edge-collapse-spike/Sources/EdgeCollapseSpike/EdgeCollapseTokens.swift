@@ -89,6 +89,15 @@ public enum EdgeCollapseTokens {
     /// v5: the tucked state is an island grown out of the screen edge
     /// (flat side on the edge, round side inward), not a stalk.
     public static let islandSize = CGSize(width: 32, height: 112)
+    // v7 docked pill (vertical only) and hover pill
+    public static let dockSize = CGSize(width: 72, height: 176)
+    public static let dockCornerRadius: CGFloat = 30
+    public static let dockArtwork: CGFloat = 56
+    public static let hoverWidth: CGFloat = 148
+    public static let hoverArtwork: CGFloat = 96
+    public static let hoverTextHeight: CGFloat = 36
+    public static let hoverCornerRadius: CGFloat = 28
+    public static let hoverControlSize = CGSize(width: 148, height: 48)
     public static let islandCornerRadius: CGFloat = 16
     public static let islandArtwork: CGFloat = 24
     public static let floatingBarArtwork: CGFloat = 52
@@ -130,8 +139,9 @@ public enum EdgeCollapseTokens {
     /// Base darkening under the gradient arm (native Glass.tint, keeps rim).
     public static let tintBaseOpacity: Double = 0.45
     /// Edge-side dimming layer (HIG: dark dimming layer ~35%) strength and width fraction.
-    public static let edgeDimOpacity: Double = 0.62
-    public static let edgeDimInnerOpacity: Double = 0.18
+    public static let edgeDimOpacity: Double = 0.92
+    public static let edgeDimInnerOpacity: Double = 0.12
+    public static let edgeDimMidOpacity: Double = 0.40
     public static let edgeDimFraction: CGFloat = 1.0
     /// Inset so the tint overlay never paints over the glass rim highlight
     /// (instruction #1: "Overlay must not cover the glass rim... inset by
