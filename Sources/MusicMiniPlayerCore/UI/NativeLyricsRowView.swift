@@ -1176,11 +1176,13 @@ final class NativeLyricsRowView: NSView {
         // Re-assert the positioning transform AppKit's layout just reset (see above).
         layer?.setAffineTransform(positioningTransform)
         guard let row, let configuration else { return }
-        let textX = nativeLyricContentLeadingInset
         // Single source of truth (same value updateTextLayers baked against). Deriving the frame
         // width from configuration.rowWidth instead of bounds.width removes the last bounds-timing
         // hazard, so the frame can never disagree with the baked line-breaks even on the first pass.
         let textWidth = contentTextWidth(configuration)
+        // Orphan-avoidance rows borrow from both margins: shift left by the leading share.
+        let textX = nativeLyricContentLeadingInset
+            - NativeLyricsRowMeasurement.leadingShift(forTextWidth: textWidth, rowWidth: configuration.rowWidth)
         // Memoization gate: build the key from cheap/cached inputs (staticTextPlan is cached) and
         // skip the whole layout body when nothing that affects it changed. layout() is invoked on
         // every commit; the body's NSLayoutManager measurement + frame writes are idempotent, so an

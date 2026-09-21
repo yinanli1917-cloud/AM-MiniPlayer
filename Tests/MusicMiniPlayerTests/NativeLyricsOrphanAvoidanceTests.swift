@@ -274,3 +274,31 @@ final class NativeLyricsOrphanAvoidanceTests: XCTestCase {
                        "the single-pass active-line bitmap layer must agree with the base layer's widened width")
     }
 }
+
+extension NativeLyricsOrphanAvoidanceTests {
+    /// Balanced borrow: a widened row shifts left by at most 12pt and takes only what it needs.
+    func test_balancedBorrow_shiftIsHalfTheExtraCappedAt12() {
+        let rowWidth: CGFloat = 500
+        let normal = rowWidth - NativeLyricsRowMeasurement.leadingInset - NativeLyricsRowMeasurement.trailingInset
+        XCTAssertEqual(NativeLyricsRowMeasurement.leadingShift(forTextWidth: normal, rowWidth: rowWidth), 0)
+        XCTAssertEqual(NativeLyricsRowMeasurement.leadingShift(forTextWidth: normal + 10, rowWidth: rowWidth), 5)
+        XCTAssertEqual(NativeLyricsRowMeasurement.leadingShift(forTextWidth: normal + 40, rowWidth: rowWidth), 12)
+    }
+
+    func test_cjkOrphan_widensMinimally_andNeverPastBothMargins() {
+        let rowWidth: CGFloat = 500
+        let font = NSFont.systemFont(ofSize: 24, weight: .semibold)
+        let normal = rowWidth - NativeLyricsRowMeasurement.leadingInset - NativeLyricsRowMeasurement.trailingInset
+        var n = 1
+        while NativeLyricsTextMeasurement.metrics(String(repeating: "想", count: n + 1), width: normal, font: font).lineCount <= 1 { n += 1 }
+        let text = String(repeating: "想", count: n + 1) // exactly one stranded glyph at the normal width
+        let width = NativeLyricsRowMeasurement.textWidth(for: text, font: font, rowWidth: rowWidth)
+        XCTAssertGreaterThan(width, normal, "one stranded CJK glyph must be rescued with 40pt of balanced slack")
+        XCTAssertEqual(NativeLyricsTextMeasurement.metrics(text, width: width, font: font).lineCount, 1)
+        let maxAllowed = normal + (NativeLyricsRowMeasurement.trailingInset - NativeLyricsRowMeasurement.orphanAvoidanceSafetyMargin) + NativeLyricsRowMeasurement.orphanAvoidanceLeadingBorrowMax
+        XCTAssertLessThanOrEqual(width, maxAllowed)
+        // Minimal: the used width + 1pt, not the whole slack.
+        let used = NativeLyricsTextMeasurement.metrics(text, width: maxAllowed, font: font).usedRect.width
+        XCTAssertLessThanOrEqual(width, ceil(used) + 1.0001)
+    }
+}

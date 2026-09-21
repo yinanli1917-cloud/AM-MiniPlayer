@@ -265,9 +265,9 @@ final class NativeLyricsActiveLineSpacingTests: XCTestCase {
     // size × 0.18): 4pt at the 24pt melody size, 3pt at the 0.8×-scaled 19.2pt background-row
     // size). These pin the new numbers so a future edit can't silently drift them back.
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    func test_contentInsets_32Leading_12Trailing() {
+    func test_contentInsets_32Leading_32Trailing_balancedOrphanBorrow() {
         XCTAssertEqual(NativeLyricsRowMeasurement.leadingInset, 32, "leading inset: 32 (founder 2026-09-21: 20 and 26 both looked wrong (2026-09-21 founder feedback)")
-        XCTAssertEqual(NativeLyricsRowMeasurement.trailingInset, 12, "trailing inset 12 (founder 2026-09-21: Apple Music runs lines almost to the right edge; ours wrapped a glyph early (2026-09-21 founder feedback)")
+        XCTAssertEqual(NativeLyricsRowMeasurement.trailingInset, 32, "trailing inset 32: symmetric margins; orphan rows borrow from both sides instead (2026-09-21 founder feedback)")
         XCTAssertEqual(nativeLyricContentLeadingInset, NativeLyricsRowMeasurement.leadingInset,
                        "LyricsLayerRendererView's alias must read the same single source of truth")
         XCTAssertEqual(nativeLyricContentTrailingInset, NativeLyricsRowMeasurement.trailingInset,

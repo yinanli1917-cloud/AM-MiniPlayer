@@ -10,7 +10,7 @@ enum NativeLyricsRowMeasurement {
     // interlude-dot x anchor, hover background frame, NativeLyricsRowScale's scale pivot X, and
     // this file's own `textWidth` orphan-avoidance slack).
     static let leadingInset: CGFloat = 32
-    static let trailingInset: CGFloat = 12
+    static let trailingInset: CGFloat = 32
     static let preludeHeight: CGFloat = 46
     static let preludeDotContainerTopInset: CGFloat = 8
     static let preludeDotContainerHeight: CGFloat = 30
@@ -105,6 +105,17 @@ enum NativeLyricsRowMeasurement {
     /// A widened row still leaves this much room to the panel's own trailing edge —
     /// never lets orphan-avoidance push text flush against the frame.
     static let orphanAvoidanceSafetyMargin: CGFloat = 4
+    /// A widened row borrows from BOTH margins so it stays visually balanced (founder 2026-09-21:
+    /// 保持视觉平衡又不孤字成行): at most this much from the leading side (the row shifts left by
+    /// it), the rest from the trailing side.
+    static let orphanAvoidanceLeadingBorrowMax: CGFloat = 12
+
+    /// How far a widened row shifts LEFT so the extra width is split across both margins.
+    static func leadingShift(forTextWidth width: CGFloat, rowWidth: CGFloat) -> CGFloat {
+        let normalWidth = max(1, rowWidth - leadingInset - trailingInset)
+        let extra = max(0, width - normalWidth)
+        return min(orphanAvoidanceLeadingBorrowMax, (extra / 2).rounded())
+    }
 
     private struct WidthMemoKey: Hashable {
         let text: String
@@ -170,7 +181,7 @@ enum NativeLyricsRowMeasurement {
         normalWidth: CGFloat,
         lineSpacing: CGFloat
     ) -> CGFloat {
-        let slack = max(0, trailingInset - orphanAvoidanceSafetyMargin)
+        let slack = max(0, trailingInset - orphanAvoidanceSafetyMargin) + orphanAvoidanceLeadingBorrowMax
         guard slack > 0, normalWidth > 1 else { return normalWidth }
 
         let normalMetrics = NativeLyricsTextMeasurement.metrics(text, width: normalWidth, font: font, lineSpacing: lineSpacing)
@@ -178,12 +189,15 @@ enum NativeLyricsRowMeasurement {
         guard normalMetrics.lineCount > 1 else { return normalWidth }
         guard isOrphanLastLine(text: text, range: normalMetrics.lastLineRange) else { return normalWidth }
 
-        let widenedWidth = normalWidth + slack
-        let widenedMetrics = NativeLyricsTextMeasurement.metrics(text, width: widenedWidth, font: font, lineSpacing: lineSpacing)
+        let maxWidth = normalWidth + slack
+        let maxMetrics = NativeLyricsTextMeasurement.metrics(text, width: maxWidth, font: font, lineSpacing: lineSpacing)
         // Widening only helps if it actually collapses the text into fewer lines —
         // an orphan that persists even at the widened width (the text is simply too
         // long) must not shift the whole row's wrap width for nothing.
-        return widenedMetrics.lineCount < normalMetrics.lineCount ? widenedWidth : normalWidth
+        guard maxMetrics.lineCount < normalMetrics.lineCount else { return normalWidth }
+        // Take only what the collapsed layout needs (+1pt), so the balanced shift is minimal.
+        let needed = ceil(maxMetrics.usedRect.width) + 1
+        return min(maxWidth, max(normalWidth, needed))
     }
 
     private static func isOrphanLastLine(text: String, range: NSRange) -> Bool {
