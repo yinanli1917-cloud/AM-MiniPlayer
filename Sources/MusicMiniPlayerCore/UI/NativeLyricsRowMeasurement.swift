@@ -108,13 +108,12 @@ enum NativeLyricsRowMeasurement {
     /// A widened row borrows from BOTH margins so it stays visually balanced (founder 2026-09-21:
     /// 保持视觉平衡又不孤字成行): at most this much from the leading side (the row shifts left by
     /// it), the rest from the trailing side.
-    static let orphanAvoidanceLeadingBorrowMax: CGFloat = 12
+    static let orphanAvoidanceLeadingBorrowMax: CGFloat = 0 // retired 2026-09-21: rows never shift
 
     /// How far a widened row shifts LEFT so the extra width is split across both margins.
     static func leadingShift(forTextWidth width: CGFloat, rowWidth: CGFloat) -> CGFloat {
-        let normalWidth = max(1, rowWidth - leadingInset - trailingInset)
-        let extra = max(0, width - normalWidth)
-        return min(orphanAvoidanceLeadingBorrowMax, (extra / 2).rounded())
+        _ = width; _ = rowWidth
+        return 0
     }
 
     private struct WidthMemoKey: Hashable {
@@ -181,23 +180,29 @@ enum NativeLyricsRowMeasurement {
         normalWidth: CGFloat,
         lineSpacing: CGFloat
     ) -> CGFloat {
-        let slack = max(0, trailingInset - orphanAvoidanceSafetyMargin) + orphanAvoidanceLeadingBorrowMax
-        guard slack > 0, normalWidth > 1 else { return normalWidth }
-
+        guard normalWidth > 1 else { return normalWidth }
         let normalMetrics = NativeLyricsTextMeasurement.metrics(text, width: normalWidth, font: font, lineSpacing: lineSpacing)
         // Nothing to fix: already one line (or empty) at the normal width.
         guard normalMetrics.lineCount > 1 else { return normalWidth }
         guard isOrphanLastLine(text: text, range: normalMetrics.lastLineRange) else { return normalWidth }
 
-        let maxWidth = normalWidth + slack
-        let maxMetrics = NativeLyricsTextMeasurement.metrics(text, width: maxWidth, font: font, lineSpacing: lineSpacing)
-        // Widening only helps if it actually collapses the text into fewer lines —
-        // an orphan that persists even at the widened width (the text is simply too
-        // long) must not shift the whole row's wrap width for nothing.
-        guard maxMetrics.lineCount < normalMetrics.lineCount else { return normalWidth }
-        // Take only what the collapsed layout needs (+1pt), so the balanced shift is minimal.
-        let needed = ceil(maxMetrics.usedRect.width) + 1
-        return min(maxWidth, max(normalWidth, needed))
+        // 2026-09-21 founder: widening (borrowing margin) broke left alignment — a widened row sat
+        // 12pt left of its neighbours; and re-breaking to a balanced 5+4 was "too aggressive". The
+        // rule is minimal: only a ONE-glyph last line is an orphan; fix it by wrapping exactly one
+        // more glyph (8+1 → 7+2). Margins and left edge never change — we pick the LARGEST wrap
+        // width below the normal one whose last line is no longer an orphan, so the break moves by
+        // the least possible amount; every engine wraps at that width.
+        let lineCount = normalMetrics.lineCount
+        var lo = max(1, normalWidth * 0.5), hi = normalWidth
+        var best: CGFloat? = nil
+        for _ in 0..<14 {
+            let mid = (lo + hi) / 2
+            let m = NativeLyricsTextMeasurement.metrics(text, width: mid, font: font, lineSpacing: lineSpacing)
+            let ok = m.lineCount == lineCount && !isOrphanLastLine(text: text, range: m.lastLineRange)
+            if ok { best = mid; lo = mid } else { hi = mid }
+        }
+        guard let w = best else { return normalWidth }
+        return floor(w)
     }
 
     private static func isOrphanLastLine(text: String, range: NSRange) -> Bool {
@@ -207,7 +212,7 @@ enum NativeLyricsRowMeasurement {
         let lastLine = nsText.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !lastLine.isEmpty else { return false }
         if LanguageUtils.containsCJK(lastLine) {
-            return lastLine.count <= 2
+            return lastLine.count <= 1 // founder 2026-09-21: two glyphs on the last line are fine
         }
         // Latin: only a single word (no internal whitespace) of <=3 letters counts —
         // a short multi-word tail ("of it") is not the reported orphan shape.
