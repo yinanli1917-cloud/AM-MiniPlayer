@@ -12,6 +12,7 @@
 
 import AppKit
 import SwiftUI
+import MusicMiniPlayerCore
 
 /// Distributed-notification names `probe.sh` posts (via `NSDistributedNotificationCenter`,
 /// public API) to drive a collapse/expand round-trip without a screen —
@@ -28,6 +29,9 @@ import SwiftUI
 enum EdgeCollapseProbeNotification {
     static let collapse = Notification.Name("com.nanopod.edgeCollapseSpike.collapse")
     static let expand = Notification.Name("com.nanopod.edgeCollapseSpike.expand")
+    static let hover = Notification.Name("com.nanopod.edgeCollapseSpike.hover")
+    static let unhover = Notification.Name("com.nanopod.edgeCollapseSpike.unhover")
+    static let variant = Notification.Name("com.nanopod.edgeCollapseSpike.variant")
 }
 
 @MainActor
@@ -38,6 +42,9 @@ final class SpikeAppDelegate: NSObject, NSApplicationDelegate {
     var hostingView: EdgeGestureHostingView<RootContentView>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Disable the app's old C1 EdgeMorphHost inside the hosted MiniPlayerView.
+        UserDefaults.standard.set("v0", forKey: MicroInteractionFeel.edgeMorphDefaultsKey)
+        _ = MusicController.shared
         print("[EdgeCollapse] launch pid=\(ProcessInfo.processInfo.processIdentifier) probe=\(EdgeCollapseProbe.isActive)")
 
         let panel = makeEdgeCollapsePanel()
@@ -81,7 +88,25 @@ final class SpikeAppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in model?.requestExpand() }
         }
 
-        NSApp.activate(ignoringOtherApps: true)
+        DistributedNotificationCenter.default().addObserver(
+            forName: EdgeCollapseProbeNotification.hover, object: nil, queue: .main
+        ) { [weak model] _ in
+            Task { @MainActor in model?.requestHoverEnter() }
+        }
+        DistributedNotificationCenter.default().addObserver(
+            forName: EdgeCollapseProbeNotification.unhover, object: nil, queue: .main
+        ) { [weak model] _ in
+            Task { @MainActor in model?.requestHoverExit() }
+        }
+        DistributedNotificationCenter.default().addObserver(
+            forName: EdgeCollapseProbeNotification.variant, object: nil, queue: .main
+        ) { [weak model] note in
+            Task { @MainActor in
+                guard let model else { return }
+                model.variant = (note.object as? String) == "v" ? .v : .h
+                model.hostingView?.refreshHitRegion()
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

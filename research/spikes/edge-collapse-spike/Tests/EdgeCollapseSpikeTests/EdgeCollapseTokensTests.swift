@@ -62,8 +62,8 @@ final class EdgeCollapseTokensTests: XCTestCase {
 
     // MARK: - Container spacing default (top-level task instruction #1)
 
-    func test_containerSpacing_defaultsTo24() {
-        XCTAssertEqual(EdgeCollapseTokens.containerSpacing, 24, accuracy: 0.0001)
+    func test_containerSpacing_isBelowBodyControlGap_soBodiesSeparateAtRest() {
+        XCTAssertLessThan(EdgeCollapseTokens.containerSpacing, EdgeCollapseTokens.floatingBodyControlGap, "container spacing must be smaller than the rest gap or the bodies blend at rest (Apple docs)")
     }
 
     // MARK: - Window is fixed (top-level task instruction #3)

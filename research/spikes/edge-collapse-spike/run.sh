@@ -1,29 +1,40 @@
 #!/bin/bash
-# edge-collapse-spike — build release and launch the standalone prototype.
-#
-# The app is a menu-bar-less accessory app (no Dock icon): it opens a
-# transparent floating panel, FIXED at 320x360 for its whole lifetime, right
-# edge flush with the main screen's right edge and vertically centered (the
-# card/tucked/floating layouts are all positioned within this one fixed
-# canvas — the window itself never resizes), plus an ordinary
-# "edge-collapse-spike controls" window with the variant/tint/bounce/tempo/
-# Reduce-Motion switches and Collapse/Expand/Next-track buttons. Quit with
-# Cmd-Q while the controls window is focused, or `pkill -x EdgeCollapseSpike`.
+# edge-collapse-spike v3 — build release, wrap in a minimal .app bundle
+# (bundle id com.nanopod.edgecollapsespike so screenshots/Automation TCC
+# work), launch. Two windows: the transparent 320x360 panel pinned to the
+# right screen edge, and the "edge-collapse-spike controls" window.
+# Quit: close the controls window, or `pkill -x EdgeCollapseSpike`.
 set -uo pipefail
-
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
-
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 
-echo "Building release..."
-swift build -c release
-BUILD_STATUS=$?
-if [ $BUILD_STATUS -ne 0 ]; then
-    echo "BUILD FAILED"
-    exit 1
-fi
-
+swift build -c release || { echo "BUILD FAILED"; exit 1; }
 BIN="$(swift build -c release --show-bin-path)/EdgeCollapseSpike"
-echo "Launching $BIN"
-exec "$BIN"
+BUNDLE_DIR="$(swift build -c release --show-bin-path)/MusicMiniPlayer_MusicMiniPlayerCore.bundle"
+
+APP="$DIR/.build/EdgeCollapseSpike.app"
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp "$BIN" "$APP/Contents/MacOS/EdgeCollapseSpike"
+[ -d "$BUNDLE_DIR" ] && cp -R "$BUNDLE_DIR" "$APP/Contents/MacOS/"
+cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>EdgeCollapseSpike</string>
+<key>CFBundleIdentifier</key><string>com.nanopod.edgecollapsespike</string>
+<key>CFBundleName</key><string>EdgeCollapseSpike</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>0.3</string>
+<key>LSMinimumSystemVersion</key><string>26.0</string>
+<key>LSUIElement</key><false/>
+<key>NSAppleMusicUsageDescription</key><string>Reads the Music library for the edge-collapse prototype.</string>
+<key>NSAppleEventsUsageDescription</key><string>Reads Music playback for the edge-collapse prototype.</string>
+<key>NSHighResolutionCapable</key><true/>
+</dict></plist>
+PLIST
+codesign --force --sign - "$APP" >/dev/null 2>&1 || true
+pkill -x EdgeCollapseSpike 2>/dev/null
+echo "Launching $APP"
+(nohup "$APP/Contents/MacOS/EdgeCollapseSpike" > /tmp/ecs.log 2>&1 &)

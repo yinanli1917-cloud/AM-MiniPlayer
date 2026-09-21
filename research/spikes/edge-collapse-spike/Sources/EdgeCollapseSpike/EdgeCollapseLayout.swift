@@ -85,21 +85,31 @@ public enum EdgeCollapseLayout {
                 width: size.width,
                 height: size.height
             )
-            return Frames(body: rect, control: nil)
+            return Frames(body: rect, control: parkedControl(in: rect))
 
         case .tucked:
-            let size = EdgeCollapseTokens.tuckedSize
+            let size = EdgeCollapseTokens.islandSize
             let rect = CGRect(
                 x: containerSize.width - size.width,
                 y: (containerSize.height - size.height) / 2,
                 width: size.width,
                 height: size.height
             )
-            return Frames(body: rect, control: nil)
+            return Frames(body: rect, control: parkedControl(in: rect))
 
         case .floating:
             return floatingRects(variant: variant, titleWidth: titleWidth)
         }
+    }
+
+    /// Control body when NOT floating: parked fully inside the body so the
+    /// glass container unions it away (one visible shape). Keeping it mounted
+    /// with a stable glassEffectID is what lets it pinch off / merge back
+    /// without any insert/remove transition (v3's lingering ghost).
+    static func parkedControl(in body: CGRect) -> CGRect {
+        let w = min(EdgeCollapseTokens.floatingControlSizeH.width, body.width)
+        let h = min(EdgeCollapseTokens.floatingControlSizeH.height, body.height)
+        return CGRect(x: body.midX - w / 2, y: body.midY - h / 2, width: w, height: h)
     }
 
     private static func floatingRects(variant: EdgeCollapseVariant, titleWidth: CGFloat) -> Frames {

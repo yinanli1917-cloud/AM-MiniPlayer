@@ -1,135 +1,93 @@
 /**
- * [INPUT]: EdgeCollapseEvent (from gesture/hover/click handlers) + control
- *          window switches (variant/tint/bounce/tempo/reduceMotion override/
- *          track/isPlaying).
- * [OUTPUT]: EdgeCollapseAppModel — drives EdgePresentation via
- *           EdgeCollapseReducer; every transition is exactly ONE
- *           `withAnimation` (top-level task instruction #2), settle detected
- *           via `.animation(_:completionCriteria:)`; publishes the values
- *           RootContentView reads (variant/tint/bounce/tempo/track/
- *           isPlaying/reduceMotionFlashOpacity/fakeProgress).
- * [POS]: Standalone spike app layer (NOT app-portable — this is the demo
- *        harness wiring the portable pieces together for one screen).
- * [PROTOCOL]: `performTransition` is the ONLY place that calls `withAnimation`
- *             for a presentation change — never add a second staggered
- *             `withAnimation`/`asyncAfter` relay elsewhere (that's exactly
- *             what AUDIT-2026-09-20.md §3 flagged in v1).
+ * [INPUT]: EdgeCollapseEvent (gesture/hover/click), control-window switches,
+ *          MusicController.shared (artwork / title / playback).
+ * [OUTPUT]: EdgeCollapseAppModel — drives EdgePresentation via the reducer
+ *           and animates `pose` (every visual channel) with a per-channel
+ *           spring/delay plan. All channel animations for one transition are
+ *           issued in the same frame; the delays are what stagger shape →
+ *           second body → content.
+ * [POS]: Standalone spike app layer.
+ * [PROTOCOL]: `applyPlan` is the only place that calls withAnimation for a
+ *             presentation change. No asyncAfter relays.
  */
 
 import AppKit
 import SwiftUI
 import QuartzCore
+import Combine
+import MusicMiniPlayerCore
 
 @MainActor
 public final class EdgeCollapseAppModel: ObservableObject {
 
-    // MARK: - State machine (single source of truth for layout)
-
     @Published public private(set) var presentation: EdgePresentation = .card
-
-    // MARK: - Reduce Motion crossfade overlay (top-level task instruction #5)
-
+    @Published public private(set) var pose: EdgeCollapsePose
+    @Published public private(set) var artworkColor: NSColor?
     @Published var reduceMotionFlashOpacity: Double = 0
 
-    // MARK: - Fake progress fill for the tucked stalk (design §5)
-
-    @Published var fakeProgress: Double = 0.35
-
-    // MARK: - Control-window switches (top-level task instructions #1/#2/#6)
-
-    @Published public var variant: EdgeCollapseVariant = .h
+    @Published public var variant: EdgeCollapseVariant = .h { didSet { snapPoseToState() } }
     @Published public var tint: EdgeCollapseTint = .gradient
-    @Published public var bounce: EdgeCollapseBounce = .settle
+    @Published public var bounce: EdgeCollapseBounce = .bouncy
     @Published public var tempo: EdgeCollapseTempo = .normal
     @Published public var reduceMotionOverride: Bool?
-    @Published public var isPlaying = true
-    @Published public var trackIndex = 0
 
-    public let tracks = [
-        "Blinding Lights",
-        "三個人的晚餐",
-        "Everything Everywhere All at Once (Original Motion Picture Soundtrack)",
-    ]
+    private var cancellables = Set<AnyCancellable>()
+    weak var hostingView: EdgeGestureHostingView<RootContentView>?
 
-    public var trackTitle: String { tracks[trackIndex % tracks.count] }
+    public var trackTitle: String { MusicController.shared.currentTrackTitle }
 
     var reduceMotion: Bool {
         reduceMotionOverride ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
 
-    // MARK: - Wiring back to the hosting view (hover hit-region refresh)
-
-    weak var hostingView: EdgeGestureHostingView<RootContentView>?
-
-    private var progressTimer: Timer?
-
     public init() {
-        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
-                guard self.isPlaying else { return }
-                self.fakeProgress = (self.fakeProgress + 0.01).truncatingRemainder(dividingBy: 1.0)
+        pose = EdgeCollapsePoses.pose(for: .card, variant: .h, titleWidth: 0)
+        let music = MusicController.shared
+        music.$currentTrackTitle
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if self.presentation == .floating {
+                    withAnimation(.spring(duration: 0.30, bounce: 0.25)) { self.snapPoseToState() }
+                }
+                self.hostingView?.refreshHitRegion()
             }
-        }
+            .store(in: &cancellables)
+        music.$currentArtwork
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] image in
+                guard let self else { return }
+                let color = image.flatMap { edgeCollapseArtworkColor($0) }
+                withAnimation(.easeInOut(duration: 0.4)) { self.artworkColor = color }
+            }
+            .store(in: &cancellables)
     }
 
-    // MARK: - Public entry points (panel gesture/hover/click + control window buttons)
+    // MARK: - Entry points
 
     public func requestCollapse(edge: EdgeCollapseEdge = .right) {
         guard presentation == .card else { return }
-        performTransition(
-            event: .collapseRequested(edge),
-            settleEvent: .settled,
-            animation: EdgeCollapseTokens.collapseAnimation(bounce: bounce, tempo: tempo),
-            label: "collapse"
-        )
+        transition(event: .collapseRequested(edge), settle: .settled, kind: .collapse)
     }
 
     public func requestHoverEnter() {
         guard presentation == .tucked else { return }
-        performTransition(
-            event: .hoverEntered,
-            settleEvent: nil,
-            animation: EdgeCollapseTokens.floatingOutAnimation(tempo: tempo),
-            label: "floatingOut"
-        )
+        transition(event: .hoverEntered, settle: nil, kind: .floatOut)
     }
 
     public func requestHoverExit() {
         guard presentation == .floating else { return }
-        performTransition(
-            event: .hoverExited,
-            settleEvent: nil,
-            animation: EdgeCollapseTokens.floatingRetractAnimation(tempo: tempo),
-            label: "floatingRetract"
-        )
+        transition(event: .hoverExited, settle: nil, kind: .retract)
     }
 
     public func requestExpand() {
         guard presentation == .tucked || presentation == .floating else { return }
-        performTransition(
-            event: .expandRequested,
-            settleEvent: .settled,
-            animation: EdgeCollapseTokens.expandAnimation(tempo: tempo),
-            label: "expand"
-        )
+        transition(event: .expandRequested, settle: .settled, kind: .expand)
     }
 
-    public func toggleIsPlaying() { isPlaying.toggle() }
+    public func toggleIsPlaying() { MusicController.shared.togglePlayPause() }
+    public func nextTrack() { MusicController.shared.nextTrack() }
 
-    public func nextTrack() {
-        trackIndex = (trackIndex + 1) % tracks.count
-        hostingView?.refreshHitRegion()
-    }
-
-    /// The active hover/click hit-region in the panel's fixed 320×360 local
-    /// coordinate space, for `EdgeGestureHostingView`'s `NSTrackingArea` +
-    /// `hitTest` (top-level task instruction #3). `.card` uses the card's
-    /// own rect (no extra padding — the card fills most of the window
-    /// already); `.tucked`/`.floating` use `EdgeCollapseLayout.hoverRegion`
-    /// with their documented expand paddings. `EdgeCollapseLayout.rects`
-    /// already normalizes `collapsing`→tucked / `expanding`→card, so this
-    /// needs no extra switch over the 5-case state machine.
     func activeHitRegion() -> CGRect {
         let titleWidth = EdgeCollapseLayout.estimatedTitleWidth(trackTitle)
         switch EdgeCollapseLayout.visualLayout(for: presentation) {
@@ -142,70 +100,85 @@ public final class EdgeCollapseAppModel: ObservableObject {
         }
     }
 
-    // MARK: - Event entry point (reducer only — no animation here)
+    // MARK: - Reducer + pose
 
     private func send(_ event: EdgeCollapseEvent) {
-        let previous = presentation
-        let next = EdgeCollapseReducer.reduce(state: previous, event: event)
-        guard next != previous else { return }
+        let next = EdgeCollapseReducer.reduce(state: presentation, event: event)
+        guard next != presentation else { return }
         presentation = next
     }
 
-    // MARK: - The ONE transition driver (top-level task instruction #2)
+    private func targetPose(for state: EdgePresentation) -> EdgeCollapsePose {
+        EdgeCollapsePoses.pose(
+            for: EdgeCollapseLayout.visualLayout(for: state),
+            variant: variant,
+            titleWidth: EdgeCollapseLayout.estimatedTitleWidth(trackTitle))
+    }
 
-    /// Every transition is exactly one `withAnimation(animation) { presentation
-    /// = next }`. Settling is detected via `.logicallyComplete` completion
-    /// criteria (macOS 14+), which then fires `settleEvent` (if any) to move
-    /// the reducer's `collapsing`/`expanding` bookkeeping state to its
-    /// resting `tucked`/`card` state — this second `send` is NOT itself
-    /// wrapped in a new `withAnimation` and produces no visible change,
-    /// because `EdgeCollapseLayout.visualLayout(for:)` already maps
-    /// `collapsing`→`tucked` and `expanding`→`card`, so the single animated
-    /// move already reached the correct visual target.
-    private func performTransition(
-        event: EdgeCollapseEvent,
-        settleEvent: EdgeCollapseEvent?,
-        animation: Animation,
-        label: String
-    ) {
+    private func snapPoseToState() {
+        pose = targetPose(for: presentation)
+    }
+
+    private func transition(event: EdgeCollapseEvent, settle: EdgeCollapseEvent?, kind: EdgeCollapseTransitionKind) {
         let from = presentation
-        guard EdgeCollapseReducer.reduce(state: from, event: event) != from else { return }
+        let next = EdgeCollapseReducer.reduce(state: from, event: event)
+        guard next != from else { return }
         let t0 = CACurrentMediaTime()
+        let target = targetPose(for: next)
+        EdgeCollapseLog.event(t0: t0, from: from, to: next, anim: kind.rawValue, event: "start")
+        if let hostingView { EdgeCollapseProbe.record(view: hostingView, label: kind.rawValue) }
 
         if reduceMotion {
-            // Instant geometry snap under a Transaction with animations
-            // disabled, cross-faded by a 180ms linear opacity flash — top-
-            // level task instruction #5's "simplest correct thing".
-            var snap = Transaction()
-            snap.disablesAnimations = true
+            var snap = Transaction(); snap.disablesAnimations = true
             withTransaction(snap) {
-                send(event)
-                if let settleEvent { send(settleEvent) }
+                send(event); pose = target
+                if let settle { send(settle) }
             }
             hostingView?.refreshHitRegion()
-            EdgeCollapseLog.event(t0: t0, from: from, to: presentation, anim: "\(label)-reduceMotion", event: "start")
             reduceMotionFlashOpacity = 1
-            withAnimation(EdgeCollapseTokens.reduceMotionAnimation(tempo: tempo)) {
-                reduceMotionFlashOpacity = 0
-            }
-            EdgeCollapseLog.event(t0: t0, from: from, to: presentation, anim: "\(label)-reduceMotion", event: "settle")
+            withAnimation(EdgeCollapseTokens.reduceMotionAnimation(tempo: tempo)) { reduceMotionFlashOpacity = 0 }
+            EdgeCollapseLog.event(t0: t0, from: from, to: presentation, anim: "\(kind.rawValue)-reduceMotion", event: "settle")
             return
         }
 
-        let target = EdgeCollapseReducer.reduce(state: from, event: event)
-        EdgeCollapseLog.event(t0: t0, from: from, to: target, anim: label, event: "start")
-        if let hostingView {
-            EdgeCollapseProbe.record(view: hostingView, label: label)
-        }
-
-        withAnimation(animation, completionCriteria: .logicallyComplete) {
-            send(event)
-        } completion: { [weak self] in
+        send(event)
+        applyPlan(EdgeCollapsePlan.plan(for: kind, bounce: bounce, tempo: tempo), target: target) { [weak self] in
             guard let self else { return }
             let mid = self.presentation
-            if let settleEvent { self.send(settleEvent) }
-            EdgeCollapseLog.event(t0: t0, from: mid, to: self.presentation, anim: label, event: "settle")
+            if let settle { self.send(settle) }
+            EdgeCollapseLog.event(t0: t0, from: mid, to: self.presentation, anim: kind.rawValue, event: "settle")
         }
         hostingView?.refreshHitRegion()
+    }
+
+    /// One withAnimation per channel, all issued now. The longest channel's
+    /// completion drives `settle`.
+    private func applyPlan(_ plan: EdgeCollapsePlan, target: EdgeCollapsePose, completion: @escaping () -> Void) {
+        withAnimation(plan.bodyHeight) {
+            pose.bodyRect.size.height = target.bodyRect.height
+            pose.bodyRect.origin.y = target.bodyRect.origin.y
+        }
+        withAnimation(plan.bodyWidth) {
+            pose.bodyRect.size.width = target.bodyRect.width
+        }
+        withAnimation(plan.bodyPosition) {
+            pose.bodyRect.origin.x = target.bodyRect.origin.x
+        }
+        withAnimation(plan.corners) {
+            pose.cornerInner = target.cornerInner
+            pose.cornerEdge = target.cornerEdge
+        }
+        withAnimation(plan.control) {
+            pose.controlRect = target.controlRect
+            pose.controlContentOpacity = target.controlContentOpacity
+        }
+        withAnimation(plan.hero, completionCriteria: .logicallyComplete) {
+            pose.heroRect = target.heroRect
+            pose.heroCorner = target.heroCorner
+        } completion: { completion() }
+        withAnimation(plan.material) { pose.artworkTint = target.artworkTint }
+        withAnimation(plan.cardContent) { pose.cardContentOpacity = target.cardContentOpacity }
+        withAnimation(plan.barText) { pose.barTextOpacity = target.barTextOpacity }
+        withAnimation(plan.progress) { pose.progressOpacity = target.progressOpacity }
     }
 }

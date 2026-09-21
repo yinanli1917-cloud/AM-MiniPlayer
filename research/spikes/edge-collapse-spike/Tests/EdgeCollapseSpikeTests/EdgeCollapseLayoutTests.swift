@@ -28,7 +28,7 @@ final class EdgeCollapseLayoutTests: XCTestCase {
     func test_card_satisfiesCornerRule() {
         let frames = EdgeCollapseLayout.rects(for: EdgePresentation.card, variant: .h, titleWidth: 0)
         XCTAssertTrue(aspectOrCornerHolds(width: frames.body.width, height: frames.body.height, cornerRadius: EdgeCollapseTokens.cardCornerRadius))
-        XCTAssertNil(frames.control, ".card has no control body")
+        XCTAssertTrue(frames.body.contains(frames.control!), ".card parks the control body inside the card")
     }
 
     func test_tucked_satisfiesAspectRule_stalkIsTallAndThin() {
@@ -37,10 +37,9 @@ final class EdgeCollapseLayoutTests: XCTestCase {
             // The stalk is a capsule (cornerRadius == height/2 by construction
             // in RootContentView) — verify via the aspect clause directly too,
             // since 8×96 is genuinely ≥3:1 regardless of corner radius.
-            XCTAssertTrue(aspectOrCornerHolds(width: frames.body.width, height: frames.body.height, cornerRadius: frames.body.height / 2))
-            let longSide = max(frames.body.width, frames.body.height)
-            let shortSide = min(frames.body.width, frames.body.height)
-            XCTAssertGreaterThanOrEqual(longSide / shortSide, 3.0, "tucked stalk must be ≥3:1")
+            // v5: the tucked state is an island (44×96, inner corners 22 = half the short side).
+            XCTAssertTrue(aspectOrCornerHolds(width: frames.body.width, height: frames.body.height, cornerRadius: EdgeCollapseTokens.islandCornerRadius))
+            XCTAssertEqual(frames.body.maxX, EdgeCollapseTokens.containerSize.width, accuracy: 0.01, "island must be flush with the edge")
         }
     }
 

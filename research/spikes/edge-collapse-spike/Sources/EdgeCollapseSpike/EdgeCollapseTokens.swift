@@ -66,12 +66,15 @@ public enum EdgeCollapseTokens {
     /// default 24; glass-morph-spike's own scenario 2 measured a real,
     /// continuously-changing blend at this kind of spacing with NO identity
     /// change at all — see research/spikes/glass-morph-spike/results/summary.md).
-    public static let containerSpacing: CGFloat = 24
+    public static let containerSpacing: CGFloat = 10
 
     // MARK: - Card (body id "body" in `.card`)
 
     public static let cardSize = CGSize(width: 250, height: 316)
-    public static let cardCornerRadius: CGFloat = 18
+    public static let cardCornerRadius: CGFloat = 22
+    public static let cardArtworkInset: CGFloat = 16
+    /// Artwork-colour tint strength on the card glass.
+    public static let cardTintOpacity: Double = 0.35
 
     // MARK: - Tucked (body id "body" in `.tucked`)
 
@@ -83,6 +86,13 @@ public enum EdgeCollapseTokens {
     /// identity" note for why this spike never switches the `body` view's
     /// concrete `Shape` TYPE across states.
     public static let tuckedSize = CGSize(width: 8, height: 96)
+    /// v5: the tucked state is an island grown out of the screen edge
+    /// (flat side on the edge, round side inward), not a stalk.
+    public static let islandSize = CGSize(width: 44, height: 96)
+    public static let islandCornerRadius: CGFloat = 22
+    public static let islandArtwork: CGFloat = 36
+    public static let floatingBarArtwork: CGFloat = 48
+    public static let floatingDropArtwork: CGFloat = 56
     /// Hover/click hit-region padding beyond the visible 8pt sliver — an 8pt
     /// target is not landable with a cursor (design §6).
     public static let tuckedHoverExpand: CGFloat = 16
@@ -93,30 +103,35 @@ public enum EdgeCollapseTokens {
     public static let floatingEdgeGap: CGFloat = 12
     /// Visual gap between the body and control shapes (VStack spacing) —
     /// distinct from `containerSpacing` (the glass BLEND threshold).
-    public static let floatingBodyControlGap: CGFloat = 10
+    public static let floatingBodyControlGap: CGFloat = 12
     public static let floatingHoverExitExpand: CGFloat = 12
 
-    public static let floatingBarHeight: CGFloat = 32
-    public static let floatingBarMinWidth: CGFloat = 100
-    public static let floatingBarMaxWidth: CGFloat = 180
+    public static let floatingBarHeight: CGFloat = 64
+    public static let floatingBarMinWidth: CGFloat = 200
+    public static let floatingBarMaxWidth: CGFloat = 260
     /// Budget added to the measured title text width to get the bar's
     /// content width (artwork dot + spacing + horizontal padding).
-    public static let floatingBarHorizontalPadding: CGFloat = 56
+    public static let floatingBarHorizontalPadding: CGFloat = 84
 
-    public static let floatingControlSizeH = CGSize(width: 64, height: 28)
-    public static let floatingControlCornerRadius: CGFloat = 14
+    public static let floatingControlSizeH = CGSize(width: 72, height: 40)
+    public static let floatingControlCornerRadius: CGFloat = 20
 
     /// V variant's artwork drop: task instruction #1 explicitly overrides
     /// the old Circle/32×32-capsule-ish shape with a RoundedRectangle
     /// corner 16 "to keep the explicit-shape rule" (aspect ≥3:1 OR corner
     /// ≤ half short side — 16 = 32/2, satisfies the corner clause exactly).
-    public static let floatingDropSizeV = CGSize(width: 32, height: 32)
+    public static let floatingDropSizeV = CGSize(width: 64, height: 64)
     public static let floatingDropCornerRadiusV: CGFloat = 16
-    public static let floatingControlSizeV = CGSize(width: 28, height: 64)
+    public static let floatingControlSizeV = CGSize(width: 40, height: 88)
 
     // MARK: - Tint overlay (top-level task instruction #1)
 
-    public static let tintOpacity: Double = 0.85
+    public static let tintOpacity: Double = 0.45
+    /// Base darkening under the gradient arm (native Glass.tint, keeps rim).
+    public static let tintBaseOpacity: Double = 0.45
+    /// Edge-side dimming layer (HIG: dark dimming layer ~35%) strength and width fraction.
+    public static let edgeDimOpacity: Double = 0.5
+    public static let edgeDimFraction: CGFloat = 0.4
     /// Inset so the tint overlay never paints over the glass rim highlight
     /// (instruction #1: "Overlay must not cover the glass rim... inset by
     /// 1.5pt" — the alternative offered, blendMode .multiply, is NOT used
