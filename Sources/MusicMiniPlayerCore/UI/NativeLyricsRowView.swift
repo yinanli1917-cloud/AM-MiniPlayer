@@ -667,6 +667,8 @@ final class NativeLyricsRowView: NSView {
     }
 
     var debugMainTextLayerFrame: CGRect { mainTextLayer.frame }
+    var debugMainTextUsedWidth: CGFloat? { mainTextLayer.usedTextWidth }
+    static var debugHoverBackgroundEdgeMargin: CGFloat { hoverBackgroundEdgeMargin }
 
     var debugMainTextLayerHidden: Bool { mainTextLayer.isHidden }
 
@@ -1789,11 +1791,23 @@ final class NativeLyricsRowView: NSView {
             let width = max(1, bounds.width - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset + 2 * Self.hoverBackgroundPadding)
             return CGRect(x: x, y: 0, width: width, height: max(1, bounds.height))
         }
+        // Hug the text actually drawn, not the layout container: an orphan-avoidance row's container
+        // is widened up to the trailing safety margin, so a container-sized box ran off the panel
+        // (founder 2026-09-21). Width = the layout manager's used width; then clamp the padded box
+        // inside the row with a minimum edge margin so it can never leave the screen.
+        if let used = mainTextLayer.usedTextWidth, used > 1 {
+            contentRect.size.width = min(contentRect.width, ceil(used))
+        }
         if !translationTextLayer.isHidden, translationTextLayer.frame != .zero {
             contentRect = contentRect.union(translationTextLayer.frame)
         }
-        return contentRect.insetBy(dx: -Self.hoverBackgroundPadding, dy: -Self.hoverBackgroundPadding)
+        var box = contentRect.insetBy(dx: -Self.hoverBackgroundPadding, dy: -Self.hoverBackgroundPadding)
+        let limit = bounds.insetBy(dx: Self.hoverBackgroundEdgeMargin, dy: 0)
+        if box.minX < limit.minX { box.origin.x = limit.minX }
+        if box.maxX > limit.maxX { box.size.width = max(1, limit.maxX - box.minX) }
+        return box
     }
+    private static let hoverBackgroundEdgeMargin: CGFloat = 4
 
     @discardableResult
     func updatePlaybackPhase(

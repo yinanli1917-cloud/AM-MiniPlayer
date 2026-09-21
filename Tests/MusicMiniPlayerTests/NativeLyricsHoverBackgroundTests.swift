@@ -63,12 +63,20 @@ final class NativeLyricsHoverBackgroundTests: XCTestCase {
             onLineMotionFrames: { _, _, _, _ in })
     }
 
-    private func expectedFrame(main: CGRect, translation: CGRect?) -> CGRect {
+    /// The hover box hugs the USED text width (not the layout container — an orphan-avoidance row's
+    /// container is widened into the trailing margin), is padded, then clamped inside the row bounds
+    /// with the edge margin so it can never run off the panel (founder 2026-09-21).
+    private func expectedFrame(main: CGRect, translation: CGRect?, usedWidth: CGFloat?, bounds: CGRect) -> CGRect {
         var rect = main
+        if let usedWidth, usedWidth > 1 { rect.size.width = min(rect.width, ceil(usedWidth)) }
         if let translation, translation != .zero {
             rect = rect.union(translation)
         }
-        return rect.insetBy(dx: -NativeLyricsRowView.hoverBackgroundPadding, dy: -NativeLyricsRowView.hoverBackgroundPadding)
+        var box = rect.insetBy(dx: -NativeLyricsRowView.hoverBackgroundPadding, dy: -NativeLyricsRowView.hoverBackgroundPadding)
+        let limit = bounds.insetBy(dx: NativeLyricsRowView.debugHoverBackgroundEdgeMargin, dy: 0)
+        if box.minX < limit.minX { box.origin.x = limit.minX }
+        if box.maxX > limit.maxX { box.size.width = max(1, limit.maxX - box.minX) }
+        return box
     }
 
     // MARK: - Single-line row
@@ -83,7 +91,7 @@ final class NativeLyricsHoverBackgroundTests: XCTestCase {
         view.debugForceLayout()
         view.debugInvokeLayoutDirectly()
 
-        let expected = expectedFrame(main: view.debugMainTextLayerFrame, translation: nil)
+        let expected = expectedFrame(main: view.debugMainTextLayerFrame, translation: nil, usedWidth: view.debugMainTextUsedWidth, bounds: view.bounds)
         XCTAssertEqual(view.debugHoverBackgroundFrame, expected, "hover background must equal main text frame padded by the 8pt constant, not `bounds`")
         // Sanity: it must NOT equal the old bounds-derived box (which spanned the full 320pt row width).
         XCTAssertNotEqual(view.debugHoverBackgroundFrame.width, 320, "regression guard: must not fall back to the full row width for a short line")
@@ -105,7 +113,7 @@ final class NativeLyricsHoverBackgroundTests: XCTestCase {
 
         let mainFrame = view.debugMainTextLayerFrame
         XCTAssertGreaterThan(mainFrame.height, 40, "precondition: text must actually wrap to more than one line at this width")
-        let expected = expectedFrame(main: mainFrame, translation: nil)
+        let expected = expectedFrame(main: mainFrame, translation: nil, usedWidth: view.debugMainTextUsedWidth, bounds: view.bounds)
         XCTAssertEqual(view.debugHoverBackgroundFrame, expected, "wrapped row: hover background must hug the FULL multi-line text height, not one line's worth")
     }
 
@@ -123,7 +131,7 @@ final class NativeLyricsHoverBackgroundTests: XCTestCase {
 
         let translationFrame = view.debugTranslationTextLayerFrame
         XCTAssertNotEqual(translationFrame, .zero, "precondition: translation must actually be laid out")
-        let expected = expectedFrame(main: view.debugMainTextLayerFrame, translation: translationFrame)
+        let expected = expectedFrame(main: view.debugMainTextLayerFrame, translation: translationFrame, usedWidth: view.debugMainTextUsedWidth, bounds: view.bounds)
         XCTAssertEqual(view.debugHoverBackgroundFrame, expected, "hover background must extend to cover the translation line too")
         XCTAssertGreaterThan(view.debugHoverBackgroundFrame.height, view.debugMainTextLayerFrame.height,
                              "background must be taller than the main line alone once a translation is present")

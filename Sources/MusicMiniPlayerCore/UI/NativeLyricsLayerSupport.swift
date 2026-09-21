@@ -198,6 +198,13 @@ final class NativeLyricsLayoutTextLayer: CALayer {
         textStorage = storage
     }
 
+    /// Width of the text actually laid out (longest line), in points; nil before the first layout.
+    var usedTextWidth: CGFloat? {
+        ensureLayout()
+        guard let textLayoutManager, let textContainer else { return nil }
+        return textLayoutManager.usedRect(for: textContainer).width
+    }
+
     override func draw(in ctx: CGContext) {
         ensureLayout()
         guard let textLayoutManager, let textContainer else { return }
