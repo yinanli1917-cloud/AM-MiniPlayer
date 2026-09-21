@@ -7,6 +7,12 @@ enum NativeLyricsTextMeasurement {
         let height: CGFloat
         let lineCount: Int
         let usedRect: CGRect
+        /// The character range (into the ORIGINAL text) of the LAST non-empty line
+        /// fragment at this measurement width — the orphan-avoidance choke point
+        /// (`NativeLyricsRowMeasurement.textWidth`) uses this to decide whether the
+        /// last line is a lone stranded character/short word. `.zero`/length-0 when
+        /// the text is empty or single-line.
+        let lastLineRange: NSRange
     }
 
     #if DEBUG
@@ -27,7 +33,7 @@ enum NativeLyricsTextMeasurement {
         lineSpacing: CGFloat? = nil
     ) -> Metrics {
         guard !text.isEmpty, width > 1 else {
-            return Metrics(height: 0, lineCount: 0, usedRect: .zero)
+            return Metrics(height: 0, lineCount: 0, usedRect: .zero, lastLineRange: NSRange(location: 0, length: 0))
         }
         #if DEBUG
         debugMeasureCount += 1
@@ -57,16 +63,22 @@ enum NativeLyricsTextMeasurement {
 
         let glyphRange = layoutManager.glyphRange(for: textContainer)
         var lineCount = 0
-        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, _, _ in
+        var lastLineGlyphRange = NSRange(location: 0, length: 0)
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, glyphFragmentRange, _ in
             if usedRect.width > 0 || usedRect.height > 0 {
                 lineCount += 1
+                lastLineGlyphRange = glyphFragmentRange
             }
         }
+        let lastLineRange = lastLineGlyphRange.length > 0
+            ? layoutManager.characterRange(forGlyphRange: lastLineGlyphRange, actualGlyphRange: nil)
+            : NSRange(location: 0, length: 0)
         let usedRect = layoutManager.usedRect(for: textContainer)
         return Metrics(
             height: max(1, ceil(usedRect.height)),
             lineCount: lineCount,
-            usedRect: usedRect
+            usedRect: usedRect,
+            lastLineRange: lastLineRange
         )
     }
 

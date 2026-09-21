@@ -567,16 +567,28 @@ final class NativeLyricsRowView: NSView {
     // horizontal-clip + blank-row bug).
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     private func contentTextWidth(_ configuration: LyricsLayerRendererConfiguration) -> CGFloat {
-        max(1, configuration.rowWidth - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset)
+        guard let row, !row.isPrelude else {
+            return max(1, configuration.rowWidth - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset)
+        }
+        let staticPlan = staticTextPlan(for: row)
+        return NativeLyricsRowMeasurement.textWidth(
+            for: staticPlan.displayText,
+            font: .systemFont(ofSize: staticPlan.constants.mainFontSize, weight: .semibold),
+            rowWidth: configuration.rowWidth
+        )
     }
 
     func measuredHeight(width: CGFloat) -> CGFloat {
         guard let row, let configuration else { return 1 }
-        let textWidth = max(1, width - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset)
         if row.isPrelude {
             return 46
         }
         let plan = textRenderPlan(row: row, configuration: configuration)
+        let textWidth = NativeLyricsRowMeasurement.textWidth(
+            for: plan.displayText,
+            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold),
+            rowWidth: width
+        )
         let mainHeight = measuredTextHeight(
             plan.displayText,
             width: textWidth,
