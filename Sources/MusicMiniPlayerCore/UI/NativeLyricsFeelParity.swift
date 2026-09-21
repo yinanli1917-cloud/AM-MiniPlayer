@@ -152,6 +152,29 @@ public enum NativeLyricsFeelParity {
         )
     }
 
+    // 2026-09-20 real-machine isolation arms (headless cannot see CIFilter output or the
+    // rasterized-snapshot→live composite switch). Read from UserDefaults at most once per second
+    // so the per-row call sites stay cheap. `defaults write … nanoPodFeelDepthBlur -string off`
+    // removes every depth-of-field blur filter (rows never rasterize either, since rasterization
+    // is gated on blur); `… nanoPodFeelRaster -string off` keeps the blur but never rasterizes.
+    public static let depthBlurDefaultsKey = "nanoPodFeelDepthBlur"
+    public static let rasterDefaultsKey = "nanoPodFeelRaster"
+    nonisolated(unsafe) private static var isolationArmsCache: (at: CFAbsoluteTime, blurOff: Bool, rasterOff: Bool) = (0, false, false)
+    private static func isolationArms() -> (blurOff: Bool, rasterOff: Bool) {
+        let now = CFAbsoluteTimeGetCurrent()
+        if now - isolationArmsCache.at > 1 {
+            let d = UserDefaults.standard
+            isolationArmsCache = (
+                now,
+                d.string(forKey: depthBlurDefaultsKey)?.lowercased() == "off",
+                d.string(forKey: rasterDefaultsKey)?.lowercased() == "off"
+            )
+        }
+        return (isolationArmsCache.blurOff, isolationArmsCache.rasterOff)
+    }
+    public static var depthBlurDisabled: Bool { isolationArms().blurOff }
+    public static var rasterizationDisabled: Bool { isolationArms().rasterOff }
+
     public static var blurMode: BlurMode {
         #if DEBUG
         if let testingBlur { return testingBlur }

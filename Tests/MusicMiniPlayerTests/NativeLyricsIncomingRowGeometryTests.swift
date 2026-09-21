@@ -61,7 +61,7 @@ final class NativeLyricsIncomingRowGeometryTests: XCTestCase {
     // 0.5-1.0 s gaps between lines, per-word timings within each line.
     private struct LineSpec { let text: String; let words: [String]; let start: TimeInterval; let duration: TimeInterval }
 
-    private func makeRows() -> [LayerBackedLyricRow] {
+    private func makeRows(withTranslation: Bool = false) -> [LayerBackedLyricRow] {
         let specs: [LineSpec] = [
             LineSpec(text: "又独行旧地", words: ["又", "独行", "旧地"], start: 0.0, duration: 2.2),
             LineSpec(text: "遇着拦路雨洒遍地", words: ["遇着", "拦路", "雨洒", "遍地"], start: 2.9, duration: 2.6),
@@ -81,7 +81,8 @@ final class NativeLyricsIncomingRowGeometryTests: XCTestCase {
                 words.append(LyricWord(word: w, startTime: t, endTime: t + per))
                 t += per
             }
-            let line = LyricLine(text: spec.text, startTime: spec.start, endTime: spec.start + spec.duration, words: words)
+            var line = LyricLine(text: spec.text, startTime: spec.start, endTime: spec.start + spec.duration, words: words)
+            if withTranslation { line.translation = "translation of line \(i) 译文" }
             let dl = DisplayLyricLine(id: "r\(i)", sourceIndex: i, segmentIndex: 0, segmentCount: 1, line: line)
             return LayerBackedLyricRow(id: dl.id, index: i, displayLine: dl, sourceLine: line,
                                        isPrelude: false, preludeEndTime: 0, interlude: nil)
@@ -90,17 +91,18 @@ final class NativeLyricsIncomingRowGeometryTests: XCTestCase {
 
     @MainActor
     private func config(
-        _ rowList: [LayerBackedLyricRow], current: Int, mc: MusicController
+        _ rowList: [LayerBackedLyricRow], current: Int, mc: MusicController,
+        showTranslation: Bool = false, measuredHeights: [Int: CGFloat]? = nil
     ) -> LyricsLayerRendererConfiguration {
-        var heights: [Int: CGFloat] = [:]
-        for r in rowList { heights[r.index] = 56 }
+        var heights: [Int: CGFloat] = measuredHeights ?? [:]
+        if measuredHeights == nil { for r in rowList { heights[r.index] = 56 } }
         return LyricsLayerRendererConfiguration(
             rows: rowList, currentIndex: current, anchorY: 300, rowWidth: 320,
             renderedIndices: rowList.map(\.index), accumulatedHeights: heights, lineTargetIndices: [:],
             lineInterval: 4, hasSyllableSync: true,
             trackContext: DiagnosticTrackContext(title: "T", artist: "A", album: "Al", duration: 240),
             isWaveTimelineDiagnosticsEnabled: false, isManualScrolling: false, reduceMotion: false,
-            suppressInitialMotion: false, pendingTranslationLineIndices: [], showTranslation: false,
+            suppressInitialMotion: false, pendingTranslationLineIndices: [], showTranslation: showTranslation,
             isTranslating: false, translationFailed: false, interludeAfterIndex: nil, directSnapRequest: nil,
             controlsVisible: false, musicController: mc,
             onLineTap: { _ in }, onDirectSnapConsumed: { _ in }, onManualScrollStarted: { _ in },
@@ -440,5 +442,200 @@ final class NativeLyricsIncomingRowGeometryTests: XCTestCase {
         } else {
             XCTFail("the incoming row never activated (mainTextLayer never hidden) — cannot pin the swap tick")
         }
+    }
+
+    /// 2026-09-21 founder recording #2 (60fps): at the activation frame the INCOMING row's whole
+    /// ink centroid jumped −2.3px and the row BELOW it −4.2px in ONE frame, 10 frames before the
+    /// scroll wave started; the outgoing (history) row also "bobs". Whole rows, not glyphs — a
+    /// layout/position discontinuity. Production rows carry translations and heights measured
+    /// by the rows themselves (onHeightMeasured feeds back), so this variant turns both on and
+    /// pins: no row FRAME origin may move ≥ 1px in a single tick while the wave has not yet
+    /// started (t < +0.1s); after that, motion is the spring's business.
+    @MainActor
+    func test_activationDoesNotSnapRowFramesBeforeTheWave_withTranslations() {
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        host(surface, NSSize(width: 360, height: 600))
+        let mc = MusicController(preview: true)
+        mc.duration = 240; mc.isPlaying = true
+        let rows = makeRows(withTranslation: true)
+        surface.debugSkipDedupe = true
+        var measured: [Int: CGFloat] = [:]
+        var wall: CFTimeInterval = 1_000
+        var date = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        surface.debugNowOverride = { wall }
+        mc.debugPlaybackClockDateProvider = { date }
+        defer { surface.debugNowOverride = nil; mc.debugPlaybackClockDateProvider = nil }
+        let tickDt = 1.0 / 120.0
+        func makeConfig() -> LyricsLayerRendererConfiguration {
+            var c = config(rows, current: surface.debugNativeSemanticIndex ?? 0, mc: mc,
+                           showTranslation: true, measuredHeights: measured.isEmpty ? nil : measured)
+            c = LyricsLayerRendererConfiguration(
+                rows: c.rows, currentIndex: c.currentIndex, anchorY: c.anchorY, rowWidth: c.rowWidth,
+                renderedIndices: c.renderedIndices, accumulatedHeights: c.accumulatedHeights, lineTargetIndices: c.lineTargetIndices,
+                lineInterval: c.lineInterval, hasSyllableSync: c.hasSyllableSync, trackContext: c.trackContext,
+                isWaveTimelineDiagnosticsEnabled: false, isManualScrolling: false, reduceMotion: false,
+                suppressInitialMotion: false, pendingTranslationLineIndices: [], showTranslation: true,
+                isTranslating: false, translationFailed: false, interludeAfterIndex: nil, directSnapRequest: nil,
+                controlsVisible: false, musicController: mc,
+                onLineTap: { _ in }, onDirectSnapConsumed: { _ in }, onManualScrollStarted: { _ in },
+                onManualScrollDelta: { _, _ in }, onManualScrollEnded: {}, onManualScrollRecovered: {},
+                onManualScrollChromeReset: nil, onHeightMeasured: { idx, h in measured[idx] = h },
+                lineMotionSamplingEnabled: false, lineMotionFocusedSamplingUntil: Date.distantPast,
+                lineMotionFirstRealDisplayIndex: 0, onLineMotionFrames: { _, _, _, _ in })
+            return c
+        }
+        func step(playback: TimeInterval) {
+            wall += tickDt; date = date.addingTimeInterval(tickDt)
+            mc.syncPlaybackClock(to: playback, playing: true, at: date)
+            surface.configure(makeConfig())
+            surface.debugTick(displayInterval: tickDt)
+            RunLoop.main.run(until: Date())
+        }
+        let outgoingIndex = 3, incomingIndex = 4, belowIndex = 5
+        let boundaryTime = rows[incomingIndex].displayLine.line.startTime
+        mc.syncPlaybackClock(to: -0.5, playing: true, at: date)
+        surface.configure(makeConfig()); surface.layoutSubtreeIfNeeded()
+        var t: TimeInterval = -0.5
+        while t < boundaryTime - 0.3 { step(playback: t); t += tickDt }
+        var table = ["   t_off   outY    inY  belowY"]
+        var prev: [Int: CGFloat] = [:]
+        var violations: [String] = []
+        var playback = t
+        while playback <= boundaryTime + 0.5 {
+            step(playback: playback)
+            var ys: [Int: CGFloat] = [:]
+            for idx in [outgoingIndex, incomingIndex, belowIndex] {
+                ys[idx] = surface.debugRowView(forIndex: idx)?.frame.origin.y ?? .nan
+            }
+            let off = playback - boundaryTime
+            table.append(String(format: "%+7.3f %6.2f %6.2f %6.2f", off, ys[outgoingIndex]!, ys[incomingIndex]!, ys[belowIndex]!))
+            if off < 0.1 {
+                for (idx, y) in ys { if let p = prev[idx], abs(y - p) >= 1 { violations.append(String(format: "row %d jumped %.2f -> %.2f (Δ%+.2f) at t=%+.3f", idx, p, y, y - p, off)) } }
+            }
+            prev = ys
+            playback += tickDt
+        }
+        print(table.joined(separator: "\n"))
+        XCTAssertTrue(violations.isEmpty, "row frame snapped before the wave: \n" + violations.joined(separator: "\n"))
+    }
+
+    /// Transform-aware surface-space ink bbox: the row's OWN layer transform (the 0.95↔1.0 scale
+    /// about the row centre) is applied by the compositor, not by `render(in:)`, so the earlier
+    /// samplers were blind to it. Map the local bbox through the layer's affine transform about
+    /// its anchor, then offset by the frame origin.
+    @MainActor
+    private func surfaceInkRect(_ view: NativeLyricsRowView) -> (rect: CGRect, scale: CGFloat)? {
+        guard let layer = view.layer else { return nil }
+        let local = inkBBox(of: layer, width: view.bounds.width, height: max(1, view.bounds.height))
+        guard !local.isEmpty else { return nil }
+        let t = layer.affineTransform()
+        let b = layer.bounds
+        let anchor = CGPoint(x: b.minX + b.width * layer.anchorPoint.x, y: b.minY + b.height * layer.anchorPoint.y)
+        func map(_ p: CGPoint) -> CGPoint {
+            let q = CGPoint(x: p.x - anchor.x, y: p.y - anchor.y).applying(t)
+            return CGPoint(x: q.x + anchor.x + view.frame.origin.x, y: q.y + anchor.y + view.frame.origin.y)
+        }
+        let c1 = map(CGPoint(x: local.minX, y: local.minY)), c2 = map(CGPoint(x: local.maxX, y: local.maxY))
+        return (CGRect(x: min(c1.x, c2.x), y: min(c1.y, c2.y), width: abs(c2.x - c1.x), height: abs(c2.y - c1.y)),
+                sqrt(t.a * t.a + t.c * t.c))
+    }
+
+    /// 2026-09-21 founder recording #2: wrapped CJK rows; at the activation frame the incoming
+    /// (2-line) row's ink moved UP 3px and the row below it 6px in ONE frame, ~10 frames before
+    /// the wave; the outgoing row bobs. Neither the engine targets nor measured heights changed
+    /// (release evidence logs SettledRetarget/RowHeight stayed empty), so the discontinuity is in
+    /// what the compositor sees: frame + row transform + content. This drives WRAPPED rows and
+    /// samples the transform-aware ink rect per tick; any ≥1px single-tick move of the top edge
+    /// before the wave (t < +0.1s) is the twitch.
+    @MainActor
+    func test_activationDoesNotJumpTransformedInk_wrappedRows() {
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        host(surface, NSSize(width: 360, height: 600))
+        let mc = MusicController(preview: true)
+        mc.duration = 240; mc.isPlaying = true
+        // Long lines so several rows WRAP at rowWidth 320.
+        let specs: [(String, [String], TimeInterval, TimeInterval)] = [
+            ("又独行旧地遇着拦路雨洒遍地", ["又独行", "旧地", "遇着", "拦路雨", "洒遍地"], 0.0, 2.6),
+            ("路静人寂寞", ["路静", "人", "寂寞"], 3.4, 2.0),
+            ("这痛哭的雨途人懒去作躲避", ["这痛哭", "的雨", "途人", "懒去", "作躲避"], 6.2, 2.8),
+            ("这雨中失意空间点点雨似渗出眼泪", ["这雨中", "失意", "空间", "点点雨", "似渗出", "眼泪"], 9.8, 3.0),
+            ("置身雨中哭泣着谁人可躲避这痛哭的雨途人懒去作躲避", ["置身", "雨中", "哭泣着", "谁人", "可躲避", "这痛哭", "的雨", "途人", "懒去", "作躲避"], 13.6, 2.8),
+            ("我置身失意空间置身雨中哭泣着谁人可躲避", ["我置身", "失意", "空间", "置身", "雨中", "哭泣着", "谁人", "可躲避"], 17.2, 2.0),
+            ("但是我怕这个夜晚细雨渐渐洒得凄迷", ["但是", "我怕", "这个夜晚", "细雨", "渐渐", "洒得凄迷"], 20.0, 3.2),
+            ("细雨渐渐洒得凄迷", ["细雨", "渐渐", "洒得", "凄迷"], 24.0, 2.6),
+        ]
+        let rows: [LayerBackedLyricRow] = specs.enumerated().map { i, spec in
+            let per = spec.3 / TimeInterval(spec.1.count); var t = spec.2
+            var words: [LyricWord] = []
+            for w in spec.1 { words.append(LyricWord(word: w, startTime: t, endTime: t + per)); t += per }
+            let line = LyricLine(text: spec.0, startTime: spec.2, endTime: spec.2 + spec.3, words: words)
+            let dl = DisplayLyricLine(id: "w\(i)", sourceIndex: i, segmentIndex: 0, segmentCount: 1, line: line)
+            return LayerBackedLyricRow(id: dl.id, index: i, displayLine: dl, sourceLine: line, isPrelude: false, preludeEndTime: 0, interlude: nil)
+        }
+        surface.debugSkipDedupe = true
+        var measured: [Int: CGFloat] = [:]
+        var wall: CFTimeInterval = 1_000
+        var date = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        surface.debugNowOverride = { wall }
+        mc.debugPlaybackClockDateProvider = { date }
+        defer { surface.debugNowOverride = nil; mc.debugPlaybackClockDateProvider = nil }
+        let tickDt = 1.0 / 120.0
+        func makeConfig() -> LyricsLayerRendererConfiguration {
+            let c = config(rows, current: surface.debugNativeSemanticIndex ?? 0, mc: mc,
+                           showTranslation: false, measuredHeights: measured.isEmpty ? nil : measured)
+            return LyricsLayerRendererConfiguration(
+                rows: c.rows, currentIndex: c.currentIndex, anchorY: c.anchorY, rowWidth: c.rowWidth,
+                renderedIndices: c.renderedIndices, accumulatedHeights: c.accumulatedHeights, lineTargetIndices: [:],
+                lineInterval: c.lineInterval, hasSyllableSync: true, trackContext: c.trackContext,
+                isWaveTimelineDiagnosticsEnabled: false, isManualScrolling: false, reduceMotion: false,
+                suppressInitialMotion: false, pendingTranslationLineIndices: [], showTranslation: false,
+                isTranslating: false, translationFailed: false, interludeAfterIndex: nil, directSnapRequest: nil,
+                controlsVisible: false, musicController: mc,
+                onLineTap: { _ in }, onDirectSnapConsumed: { _ in }, onManualScrollStarted: { _ in },
+                onManualScrollDelta: { _, _ in }, onManualScrollEnded: {}, onManualScrollRecovered: {},
+                onManualScrollChromeReset: nil, onHeightMeasured: { idx, h in measured[idx] = h },
+                lineMotionSamplingEnabled: false, lineMotionFocusedSamplingUntil: Date.distantPast,
+                lineMotionFirstRealDisplayIndex: 0, onLineMotionFrames: { _, _, _, _ in })
+        }
+        func step(playback: TimeInterval) {
+            wall += tickDt; date = date.addingTimeInterval(tickDt)
+            mc.syncPlaybackClock(to: playback, playing: true, at: date)
+            surface.configure(makeConfig())
+            surface.debugTick(displayInterval: tickDt)
+            RunLoop.main.run(until: Date())
+        }
+        let outgoingIndex = 3, incomingIndex = 4, belowIndex = 5
+        let boundaryTime = rows[incomingIndex].displayLine.line.startTime
+        mc.syncPlaybackClock(to: -0.5, playing: true, at: date)
+        surface.configure(makeConfig()); surface.layoutSubtreeIfNeeded()
+        var t: TimeInterval = -0.5
+        while t < boundaryTime - 0.3 { step(playback: t); t += tickDt }
+        var table = ["   t_off | out: frameY top scale | in: frameY top bottom scale | below: frameY top scale"]
+        var prevTop: [Int: CGFloat] = [:]
+        var prevBottom: [Int: CGFloat] = [:]
+        var violations: [String] = []
+        var playback = t
+        while playback <= boundaryTime + 0.4 {
+            step(playback: playback)
+            let off = playback - boundaryTime
+            var cols: [String] = []
+            for idx in [outgoingIndex, incomingIndex, belowIndex] {
+                guard let v = surface.debugRowView(forIndex: idx), let r = surfaceInkRect(v) else { cols.append("   -"); continue }
+                cols.append(String(format: "%6.2f %7.2f %7.2f %.3f", v.frame.origin.y, r.rect.minY, r.rect.maxY, r.scale))
+                // Before the wave, NOTHING may move the ink: the CATextLayer→bitmap swap at t=0 must be
+                // geometry-identical for a WRAPPED row too (device: first line −3px, second line −6px;
+                // headless: −0.48 / −0.96 — the two text paths lay wrapped lines at different pitch).
+                if off < 0.1, let p = prevTop[idx], let pb = prevBottom[idx],
+                   abs(r.rect.minY - p) >= 0.25 || abs(r.rect.maxY - pb) >= 0.25 {
+                    violations.append(String(format: "row %d ink top %.2f→%.2f (Δ%+.2f) bottom %.2f→%.2f (Δ%+.2f) at t=%+.3f scale=%.3f",
+                                             idx, p, r.rect.minY, r.rect.minY - p, pb, r.rect.maxY, r.rect.maxY - pb, off, r.scale))
+                }
+                prevTop[idx] = r.rect.minY; prevBottom[idx] = r.rect.maxY
+            }
+            table.append(String(format: "%+7.3f | ", off) + cols.joined(separator: " | "))
+            playback += tickDt
+        }
+        print(table.joined(separator: "\n"))
+        XCTAssertTrue(violations.isEmpty, "transformed ink jumped before the wave:\n" + violations.joined(separator: "\n"))
     }
 }

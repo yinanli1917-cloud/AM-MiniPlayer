@@ -467,7 +467,7 @@ final class NativeLyricsRowView: NSView {
 
     @discardableResult
     func applyBlurRadius(_ radius: CGFloat) -> CGFloat {
-        let logicalBlur = radius > 0.1 ? radius : 0
+        let logicalBlur = radius > 0.1 && !NativeLyricsFeelParity.depthBlurDisabled ? radius : 0
         let calibrated = logicalBlur > 0 ? sqrt(logicalBlur) * Self.blurRenderCalibration : 0
         let effectiveRadius = calibrated > 0.1 ? calibrated : 0
         let quantizedRadius = (effectiveRadius * 2).rounded(.toNearestOrAwayFromZero) / 2
@@ -547,6 +547,7 @@ final class NativeLyricsRowView: NSView {
         let desired = rasterizationEligible
             && appliedBlurRadius > 0.001
             && !hasLiveDotAnimation
+            && !NativeLyricsFeelParity.rasterizationDisabled
         guard let layer, layer.shouldRasterize != desired else { return }
         if desired {
             // Same contentsScale convention as commonInit; without it the cache renders at 1x.
@@ -1045,6 +1046,14 @@ final class NativeLyricsRowView: NSView {
     /// and forces CoreText to typeset again (measured 2026-08-27: CATextLayer drawInContext
     /// dominated presentationTick).
     private(set) var debugWordGlyphColorAssignCount = 0
+    /// 2026-09-21 switch-window probe accessors (release-safe, read-only).
+    var probeMainTextFrame: CGRect { mainTextLayer.frame }
+    var probeMainTextPresentationFrame: CGRect { mainTextLayer.presentation()?.frame ?? mainTextLayer.frame }
+    var probeActiveDrawFrame: CGRect { activeLineDrawLayer.frame }
+    var probeActiveDrawHidden: Bool { activeLineDrawLayer.isHidden }
+    var probeMainTextHidden: Bool { mainTextLayer.isHidden }
+    var probeRasterized: Bool { layer?.shouldRasterize ?? false }
+
     func setPositioning(_ transform: CGAffineTransform) {
         layerMutationAttempts += 1
         // Track the intended transform for layout()'s re-assertion regardless of whether we write now.
@@ -3876,7 +3885,8 @@ final class NativeLyricsRowView: NSView {
                 textActiveIndex: configuration.effectiveTextActiveIndex
             ),
             staticOpacity: 1,
-            showTranslation: configuration.showTranslation
+            showTranslation: configuration.showTranslation,
+            wordFloatReleaseTime: configuration.nativeWordFloatReleaseTime
         )
     }
 

@@ -125,6 +125,7 @@ final class LyricsPresentationEngine {
         }
 
         if hasStaleTargetBacklog(for: newIndex) {
+            DebugLogger.log("EngineSnap", "stale target backlog on advance \(oldIndex)→\(newIndex): snapping all rows")
             cancelPendingWave(deferred: true)
             lastCurrentIndex = newIndex
             recoverySnapAdvancesRemaining = 0
@@ -134,6 +135,7 @@ final class LyricsPresentationEngine {
         }
 
         if abs(newIndex - oldIndex) > LyricWaveTiming.largeJumpThreshold {
+            DebugLogger.log("EngineSnap", "large jump \(oldIndex)→\(newIndex): snapping all rows")
             cancelPendingWave(deferred: true)
             lastCurrentIndex = newIndex
             recoverySnapAdvancesRemaining = 0
@@ -522,6 +524,18 @@ final class LyricsPresentationEngine {
                     isBufferedActive: isBufferedActive
                 )
             } else if let existing = rowStates[index] {
+                // 2026-09-21 release-safe evidence line (runtime-gated by DebugLogger): a SETTLED
+                // row whose target moved while the target INDEX did not change is a layout-input
+                // shift (accumulatedHeights / anchorY), not a wave — the founder's "history row and
+                // incoming row bob 2–4px at activation, before the scroll".
+                if abs(existing.y - existing.targetY) <= 0.25, abs(existing.velocity) <= 0.25,
+                   abs(targetY - existing.targetY) > 0.25, snap || existing.targetIndex == targetIndex {
+                    DebugLogger.log("SettledRetarget", String(
+                        format: "row=%d target %d→%d y %.2f→%.2f Δ%+.2f ownAcc=%.2f targetAcc=%.2f anchor=%.2f snap=%d",
+                        index, existing.targetIndex, targetIndex, existing.targetY, targetY, targetY - existing.targetY,
+                        configuration.accumulatedHeights[index] ?? -1, configuration.accumulatedHeights[targetIndex] ?? -1,
+                        configuration.anchorY, snap ? 1 : 0))
+                }
                 #if DEBUG
                 let wasSettled = abs(existing.y - existing.targetY) <= 0.25 && abs(existing.velocity) <= 0.25
                 let targetYChanged = abs(targetY - existing.targetY) > 0.25

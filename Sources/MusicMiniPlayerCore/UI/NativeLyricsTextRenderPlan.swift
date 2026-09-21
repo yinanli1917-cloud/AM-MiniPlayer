@@ -86,19 +86,28 @@ struct NativeLyricsTextRenderPlan: Equatable {
         let isActive: Bool
         let staticOpacity: CGFloat
         let showTranslation: Bool
+        /// 2026-09-20 (founder: 入场行在滚动前原地抖 1–2px): the per-word −2pt float must not begin
+        /// before the row's own position wave has fired, or the first word lifts in place while
+        /// the row still waits its stagger turn (0.16–0.24s under topDown). `nil` = no gate (float
+        /// from the word's own start, the v2.8 timing); a finite value = the float clock for every
+        /// word starts no earlier than this playback time; `.infinity` = held at 0 for now.
+        /// Sweep brightness is NOT gated — sync stays exact; only the lift waits for the motion.
+        let wordFloatReleaseTime: TimeInterval?
 
         init(
             line: LyricLine,
             currentTime: TimeInterval,
             isActive: Bool,
             staticOpacity: CGFloat = 0.35,
-            showTranslation: Bool = true
+            showTranslation: Bool = true,
+            wordFloatReleaseTime: TimeInterval? = nil
         ) {
             self.line = line
             self.currentTime = currentTime
             self.isActive = isActive
             self.staticOpacity = staticOpacity
             self.showTranslation = showTranslation
+            self.wordFloatReleaseTime = wordFloatReleaseTime
         }
     }
 
@@ -140,7 +149,8 @@ struct NativeLyricsTextRenderPlan: Equatable {
                 currentTime: configuration.currentTime,
                 isActiveLine: configuration.isActive && appliesTimedWordSweep,
                 staticOpacity: configuration.staticOpacity,
-                constants: constants
+                constants: constants,
+                floatReleaseTime: configuration.wordFloatReleaseTime
             )
         }
         let translation = makeTranslationPlan(
@@ -328,7 +338,8 @@ struct NativeLyricsWordRunPlan: Equatable {
         currentTime: TimeInterval,
         isActiveLine: Bool,
         staticOpacity: CGFloat,
-        constants: NativeLyricsTextConstants
+        constants: NativeLyricsTextConstants,
+        floatReleaseTime: TimeInterval? = nil
     ) -> NativeLyricsWordRunPlan {
         let progress = wordProgress(
             currentTime: currentTime,
@@ -336,11 +347,14 @@ struct NativeLyricsWordRunPlan: Equatable {
             endTime: staticRun.endTime
         )
         let opacity = isActiveLine ? constants.brightAlpha : staticOpacity
+        // Float clock starts at the word's own start, or later at the row's motion release
+        // (see Configuration.wordFloatReleaseTime); the float DURATION stays the word's own.
+        let floatStart = max(staticRun.startTime, floatReleaseTime ?? -.infinity)
         let baseFloatY = isActiveLine
             ? baseFloat(
                 currentTime: currentTime,
-                startTime: staticRun.startTime,
-                endTime: staticRun.endTime,
+                startTime: floatStart,
+                endTime: floatStart + max(0, staticRun.endTime - staticRun.startTime),
                 targetY: constants.baseFloatTargetY
             )
             : 0

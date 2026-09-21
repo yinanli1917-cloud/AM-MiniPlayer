@@ -243,6 +243,8 @@ enum NativeLyricsMaskTrace {
     /// UserDefaults key the founder can set from a plist/`defaults write` without a terminal
     /// environment variable. Public so Settings/diagnostics UI could someday expose a toggle.
     static let userDefaultsKey = "NanoPodMaskTraceEnabled"
+    /// Public read of the (cached) arming decision for callers that batch their own lines.
+    static var isArmedForProbes: Bool { isArmed }
 
     private static let lock = NSLock()
     private static var lastKey: String = ""
@@ -531,6 +533,23 @@ enum NativeLyricsMaskTrace {
         if let summaryLine {
             enqueue(summaryLine)
         }
+    }
+
+    /// 2026-09-21 switch-window geometry probe: model values vs CA presentation values per row.
+    static func recordRowGeometry(tickSinceSwitch: Int, active: Int, rowIndex: Int,
+                                  frameY: CGFloat, frameH: CGFloat, modelA: CGFloat, modelTy: CGFloat,
+                                  presY: CGFloat, presA: CGFloat, presTy: CGFloat,
+                                  engineY: CGFloat, scale: CGFloat, opacity: CGFloat, blur: CGFloat,
+                                  mainY: CGFloat = 0, mainH: CGFloat = 0, presMainY: CGFloat = 0, presMainH: CGFloat = 0,
+                                  drawY: CGFloat = 0, drawHidden: Bool = true, mainHidden: Bool = false, rasterized: Bool = false) -> String? {
+        guard isArmed else { return nil }
+        let line = "{\"event\":\"row_geom\",\"k\":\(tickSinceSwitch),\"active\":\(active),\"row\":\(rowIndex),\"frameY\":\(fixedPoint(Double(frameY), decimals: 2)),\"frameH\":\(fixedPoint(Double(frameH), decimals: 2)),\"a\":\(fixedPoint(Double(modelA), decimals: 4)),\"ty\":\(fixedPoint(Double(modelTy), decimals: 2)),\"presY\":\(fixedPoint(Double(presY), decimals: 2)),\"presA\":\(fixedPoint(Double(presA), decimals: 4)),\"presTy\":\(fixedPoint(Double(presTy), decimals: 2)),\"engineY\":\(fixedPoint(Double(engineY), decimals: 2)),\"scale\":\(fixedPoint(Double(scale), decimals: 4)),\"opacity\":\(fixedPoint(Double(opacity), decimals: 3)),\"blur\":\(fixedPoint(Double(blur), decimals: 2)),\"mainY\":\(fixedPoint(Double(mainY), decimals: 2)),\"mainH\":\(fixedPoint(Double(mainH), decimals: 2)),\"presMainY\":\(fixedPoint(Double(presMainY), decimals: 2)),\"presMainH\":\(fixedPoint(Double(presMainH), decimals: 2)),\"drawY\":\(fixedPoint(Double(drawY), decimals: 2)),\"drawHidden\":\(drawHidden),\"mainHidden\":\(mainHidden),\"raster\":\(rasterized)}\n"
+        return line
+    }
+
+    static func enqueueLines(_ lines: [String]) {
+        guard isArmed else { return }
+        for l in lines { enqueue(l) }
     }
 
     static func recordRowPosition(

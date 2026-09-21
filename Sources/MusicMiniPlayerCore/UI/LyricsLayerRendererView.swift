@@ -167,6 +167,9 @@ struct LyricsLayerRendererConfiguration {
     var nativeManualScrollSnapshot: NativeLyricsManualScrollSnapshot? = nil
     var nativeDirectSnapIndex: Int? = nil
     var nativeDirectSnapReason: LyricsPresentationDirectSnapReason? = nil
+    /// Per-row float gate (see NativeLyricsTextRenderPlan.Configuration.wordFloatReleaseTime):
+    /// set by the surface for the row whose text phase is being driven.
+    var nativeWordFloatReleaseTime: TimeInterval? = nil
     var nativeSemanticCurrentIndex: Int? = nil
     var nativeScrollTargetIndex: Int? = nil
     var nativeHotActiveIndices: Set<Int> = []
@@ -264,6 +267,9 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     // — a line-level song sitting idle between switches never touches
     // `measuredHeightsByIndex`, so the version stays flat and the recomputation can be skipped.
     private var measuredHeightsVersion: Int = 0
+    private var geometryProbeTicksRemaining = 0
+    private var geometryProbeTick = 0
+    private var geometryProbeRing: [[String]] = []
     // Memoizes the ONE genuinely expensive part of `runtimeConfiguration(from:)` — the
     // `NativeLyricsHeightAccumulator.accumulatedHeights(...)` O(rows) recomputation, which used
     // to run unconditionally on every call (several calls per presentation tick, per the founder's
@@ -1966,7 +1972,9 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         let heightChanged = abs((measuredHeightsByIndex[row.index] ?? 0) - height) > 2
         renderTelemetry.recordHeightMeasurement(changed: heightChanged)
         if heightChanged {
-
+            DebugLogger.log("RowHeight", String(format: "row=%d %.1f→%.1f (active=%d)", row.index,
+                                                measuredHeightsByIndex[row.index] ?? -1, height,
+                                                row.index == (nativeSemanticCurrentIndex ?? -1) ? 1 : 0))
             measuredHeightsByIndex[row.index] = height
             measuredHeightsVersion += 1
             DispatchQueue.main.async {
@@ -2140,8 +2148,28 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         // singing-line translation absent 1258/1258 frames wave-bound vs 3/1258 semantic). POSITION /
         // movement still follows the wave via visualTarget; only the phase input is decoupled here.
         textConfiguration.nativeTextActiveIndex = presentationSnapshot.semanticIndex
+        // 2026-09-20 float gate: the per-word lift of the SINGING row waits until the scroll wave
+        // has actually retargeted that row (its engine target == the semantic index). Under the
+        // topDown stagger the incoming row's own move starts 0.16–0.24s after activation; letting
+        // the first word float during that wait read as a 1–2px twitch in place (founder
+        // recording, 下雨天). Brightness/sweep are untouched — only the lift waits for the motion.
+        let semantic = presentationSnapshot.semanticIndex
+        if row.index == semantic {
+            let waveFired = (presentationSnapshot.targetIndices[row.index] ?? semantic) == semantic
+            if let held = wordFloatRelease, held.semanticIndex == semantic {
+                if held.releaseTime == nil, waveFired {
+                    wordFloatRelease = (semantic, configuration.phaseRenderTime())
+                }
+            } else {
+                wordFloatRelease = (semantic, waveFired ? configuration.phaseRenderTime() : nil)
+            }
+            textConfiguration.nativeWordFloatReleaseTime = wordFloatRelease?.releaseTime ?? .infinity
+        }
         return textConfiguration
     }
+
+    /// (semanticIndex, playback time its wave fired — nil while still waiting its stagger turn).
+    private var wordFloatRelease: (semanticIndex: Int, releaseTime: TimeInterval?)?
 
     private func shouldDriveTextPhase(
         row: LayerBackedLyricRow,
@@ -3032,6 +3060,48 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         let tickStart = CFAbsoluteTimeGetCurrent()
         let activeBefore = nativeSemanticCurrentIndex
         presentationTickBody(displayInterval: displayInterval, displayTimestamp: displayTimestamp)
+        // 2026-09-21 switch-window geometry probe (armed with the mask trace). Every tick builds the
+        // lines for rows active-1…active+3 into a 3-tick ring buffer; a switch flushes the ring
+        // (k=-2,-1,0 = the pre-switch state) and then keeps recording for 40 ticks.
+        if NativeLyricsMaskTrace.isArmedForProbes {
+            let switched = activeBefore != nativeSemanticCurrentIndex
+            if switched { geometryProbeTicksRemaining = 40; geometryProbeTick = 0 }
+            if let active = nativeSemanticCurrentIndex {
+                var lines: [String] = []
+                for idx in (active - 1)...(active + 3) {
+                    guard let v = rowIDByIndex[idx].flatMap({ rowViews[$0] }), let layer = v.layer else { continue }
+                    let m = layer.affineTransform()
+                    let pres = layer.presentation()
+                    let pm = pres?.affineTransform() ?? m
+                    let st = visualStates[idx]
+                    let mf = v.probeMainTextFrame, pmf = v.probeMainTextPresentationFrame
+                    if let line = NativeLyricsMaskTrace.recordRowGeometry(
+                        tickSinceSwitch: geometryProbeTick, active: active, rowIndex: idx,
+                        frameY: v.frame.origin.y, frameH: v.frame.height, modelA: m.a, modelTy: m.ty,
+                        presY: pres?.frame.origin.y ?? -1, presA: pm.a, presTy: pm.ty,
+                        engineY: presentationEngine.presentation(for: idx)?.y ?? -1,
+                        scale: st?.scale ?? -1, opacity: st?.opacity ?? -1, blur: st?.blur ?? -1,
+                        mainY: mf.origin.y, mainH: mf.height, presMainY: pmf.origin.y, presMainH: pmf.height,
+                        drawY: v.probeActiveDrawFrame.origin.y, drawHidden: v.probeActiveDrawHidden,
+                        mainHidden: v.probeMainTextHidden, rasterized: v.probeRasterized) { lines.append(line) }
+                }
+                if geometryProbeTicksRemaining > 0 {
+                    if switched {
+                        // flush the ring as k=-2,-1 (they were built with the previous active index)
+                        let ring = geometryProbeRing
+                        NativeLyricsMaskTrace.enqueueLines(ring.enumerated().flatMap { i, ls in
+                            ls.map { $0.replacingOccurrences(of: "\"k\":0,", with: "\"k\":\(i - ring.count),") }
+                        })
+                    }
+                    NativeLyricsMaskTrace.enqueueLines(lines)
+                    geometryProbeTicksRemaining -= 1; geometryProbeTick += 1
+                    if geometryProbeTicksRemaining == 0 { geometryProbeTick = 0; geometryProbeRing.removeAll() }
+                } else {
+                    geometryProbeRing.append(lines)
+                    if geometryProbeRing.count > 2 { geometryProbeRing.removeFirst() }
+                }
+            }
+        }
         NativeLyricsMaskTrace.recordTick(
             dtMs: (CFAbsoluteTimeGetCurrent() - tickStart) * 1000,
             intervalMs: (displayInterval ?? 0) * 1000,
