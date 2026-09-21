@@ -90,13 +90,13 @@ final class NativeLyricsActiveLineDrawLayer: CALayer {
     /// The single layout this layer draws from. Same attributes as the sweep layout (system
     /// semibold, wrap by word, zero padding) so run/glyph rects from the sweep plan line up.
     @discardableResult
-    func prepareLayout(text: String, width: CGFloat, fontSize: CGFloat) -> NSLayoutManager {
-        let key = "\(fontSize)|\(width)|\(text)"
+    func prepareLayout(text: String, width: CGFloat, fontSize: CGFloat, lineSpacing: CGFloat = 0) -> NSLayoutManager {
+        let key = "\(fontSize)|\(width)|\(lineSpacing)|\(text)"
         if layoutKey == key, let textLayoutManager { return textLayoutManager }
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byWordWrapping
         paragraph.alignment = .left
-        paragraph.lineSpacing = 0
+        paragraph.lineSpacing = lineSpacing
         let storage = NSTextStorage(string: text, attributes: [
             .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
             .paragraphStyle: paragraph,
@@ -161,8 +161,8 @@ final class NativeLyricsActiveLineDrawLayer: CALayer {
 
     /// Pre-rasterize this line's run bitmaps ahead of activation (called for the NEXT row during
     /// idle frames) so the activation frame only positions cached images.
-    func prewarm(text: String, width: CGFloat, fontSize: CGFloat, runs: [(charRange: NSRange, rect: CGRect)]) {
-        prepareLayout(text: text, width: width, fontSize: fontSize)
+    func prewarm(text: String, width: CGFloat, fontSize: CGFloat, lineSpacing: CGFloat = 0, runs: [(charRange: NSRange, rect: CGRect)]) {
+        prepareLayout(text: text, width: width, fontSize: fontSize, lineSpacing: lineSpacing)
         ensureRunLayers(runs.count)
         for (i, run) in runs.enumerated() {
             guard let (image, restFrame) = runImage(for: .init(lineIndex: 0, charRange: run.charRange, rect: run.rect, floatY: 0,

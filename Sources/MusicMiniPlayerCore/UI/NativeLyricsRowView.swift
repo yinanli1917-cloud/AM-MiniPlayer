@@ -580,7 +580,8 @@ final class NativeLyricsRowView: NSView {
         let mainHeight = measuredTextHeight(
             plan.displayText,
             width: textWidth,
-            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
+            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold),
+            lineSpacing: plan.constants.mainLineSpacing
         )
         var height = mainHeight + 16
         if let translation = plan.translation {
@@ -786,6 +787,10 @@ final class NativeLyricsRowView: NSView {
     /// True when the hover background is actually painted for this row. Tests assert it clears once
     /// the row is no longer under the cursor (the "hover bg stuck after the row moved away" bug).
     var debugHoverBackgroundVisible: Bool { isHovering && !backgroundLayer.isHidden }
+
+    /// The hover background layer's actual frame — tests assert it hugs the content rect
+    /// (`hoverBackgroundFrame()`), not the row's full bounds (2026-09-21 founder feedback).
+    var debugHoverBackgroundFrame: CGRect { backgroundLayer.frame }
 
     func debugForceLayout() { layoutSubtreeIfNeeded() }
 
@@ -1140,7 +1145,6 @@ final class NativeLyricsRowView: NSView {
         if cacheKey == lastLineLayoutCacheKey { return }
         lastLineLayoutCacheKey = cacheKey
         let plan = textRenderPlan(row: row, configuration: configuration)
-        backgroundLayer.frame = Self.hoverBackgroundFrame(in: bounds)
         var y: CGFloat = Self.mainTextTopInset
         if row.isPrelude {
             mainTextLayer.frame = .zero
@@ -1161,6 +1165,7 @@ final class NativeLyricsRowView: NSView {
                 width: textWidth,
                 height: NativeLyricsRowMeasurement.preludeDotContainerHeight
             ))
+            backgroundLayer.frame = hoverBackgroundFrame()
             lastLineLayoutMetrics = .inactive
             return
         }
@@ -1168,7 +1173,8 @@ final class NativeLyricsRowView: NSView {
         let mainHeight = measuredTextHeight(
             plan.displayText,
             width: textWidth,
-            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
+            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold),
+            lineSpacing: plan.constants.mainLineSpacing
         )
         mainTextLayer.frame = CGRect(x: textX, y: y, width: textWidth, height: mainHeight + Self.textBottomClipPad)
         activeLineDrawLayer.frame = mainTextLayer.frame
@@ -1219,6 +1225,10 @@ final class NativeLyricsRowView: NSView {
         }
         interludeTextLayer.frame = .zero
         if !row.isPrelude { hideDotLayers() }
+        // Derived AFTER mainTextLayer/translationTextLayer land their final frames this pass, so
+        // the hover background hugs the geometry that is actually about to render (see
+        // `hoverBackgroundFrame()`).
+        backgroundLayer.frame = hoverBackgroundFrame()
         let mainFrameHeightError = abs(mainTextLayer.frame.height - mainHeight)
         let mainFrameWidthError = abs(mainTextLayer.frame.width - textWidth)
         lastLineLayoutMetrics = LineLayoutAppliedMetrics(
@@ -1480,12 +1490,14 @@ final class NativeLyricsRowView: NSView {
         let wrappedMainText = Self.displayWrapped(
             plan.displayText,
             width: displayTextWidth,
-            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
+            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold),
+            lineSpacing: plan.constants.mainLineSpacing
         )
         wholeLineMainString = attributedText(
             wrappedMainText,
             fontSize: plan.constants.mainFontSize,
-            alpha: mainAlpha
+            alpha: mainAlpha,
+            lineSpacing: plan.constants.mainLineSpacing
         )
         mainTextLayer.string = wholeLineMainString
         // The reuse pool hides every text layer in prepareForReuse() to kill stale content during
@@ -1494,7 +1506,12 @@ final class NativeLyricsRowView: NSView {
         // recycles rows, and the active line shows only its sung (bright) portion. Restore it now.
         mainTextLayer.isHidden = false
         wholeLineBrightString = appliesMainSweep
-            ? attributedText(wrappedMainText, fontSize: plan.constants.mainFontSize, alpha: plan.constants.brightAlpha)
+            ? attributedText(
+                wrappedMainText,
+                fontSize: plan.constants.mainFontSize,
+                alpha: plan.constants.brightAlpha,
+                lineSpacing: plan.constants.mainLineSpacing
+            )
             : nil
         mainBrightTextLayer.string = wholeLineBrightString
         activeHiddenEmphasisSignature = nil
@@ -1606,7 +1623,7 @@ final class NativeLyricsRowView: NSView {
         // hovered. Writing the layer each time re-composites it (the render-churn class this session
         // killed). Skip the write when the value is unchanged — frame tracks bounds (constant), isHidden
         // only flips on a hover transition. cornerRadius is a constant set once in commonInit.
-        let frame = Self.hoverBackgroundFrame(in: bounds)
+        let frame = hoverBackgroundFrame()
         if lastAppliedHoverFrame != frame {
             backgroundLayer.frame = frame
             lastAppliedHoverFrame = frame
@@ -1621,7 +1638,7 @@ final class NativeLyricsRowView: NSView {
             let alpha = NSColor(cgColor: backgroundLayer.backgroundColor ?? NSColor.clear.cgColor)?.alphaComponent
                 ?? Self.hoverBackgroundAlpha
             (superview as? NativeLyricsSurfaceView)?.recordHoverBackgroundParity(NativeLyricsHoverParitySample(
-                expectedFrame: Self.hoverBackgroundFrame(in: bounds),
+                expectedFrame: hoverBackgroundFrame(),
                 appliedFrame: backgroundLayer.frame,
                 expectedCornerRadius: Self.hoverBackgroundCornerRadius,
                 appliedCornerRadius: backgroundLayer.cornerRadius,
@@ -1632,10 +1649,28 @@ final class NativeLyricsRowView: NSView {
         lastHoverBackgroundVisible = visible
     }
 
-    private static func hoverBackgroundFrame(in bounds: CGRect) -> CGRect {
-        let x = nativeLyricContentLeadingInset - 8
-        let width = max(1, bounds.width - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset + 16)
-        return CGRect(x: x, y: 0, width: width, height: max(1, bounds.height))
+    // 2026-09-21 founder feedback: the hover background did not track the new text geometry
+    // (moved-left insets, wrapped-line pitch, any future orphan-avoidance widening) because it
+    // was derived independently from `bounds` instead of from the SAME content rect the text
+    // layers were just laid out with. `layout()` already sets `mainTextLayer.frame` /
+    // `translationTextLayer.frame` to the exact (leadingInset, textWidth, measured height)
+    // content box — union them and pad by the existing 8pt so the highlight always hugs the
+    // rendered text, single/wrapped/widened rows alike.
+    static let hoverBackgroundPadding: CGFloat = 8
+
+    private func hoverBackgroundFrame() -> CGRect {
+        var contentRect = mainTextLayer.frame
+        if contentRect == .zero {
+            // Not laid out yet (or a prelude row, where hover never shows) — fall back to the
+            // full content box so the frame is never nonsensical before the first layout() runs.
+            let x = nativeLyricContentLeadingInset - Self.hoverBackgroundPadding
+            let width = max(1, bounds.width - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset + 2 * Self.hoverBackgroundPadding)
+            return CGRect(x: x, y: 0, width: width, height: max(1, bounds.height))
+        }
+        if !translationTextLayer.isHidden, translationTextLayer.frame != .zero {
+            contentRect = contentRect.union(translationTextLayer.frame)
+        }
+        return contentRect.insetBy(dx: -Self.hoverBackgroundPadding, dy: -Self.hoverBackgroundPadding)
     }
 
     @discardableResult
@@ -2788,14 +2823,16 @@ final class NativeLyricsRowView: NSView {
             fontSize: plan.constants.mainFontSize,
             alpha: 1,
             hiddenOrders: hiddenOrders,
-            wordRuns: plan.wordRuns
+            wordRuns: plan.wordRuns,
+            lineSpacing: plan.constants.mainLineSpacing
         )
         mainBrightTextLayer.string = attributedText(
             plan.displayText,
             fontSize: plan.constants.mainFontSize,
             alpha: plan.constants.brightAlpha,
             hiddenOrders: hiddenOrders,
-            wordRuns: plan.wordRuns
+            wordRuns: plan.wordRuns,
+            lineSpacing: plan.constants.mainLineSpacing
         )
     }
 
@@ -2835,7 +2872,8 @@ final class NativeLyricsRowView: NSView {
             fontSize: plan.constants.mainFontSize,
             alpha: 1,
             hiddenOrders: floatingOrders,
-            wordRuns: plan.wordRuns
+            wordRuns: plan.wordRuns,
+            lineSpacing: plan.constants.mainLineSpacing
         )
         guard let configuration else {
             mainTextLayer.string = hiddenRaw
@@ -2873,7 +2911,7 @@ final class NativeLyricsRowView: NSView {
                 runs.append((NSRange(location: first.characterIndex, length: last.characterIndex - first.characterIndex + 1), visualRun.rect))
             }
         }
-        activeLineDrawLayer.prewarm(text: plan.displayText, width: width, fontSize: plan.constants.mainFontSize, runs: runs)
+        activeLineDrawLayer.prewarm(text: plan.displayText, width: width, fontSize: plan.constants.mainFontSize, lineSpacing: plan.constants.mainLineSpacing, runs: runs)
     }
 
     private func leaveSinglePassActiveLine() {
@@ -2917,7 +2955,8 @@ final class NativeLyricsRowView: NSView {
         activeLineDrawLayer.prepareLayout(
             text: plan.displayText,
             width: sweepBounds.width,
-            fontSize: plan.constants.mainFontSize
+            fontSize: plan.constants.mainFontSize,
+            lineSpacing: plan.constants.mainLineSpacing
         )
         let maskLines = NativeLyricsTextSweepLayout.maskLines(
             from: linePlan,
@@ -3000,12 +3039,14 @@ final class NativeLyricsRowView: NSView {
         mainTextLayer.string = attributedText(
             plan.displayText,
             fontSize: plan.constants.mainFontSize,
-            alpha: 1
+            alpha: 1,
+            lineSpacing: plan.constants.mainLineSpacing
         )
         mainBrightTextLayer.string = attributedText(
             plan.displayText,
             fontSize: plan.constants.mainFontSize,
-            alpha: plan.constants.brightAlpha
+            alpha: plan.constants.brightAlpha,
+            lineSpacing: plan.constants.mainLineSpacing
         )
     }
 
@@ -3563,7 +3604,8 @@ final class NativeLyricsRowView: NSView {
             wordRuns: plan.wordRuns,
             width: bounds.width,
             fontSize: plan.constants.mainFontSize,
-            fadeHalfPoint: plan.constants.fadeHalfPoint
+            fadeHalfPoint: plan.constants.fadeHalfPoint,
+            lineSpacing: plan.constants.mainLineSpacing
         )
         cachedMainSweepLayoutKey = key
         cachedMainSweepLinePlan = linePlan
@@ -3908,10 +3950,11 @@ final class NativeLyricsRowView: NSView {
         fontSize: CGFloat,
         alpha: CGFloat,
         hiddenOrders: Set<Int>,
-        wordRuns: [NativeLyricsWordRunPlan]
+        wordRuns: [NativeLyricsWordRunPlan],
+        lineSpacing: CGFloat? = nil
     ) -> NSAttributedString {
         let attributed = NSMutableAttributedString(
-            attributedString: attributedText(text, fontSize: fontSize, alpha: alpha)
+            attributedString: attributedText(text, fontSize: fontSize, alpha: alpha, lineSpacing: lineSpacing)
         )
         for range in NativeLyricsHiddenTextMask.ranges(
             in: text,

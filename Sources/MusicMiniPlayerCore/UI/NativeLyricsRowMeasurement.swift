@@ -3,8 +3,14 @@ import CoreGraphics
 import Foundation
 
 enum NativeLyricsRowMeasurement {
-    static let leadingInset: CGFloat = 32
-    static let trailingInset: CGFloat = 32
+    // 2026-09-21 founder feedback comparing against Apple Music's lyrics panel: the text column
+    // sat too far right. Moved left (32→20 leading, 32→24 trailing) — the ONE constant pair every
+    // consumer reads (LyricsLayerRendererView's `nativeLyricContentLeadingInset`/
+    // `nativeLyricContentTrailingInset` alias these; see that file for the full usage inventory:
+    // interlude-dot x anchor, hover background frame, NativeLyricsRowScale's scale pivot X, and
+    // this file's own `textWidth` orphan-avoidance slack).
+    static let leadingInset: CGFloat = 20
+    static let trailingInset: CGFloat = 24
     static let preludeHeight: CGFloat = 46
     static let preludeDotContainerTopInset: CGFloat = 8
     static let preludeDotContainerHeight: CGFloat = 30
@@ -35,7 +41,8 @@ enum NativeLyricsRowMeasurement {
         let mainHeight = measuredTextHeight(
             staticPlan.displayText,
             width: textWidth,
-            font: .systemFont(ofSize: constants.mainFontSize, weight: .semibold)
+            font: .systemFont(ofSize: constants.mainFontSize, weight: .semibold),
+            lineSpacing: constants.mainLineSpacing
         )
         let verticalPadding = row.displayLine.line.isBackground ? backgroundRowVerticalPadding : rowVerticalPadding
         var height = mainHeight + verticalPadding

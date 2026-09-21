@@ -66,11 +66,16 @@ private struct NativeLyricsTokenGlyphPlan {
 }
 
 enum NativeLyricsTextSweepLayout {
-    static var mainParagraphStyle: NSParagraphStyle {
+    // `lineSpacing` default (0) preserves every existing caller's geometry unless it opts in —
+    // production wiring is `NativeLyricsRowView`'s call at line ~3561, which passes
+    // `plan.constants.mainLineSpacing` so this engine's glyph rects and the whole-line dim base's
+    // `NSLayoutManager` wrap (`NativeLyricsRowView.attributedText`/`displayWrapped`) agree on the
+    // SAME paragraph recipe (banned-patterns.md's two-text-engine rule).
+    static func mainParagraphStyle(lineSpacing: CGFloat = 0) -> NSParagraphStyle {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byWordWrapping
         paragraph.alignment = .left
-        paragraph.lineSpacing = 0
+        paragraph.lineSpacing = lineSpacing
         return paragraph
     }
 
@@ -80,7 +85,8 @@ enum NativeLyricsTextSweepLayout {
         width: CGFloat,
         fontSize: CGFloat,
         fadeHalfPoint: CGFloat,
-        currentTime: TimeInterval
+        currentTime: TimeInterval,
+        lineSpacing: CGFloat = 0
     ) -> [NativeLyricsTextSweepMaskLine] {
         maskLines(
             from: makePlan(
@@ -88,7 +94,8 @@ enum NativeLyricsTextSweepLayout {
                 wordRuns: wordRuns,
                 width: width,
                 fontSize: fontSize,
-                fadeHalfPoint: fadeHalfPoint
+                fadeHalfPoint: fadeHalfPoint,
+                lineSpacing: lineSpacing
             ),
             fadeHalfPoint: fadeHalfPoint,
             currentTime: currentTime
@@ -100,7 +107,8 @@ enum NativeLyricsTextSweepLayout {
         wordRuns: [NativeLyricsWordRunPlan],
         width: CGFloat,
         fontSize: CGFloat,
-        fadeHalfPoint: CGFloat
+        fadeHalfPoint: CGFloat,
+        lineSpacing: CGFloat = 0
     ) -> [NativeLyricsTextSweepVisualLinePlan] {
         guard !displayText.isEmpty, !wordRuns.isEmpty, width > 1 else { return [] }
 
@@ -108,7 +116,7 @@ enum NativeLyricsTextSweepLayout {
             string: displayText,
             attributes: [
                 .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
-                .paragraphStyle: NativeLyricsTextSweepLayout.mainParagraphStyle
+                .paragraphStyle: NativeLyricsTextSweepLayout.mainParagraphStyle(lineSpacing: lineSpacing)
             ]
         )
         let storage = NSTextStorage(attributedString: attributed)
@@ -410,14 +418,16 @@ enum NativeLyricsTextSweepLayout {
         displayText: String,
         wordRuns: [NativeLyricsWordRunPlan],
         width: CGFloat,
-        fontSize: CGFloat
+        fontSize: CGFloat,
+        lineSpacing: CGFloat = 0
     ) -> LayoutSnapshot {
         let plan = makePlan(
             displayText: displayText,
             wordRuns: wordRuns,
             width: width,
             fontSize: fontSize,
-            fadeHalfPoint: 12
+            fadeHalfPoint: 12,
+            lineSpacing: lineSpacing
         )
         var heights: [CGFloat] = []
         var minYs: [CGFloat] = []
