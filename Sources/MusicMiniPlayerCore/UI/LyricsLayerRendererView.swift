@@ -2036,7 +2036,8 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
             hotActiveIndices: visualHotActiveIndices,
             isManualScrolling: configuration.effectiveIsManualScrolling,
             interludeBlend: interludeBlend(for: row, configuration: configuration),
-            gapRecedeBlend: gapRecedeBlend(for: row, configuration: configuration)
+            gapRecedeBlend: gapRecedeBlend(for: row, configuration: configuration),
+            isBackground: row.displayLine.line.isBackground
         )
     }
 

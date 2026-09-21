@@ -10,6 +10,13 @@ enum NativeLyricsRowMeasurement {
     static let preludeDotContainerHeight: CGFloat = 30
     static let preludeDotCenterY: CGFloat = preludeDotContainerTopInset + preludeDotContainerHeight / 2
     static let translationLoadingRowHeight: CGFloat = 8
+    /// Normal per-row vertical padding baked into `estimatedHeight` (top+bottom
+    /// margin contributing the visual gap between stacked rows).
+    static let rowVerticalPadding: CGFloat = 16
+    /// A backing-vocal (和声) row sits directly under its melody row at HALF the
+    /// normal gap (founder 2026-09-20) — same constant, halved, no second
+    /// layout path.
+    static let backgroundRowVerticalPadding: CGFloat = rowVerticalPadding / 2
 
     static func estimatedHeight(
         for row: LayerBackedLyricRow,
@@ -30,7 +37,8 @@ enum NativeLyricsRowMeasurement {
             width: textWidth,
             font: .systemFont(ofSize: constants.mainFontSize, weight: .semibold)
         )
-        var height = mainHeight + 16
+        let verticalPadding = row.displayLine.line.isBackground ? backgroundRowVerticalPadding : rowVerticalPadding
+        var height = mainHeight + verticalPadding
         if showTranslation,
            let translation = row.displayLine.line.translation,
            !translation.isEmpty {

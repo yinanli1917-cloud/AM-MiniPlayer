@@ -358,7 +358,56 @@ struct NativeLyricsVisualTarget: Equatable {
         )
     }
 
+    /// Ordered brightness tiers this codebase uses across opacity AND
+    /// dimBaseBrightness (1.0 sweeping-bright, 0.85 harmony/duet, 0.6
+    /// manual-scroll all-clear, 0.35 inactive dim base). A backing-vocal
+    /// (和声) row reads ONE STEP LOWER than its melody row's own tier in the
+    /// same state (founder 2026-09-20) — 0.22 extends the ladder one step
+    /// below the lowest existing tier for that case. Needs the founder's
+    /// on-device check like every other value on this ladder.
+    private static let brightnessTierLadder: [CGFloat] = [1.0, 0.85, 0.6, 0.35, 0.22]
+
+    static func nextLowerBrightnessTier(_ value: CGFloat) -> CGFloat {
+        for tier in brightnessTierLadder where tier < value - 0.001 {
+            return tier
+        }
+        return brightnessTierLadder.last ?? value
+    }
+
     static func amllTarget(
+        displayIndex: Int,
+        currentIndex: Int,
+        scrollTargetIndex: Int,
+        hotActiveIndices: Set<Int>,
+        isManualScrolling: Bool,
+        interludeBlend: CGFloat = 0,
+        gapRecedeBlend: CGFloat = 0,
+        isBackground: Bool = false
+    ) -> NativeLyricsVisualTarget {
+        let melody = melodyAmllTarget(
+            displayIndex: displayIndex,
+            currentIndex: currentIndex,
+            scrollTargetIndex: scrollTargetIndex,
+            hotActiveIndices: hotActiveIndices,
+            isManualScrolling: isManualScrolling,
+            interludeBlend: interludeBlend,
+            gapRecedeBlend: gapRecedeBlend
+        )
+        guard isBackground else { return melody }
+        // Subordinate row (founder 2026-09-20): lights up alongside its melody
+        // (isActive carries through so the word sweep still runs when it has
+        // words) at one tier lower brightness, never scales up past the
+        // inactive scale, and is never itself a blur-focus centre.
+        return NativeLyricsVisualTarget(
+            opacity: nextLowerBrightnessTier(melody.opacity),
+            scale: min(melody.scale, 0.95),
+            blur: 0,
+            isActive: melody.isActive,
+            dimBaseBrightness: nextLowerBrightnessTier(melody.dimBaseBrightness)
+        )
+    }
+
+    private static func melodyAmllTarget(
         displayIndex: Int,
         currentIndex: Int,
         scrollTargetIndex: Int,
