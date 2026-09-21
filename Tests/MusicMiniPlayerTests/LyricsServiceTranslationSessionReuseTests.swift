@@ -130,19 +130,44 @@ final class LyricsServiceTranslationSessionReuseTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 50_000_000)
 
         service.resetTranslationRequestStream()
-        // Finishing the stream must end the OLD loop cleanly.
-        await oldServeTask.value
         XCTAssertEqual(oldExecutor.callCount, 0, "no request was ever enqueued before the reset")
 
         let newExecutor = FakeExecutor()
         let newDone = expectation(description: "new session translated after reset")
         newExecutor.onCall = { _ in newDone.fulfill() }
+        // Registering the NEW server retires the old loop (its stream is
+        // finished and it is no longer the registered server), so the old
+        // executor can never fire again.
         let newServeTask = Task { await service.serveTranslationRequests(with: newExecutor) }
+        await oldServeTask.value
         service.requestTranslation()
         await fulfillment(of: [newDone], timeout: 2.0)
         newServeTask.cancel()
 
         XCTAssertEqual(newExecutor.callCount, 1, "the new session must serve the post-reset request")
         XCTAssertEqual(oldExecutor.callCount, 0, "the old executor must never fire after its queue was reset")
+    }
+
+    /// 2026-09-20 founder repro: the first config landing calls
+    /// `resetTranslationRequestStream()` while the language pair is unchanged,
+    /// so SwiftUI never restarts `.translationTask`. The SAME serve loop must
+    /// keep serving after a reset, or the translate button fires into nothing.
+    func test_resetWithoutSessionRestart_sameLoopKeepsServing() async {
+        let service = makeService()
+        let executor = FakeExecutor()
+
+        seed(service, title: "Song A")
+        let serveTask = Task { await service.serveTranslationRequests(with: executor) }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        service.resetTranslationRequestStream()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        let done = expectation(description: "request after a config-equal reset is still served")
+        executor.onCall = { _ in done.fulfill() }
+        service.requestTranslation()
+        await fulfillment(of: [done], timeout: 2.0)
+        serveTask.cancel()
+        XCTAssertEqual(executor.callCount, 1)
     }
 }

@@ -147,9 +147,10 @@ public class LyricsService: ObservableObject {
     @MainActor
     private lazy var translationRequestCoalescer = TranslationRequestCoalescer(delay: 0.05)
     private var translationRequestContinuation: AsyncStream<Void>.Continuation?
-    private lazy var translationRequestStream: AsyncStream<Void> = AsyncStream { [weak self] continuation in
-        self?.translationRequestContinuation = continuation
-    }
+    /// Identity of the serve loop currently registered as THE consumer of
+    /// translation requests. A newer `serveTranslationRequests` call replaces
+    /// it; an older loop that wakes up and finds itself retired returns.
+    private var translationServeToken = UUID()
     /// Explicit-source Korean `TranslationSession`, warmed by a second,
     /// invisible `.translationTask(Configuration(source: "ko", target:))`
     /// host in LyricsView (`TranslationTaskHostCore`). Used only for Hangul
@@ -2335,11 +2336,15 @@ public class LyricsService: ObservableObject {
     /// OLD session/language can never be replayed onto the NEW one.
     @MainActor
     public func resetTranslationRequestStream() {
+        // Finishing the continuation drops every buffered request. The live
+        // serve loop (if any) wakes, sees it is still the registered server
+        // and re-subscribes with a fresh stream — a reset alone must never
+        // leave the app without a consumer (2026-09-20 bug: the FIRST config
+        // landing reset the stream while the language pair was unchanged, so
+        // SwiftUI never restarted `.translationTask`; the translate button
+        // then fired into a finished stream forever).
         translationRequestContinuation?.finish()
         translationRequestContinuation = nil
-        translationRequestStream = AsyncStream { [weak self] continuation in
-            self?.translationRequestContinuation = continuation
-        }
     }
 
     /// Consumes translation requests for as long as `session` (or the
@@ -2354,10 +2359,26 @@ public class LyricsService: ObservableObject {
     @available(macOS 15.0, *)
     @MainActor
     public func serveTranslationRequests<Executor: LyricsTranslationExecuting>(with session: Executor) async {
-        for await _ in translationRequestStream {
-            if Task.isCancelled { return }
-            await performSystemTranslation(session: session)
+        let token = UUID()
+        translationServeToken = token
+        debugLogPublic("🈺 translation session ready — serving requests")
+        while !Task.isCancelled, translationServeToken == token {
+            // Each subscription owns a fresh stream; registering it retires any
+            // continuation a previous (now-superseded) loop was blocked on, so
+            // a SwiftUI-cancelled-but-still-suspended old loop can never steal
+            // a request meant for this session.
+            let stream = AsyncStream<Void> { [weak self] continuation in
+                self?.translationRequestContinuation?.finish()
+                self?.translationRequestContinuation = continuation
+            }
+            for await _ in stream {
+                if Task.isCancelled || translationServeToken != token { return }
+                await performSystemTranslation(session: session)
+            }
+            // Stream finished (reset or superseded). Loop re-checks the guard:
+            // still the registered server → re-subscribe; otherwise exit.
         }
+        debugLogPublic("🈺 translation serve loop retired")
     }
 
     /// Performs system translation from SwiftUI .translationTask().

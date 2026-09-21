@@ -2710,35 +2710,36 @@ private struct TranslationTaskHostCore: View {
     let lyricsService: LyricsService
 
     var body: some View {
-        Color.clear
-            .translationTask(activeConfig, action: { session in
-                // No outer showTranslation/lyrics gate here: this closure
-                // only restarts when `activeConfig` (the language pair)
-                // changes, so a one-time gate evaluated at start would stay
-                // stuck if the user toggles showTranslation off then back on
-                // without the language changing — serveTranslationRequests
-                // must loop unconditionally; performSystemTranslation
-                // re-checks showTranslation/lyrics on every request already.
-                await lyricsService.serveTranslationRequests(with: session)
-            })
+        // Each session gets its OWN zero-size host view. 2026-09-20 regression: stacking a second
+        // `.translationTask` on the same `Color.clear` (the explicit-ko session) left the primary
+        // auto-detect loop never starting — translate button pressed, no "Starting translation"
+        // ever logged. One translationTask per view; siblings in a ZStack.
+        ZStack {
+            Color.clear
+                .translationTask(activeConfig, action: { session in
+                    // No outer showTranslation/lyrics gate here: this closure
+                    // only restarts when `activeConfig` (the language pair)
+                    // changes, so a one-time gate evaluated at start would stay
+                    // stuck if the user toggles showTranslation off then back on
+                    // without the language changing — serveTranslationRequests
+                    // must loop unconditionally; performSystemTranslation
+                    // re-checks showTranslation/lyrics on every request already.
+                    await lyricsService.serveTranslationRequests(with: session)
+                })
             // Second, invisible session with an EXPLICIT Korean source —
             // script-determined (ScriptRunSegmenter classifies Hangul), not
-            // NLLanguageRecognizer-guessed, so this does not repeat the
-            // banned `source: detectLanguage()` pattern. Used only for
-            // Hangul runs inside mixed-script lines (2026-09-20 NewJeans
-            // "How Sweet" evidence: whole-line auto-detect only translates
-            // the dominant script, leaving Korean or English half untouched).
-            // This task just warms/holds the session; the main loop above
-            // (serveTranslationRequests, driven by translation requests)
-            // is what actually issues work through it via
-            // LyricsService.koreanRunTranslationExecutor.
-            .translationTask(koreanRunConfig, action: { session in
-                await lyricsService.updateKoreanRunTranslationExecutor(session)
-                while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 3_600_000_000_000)
-                }
-                await lyricsService.updateKoreanRunTranslationExecutor(nil)
-            })
+            // NLLanguageRecognizer-guessed. Used only for Hangul runs inside
+            // mixed-script lines; this task just warms/holds the session and
+            // hands it to LyricsService.koreanRunTranslationExecutor.
+            Color.clear
+                .translationTask(koreanRunConfig, action: { session in
+                    await lyricsService.updateKoreanRunTranslationExecutor(session)
+                    while !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 3_600_000_000_000)
+                    }
+                    await lyricsService.updateKoreanRunTranslationExecutor(nil)
+                })
+        }
     }
 
     private var activeConfig: TranslationSession.Configuration {
