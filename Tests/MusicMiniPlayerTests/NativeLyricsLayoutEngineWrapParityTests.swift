@@ -89,7 +89,7 @@ final class NativeLyricsLayoutEngineWrapParityTests: XCTestCase {
     /// (a) NSLayoutManager — same construction as `NativeLyricsTextSweepLayout.buildLayout`
     /// (font, paragraph style, container width, zero line-fragment padding).
     private func nsLayoutManagerFragments(for text: String, width: CGFloat, fontSize: CGFloat) -> [EngineLineFragment] {
-        let paragraph = NativeLyricsTextSweepLayout.mainParagraphStyle
+        let paragraph = NativeLyricsTextSweepLayout.mainParagraphStyle()
         let attributed = NSAttributedString(string: text, attributes: [
             .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
             .paragraphStyle: paragraph

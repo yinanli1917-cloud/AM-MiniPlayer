@@ -221,11 +221,13 @@ final class NativeLyricsActiveLineSpacingTests: XCTestCase {
 
     // 2026-09-17 (C1 fix, research/repro-2026-09-17-lyrics-render-3c.md §C1): the X pivot moved
     // from the row's own frame origin (x=0) to the text's actual left edge
-    // (nativeLyricContentLeadingInset, 32pt) — x=0 was never the text's own position, it was 32pt
-    // to the text's LEFT, so scaling around it silently moved the text by
-    // leadingInset * |Δscale| (a real, deterministic 1.6pt every active<->inactive transition,
-    // confirmed via RowScaleAnchorDisplacementTests before this fix). "Preserves left" now means
-    // preserving THIS point, not x=0.
+    // (nativeLyricContentLeadingInset — 32pt at the time of that fix, moved to 20pt by the
+    // 2026-09-21 founder "text sits too far right" feedback) — x=0 was never the text's own
+    // position, it was `leadingInset`pt to the text's LEFT, so scaling around it silently moved
+    // the text by leadingInset * |Δscale| (a real, deterministic displacement every
+    // active<->inactive transition, confirmed via RowScaleAnchorDisplacementTests before this
+    // fix). "Preserves left" now means preserving THIS point, not x=0. This test reads
+    // `nativeLyricContentLeadingInset` live, so it tracks whatever that constant is set to.
     //
     // 2026-09-18 (coordinator-approved follow-up, research/repro-2026-09-18-lyrics-render-3d.md
     // §4 third round): `leadingTransform` no longer derives its OWN Y pivot from `height/2` — it
@@ -253,5 +255,63 @@ final class NativeLyricsActiveLineSpacingTests: XCTestCase {
         XCTAssertNotEqual(top.y, originScaled.y, accuracy: 0.0001,
                           "pivot-centered scale must move a point away from the pivot; origin scale leaves it put")
         XCTAssertEqual(NativeLyricsRowScale.leadingTransform(scale: 1, height: height, pivotY: pivotY), .identity)
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 2026-09-21 founder feedback (vs. Apple Music's lyrics panel): text column moved left
+    // (leading 32→20, trailing 32→24 — `NativeLyricsRowMeasurement.leadingInset`/`trailingInset`,
+    // aliased everywhere via `nativeLyricContentLeadingInset`/`nativeLyricContentTrailingInset`),
+    // and wrapped lines within one row got explicit breathing room (`mainLineSpacing`, round(font
+    // size × 0.18): 4pt at the 24pt melody size, 3pt at the 0.8×-scaled 19.2pt background-row
+    // size). These pin the new numbers so a future edit can't silently drift them back.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    func test_contentInsets_movedLeft_20Leading_24Trailing() {
+        XCTAssertEqual(NativeLyricsRowMeasurement.leadingInset, 20, "leading inset: 32 → 20 (2026-09-21 founder feedback)")
+        XCTAssertEqual(NativeLyricsRowMeasurement.trailingInset, 24, "trailing inset: 32 → 24 (2026-09-21 founder feedback)")
+        XCTAssertEqual(nativeLyricContentLeadingInset, NativeLyricsRowMeasurement.leadingInset,
+                       "LyricsLayerRendererView's alias must read the same single source of truth")
+        XCTAssertEqual(nativeLyricContentTrailingInset, NativeLyricsRowMeasurement.trailingInset,
+                       "LyricsLayerRendererView's alias must read the same single source of truth")
+    }
+
+    func test_mainLineSpacing_isRoundedFontSizeTimes0Point18_andScalesWithBackgroundRow() {
+        let melody = NativeLyricsTextConstants(scale: 1.0)
+        XCTAssertEqual(melody.mainFontSize, 24)
+        XCTAssertEqual(melody.mainLineSpacing, 4, "round(24 × 0.18) = round(4.32) = 4")
+
+        let background = NativeLyricsTextConstants(scale: NativeLyricsTextConstants.backgroundRowFontScale)
+        XCTAssertEqual(background.mainFontSize, 24 * 0.8, accuracy: 0.001)
+        XCTAssertEqual(background.mainLineSpacing, 3, "round(19.2 × 0.18) = round(3.456) = 3 — scales with the background row's smaller font")
+    }
+
+    /// Both text engines must apply the SAME `mainLineSpacing` (banned-patterns.md's 2026-09-21
+    /// two-text-engine rule): `NativeLyricsTextSweepLayout` (active-line glyph rects) and the
+    /// whole-line dim base's `NativeLyricsTextMeasurement`/`displayWrapped` path
+    /// (`NativeLyricsRowMeasurement.estimatedHeight`). A wrapped row's measured height must grow
+    /// by exactly (lineCount - 1) × mainLineSpacing versus the same text laid out with zero
+    /// line spacing.
+    @MainActor
+    func test_wrappedRowHeight_growsByLineSpacing_perExtraVisualLine() {
+        let width: CGFloat = 186
+        let line = cjkLine()
+        let plan = NativeLyricsTextRenderPlan.make(configuration: .init(line: line, currentTime: line.startTime, isActive: false))
+        let textWidth = max(1, width - NativeLyricsRowMeasurement.leadingInset - NativeLyricsRowMeasurement.trailingInset)
+        let font = NSFont.systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
+
+        let spacedMetrics = NativeLyricsTextMeasurement.metrics(plan.displayText, width: textWidth, font: font, lineSpacing: plan.constants.mainLineSpacing)
+        let unspacedMetrics = NativeLyricsTextMeasurement.metrics(plan.displayText, width: textWidth, font: font, lineSpacing: 0)
+        XCTAssertGreaterThanOrEqual(spacedMetrics.lineCount, 2, "precondition: fixture must wrap")
+        XCTAssertEqual(spacedMetrics.lineCount, unspacedMetrics.lineCount, "line spacing must not change wrap points, only vertical pitch")
+
+        let expectedGrowth = CGFloat(spacedMetrics.lineCount - 1) * plan.constants.mainLineSpacing
+        XCTAssertEqual(spacedMetrics.height - unspacedMetrics.height, expectedGrowth, accuracy: 0.5,
+                       "wrapped-row height must grow by exactly (visualLines - 1) × mainLineSpacing")
+
+        let row = row(for: line, index: 1)
+        let rowMeasuredHeight = NativeLyricsRowMeasurement.estimatedHeight(
+            for: row, rowWidth: width, showTranslation: false, isTranslating: false, pendingTranslationLineIndices: []
+        )
+        XCTAssertGreaterThanOrEqual(rowMeasuredHeight, spacedMetrics.height,
+                                    "row's estimated height must account for the spaced (not unspaced) text height")
     }
 }

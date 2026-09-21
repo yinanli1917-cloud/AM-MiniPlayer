@@ -4,8 +4,12 @@ import CoreVideo
 import QuartzCore
 import SwiftUI
 
-let nativeLyricContentLeadingInset: CGFloat = 32
-let nativeLyricContentTrailingInset: CGFloat = 32
+// Single source of truth: `NativeLyricsRowMeasurement.leadingInset`/`trailingInset` (2026-09-21
+// founder feedback: text column moved left, 32→20/24). Every consumer — this file's interlude-dot
+// x anchor, `NativeLyricsRowScale.leadingTransform`'s scale pivot X, `NativeLyricsRowView`'s
+// content width / hover background frame — reads these two aliases.
+let nativeLyricContentLeadingInset: CGFloat = NativeLyricsRowMeasurement.leadingInset
+let nativeLyricContentTrailingInset: CGFloat = NativeLyricsRowMeasurement.trailingInset
 private let nativeLyricAutoVisibleRowRadius = 12
 private let nativeLyricManualVisibleRowRadius = 12
 private let nativeLyricVisualStateRetentionRadius = nativeLyricAutoVisibleRowRadius * 4

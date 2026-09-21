@@ -297,10 +297,19 @@ struct NativeLyricsTextConstants: Equatable {
     let mainFontSize: CGFloat
     let translationFontSize: CGFloat
     let translationLineSpacing: CGFloat = 2
+    /// 2026-09-21 founder feedback: wrapped lines within ONE lyric row read too tight next to
+    /// Apple Music's lyrics panel (their second wrapped line sits noticeably lower). Shared by
+    /// BOTH text engines — `NativeLyricsTextSweepLayout.mainParagraphStyle` (active-line glyph
+    /// layout / bitmap rects) and the whole-line dim base's `attributedText`/`displayWrapped`
+    /// calls in `NativeLyricsRowView` — so wrap points and inter-line pitch stay identical
+    /// between engines (banned-patterns.md's two-text-engine rule). Scales with the font size
+    /// (so a 0.8×-scaled background/和声 row gets a proportionally smaller gap too): 24pt → 4pt.
+    let mainLineSpacing: CGFloat
 
     init(scale: CGFloat = 1.0) {
         mainFontSize = 24 * scale
         translationFontSize = 24 * 0.67 * scale
+        mainLineSpacing = (24 * scale * 0.18).rounded()
     }
 
     /// Convenience: the scale a render plan should use for `line`.
