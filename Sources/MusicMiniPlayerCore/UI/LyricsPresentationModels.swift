@@ -688,10 +688,28 @@ struct LyricsPresentationPendingWave {
 /// progress-bar scrub) also forces a seek even for a +1 step that would otherwise look natural.
 enum NativeLyricsSeekClassifier {
     static func isSeek(previousIndex: Int?, liveIndex: Int, explicitSeek: Bool) -> Bool {
+        isSeek(previousIndex: previousIndex, liveIndex: liveIndex, explicitSeek: explicitSeek, naturalNextIndex: previousIndex.map { $0 + 1 })
+    }
+
+    /// Row-aware variant (2026-09-20 founder: 和声行处硬切、没有波浪). Background rows sit in the
+    /// row array between melody lines but never become the semantic index, so melody→melody
+    /// advance is `previous + 1 + (background rows in between)`. The caller supplies the index of
+    /// the next NON-background row after `previous` as `naturalNextIndex`; stepping exactly onto
+    /// it is natural playback, anything else is still a seek.
+    static func isSeek(previousIndex: Int?, liveIndex: Int, explicitSeek: Bool, naturalNextIndex: Int?) -> Bool {
         if explicitSeek { return true }
         guard let previous = previousIndex else { return false }
-        if liveIndex == previous || liveIndex == previous + 1 { return false }
+        if liveIndex == previous { return false }
+        if let naturalNextIndex, liveIndex == naturalNextIndex { return false }
         return true
+    }
+
+    /// The next melody (non-background) row index after `index`, in row order; nil at the end.
+    static func naturalNextIndex(after index: Int, rows: [LayerBackedLyricRow]) -> Int? {
+        rows.lazy
+            .filter { $0.index > index && !$0.displayLine.line.isBackground && !$0.isPrelude }
+            .map(\.index)
+            .min()
     }
 
     // The playback clock may step BACKWARD by up to the clock's non-seek window when a poll resync

@@ -1761,7 +1761,10 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
             || NativeLyricsSeekClassifier.isSeek(
                 previousIndex: nativeSemanticCurrentIndex,
                 liveIndex: liveIndex,
-                explicitSeek: explicitSeek
+                explicitSeek: explicitSeek,
+                naturalNextIndex: nativeSemanticCurrentIndex.map {
+                    NativeLyricsSeekClassifier.naturalNextIndex(after: $0, rows: configuration.rows)
+                } ?? nil
             )
         // Deliberately narrower than `isSeek` (which also fires for a passive backward CLOCK
         // JITTER/resync beyond resyncRewindTolerance — `clock.step == .seek` — and for

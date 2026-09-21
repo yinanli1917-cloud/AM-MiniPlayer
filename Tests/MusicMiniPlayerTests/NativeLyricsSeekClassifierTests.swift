@@ -31,4 +31,15 @@ final class NativeLyricsSeekClassifierTests: XCTestCase {
         XCTAssertTrue(NativeLyricsSeekClassifier.isSeek(previousIndex: 5, liveIndex: 6, explicitSeek: true))
         XCTAssertTrue(NativeLyricsSeekClassifier.isSeek(previousIndex: 5, liveIndex: 5, explicitSeek: true))
     }
+
+    /// 2026-09-20: a background (和声) row between two melody lines must not turn the melody→melody
+    /// advance (+2 in row order) into a seek — that snapped instead of waving at every harmony line.
+    func testAdvanceOverBackgroundRowIsNatural() {
+        XCTAssertFalse(NativeLyricsSeekClassifier.isSeek(previousIndex: 5, liveIndex: 7, explicitSeek: false, naturalNextIndex: 7))
+        // Skipping PAST the natural successor is still a seek.
+        XCTAssertTrue(NativeLyricsSeekClassifier.isSeek(previousIndex: 5, liveIndex: 8, explicitSeek: false, naturalNextIndex: 7))
+        XCTAssertTrue(NativeLyricsSeekClassifier.isSeek(previousIndex: 5, liveIndex: 6, explicitSeek: false, naturalNextIndex: 7))
+        // Explicit seek still wins.
+        XCTAssertTrue(NativeLyricsSeekClassifier.isSeek(previousIndex: 5, liveIndex: 7, explicitSeek: true, naturalNextIndex: 7))
+    }
 }
