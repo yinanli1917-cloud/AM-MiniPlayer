@@ -270,6 +270,7 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     private var geometryProbeTicksRemaining = 0
     private var geometryProbeTick = 0
     private var geometryProbeRing: [[String]] = []
+    private static let geometryProbeEnabled = UserDefaults.standard.bool(forKey: "NanoPodGeomProbe")
     // Memoizes the ONE genuinely expensive part of `runtimeConfiguration(from:)` — the
     // `NativeLyricsHeightAccumulator.accumulatedHeights(...)` O(rows) recomputation, which used
     // to run unconditionally on every call (several calls per presentation tick, per the founder's
@@ -3072,7 +3073,8 @@ final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
         // 2026-09-21 switch-window geometry probe (armed with the mask trace). Every tick builds the
         // lines for rows active-1…active+3 into a 3-tick ring buffer; a switch flushes the ring
         // (k=-2,-1,0 = the pre-switch state) and then keeps recording for 40 ticks.
-        if NativeLyricsMaskTrace.isArmedForProbes {
+        // Expensive (5 rows × presentation() reads per tick): only with the separate NanoPodGeomProbe pref.
+        if NativeLyricsMaskTrace.isArmedForProbes, Self.geometryProbeEnabled {
             let switched = activeBefore != nativeSemanticCurrentIndex
             if switched { geometryProbeTicksRemaining = 40; geometryProbeTick = 0 }
             if let active = nativeSemanticCurrentIndex {

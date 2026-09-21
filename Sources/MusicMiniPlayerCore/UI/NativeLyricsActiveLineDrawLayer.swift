@@ -240,6 +240,10 @@ final class NativeLyricsActiveLineDrawLayer: CALayer {
     /// finalizes and swaps back to the whole-line base (the on-screen brightness "pop"). This
     /// keeps the visible dim tile in lockstep with that same compensated channel every frame,
     /// so finalize is a no-op: both paths already agree on the current brightness.
+    var probeRecentInputs: [(Double, [CGFloat], CGFloat, CGFloat)] {
+        recentInputs.map { ($0.0, $0.1, $0.3, $0.4) }
+    }
+
     func setDimAlpha(_ alpha: CGFloat) {
         let clamped = Float(max(0, min(1, alpha)))
         guard dimContainer.opacity != clamped else { return }

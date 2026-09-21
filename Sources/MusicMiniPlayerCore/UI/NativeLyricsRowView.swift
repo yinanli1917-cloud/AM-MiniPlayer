@@ -1075,6 +1075,10 @@ final class NativeLyricsRowView: NSView {
     /// dominated presentationTick).
     private(set) var debugWordGlyphColorAssignCount = 0
     /// 2026-09-21 switch-window probe accessors (release-safe, read-only).
+    /// Test-only: the draw layer's recent frame inputs (ms timestamp, per-run floatY, dimAlpha, brightAlpha).
+    var probeRecentDrawInputs: [(Double, [CGFloat], CGFloat, CGFloat)] {
+        activeLineDrawLayer.probeRecentInputs
+    }
     var probeMainTextFrame: CGRect { mainTextLayer.frame }
     var probeMainTextPresentationFrame: CGRect { mainTextLayer.presentation()?.frame ?? mainTextLayer.frame }
     var probeActiveDrawFrame: CGRect { activeLineDrawLayer.frame }
