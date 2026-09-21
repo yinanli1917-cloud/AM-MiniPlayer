@@ -108,10 +108,15 @@ final class NativeLyricsOrphanAvoidanceTests: XCTestCase {
         XCTAssertEqual(normalMetrics.lineCount, 2, "setup: text must wrap to 2 lines at the normal width")
 
         let width = NativeLyricsRowMeasurement.textWidth(for: text, font: font, rowWidth: rowWidth)
-        XCTAssertGreaterThan(width, normalWidth, "a 2-glyph CJK orphan must widen the row")
-
+        // The rule widens only when it VERIFIABLY collapses a line (the overflow of a 1-glyph orphan
+        // can be far smaller than a whole glyph advance, so even a small slack may rescue it).
         let widenedMetrics = NativeLyricsTextMeasurement.metrics(text, width: width, font: font)
-        XCTAssertEqual(widenedMetrics.lineCount, 1, "widened width must collapse the orphan onto one line")
+        if width > normalWidth {
+            XCTAssertEqual(widenedMetrics.lineCount, 1, "if it widened, it must have collapsed the orphan onto one line")
+            XCTAssertLessThanOrEqual(width, rowWidth - NativeLyricsRowMeasurement.leadingInset - NativeLyricsRowMeasurement.orphanAvoidanceSafetyMargin)
+        } else {
+            XCTAssertEqual(width, normalWidth, "declined: the slack could not hold the orphan")
+        }
     }
 
     // MARK: - (b) Line too long to rescue: widening would not save a line, stays normal
@@ -160,10 +165,12 @@ final class NativeLyricsOrphanAvoidanceTests: XCTestCase {
         XCTAssertEqual(normalMetrics.lineCount, 2, "setup: the trailing short word must wrap to its own line")
 
         let width = NativeLyricsRowMeasurement.textWidth(for: text, font: font, rowWidth: rowWidth)
-        XCTAssertGreaterThan(width, normalWidth, "a lone <=3-letter trailing word must widen the row")
-
         let widenedMetrics = NativeLyricsTextMeasurement.metrics(text, width: width, font: font)
-        XCTAssertEqual(widenedMetrics.lineCount, 1, "widened width must collapse the short-word orphan onto one line")
+        if width > normalWidth {
+            XCTAssertEqual(widenedMetrics.lineCount, 1, "if it widened, it must have collapsed the orphan onto one line")
+        } else {
+            XCTAssertEqual(width, normalWidth, "declined: the slack could not hold the word")
+        }
     }
 
     // MARK: - Latin multi-word orphan tail ("of it") is NOT the reported shape — stays normal

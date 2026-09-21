@@ -10,7 +10,7 @@ enum NativeLyricsRowMeasurement {
     // interlude-dot x anchor, hover background frame, NativeLyricsRowScale's scale pivot X, and
     // this file's own `textWidth` orphan-avoidance slack).
     static let leadingInset: CGFloat = 32
-    static let trailingInset: CGFloat = 32
+    static let trailingInset: CGFloat = 12
     static let preludeHeight: CGFloat = 46
     static let preludeDotContainerTopInset: CGFloat = 8
     static let preludeDotContainerHeight: CGFloat = 30
