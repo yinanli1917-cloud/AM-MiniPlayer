@@ -22,6 +22,46 @@ struct LyricTimedDisplayToken: Equatable {
     let text: String
 }
 
+// MARK: - Plan A: real-wrap-driven splitting (2026-09-22, founder-approved)
+//
+// Supersedes the unit-based `segments`/`balancedSegments` trigger for
+// LyricsView.makeDisplayLyricLines' split decision: whether and where a line
+// splits is now driven by the RENDERER'S OWN real NSLayoutManager wrap
+// measurement (LyricDisplayLineMeasurement) at the CURRENT lyrics column
+// width, not an estimated character-unit budget -- see
+// docs/lyrics-ux-contract.md §E and research/long-line-eval-2026-09-22.md.
+// The `segments`/`balancedSegments`/`wordSegments`/`estimatedVisualLineCount`
+// functions above are left as-is (still covered by their existing tests) but
+// are no longer called from the production split path.
+
+/// Options for `LyricDisplaySegmenter.realWrapPieces` / `realWrapWordPieces` / `proportionalTiming`.
+struct LyricRealWrapSplitOptions: Equatable {
+    /// Every displayed piece should fit within this many real visual lines. A
+    /// single unbreakable token that itself exceeds this is exempt (never
+    /// split inside a word).
+    let maxVisualLinesPerPiece: Int
+    /// A piece at or below this glyph count (after trimming whitespace) is an
+    /// orphan; the splitter avoids leaving one when a rebalance can prevent it.
+    let minOrphanGlyphCount: Int
+    /// A line-level piece whose proportional duration would fall below this
+    /// floor is folded into a neighbour instead of flashing on screen.
+    let minimumPieceDuration: TimeInterval
+
+    static let `default` = LyricRealWrapSplitOptions(
+        maxVisualLinesPerPiece: 2,
+        minOrphanGlyphCount: 2,
+        minimumPieceDuration: 1.2
+    )
+}
+
+/// A text piece with its own start/end time -- line-level proportional timing
+/// or word-level exact timing, both produced by `LyricDisplaySegmenter`.
+struct LyricTimedPiece: Equatable {
+    let text: String
+    let startTime: TimeInterval
+    let endTime: TimeInterval
+}
+
 enum LyricDisplaySegmenter {
     private static let phraseBoundaryWhitespaceDuration: TimeInterval = 0.35
 
@@ -681,5 +721,303 @@ enum LyricDisplaySegmenter {
 
     private static func isThai(_ scalar: UnicodeScalar) -> Bool {
         (0x0E00...0x0E7F).contains(Int(scalar.value))
+    }
+
+    // MARK: - Plan A: line-level text splitting (real wrap, priority break points)
+
+    /// Splits `text` into pieces that each fit within
+    /// `options.maxVisualLinesPerPiece` real visual lines at `rowWidth`
+    /// (measured via `LyricDisplayLineMeasurement`, the SAME NSLayoutManager
+    /// recipe the native renderer measures with). Break points, in priority
+    /// order: strong punctuation > weak punctuation > script-run boundary >
+    /// whitespace nearest the balanced midpoint > (no delimiters at all, and
+    /// the text is entirely a compact script -- CJK/kana/hangul/thai, which
+    /// carries no inter-word spacing) character boundary nearest the balanced
+    /// midpoint. Never splits inside a Latin word (Latin text with no
+    /// delimiter at all falls through every tier and is returned whole). An
+    /// orphan piece (<= `options.minOrphanGlyphCount` glyphs) is folded into
+    /// a neighbour as a final pass.
+    static func realWrapPieces(
+        for text: String,
+        rowWidth: CGFloat,
+        isBackground: Bool = false,
+        options: LyricRealWrapSplitOptions = .default
+    ) -> [String] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let pieces = splitRecursively(trimmed, rowWidth: rowWidth, isBackground: isBackground, options: options)
+        return mergeOrphanTextPieces(pieces, minGlyphs: options.minOrphanGlyphCount)
+    }
+
+    private static func splitRecursively(
+        _ text: String,
+        rowWidth: CGFloat,
+        isBackground: Bool,
+        options: LyricRealWrapSplitOptions
+    ) -> [String] {
+        guard LyricDisplayLineMeasurement.visualLineCount(for: text, rowWidth: rowWidth, isBackground: isBackground) > options.maxVisualLinesPerPiece else {
+            return [text]
+        }
+        guard let cut = bestRealWrapCut(in: text, options: options) else {
+            return [text] // unbreakable token -- allowed to exceed the target
+        }
+        let left = String(text[text.startIndex..<cut]).trimmingCharacters(in: .whitespaces)
+        let right = String(text[cut...]).trimmingCharacters(in: .whitespaces)
+        guard !left.isEmpty, !right.isEmpty else { return [text] }
+        return splitRecursively(left, rowWidth: rowWidth, isBackground: isBackground, options: options)
+            + splitRecursively(right, rowWidth: rowWidth, isBackground: isBackground, options: options)
+    }
+
+    /// Finds the best `String.Index` to cut `text` at, per the priority order
+    /// documented on `realWrapPieces`. Returns nil when there is no
+    /// candidate at all (an unbreakable token).
+    private static func bestRealWrapCut(in text: String, options: LyricRealWrapSplitOptions) -> String.Index? {
+        let chars = Array(text)
+        guard chars.count > 1 else { return nil }
+        let balancedOffset = chars.count / 2
+
+        func pick(_ offsets: [Int]) -> Int? {
+            guard !offsets.isEmpty else { return nil }
+            let safe = offsets.filter { $0 >= options.minOrphanGlyphCount && chars.count - $0 >= options.minOrphanGlyphCount }
+            let pool = safe.isEmpty ? offsets : safe
+            return pool.min(by: { abs($0 - balancedOffset) < abs($1 - balancedOffset) })
+        }
+
+        // 1-2. Strong / weak punctuation: cut right after the punctuation
+        // character (and any immediately-following closing quote/bracket).
+        let strongOffsets = punctuationCutOffsets(chars, isBoundary: isStrongBoundary)
+        let weakOffsets = punctuationCutOffsets(chars, isBoundary: isWeakBoundary)
+
+        // 3. Script-run boundary: the point where the Unicode script class
+        // changes (e.g. CJK -> Latin). Only a genuine compact<->Latin
+        // transition counts -- NOT a transition into/out of `.other`
+        // (apostrophes, hyphens, quotes, symbols), which would otherwise
+        // treat punctuation glued to a word (e.g. the apostrophe in "Don't")
+        // as a script boundary and cut straight through the middle of it.
+        var scriptOffsets: [Int] = []
+        for i in 1..<chars.count {
+            let prev = scriptClass(chars[i - 1])
+            let next = scriptClass(chars[i])
+            guard prev != next, (prev == .compact || prev == .latin), (next == .compact || next == .latin) else { continue }
+            scriptOffsets.append(i)
+        }
+
+        // 4. Whitespace: cut at the start of the next non-whitespace run.
+        var whitespaceOffsets: [Int] = []
+        var i = 0
+        while i < chars.count {
+            if chars[i].isWhitespace {
+                var j = i
+                while j < chars.count, chars[j].isWhitespace { j += 1 }
+                if j < chars.count { whitespaceOffsets.append(j) }
+                i = j
+            } else {
+                i += 1
+            }
+        }
+
+        // 5. Compact-script (CJK/kana/hangul/thai) character boundary --
+        // ONLY when the whole string has no punctuation and no whitespace to
+        // fall back on AND is entirely a compact script (those scripts do
+        // not mark word boundaries with spaces, so cutting between two
+        // characters is not "inside a word" the way it would be for Latin).
+        var compactScriptOffsets: [Int] = []
+        if strongOffsets.isEmpty, weakOffsets.isEmpty, whitespaceOffsets.isEmpty,
+           chars.allSatisfy({ scriptClass($0) == .compact }) {
+            compactScriptOffsets = Array(1..<chars.count)
+        }
+
+        if let offset = pick(strongOffsets) { return text.index(text.startIndex, offsetBy: offset) }
+        if let offset = pick(weakOffsets) { return text.index(text.startIndex, offsetBy: offset) }
+        if let offset = pick(scriptOffsets) { return text.index(text.startIndex, offsetBy: offset) }
+        if let offset = pick(whitespaceOffsets) { return text.index(text.startIndex, offsetBy: offset) }
+        if let offset = pick(compactScriptOffsets) { return text.index(text.startIndex, offsetBy: offset) }
+        return nil
+    }
+
+    private static func punctuationCutOffsets(_ chars: [Character], isBoundary: (Character) -> Bool) -> [Int] {
+        var offsets: [Int] = []
+        for i in chars.indices where isBoundary(chars[i]) {
+            var j = i + 1
+            while j < chars.count, chars[j].isWhitespace || "\"'\u{201d}\u{2019}\u{3011}\u{300d}\u{300f})".contains(chars[j]) { j += 1 }
+            if j < chars.count { offsets.append(j) }
+        }
+        return offsets
+    }
+
+    private enum ScriptClass: Equatable {
+        case compact // CJK / kana / hangul / thai -- no inter-word spacing
+        case latin
+        case whitespace
+        case other
+    }
+
+    private static func scriptClass(_ character: Character) -> ScriptClass {
+        if character.isWhitespace { return .whitespace }
+        guard let scalar = character.unicodeScalars.first else { return .other }
+        if LanguageUtils.isCJKScalar(scalar) || isKana(scalar) || isHangul(scalar) || isThai(scalar) {
+            return .compact
+        }
+        if scalar.isASCII, CharacterSet.letters.contains(scalar) || CharacterSet.decimalDigits.contains(scalar) {
+            return .latin
+        }
+        return .other
+    }
+
+    private static func mergeOrphanTextPieces(_ pieces: [String], minGlyphs: Int) -> [String] {
+        guard pieces.count > 1 else { return pieces }
+        var result = pieces
+        var index = 0
+        while index < result.count {
+            let glyphCount = result[index].trimmingCharacters(in: .whitespacesAndNewlines).count
+            guard glyphCount > 0, glyphCount <= minGlyphs, result.count > 1 else { index += 1; continue }
+            if index > 0 {
+                result[index - 1] += textJoinSeparator(result[index - 1], result[index]) + result[index]
+                result.remove(at: index)
+            } else {
+                result[index + 1] = result[index] + textJoinSeparator(result[index], result[index + 1]) + result[index + 1]
+                result.remove(at: index)
+            }
+        }
+        return result
+    }
+
+    private static func textJoinSeparator(_ left: String, _ right: String) -> String {
+        guard let lastLeft = left.last, let firstRight = right.first else { return "" }
+        func isCompact(_ ch: Character) -> Bool {
+            guard let scalar = ch.unicodeScalars.first else { return false }
+            return LanguageUtils.isCJKScalar(scalar) || isKana(scalar) || isHangul(scalar) || isThai(scalar)
+        }
+        return (isCompact(lastLeft) || isCompact(firstRight)) ? "" : " "
+    }
+
+    // MARK: - Plan A: line-level timing (proportional to display length, merge short pieces)
+
+    /// Distributes `[lineStart, lineEnd]` across `pieces` proportional to each
+    /// piece's own display length (character count) rather than dividing
+    /// equally, then folds any piece whose resulting duration would fall
+    /// below `options.minimumPieceDuration` into a neighbour (merging text
+    /// too) so it never flashes on screen for a fraction of a second.
+    static func proportionalTiming(
+        for pieces: [String],
+        lineStart: TimeInterval,
+        lineEnd: TimeInterval,
+        options: LyricRealWrapSplitOptions = .default
+    ) -> [LyricTimedPiece] {
+        guard pieces.count > 1 else {
+            return pieces.map { LyricTimedPiece(text: $0, startTime: lineStart, endTime: lineEnd) }
+        }
+        let duration = max(0, lineEnd - lineStart)
+        guard duration > 0 else {
+            return [LyricTimedPiece(text: pieces.joined(), startTime: lineStart, endTime: lineEnd)]
+        }
+
+        var texts = pieces
+        while texts.count > 1 {
+            let weights = texts.map { max(1, $0.trimmingCharacters(in: .whitespacesAndNewlines).count) }
+            let totalWeight = weights.reduce(0, +)
+            let pieceDurations = weights.map { duration * Double($0) / Double(totalWeight) }
+            guard let shortIndex = pieceDurations.firstIndex(where: { $0 < options.minimumPieceDuration }) else { break }
+            let mergeWithPrevious: Bool
+            if shortIndex == 0 {
+                mergeWithPrevious = false
+            } else if shortIndex == texts.count - 1 {
+                mergeWithPrevious = true
+            } else {
+                mergeWithPrevious = weights[shortIndex - 1] <= weights[shortIndex + 1]
+            }
+            if mergeWithPrevious {
+                texts[shortIndex - 1] += textJoinSeparator(texts[shortIndex - 1], texts[shortIndex]) + texts[shortIndex]
+                texts.remove(at: shortIndex)
+            } else {
+                texts[shortIndex + 1] = texts[shortIndex] + textJoinSeparator(texts[shortIndex], texts[shortIndex + 1]) + texts[shortIndex + 1]
+                texts.remove(at: shortIndex)
+            }
+        }
+
+        guard texts.count > 1 else {
+            return [LyricTimedPiece(text: texts.joined(), startTime: lineStart, endTime: lineEnd)]
+        }
+
+        let weights = texts.map { max(1, $0.trimmingCharacters(in: .whitespacesAndNewlines).count) }
+        let totalWeight = weights.reduce(0, +)
+        var cursor = lineStart
+        var result: [LyricTimedPiece] = []
+        for (index, text) in texts.enumerated() {
+            let share = Double(weights[index]) / Double(totalWeight)
+            let start = cursor
+            let end = index == texts.count - 1 ? lineEnd : start + duration * share
+            result.append(LyricTimedPiece(text: text, startTime: start, endTime: end))
+            cursor = end
+        }
+        return result
+    }
+
+    // MARK: - Plan A: word-level splitting (exact timing; breath-gap break points)
+
+    /// Splits `words` (a syllable-synced line) into groups that each fit
+    /// within `options.maxVisualLinesPerPiece` real visual lines at
+    /// `rowWidth`. Each group keeps its own `LyricWord`s verbatim -- the
+    /// caller derives start/end from `group.first`/`group.last`, so timing
+    /// error against the source data is always exactly zero. Break points
+    /// prefer the largest inter-word silence near the balanced midpoint
+    /// (lyric-align "breath split" style -- see
+    /// research/long-line-eval-2026-09-22.md); with no clear pause, falls
+    /// back to the plain balanced word-count midpoint (still a boundary
+    /// BETWEEN words, never inside one -- `LyricWord` is already the atomic
+    /// unit).
+    static func realWrapWordPieces(
+        for words: [LyricWord],
+        rowWidth: CGFloat,
+        options: LyricRealWrapSplitOptions = .default
+    ) -> [[LyricWord]] {
+        guard !words.isEmpty else { return [] }
+        let text = displayText(forWords: words)
+        guard LyricDisplayLineMeasurement.visualLineCount(for: text, rowWidth: rowWidth) > options.maxVisualLinesPerPiece else {
+            return [words]
+        }
+        guard words.count > 1, let cutIndex = bestBreathGapCutIndex(words: words) else {
+            return [words] // a single atomic word/character token -- unbreakable
+        }
+        let left = Array(words[..<cutIndex])
+        let right = Array(words[cutIndex...])
+        return realWrapWordPieces(for: left, rowWidth: rowWidth, options: options)
+            + realWrapWordPieces(for: right, rowWidth: rowWidth, options: options)
+    }
+
+    private static func balancedWordSplitIndex(_ words: [LyricWord]) -> Int? {
+        guard words.count > 1 else { return nil }
+        let lens = words.map { max(1, $0.word.count) }
+        let total = lens.reduce(0, +)
+        var running = 0
+        var bestIndex = 1
+        var bestDiff = Int.max
+        for i in 1..<words.count {
+            running += lens[i - 1]
+            let diff = abs(2 * running - total)
+            if diff < bestDiff { bestDiff = diff; bestIndex = i }
+        }
+        return bestIndex
+    }
+
+    private static func bestBreathGapCutIndex(words: [LyricWord]) -> Int? {
+        guard let balanced = balancedWordSplitIndex(words) else { return nil }
+        let windowRadius = max(1, words.count / 3)
+        let lo = max(1, balanced - windowRadius)
+        let hi = min(words.count - 1, balanced + windowRadius)
+        guard lo <= hi else { return balanced }
+        var bestIndex = balanced
+        var bestGap: TimeInterval = -1
+        for i in lo...hi {
+            let gap = words[i].startTime - words[i - 1].endTime
+            if gap > bestGap {
+                bestGap = gap
+                bestIndex = i
+            }
+        }
+        // A gap this small isn't a genuine breath -- still cut, just at the
+        // plain balanced word boundary rather than pretending a micro-gap is
+        // meaningful.
+        return bestGap >= 0.12 ? bestIndex : balanced
     }
 }

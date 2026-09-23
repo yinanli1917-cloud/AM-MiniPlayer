@@ -31,6 +31,13 @@ private struct CacheState {
     var heightCacheInvalidated = true
     var lyricsContainerHeight: CGFloat = 300
     var nativeEstimatedRowWidth: CGFloat = 0
+    /// Plan A (2026-09-22): the lyrics column width `makeDisplayLyricLines`
+    /// last split against. Defaults to the app's first-launch window width
+    /// (MusicMiniPlayerApp.swift windowSize=250) so the very first split --
+    /// before GeometryReader ever reports the real width -- is already a
+    /// reasonable guess rather than "no width at all" (which would force
+    /// every line to stay unsplit until the real width arrives).
+    var segmentationRowWidth: CGFloat = 250
     /// Cached renderedIndices — invalidated only when lyrics change
     var renderedIndicesCached: [Int] = []
     var renderedIndicesValid = false
@@ -72,7 +79,6 @@ private let lyricSteadyRenderVisibleRange = 6
 // `asyncAfter` survives the generation check. 50ms is enough to absorb that
 // burst without reading as a perceptible delay.
 private let lyricPageSwitchTranslationDeferDuration: TimeInterval = 0.05
-private let lyricMinimumGeneratedSegmentDuration: TimeInterval = 1.65
 private let lyricContentLeadingInset: CGFloat = 32
 private let lyricContentTrailingInset: CGFloat = 32
 
@@ -525,6 +531,19 @@ public struct LyricsView: View {
     /// identical commits 1-4ms apart) and every redundant commit re-pokes the
     /// native surface = a visible "refresh". 0 = nothing committed yet.
     @State private var lastCommittedRowsFingerprint: Int = 0
+    /// Plan A (2026-09-22, docs/lyrics-ux-contract.md §E): the split decision
+    /// for a long line now needs the REAL lyrics column width (real
+    /// NSLayoutManager wrap, not a unit estimate) -- so unlike the other
+    /// inputs in `displayLineInputFingerprint`, a width change alone must be
+    /// able to trigger a rebuild even though `lyrics`/`showTranslation`/etc.
+    /// haven't changed. `hasEstablishedSegmentationWidth` lets the FIRST width
+    /// this view instance observes (e.g. right after a track loads) apply
+    /// immediately with no debounce -- only a width CHANGE afterwards (live
+    /// window resizing) is debounced, so a fresh song never briefly renders
+    /// against a guessed default width and then visibly reflows.
+    @State private var hasEstablishedSegmentationWidth = false
+    @State private var lyricsSegmentationWidthGeneration: Int = 0
+    private let lyricsSegmentationWidthDebounceDuration: TimeInterval = 0.15
     @State private var contentTransitionOpacity: Double = 1
     // "向下生长" intro: the whole lyrics page drops down into place + fades on every track load.
     // Paired with contentTransitionOpacity and animated together in refreshDisplayLineCache. This
@@ -1009,6 +1028,7 @@ public struct LyricsView: View {
                 : liveIndex
             let isLineWaveActive = !wave.workItems.isEmpty
             let _ = updateLyricsContainerHeight(containerHeight)
+            let _ = updateLyricsSegmentationWidthIfNeeded(geo.size.width)
             // Clamp the active-line anchor so a tall wrapped line keeps its sung text visible:
             // never lifted above the top header inset, and pulled above the bottom controls
             // when it still fits. The native height cache primes ASYNCHRONOUSLY, so a freshly
@@ -2017,12 +2037,24 @@ public struct LyricsView: View {
         LyricPreludeGlyph.isEllipsis(text)
     }
 
-    private func makeDisplayLyricLines(from lyrics: [LyricLine]) -> [DisplayLyricLine] {
+    // Plan A (2026-09-22, founder-approved; docs/lyrics-ux-contract.md §E,
+    // research/long-line-eval-2026-09-22.md): the split trigger is now the
+    // RENDERER'S OWN real NSLayoutManager wrap at the CURRENT lyrics column
+    // width (`LyricDisplayLineMeasurement`, called through
+    // `LyricDisplaySegmenter.realWrapPieces`/`realWrapWordPieces`), not the
+    // old unit-based estimate. Prelude/instrumental/background rows are
+    // unchanged (never split). Word-level (hasSyllableSync) rows now DO
+    // split -- each piece carries its own real `LyricWord`s, so its timing
+    // is exact, never estimated. Line-level pieces get proportional (not
+    // equal) timing, with short pieces folded into a neighbour. The full
+    // translation attaches to the FIRST piece only; later pieces carry none
+    // (never chopped mid-sentence to match an unrelated split count).
+    private func makeDisplayLyricLines(from lyrics: [LyricLine], rowWidth: CGFloat) -> [DisplayLyricLine] {
         var result: [DisplayLyricLine] = []
         result.reserveCapacity(lyrics.count)
 
         for (sourceIndex, line) in lyrics.enumerated() {
-            if isPreludeEllipsis(line.text) || isInstrumentalNotice(line.text) {
+            if isPreludeEllipsis(line.text) || isInstrumentalNotice(line.text) || line.isBackground {
                 result.append(DisplayLyricLine(
                     id: "\(sourceIndex)-0",
                     sourceIndex: sourceIndex,
@@ -2034,19 +2066,46 @@ public struct LyricsView: View {
             }
 
             if line.hasSyllableSync {
-                result.append(DisplayLyricLine(
-                    id: "\(sourceIndex)-0",
-                    sourceIndex: sourceIndex,
-                    segmentIndex: 0,
-                    segmentCount: 1,
-                    line: line
-                ))
+                let wordGroups = LyricDisplaySegmenter.realWrapWordPieces(for: line.words, rowWidth: rowWidth)
+                guard !shouldKeepDisplayLineUnsplit(pieceCount: wordGroups.count) else {
+                    result.append(DisplayLyricLine(
+                        id: "\(sourceIndex)-0",
+                        sourceIndex: sourceIndex,
+                        segmentIndex: 0,
+                        segmentCount: 1,
+                        line: line
+                    ))
+                    continue
+                }
+                let segmentCount = wordGroups.count
+                for (segmentIndex, group) in wordGroups.enumerated() {
+                    // Timing error vs. the source data is exactly zero by
+                    // construction: start/end come straight from the group's
+                    // own real word timestamps, never estimated.
+                    let start = group.first?.startTime ?? line.startTime
+                    let end = group.last?.endTime ?? line.endTime
+                    let segmentLine = LyricLine(
+                        text: LyricDisplaySegmenter.displayText(forWords: group),
+                        startTime: start,
+                        endTime: end,
+                        words: group,
+                        translation: segmentIndex == 0 ? line.translation : nil,
+                        isBackground: false
+                    )
+                    result.append(DisplayLyricLine(
+                        id: "\(sourceIndex)-\(segmentIndex)",
+                        sourceIndex: sourceIndex,
+                        segmentIndex: segmentIndex,
+                        segmentCount: segmentCount,
+                        line: segmentLine
+                    ))
+                }
                 continue
             }
 
-            let textSegments = LyricDisplaySegmenter.segments(for: line.text, options: .mainLyric)
-            let segmentCount = max(textSegments.count, 1)
-            if shouldKeepDisplayLineUnsplit(line, generatedSegmentCount: segmentCount) {
+            let textPieces = LyricDisplaySegmenter.realWrapPieces(for: line.text, rowWidth: rowWidth)
+            let timedPieces = displayTiming(for: line, textPieces: textPieces)
+            guard !shouldKeepDisplayLineUnsplit(pieceCount: timedPieces.count) else {
                 result.append(DisplayLyricLine(
                     id: "\(sourceIndex)-0",
                     sourceIndex: sourceIndex,
@@ -2056,28 +2115,15 @@ public struct LyricsView: View {
                 ))
                 continue
             }
-            let translationSegments = line.translation.map {
-                LyricDisplaySegmenter.balancedSegments(
-                    for: $0,
-                    count: segmentCount,
-                    options: .translation
-                )
-            } ?? []
-            for segmentIndex in 0..<segmentCount {
-                let timing = displayTiming(
-                    for: line,
-                    segmentIndex: segmentIndex,
-                    segmentCount: segmentCount,
-                    wordSegment: []
-                )
+            let segmentCount = timedPieces.count
+            for (segmentIndex, piece) in timedPieces.enumerated() {
                 let segmentLine = LyricLine(
-                    text: textSegments.indices.contains(segmentIndex) ? textSegments[segmentIndex] : line.text,
-                    startTime: timing.start,
-                    endTime: timing.end,
+                    text: piece.text,
+                    startTime: piece.startTime,
+                    endTime: piece.endTime,
                     words: [],
-                    translation: translationSegments.indices.contains(segmentIndex)
-                        ? translationSegments[segmentIndex]
-                        : nil
+                    translation: segmentIndex == 0 ? line.translation : nil,
+                    isBackground: false
                 )
                 result.append(DisplayLyricLine(
                     id: "\(sourceIndex)-\(segmentIndex)",
@@ -2092,32 +2138,21 @@ public struct LyricsView: View {
         return result
     }
 
-    private func shouldKeepDisplayLineUnsplit(
-        _ line: LyricLine,
-        generatedSegmentCount: Int
-    ) -> Bool {
-        guard generatedSegmentCount > 1 else { return true }
-        let duration = line.endTime - line.startTime
-        guard duration.isFinite, duration > 0 else { return false }
-        return duration / Double(generatedSegmentCount) < lyricMinimumGeneratedSegmentDuration
+    /// A line stays a single, unsplit display row whenever the real-wrap /
+    /// proportional-timing pipeline above produced only one piece (nothing
+    /// needed splitting, or a duration-driven merge collapsed everything
+    /// back down to one).
+    private func shouldKeepDisplayLineUnsplit(pieceCount: Int) -> Bool {
+        pieceCount <= 1
     }
 
-    private func displayTiming(
-        for line: LyricLine,
-        segmentIndex: Int,
-        segmentCount: Int,
-        wordSegment: [LyricWord]
-    ) -> (start: TimeInterval, end: TimeInterval) {
-        if let first = wordSegment.first, let last = wordSegment.last, last.endTime > first.startTime {
-            return (first.startTime, last.endTime)
-        }
-
-        let duration = max(0, line.endTime - line.startTime)
-        guard segmentCount > 1, duration > 0 else { return (line.startTime, line.endTime) }
-        let segmentDuration = duration / Double(segmentCount)
-        let start = line.startTime + segmentDuration * Double(segmentIndex)
-        let end = segmentIndex == segmentCount - 1 ? line.endTime : start + segmentDuration
-        return (start, end)
+    /// Line-level-only: proportional (character-length-weighted) timing for
+    /// `textPieces`, with short-duration pieces folded into a neighbour --
+    /// see `LyricDisplaySegmenter.proportionalTiming`. Word-level pieces
+    /// never go through this path; their timing comes directly from real
+    /// word timestamps in `makeDisplayLyricLines` above.
+    private func displayTiming(for line: LyricLine, textPieces: [String]) -> [LyricTimedPiece] {
+        LyricDisplaySegmenter.proportionalTiming(for: textPieces, lineStart: line.startTime, lineEnd: line.endTime)
     }
 
     private func displayFirstRealLyricIndex(in displayLines: [DisplayLyricLine]) -> Int {
@@ -2178,7 +2213,13 @@ public struct LyricsView: View {
         }
     }
 
-    private func refreshDisplayLineCache() {
+    /// - Parameter forceRebuild: bypasses the dedup guard below. Used ONLY by
+    ///   `updateLyricsSegmentationWidthIfNeeded` (Plan A, 2026-09-22): a width
+    ///   change alone must be able to rebuild the split even though
+    ///   `lyrics`/`showTranslation`/etc. (the fingerprint's other inputs)
+    ///   haven't changed. Every other call site passes `false` (default) and
+    ///   keeps today's dedup behavior unchanged.
+    private func refreshDisplayLineCache(forceRebuild: Bool = false) {
         // ---- Dedup guard ----------------------------------------------------
         // The staged load fires onChange(lyrics) AND onChange(displayState),
         // each calling here; the stage log showed the same logical state
@@ -2186,10 +2227,10 @@ public struct LyricsView: View {
         // re-pokes the native surface for no reason = a visible "refresh".
         // Bail when the inputs that determine the rows are unchanged.
         let inputFingerprint = displayLineInputFingerprint()
-        guard inputFingerprint != lastCommittedRowsFingerprint else { return }
+        guard forceRebuild || inputFingerprint != lastCommittedRowsFingerprint else { return }
         lastCommittedRowsFingerprint = inputFingerprint
 
-        let displayLines = makeDisplayLyricLines(from: lyricsService.lyrics)
+        let displayLines = makeDisplayLyricLines(from: lyricsService.lyrics, rowWidth: cache.segmentationRowWidth)
         let firstRealDisplayIndex = displayFirstRealLyricIndex(in: displayLines)
         cachedDisplayLines = displayLines
         cachedDisplayLyrics = displayLines.map(\.line)
@@ -2400,6 +2441,38 @@ public struct LyricsView: View {
     private func updateLyricsContainerHeight(_ height: CGFloat) {
         if cache.lyricsContainerHeight != height {
             DispatchQueue.main.async { cache.lyricsContainerHeight = height }
+        }
+    }
+
+    /// Plan A (2026-09-22): the split trigger now needs the real lyrics
+    /// column width. The FIRST width this view instance observes applies
+    /// immediately (no debounce -- there is nothing to coalesce yet, and
+    /// delaying it would make every fresh song render unsplit-then-reflow).
+    /// Any width CHANGE after that (a live window resize) is debounced via a
+    /// generation counter (same pattern as `scheduleTranslationSessionConfigUpdate`)
+    /// so a resize drag rebuilds display lines once it settles, not once per
+    /// frame of the drag.
+    private func updateLyricsSegmentationWidthIfNeeded(_ width: CGFloat) {
+        guard width > 1 else { return }
+        let rounded = width.rounded(.toNearestOrAwayFromZero)
+        guard abs(rounded - cache.segmentationRowWidth) > 0.5 else { return }
+
+        guard hasEstablishedSegmentationWidth else {
+            DispatchQueue.main.async {
+                hasEstablishedSegmentationWidth = true
+                cache.segmentationRowWidth = rounded
+                refreshDisplayLineCache(forceRebuild: true)
+            }
+            return
+        }
+
+        lyricsSegmentationWidthGeneration += 1
+        let generation = lyricsSegmentationWidthGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + lyricsSegmentationWidthDebounceDuration) {
+            guard lyricsSegmentationWidthGeneration == generation else { return } // superseded mid-debounce
+            guard abs(rounded - cache.segmentationRowWidth) > 0.5 else { return } // already applied
+            cache.segmentationRowWidth = rounded
+            refreshDisplayLineCache(forceRebuild: true)
         }
     }
 

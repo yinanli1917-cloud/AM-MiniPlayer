@@ -1575,7 +1575,20 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
-    func testWordLevelLyricsBypassDisplayChunking() throws {
+    // 2026-09-22 Plan A (founder-approved, docs/lyrics-ux-contract.md §E,
+    // research/long-line-eval-2026-09-22.md): word-level (hasSyllableSync)
+    // lines are NOW split when they real-wrap past the visual-line target --
+    // this test used to assert the OPPOSITE (word-level lines never split at
+    // all), which was exactly the founder's literal complaint (a single
+    // syllable-synced line could wrap 4+ visual lines and fill the window).
+    // The invariant this test protects now: splitting still goes through
+    // `realWrapWordPieces` (real word-gap break points, never the old
+    // whitespace-timed-token `wordSegments` helper, which was designed for a
+    // different call site and doesn't measure real visual-line wrap), and
+    // each resulting piece's timing must still come from real LyricWord
+    // timestamps -- never an estimate -- so sentence breaks and wave geometry
+    // stay tied to the actual sung timing, not a guess.
+    func testWordLevelLyricsSplitViaRealWrapWithExactWordTiming() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -1591,11 +1604,15 @@ final class RapidSwitchTests: XCTestCase {
 
         XCTAssertTrue(
             body.contains("if line.hasSyllableSync"),
-            "Word-level lyrics must keep one source line as one display line."
+            "Word-level lyrics must still be handled by their own branch (real-wrap split, not the line-level text splitter)."
         )
-        XCTAssertFalse(
-            body.contains("wordSegments"),
-            "Display chunking must not split word-level lyrics into virtual rows; that changes sentence breaks and wave geometry."
+        XCTAssertTrue(
+            body.contains("LyricDisplaySegmenter.realWrapWordPieces(for: line.words, rowWidth: rowWidth)"),
+            "Word-level splitting must go through the real-wrap word splitter (breath-gap break points, real visual-line measurement) -- not LyricDisplaySegmenter.wordSegments, which flushes on the FIRST >=0.35s gap rather than measuring real wrap or preferring a balanced cut."
+        )
+        XCTAssertTrue(
+            body.contains("let start = group.first?.startTime ?? line.startTime") && body.contains("let end = group.last?.endTime ?? line.endTime"),
+            "Each split word-level piece's timing must come directly from its own group's real LyricWord timestamps, never an estimate."
         )
     }
 

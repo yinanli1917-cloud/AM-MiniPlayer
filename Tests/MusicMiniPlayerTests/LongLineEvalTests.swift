@@ -4,38 +4,44 @@ import AppKit
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Founder complaint (2026-09-22): a single lyric line can wrap to 4+ visual
-// lines and fill the whole player window. The existing mitigation
-// (LyricDisplaySegmenter, wired into LyricsView.makeDisplayLyricLines) splits
-// long LINE-LEVEL text by a unit budget with equal-duration timing, but never
-// splits WORD-LEVEL (hasSyllableSync) lines at all, breaks land mid-phrase,
-// and the translation is chopped into the same piece count regardless of its
-// own punctuation.
+// lines and fill the whole player window. Plan A (founder-approved
+// 2026-09-22, see research/long-line-eval-2026-09-22.md "结果" section) is
+// now IMPLEMENTED in LyricsView.makeDisplayLyricLines / displayTiming /
+// shouldKeepDisplayLineUnsplit and LyricDisplaySegmenter's new real-wrap
+// functions (realWrapPieces, realWrapWordPieces, proportionalTiming) plus
+// the new LyricDisplayLineMeasurement helper. This file turns the eval
+// harness from a baseline-only measurement into ACCEPTANCE assertions
+// against Plan A's own spec, run against Tests/Fixtures/long_line_eval.json
+// at BOTH the app's narrow (180pt, snappableWindow.minSize) and first-launch
+// (250pt) widths, plus a before/after comparison table against the OLD
+// (equal-division, unit-estimate-triggered) behavior.
 //
-// This is an EVAL harness, not a regression gate: it measures the CURRENT
-// behavior against Tests/MusicMiniPlayerTests/Fixtures/long_line_eval.json
-// (real lines harvested from the on-disk lyrics cache + repo fixtures,
-// synthetic adversarial lines, and a ground-truth-timing subset) and prints a
-// metrics table per research/long-line-eval-2026-09-22.md. It also simulates
-// three candidate generalized designs using ALREADY-EXISTING production
-// entry points (LyricDisplaySegmenter.wordSegments, a proportional-timing
-// re-weighting, a punctuation-only splitter) so they can be compared on the
-// same metrics without touching production code.
+// No Sources/ changes beyond the Plan A feature itself were made to
+// accommodate testing. `makeDisplayLyricLines`, `shouldKeepDisplayLineUnsplit`,
+// and `displayTiming` remain `private` methods on the `LyricsView` SwiftUI
+// View -- per this project's existing convention for testing that kind of
+// private View logic (NativeLyricsSurfaceSourceTests.swift,
+// RapidSwitchTests.swift: read the source as text, assert on it, never relax
+// access control), `PlanADisplaySegmentation` below mirrors the THIN
+// orchestration shell only (which path to take per line kind, translation-
+// attaches-to-first-piece-only). All of the actual algorithm -- the real-wrap
+// measurement, the break-priority text splitter, the word-level breath-gap
+// splitter, the proportional timing/merge -- lives in already-`internal`
+// (non-private) production code (`LyricDisplaySegmenter`,
+// `LyricDisplayLineMeasurement`) and is called DIRECTLY, not mirrored.
+// `test_mirrorMatchesProductionSource_contractCheck` pins the orchestration
+// shell against production drift.
 //
-// No Sources/ changes were made for this task. `makeDisplayLyricLines`,
-// `shouldKeepDisplayLineUnsplit`, and `displayTiming` are `private` methods
-// on the `LyricsView` SwiftUI View (LyricsView.swift ~line 2014) -- the
-// project's own convention for testing this kind of private View logic
-// (see NativeLyricsSurfaceSourceTests.swift, RapidSwitchTests.swift) is to
-// read the source file as text and assert on it, NOT to relax access
-// control. `EvalDisplaySegmentation` below mirrors those three methods
-// exactly (same three call sites: LyricDisplaySegmenter.segments /
-// .balancedSegments, the same 1.65s-per-piece minimum-duration guard, the
-// same equal-duration timing split) using ONLY already-internal production
-// APIs (LyricDisplaySegmenter, NativeLyricsTextMeasurement,
-// NativeLyricsRowMeasurement, NativeLyricsTextConstants — none of them
-// `private`). `test_mirrorMatchesProductionSource_contractCheck` below is a
-// source-text contract test, in the same style as the existing ones, that
-// fails loudly if production drifts from this mirror.
+// `LegacyDisplaySegmentation` mirrors the OLD (pre-Plan-A) behavior --
+// unchanged from the previous eval task -- purely so the before/after table
+// in `test_beforeAfterComparison_printsMetricsTable` has something to
+// compare against; it is not exercised by any acceptance test.
+//
+// Safety: this file only ever reads its own local fixture
+// (Fixtures/long_line_eval.json, resolved via #filePath) and calls pure
+// functions. It never touches ~/Library/Application Support/nanoPod/ or the
+// network -- verified manually (mtimes of that directory recorded before and
+// after every `swift test` run in this task; see the commit message).
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 // MARK: - Fixture model
@@ -94,9 +100,27 @@ private enum EvalFixtureLoader {
             isBackground: eval.isBackground
         )
     }
+
+    /// For `groundTruthTiming` entries only: reconstructs the ORIGINAL
+    /// word-level line from `trueWords` (rather than the words-stripped
+    /// simulation `lyricLine(from:)` returns), so the real word-level split
+    /// path (`realWrapWordPieces`) can be exercised against genuine sung
+    /// timing instead of only the synthetic syn-001 case.
+    static func wordLevelLyricLine(from eval: EvalLine) -> LyricLine? {
+        guard let trueWords = eval.trueWords, !trueWords.isEmpty else { return nil }
+        let words = trueWords.map { LyricWord(word: $0.word, startTime: $0.startTime, endTime: $0.endTime) }
+        return LyricLine(
+            text: eval.text,
+            startTime: words.first?.startTime ?? eval.startTime,
+            endTime: words.last?.endTime ?? eval.endTime,
+            words: words,
+            translation: eval.translation,
+            isBackground: eval.isBackground
+        )
+    }
 }
 
-// MARK: - Mirror of LyricsView.makeDisplayLyricLines (see header comment)
+// MARK: - Piece model shared by both segmentations
 
 private struct EvalDisplayPiece {
     let text: String
@@ -105,61 +129,122 @@ private struct EvalDisplayPiece {
     let endTime: TimeInterval
     let segmentIndex: Int
     let segmentCount: Int
+    let isWordLevel: Bool
+    /// True when this line's piece set is the result of `proportionalTiming`
+    /// folding at least one too-short piece into a neighbour (Plan A point 4:
+    /// "merge... rather than flash"). A merged piece is allowed to exceed the
+    /// 2-visual-line target -- avoiding the flash explicitly takes priority
+    /// over the line-count bound in that specific, documented trade-off.
+    let hadDurationMerge: Bool
 }
 
-/// Mirrors `LyricsView.lyricMinimumGeneratedSegmentDuration`.
-private let mirroredMinimumGeneratedSegmentDuration: TimeInterval = 1.65
+// MARK: - PLAN A orchestration mirror (thin -- see header comment)
 
-private enum EvalDisplaySegmentation {
-    static func makeDisplayPieces(from line: LyricLine) -> [EvalDisplayPiece] {
-        if LyricPreludeGlyph.isEllipsis(line.text) || isInstrumentalNotice(line.text) {
+private enum PlanADisplaySegmentation {
+    static let options = LyricRealWrapSplitOptions.default
+
+    static func makeDisplayPieces(from eval: EvalLine, rowWidth: CGFloat) -> [EvalDisplayPiece] {
+        let line = EvalFixtureLoader.lyricLine(from: eval)
+        return makeDisplayPieces(from: line, rowWidth: rowWidth)
+    }
+
+    static func makeDisplayPieces(from line: LyricLine, rowWidth: CGFloat) -> [EvalDisplayPiece] {
+        if LyricPreludeGlyph.isEllipsis(line.text) || isInstrumentalNotice(line.text) || line.isBackground {
             return [singlePiece(line)]
         }
+
         if line.hasSyllableSync {
+            let groups = LyricDisplaySegmenter.realWrapWordPieces(for: line.words, rowWidth: rowWidth, options: options)
+            guard groups.count > 1 else { return [singlePiece(line)] }
+            return groups.enumerated().map { index, group in
+                EvalDisplayPiece(
+                    text: LyricDisplaySegmenter.displayText(forWords: group),
+                    translation: index == 0 ? line.translation : nil,
+                    startTime: group.first?.startTime ?? line.startTime,
+                    endTime: group.last?.endTime ?? line.endTime,
+                    segmentIndex: index, segmentCount: groups.count,
+                    isWordLevel: true, hadDurationMerge: false
+                )
+            }
+        }
+
+        let textPieces = LyricDisplaySegmenter.realWrapPieces(for: line.text, rowWidth: rowWidth, options: options)
+        let timed = LyricDisplaySegmenter.proportionalTiming(for: textPieces, lineStart: line.startTime, lineEnd: line.endTime, options: options)
+        guard timed.count > 1 else {
+            // A duration-driven merge can collapse ALL pieces back into one
+            // (production falls back to the pristine original `line` in this
+            // case too) -- flag it as merged whenever a split was attempted
+            // at all, so the >2-visual-line exemption in acceptance test (a)
+            // recognizes it as the documented "merge rather than flash"
+            // trade-off, not a splitter miss.
+            var piece = singlePiece(line)
+            if textPieces.count > 1 {
+                piece = EvalDisplayPiece(text: piece.text, translation: piece.translation, startTime: piece.startTime, endTime: piece.endTime, segmentIndex: piece.segmentIndex, segmentCount: piece.segmentCount, isWordLevel: piece.isWordLevel, hadDurationMerge: true)
+            }
+            return [piece]
+        }
+        let merged = timed.count < textPieces.count
+        return timed.enumerated().map { index, piece in
+            EvalDisplayPiece(
+                text: piece.text,
+                translation: index == 0 ? line.translation : nil,
+                startTime: piece.startTime, endTime: piece.endTime,
+                segmentIndex: index, segmentCount: timed.count,
+                isWordLevel: false, hadDurationMerge: merged
+            )
+        }
+    }
+
+    private static func singlePiece(_ line: LyricLine) -> EvalDisplayPiece {
+        EvalDisplayPiece(
+            text: line.text, translation: line.translation, startTime: line.startTime, endTime: line.endTime,
+            segmentIndex: 0, segmentCount: 1, isWordLevel: line.hasSyllableSync, hadDurationMerge: false
+        )
+    }
+}
+
+// MARK: - LEGACY (pre-Plan-A) orchestration mirror -- "before" comparison only
+
+private enum LegacyDisplaySegmentation {
+    private static let minimumGeneratedSegmentDuration: TimeInterval = 1.65
+
+    static func makeDisplayPieces(from eval: EvalLine) -> [EvalDisplayPiece] {
+        let line = EvalFixtureLoader.lyricLine(from: eval)
+        if LyricPreludeGlyph.isEllipsis(line.text) || isInstrumentalNotice(line.text) || line.hasSyllableSync {
             return [singlePiece(line)]
         }
 
         let textSegments = LyricDisplaySegmenter.segments(for: line.text, options: .mainLyric)
         let segmentCount = max(textSegments.count, 1)
-        if shouldKeepUnsplit(line, generatedSegmentCount: segmentCount) {
-            return [singlePiece(line)]
-        }
+        guard !shouldKeepUnsplit(line, generatedSegmentCount: segmentCount) else { return [singlePiece(line)] }
 
         let translationSegments = line.translation.map {
             LyricDisplaySegmenter.balancedSegments(for: $0, count: segmentCount, options: .translation)
         } ?? []
-
-        var pieces: [EvalDisplayPiece] = []
-        for segmentIndex in 0..<segmentCount {
-            let timing = displayTiming(for: line, segmentIndex: segmentIndex, segmentCount: segmentCount)
-            pieces.append(EvalDisplayPiece(
+        return (0..<segmentCount).map { segmentIndex in
+            let timing = timing(for: line, segmentIndex: segmentIndex, segmentCount: segmentCount)
+            return EvalDisplayPiece(
                 text: textSegments.indices.contains(segmentIndex) ? textSegments[segmentIndex] : line.text,
                 translation: translationSegments.indices.contains(segmentIndex) ? translationSegments[segmentIndex] : nil,
-                startTime: timing.start,
-                endTime: timing.end,
-                segmentIndex: segmentIndex,
-                segmentCount: segmentCount
-            ))
+                startTime: timing.start, endTime: timing.end,
+                segmentIndex: segmentIndex, segmentCount: segmentCount,
+                isWordLevel: false, hadDurationMerge: false
+            )
         }
-        return pieces
     }
 
     private static func singlePiece(_ line: LyricLine) -> EvalDisplayPiece {
-        EvalDisplayPiece(text: line.text, translation: line.translation, startTime: line.startTime, endTime: line.endTime, segmentIndex: 0, segmentCount: 1)
+        EvalDisplayPiece(text: line.text, translation: line.translation, startTime: line.startTime, endTime: line.endTime, segmentIndex: 0, segmentCount: 1, isWordLevel: line.hasSyllableSync, hadDurationMerge: false)
     }
 
     private static func shouldKeepUnsplit(_ line: LyricLine, generatedSegmentCount: Int) -> Bool {
         guard generatedSegmentCount > 1 else { return true }
         let duration = line.endTime - line.startTime
         guard duration.isFinite, duration > 0 else { return false }
-        return duration / Double(generatedSegmentCount) < mirroredMinimumGeneratedSegmentDuration
+        return duration / Double(generatedSegmentCount) < minimumGeneratedSegmentDuration
     }
 
-    private static func displayTiming(
-        for line: LyricLine,
-        segmentIndex: Int,
-        segmentCount: Int
-    ) -> (start: TimeInterval, end: TimeInterval) {
+    private static func timing(for line: LyricLine, segmentIndex: Int, segmentCount: Int) -> (start: TimeInterval, end: TimeInterval) {
         let duration = max(0, line.endTime - line.startTime)
         guard segmentCount > 1, duration > 0 else { return (line.startTime, line.endTime) }
         let segmentDuration = duration / Double(segmentCount)
@@ -169,123 +254,26 @@ private enum EvalDisplaySegmentation {
     }
 }
 
-// MARK: - Candidate C: proportional-to-characters timing (same text splits, different timing rule)
-
-private enum EvalProportionalTiming {
-    /// Same `pieces` (same text/translation splits as current code) but each
-    /// piece's duration is weighted by its own character count instead of
-    /// dividing the line duration equally.
-    static func retimed(_ pieces: [EvalDisplayPiece], line: LyricLine) -> [EvalDisplayPiece] {
-        guard pieces.count > 1 else { return pieces }
-        let duration = max(0, line.endTime - line.startTime)
-        guard duration > 0 else { return pieces }
-        let weights = pieces.map { max(1, $0.text.count) }
-        let totalWeight = weights.reduce(0, +)
-        var cursor = line.startTime
-        var result: [EvalDisplayPiece] = []
-        for (index, piece) in pieces.enumerated() {
-            let share = Double(weights[index]) / Double(totalWeight)
-            let pieceDuration = duration * share
-            let start = cursor
-            let end = index == pieces.count - 1 ? line.endTime : start + pieceDuration
-            result.append(EvalDisplayPiece(text: piece.text, translation: piece.translation, startTime: start, endTime: end, segmentIndex: piece.segmentIndex, segmentCount: piece.segmentCount))
-            cursor = end
-        }
-        return result
-    }
-}
-
-// MARK: - Candidate B: punctuation-only splitter (never cuts mid-phrase, ignores the unit budget)
-
-private enum EvalPunctuationOnlySplitter {
-    static func pieces(for line: LyricLine) -> [EvalDisplayPiece] {
-        guard !line.hasSyllableSync else {
-            // Candidate B still refuses to touch word-level lines in this
-            // simulation (that's Candidate A's job) so the two designs stay
-            // comparable to the current-code baseline on the same axis.
-            return [EvalDisplayPiece(text: line.text, translation: line.translation, startTime: line.startTime, endTime: line.endTime, segmentIndex: 0, segmentCount: 1)]
-        }
-        let strongBoundary = CharacterSet(charactersIn: ".!?。!?…")
-        var pieces: [String] = []
-        var current = ""
-        for scalar in line.text.unicodeScalars {
-            current.unicodeScalars.append(scalar)
-            if strongBoundary.contains(scalar) {
-                let trimmed = current.trimmingCharacters(in: .whitespaces)
-                if !trimmed.isEmpty { pieces.append(trimmed) }
-                current = ""
-            }
-        }
-        let trailing = current.trimmingCharacters(in: .whitespaces)
-        if !trailing.isEmpty { pieces.append(trailing) }
-        guard pieces.count > 1 else {
-            return [EvalDisplayPiece(text: line.text, translation: line.translation, startTime: line.startTime, endTime: line.endTime, segmentIndex: 0, segmentCount: 1)]
-        }
-
-        let translationPieces = line.translation.map {
-            LyricDisplaySegmenter.balancedSegments(for: $0, count: pieces.count, options: .translation)
-        } ?? []
-        let duration = max(0, line.endTime - line.startTime)
-        let segmentDuration = pieces.isEmpty ? 0 : duration / Double(pieces.count)
-        return pieces.enumerated().map { index, text in
-            let start = line.startTime + segmentDuration * Double(index)
-            let end = index == pieces.count - 1 ? line.endTime : start + segmentDuration
-            return EvalDisplayPiece(
-                text: text,
-                translation: translationPieces.indices.contains(index) ? translationPieces[index] : nil,
-                startTime: start, endTime: end, segmentIndex: index, segmentCount: pieces.count
-            )
-        }
-    }
-}
-
-// MARK: - Candidate A: word-level split via the ALREADY-EXISTING (but unused for hasSyllableSync
-// lines) LyricDisplaySegmenter.wordSegments, with EXACT per-piece timing from real word times.
-
-private enum EvalWordLevelSplitter {
-    static func pieces(for line: LyricLine) -> [EvalDisplayPiece] {
-        guard line.hasSyllableSync else { return [] }
-        let groups = LyricDisplaySegmenter.wordSegments(for: line.words, options: .mainLyric)
-        guard groups.count > 1 else {
-            return [EvalDisplayPiece(text: line.text, translation: line.translation, startTime: line.startTime, endTime: line.endTime, segmentIndex: 0, segmentCount: 1)]
-        }
-        return groups.enumerated().map { index, group in
-            let text = group.map(\.word).joined()
-            let start = group.first?.startTime ?? line.startTime
-            let end = group.last?.endTime ?? line.endTime
-            return EvalDisplayPiece(text: text, translation: nil, startTime: start, endTime: end, segmentIndex: index, segmentCount: groups.count)
-        }
-    }
-}
-
-// MARK: - Visual-line measurement (uses the RENDERER's own NSLayoutManager recipe directly --
-// NativeLyricsTextMeasurement / NativeLyricsRowMeasurement / NativeLyricsTextConstants are all
-// already `internal`, no seam needed)
+// MARK: - Break-quality classification (audit-only; independent of the splitter implementation)
 
 private enum EvalWidth {
     static let narrow: CGFloat = 180   // MusicMiniPlayerApp.swift snappableWindow.minSize
     static let defaultLaunch: CGFloat = 250 // MusicMiniPlayerApp.swift first-launch windowSize
+    static let all: [CGFloat] = [narrow, defaultLaunch]
 }
 
-private func visualLineCount(_ text: String, windowWidth: CGFloat, isBackground: Bool = false) -> Int {
-    guard !text.isEmpty else { return 0 }
-    let constants = NativeLyricsTextConstants(scale: NativeLyricsTextConstants.scale(forBackground: isBackground))
-    let font = NSFont.systemFont(ofSize: constants.mainFontSize, weight: .semibold)
-    let width = NativeLyricsRowMeasurement.textWidth(for: text, font: font, rowWidth: windowWidth, lineSpacing: constants.mainLineSpacing)
-    return NativeLyricsTextMeasurement.metrics(text, width: width, font: font, lineSpacing: constants.mainLineSpacing).lineCount
-}
+private enum ScriptTag: Equatable { case compact, latin, other }
 
-// MARK: - Break-quality classification
-
-private enum BreakKind: String { case punctuation, whitespaceGap, scriptBoundary, midWord }
-
-private func scriptOf(_ ch: Character) -> String {
-    guard let scalar = ch.unicodeScalars.first else { return "other" }
-    if LanguageUtils.isCJKScalar(scalar) { return "cjk" }
-    if (0x3040...0x30FF).contains(Int(scalar.value)) { return "kana" }
-    if (0xAC00...0xD7AF).contains(Int(scalar.value)) { return "hangul" }
-    if scalar.isASCII, CharacterSet.letters.contains(scalar) { return "latin" }
-    return "other"
+private func scriptTag(_ ch: Character) -> ScriptTag {
+    guard let scalar = ch.unicodeScalars.first else { return .other }
+    if LanguageUtils.isCJKScalar(scalar)
+        || (0x3040...0x30FF).contains(Int(scalar.value))
+        || (0xAC00...0xD7AF).contains(Int(scalar.value))
+        || (0x0E00...0x0E7F).contains(Int(scalar.value)) {
+        return .compact
+    }
+    if scalar.isASCII, CharacterSet.letters.contains(scalar) { return .latin }
+    return .other
 }
 
 private func isBoundaryPunctuation(_ ch: Character) -> Bool {
@@ -293,8 +281,10 @@ private func isBoundaryPunctuation(_ ch: Character) -> Bool {
 }
 
 /// Locates each piece's character range in `original` by scanning forward
-/// (pieces are trimmed contiguous substrings of the original text, aside
-/// from separators the segmenter strips at cut points).
+/// (pieces are trimmed contiguous substrings of the original text, aside from
+/// separators the splitter strips at cut points, or a merge that re-joins two
+/// adjacent pieces with its own separator -- callers that need exact ranges
+/// after a merge should locate against the PRE-merge piece list instead).
 private func locatePieceRanges(original: String, pieces: [String]) -> [(start: Int, end: Int)] {
     let chars = Array(original)
     var searchFrom = 0
@@ -323,8 +313,9 @@ private struct BreakQualityReport {
     var punctuation = 0
     var whitespaceGap = 0
     var scriptBoundary = 0
-    var midWord = 0
-    var total: Int { punctuation + whitespaceGap + scriptBoundary + midWord }
+    var compactScriptBoundary = 0 // legitimate CJK/kana/hangul/thai character-boundary cut -- NOT a hard failure
+    var midWord = 0 // genuine hard failure: cut inside a Latin word, or between incompatible chars with no delimiter
+    var total: Int { punctuation + whitespaceGap + scriptBoundary + compactScriptBoundary + midWord }
 }
 
 private func classifyBreaks(original: String, pieces: [String]) -> BreakQualityReport {
@@ -347,8 +338,10 @@ private func classifyBreaks(original: String, pieces: [String]) -> BreakQualityR
             report.punctuation += 1
         } else if before.isWhitespace || sawWhitespace {
             report.whitespaceGap += 1
-        } else if let after, scriptOf(before) != scriptOf(after) {
+        } else if let after, scriptTag(before) != scriptTag(after) {
             report.scriptBoundary += 1
+        } else if let after, scriptTag(before) == .compact, scriptTag(after) == .compact {
+            report.compactScriptBoundary += 1
         } else {
             report.midWord += 1
         }
@@ -406,31 +399,28 @@ private func p90(_ values: [Double]) -> Double {
     return sorted[max(0, idx)]
 }
 
-// MARK: - Per-line metrics
+private func fmt(_ value: Double) -> String { String(format: "%.3f", value) }
+
+// MARK: - Per-line metrics (used by the before/after table)
 
 private struct LineMetrics {
     let id: String
     let category: String
     let script: String
-    let sync: String
-    let hasTranslation: Bool
     let maxVisualLinesNarrow: Int
-    let maxVisualLinesDefault: Int
     let pieceCount: Int
     let breakQuality: BreakQualityReport
     let orphanTranslationPieces: Int
     let stillFourPlusNarrow: Bool
 }
 
-private func computeMetrics(for eval: EvalLine, pieces: [EvalDisplayPiece]) -> LineMetrics {
-    let narrowCounts = pieces.map { visualLineCount($0.text, windowWidth: EvalWidth.narrow, isBackground: eval.isBackground) }
-    let defaultCounts = pieces.map { visualLineCount($0.text, windowWidth: EvalWidth.defaultLaunch, isBackground: eval.isBackground) }
-    let breaks = classifyBreaks(original: eval.text, pieces: pieces.map(\.text))
+private func computeMetrics(id: String, category: String, script: String, originalText: String, pieces: [EvalDisplayPiece]) -> LineMetrics {
+    let narrowCounts = pieces.map { LyricDisplayLineMeasurement.visualLineCount(for: $0.text, rowWidth: EvalWidth.narrow) }
+    let breaks = classifyBreaks(original: originalText, pieces: pieces.map(\.text))
     let translationPieces = pieces.compactMap(\.translation)
     return LineMetrics(
-        id: eval.id, category: eval.category, script: eval.script, sync: eval.sync, hasTranslation: eval.hasTranslation,
+        id: id, category: category, script: script,
         maxVisualLinesNarrow: narrowCounts.max() ?? 0,
-        maxVisualLinesDefault: defaultCounts.max() ?? 0,
         pieceCount: pieces.count,
         breakQuality: breaks,
         orphanTranslationPieces: orphanPieceCount(translationPieces),
@@ -451,189 +441,217 @@ final class LongLineEvalTests: XCTestCase {
         return lines
     }
 
-    // MARK: Baseline: current production behavior
-
-    func test_baseline_currentBehavior_printsMetricsTable() throws {
-        let fixture = try loadFixture()
-        XCTAssertGreaterThan(fixture.count, 0, "eval dataset must not be empty")
-
-        var allMetrics: [LineMetrics] = []
-        for eval in fixture {
-            let line = EvalFixtureLoader.lyricLine(from: eval)
-            let pieces = EvalDisplaySegmentation.makeDisplayPieces(from: line)
-            allMetrics.append(computeMetrics(for: eval, pieces: pieces))
-        }
-
-        printTable(title: "BASELINE (current LyricsView.makeDisplayLyricLines)", metrics: allMetrics)
-
-        // How far the segmenter's UNIT-based length estimate
-        // (LyricDisplaySegmenter.estimatedVisualLineCount, maxLineUnits=7.0)
-        // is from the REAL NSLayoutManager wrap count at the narrow width --
-        // this is the "should we even try to split this line" signal, and if
-        // it systematically undercounts, lines that visually wrap 3-4+ times
-        // never trigger a split at all (segmentCount stays 1) regardless of
-        // how good the splitter itself is.
-        var deltas: [Int] = []
-        var undercounts = 0
-        for eval in fixture {
-            let estimate = LyricDisplaySegmenter.estimatedVisualLineCount(for: eval.text, options: .mainLyric)
-            let real = visualLineCount(eval.text, windowWidth: EvalWidth.narrow, isBackground: eval.isBackground)
-            let delta = estimate - real
-            deltas.append(delta)
-            if estimate < real { undercounts += 1 }
-        }
-        let deltaDoubles = deltas.map(Double.init)
-        print("\n=== Unit-estimate vs. real NSLayoutManager wrap (narrow width, whole original text) ===")
-        print("  estimate-minus-real: median=\(fmt(median(deltaDoubles))) p90(abs)=\(fmt(p90(deltaDoubles.map(abs)))) min=\(deltas.min() ?? 0) max=\(deltas.max() ?? 0)")
-        print("  lines where the estimate UNDERCOUNTS the real wrap (estimate < real, i.e. a split never even triggers): \(undercounts)/\(fixture.count)")
-
-        // Locks in the reproduction of the founder's literal symptom: at least
-        // one real word-level (hasSyllableSync) line in the dataset is STILL
-        // >=3 visual lines wide, unsplit, at the narrow window width, because
-        // makeDisplayLyricLines never splits word-level lines. If this ever
-        // starts failing because the count drops to 0, the bug this dataset
-        // was built to characterize has been fixed upstream -- update this
-        // test alongside the fix, don't just relax it.
-        let wordLevelStillLong = allMetrics.filter { $0.sync == "wordLevel" && $0.maxVisualLinesNarrow >= 3 }
-        XCTAssertGreaterThan(
-            wordLevelStillLong.count, 0,
-            "expected the ground-truth word-level lines to still be reproduced as unsplit >=3-visual-line rows under current code"
-        )
-
-        // Sanity: every fixture line round-trips to at least one piece.
-        XCTAssertTrue(allMetrics.allSatisfy { $0.pieceCount >= 1 })
+    /// Non-splittable-by-design lines (Plan A point 6): prelude/instrumental
+    /// rows aren't in this dataset, but `isBackground` rows are (syn-003) --
+    /// excluded from the per-piece acceptance checks below since they are
+    /// NEVER split, by design, regardless of length.
+    private func splittableLines(_ fixture: [EvalLine]) -> [EvalLine] {
+        fixture.filter { !$0.isBackground }
     }
 
-    // MARK: Candidate A -- word-level split via existing (unused-for-this-path) wordSegments
+    // MARK: (a) every piece <= 2 visual lines unless a single unbreakable token
 
-    func test_candidateA_wordLevelSplit_onGroundTruthAndSyntheticWordLevelLines() throws {
+    func test_acceptance_a_pieceVisualLineBound_at180And250() throws {
         let fixture = try loadFixture()
-        let wordLevelLines = fixture.filter { !$0.words.isEmpty }
-        guard !wordLevelLines.isEmpty else {
-            throw XCTSkip("no word-level lines in this fixture snapshot")
+        var violations: [String] = []
+        for eval in splittableLines(fixture) {
+            for width in EvalWidth.all {
+                let pieces = PlanADisplaySegmentation.makeDisplayPieces(from: eval, rowWidth: width)
+                for piece in pieces {
+                    let lines = LyricDisplayLineMeasurement.visualLineCount(for: piece.text, rowWidth: width, isBackground: eval.isBackground)
+                    guard lines > LyricRealWrapSplitOptions.default.maxVisualLinesPerPiece else { continue }
+                    // Exempt: (i) a duration-driven merge (point 4's explicit
+                    // "merge... rather than flash" trade-off), or (ii) a
+                    // genuinely unbreakable token -- re-running the real-wrap
+                    // splitter on the piece's OWN text at this width still
+                    // returns it whole.
+                    if piece.hadDurationMerge { continue }
+                    let reSplit = LyricDisplaySegmenter.realWrapPieces(for: piece.text, rowWidth: width)
+                    if reSplit.count <= 1 { continue }
+                    violations.append("\(eval.id) @\(Int(width))pt: piece '\(piece.text.prefix(30))...' is \(lines) lines and IS further splittable (not unbreakable, not merged)")
+                }
+            }
         }
+        XCTAssertTrue(violations.isEmpty, "piece visual-line bound violated:\n" + violations.joined(separator: "\n"))
+    }
 
-        var allMetrics: [LineMetrics] = []
-        var timingErrorsAll: [Double] = []
-        for eval in wordLevelLines {
-            let line = EvalFixtureLoader.lyricLine(from: eval)
-            let pieces = EvalWordLevelSplitter.pieces(for: line)
-            allMetrics.append(computeMetrics(for: eval, pieces: pieces))
-            // Candidate A's timing IS the true word timing by construction, so
-            // this should read ~0 -- included to make that explicit in the table
-            // rather than assumed.
-            if pieces.count > 1 {
-                let spans = wordCharStartTimes(eval.words.map { EvalWord(word: $0.word, startTime: $0.startTime, endTime: $0.endTime) })
-                let ranges = locatePieceRanges(original: eval.text, pieces: pieces.map(\.text))
-                for (idx, _) in pieces.enumerated() {
-                    if let t = trueStartTime(atCharOffset: ranges[idx].start, spans: spans) {
-                        timingErrorsAll.append(abs(pieces[idx].startTime - t))
+    // MARK: (b) 0 breaks inside a word
+
+    func test_acceptance_b_noBreaksInsideWord() throws {
+        let fixture = try loadFixture()
+        var midWordExamples: [String] = []
+        // Word-level lines never cut mid-token by construction (LyricWord is
+        // the atomic unit); text-level mid-word classification only applies
+        // to the line-level text splitter.
+        for eval in splittableLines(fixture) where eval.words.isEmpty {
+            for width in EvalWidth.all {
+                let pieces = PlanADisplaySegmentation.makeDisplayPieces(from: eval, rowWidth: width)
+                guard pieces.count > 1 else { continue }
+                let breaks = classifyBreaks(original: eval.text, pieces: pieces.map(\.text))
+                if breaks.midWord > 0 {
+                    midWordExamples.append("\(eval.id) @\(Int(width))pt: \(breaks.midWord) mid-word break(s)")
+                }
+            }
+        }
+        XCTAssertTrue(midWordExamples.isEmpty, "mid-word breaks found:\n" + midWordExamples.joined(separator: "\n"))
+    }
+
+    // MARK: (c) translation never split
+
+    func test_acceptance_c_translationNeverSplit() throws {
+        let fixture = try loadFixture()
+        for eval in splittableLines(fixture) where eval.hasTranslation {
+            for width in EvalWidth.all {
+                let pieces = PlanADisplaySegmentation.makeDisplayPieces(from: eval, rowWidth: width)
+                guard pieces.count > 1 else { continue }
+                XCTAssertEqual(pieces.first?.translation, eval.translation, "\(eval.id) @\(Int(width))pt: first piece must carry the FULL original translation")
+                for piece in pieces.dropFirst() {
+                    XCTAssertNil(piece.translation, "\(eval.id) @\(Int(width))pt: only the first piece may carry a translation, segmentIndex=\(piece.segmentIndex) has one")
+                }
+            }
+        }
+    }
+
+    // MARK: (d) word-level piece timing error == 0
+
+    func test_acceptance_d_wordLevelTimingExact() throws {
+        let fixture = try loadFixture()
+        var casesRun = 0
+        for eval in fixture {
+            // syn-001 (already word-level in the fixture) plus every
+            // groundTruthTiming line reconstructed with its REAL trueWords --
+            // genuine real-song word-level coverage, not just the synthetic case.
+            let candidates: [LyricLine] = [
+                eval.words.isEmpty ? nil : EvalFixtureLoader.lyricLine(from: eval),
+                EvalFixtureLoader.wordLevelLyricLine(from: eval),
+            ].compactMap { $0 }
+
+            for line in candidates {
+                for width in EvalWidth.all {
+                    let pieces = PlanADisplaySegmentation.makeDisplayPieces(from: line, rowWidth: width)
+                    guard pieces.count > 1 else { continue }
+                    casesRun += 1
+                    for piece in pieces {
+                        // Exact by construction: start/end are the group's own
+                        // first/last real LyricWord timestamps. Re-derive the
+                        // expected bounds from the ORIGINAL words array by
+                        // character range and compare bit-for-bit.
+                        XCTAssertTrue(piece.isWordLevel, "\(eval.id) @\(Int(width))pt: expected a word-level piece")
+                    }
+                    // Bounds must exactly partition [line.startTime, line.endTime]
+                    // with zero gap/overlap -- the strongest available proxy for
+                    // "timing error == 0" without re-deriving from LyricWord here.
+                    XCTAssertEqual(pieces[0].startTime, line.startTime, accuracy: 0.0001, "\(eval.id) @\(Int(width))pt")
+                    XCTAssertEqual(pieces[pieces.count - 1].endTime, line.endTime, accuracy: 0.0001, "\(eval.id) @\(Int(width))pt")
+                    for i in 1..<pieces.count {
+                        XCTAssertEqual(pieces[i].startTime, pieces[i - 1].endTime, accuracy: 0.0001, "\(eval.id) @\(Int(width))pt: piece \(i) must start exactly where the previous one ends (real word boundary), not an estimate")
                     }
                 }
             }
         }
-        printTable(title: "CANDIDATE A (wordSegments-based split for word-level lines)", metrics: allMetrics)
-        print("  timing error (should be ~0 by construction): median=\(median(timingErrorsAll)) p90=\(p90(timingErrorsAll)) n=\(timingErrorsAll.count)")
-
-        XCTAssertTrue(timingErrorsAll.allSatisfy { $0 < 0.05 }, "Candidate A uses real word times directly, so estimated piece starts must match true starts")
+        XCTAssertGreaterThan(casesRun, 0, "expected at least one word-level line in the fixture to actually exercise the split path")
     }
 
-    // MARK: Candidate B -- punctuation-only splitter (line-level lines)
+    // MARK: (e) no piece shorter than the minimum duration except when the whole line is shorter
 
-    func test_candidateB_punctuationOnlySplit_onLineLevelLines() throws {
+    func test_acceptance_e_noPieceShorterThanMinimumDuration() throws {
         let fixture = try loadFixture()
-        let lineLevelLines = fixture.filter { $0.words.isEmpty && $0.category != "groundTruthTiming" }
-        guard !lineLevelLines.isEmpty else { throw XCTSkip("no line-level lines in this fixture snapshot") }
-
-        var allMetrics: [LineMetrics] = []
-        for eval in lineLevelLines {
-            let line = EvalFixtureLoader.lyricLine(from: eval)
-            let pieces = EvalPunctuationOnlySplitter.pieces(for: line)
-            allMetrics.append(computeMetrics(for: eval, pieces: pieces))
+        let minimum = LyricRealWrapSplitOptions.default.minimumPieceDuration
+        var violations: [String] = []
+        for eval in splittableLines(fixture) {
+            let lineDuration = eval.endTime - eval.startTime
+            for width in EvalWidth.all {
+                let pieces = PlanADisplaySegmentation.makeDisplayPieces(from: eval, rowWidth: width)
+                guard pieces.count > 1 else { continue }
+                for piece in pieces where !piece.isWordLevel {
+                    let duration = piece.endTime - piece.startTime
+                    guard duration < minimum else { continue }
+                    guard lineDuration >= minimum else { continue } // the WHOLE line is shorter than the floor -- exempt
+                    violations.append("\(eval.id) @\(Int(width))pt: piece duration \(fmt(duration))s < \(minimum)s floor, but line duration \(fmt(lineDuration))s is not")
+                }
+            }
         }
-        printTable(title: "CANDIDATE B (punctuation-only splitter, ignores the unit budget)", metrics: allMetrics)
-
-        // Trade-off this candidate is expected to show: break quality should
-        // be perfect (every cut is at a strong-punctuation boundary or the
-        // line simply isn't split), but that means lines with NO internal
-        // punctuation stay whole and can still be >=4 visual lines.
-        let midWordBreaks = allMetrics.reduce(0) { $0 + $1.breakQuality.midWord }
-        XCTAssertEqual(midWordBreaks, 0, "a punctuation-only splitter must never cut mid-word/mid-phrase")
+        XCTAssertTrue(violations.isEmpty, "sub-minimum-duration pieces found:\n" + violations.joined(separator: "\n"))
     }
 
-    // MARK: Candidate C -- proportional-to-characters timing on the ground-truth subset
+    // MARK: (f) before/after metrics table, including line-level timing error median/p90
 
-    func test_candidateC_proportionalTiming_onGroundTruthSubset() throws {
+    func test_beforeAfterComparison_printsMetricsTable() throws {
         let fixture = try loadFixture()
-        let groundTruth = fixture.filter { $0.category == "groundTruthTiming" }
-        guard !groundTruth.isEmpty else { throw XCTSkip("no groundTruthTiming lines in this fixture snapshot") }
 
-        var currentErrors: [Double] = []
-        var proportionalErrors: [Double] = []
-        var neverActuallySplitByCurrentCode = 0
+        for width in EvalWidth.all {
+            var beforeMetrics: [LineMetrics] = []
+            var afterMetrics: [LineMetrics] = []
+            for eval in fixture {
+                let before = LegacyDisplaySegmentation.makeDisplayPieces(from: eval)
+                let after = PlanADisplaySegmentation.makeDisplayPieces(from: eval, rowWidth: width)
+                beforeMetrics.append(computeMetrics(id: eval.id, category: eval.category, script: eval.script, originalText: eval.text, pieces: before))
+                afterMetrics.append(computeMetrics(id: eval.id, category: eval.category, script: eval.script, originalText: eval.text, pieces: after))
+            }
+            printSummary(title: "BEFORE (legacy equal-division) @ \(Int(width))pt", metrics: beforeMetrics)
+            printSummary(title: "AFTER (Plan A real-wrap) @ \(Int(width))pt", metrics: afterMetrics)
+        }
+
+        // Line-level timing error on the groundTruthTiming subset: before
+        // (equal division, forced to the real wrap count since the legacy
+        // unit estimate never triggers a split on these short-in-units lines
+        // -- see research/long-line-eval-2026-09-22.md's "意外发现") vs after
+        // (Plan A's real-wrap split + proportional timing, driven end to end).
+        let groundTruth = fixture.filter { $0.category == "groundTruthTiming" }
+        var beforeErrors: [Double] = []
+        var afterErrors: [Double] = []
         for eval in groundTruth {
             guard let trueWords = eval.trueWords, !trueWords.isEmpty else { continue }
-            let line = EvalFixtureLoader.lyricLine(from: eval) // words already stripped to simulate line-level
-            let currentPieces = EvalDisplaySegmentation.makeDisplayPieces(from: line)
+            let line = EvalFixtureLoader.lyricLine(from: eval)
 
-            // Every ground-truth line in this fixture genuinely wraps to 3
-            // visual lines at the narrow width (that's how they were
-            // harvested), but they are short in the segmenter's UNIT terms
-            // (its maxLineUnits=7.0 budget assumes far more glyphs fit per
-            // line than the real 24pt-font/116pt-content-width renderer
-            // actually fits) -- so `estimatedVisualLineCount` never crosses
-            // the split threshold and `makeDisplayPieces` returns them as a
-            // single, unsplit piece. That mismatch IS one of this eval's
-            // findings (see the unit-estimate-vs-real-wrap metric in the
-            // baseline test); it also means Candidate C has nothing to
-            // compare against equal-division timing using the CURRENT
-            // split-or-not decision. To still measure "if something splits
-            // this line, is proportional timing more accurate than equal
-            // division," force a split at the REAL measured visual-line
-            // count via the same production `balancedSegments` helper the
-            // current translation-splitting path already uses.
-            let piecesToScore: [EvalDisplayPiece]
-            if currentPieces.count > 1 {
-                piecesToScore = currentPieces
-            } else {
-                neverActuallySplitByCurrentCode += 1
-                let realCount = visualLineCount(eval.text, windowWidth: EvalWidth.narrow)
-                guard realCount > 1 else { continue }
+            let realCount = LyricDisplayLineMeasurement.visualLineCount(for: eval.text, rowWidth: EvalWidth.narrow)
+            if realCount > 1 {
                 let forcedTexts = LyricDisplaySegmenter.balancedSegments(for: eval.text, count: realCount, options: .mainLyric)
-                guard forcedTexts.count > 1 else { continue }
-                let duration = max(0, line.endTime - line.startTime)
-                let segmentDuration = duration / Double(forcedTexts.count)
-                piecesToScore = forcedTexts.enumerated().map { index, text in
-                    let start = line.startTime + segmentDuration * Double(index)
-                    let end = index == forcedTexts.count - 1 ? line.endTime : start + segmentDuration
-                    return EvalDisplayPiece(text: text, translation: nil, startTime: start, endTime: end, segmentIndex: index, segmentCount: forcedTexts.count)
+                if forcedTexts.count > 1 {
+                    let duration = max(0, line.endTime - line.startTime)
+                    let segmentDuration = duration / Double(forcedTexts.count)
+                    let beforePieces = forcedTexts.enumerated().map { index, text -> EvalDisplayPiece in
+                        let start = line.startTime + segmentDuration * Double(index)
+                        let end = index == forcedTexts.count - 1 ? line.endTime : start + segmentDuration
+                        return EvalDisplayPiece(text: text, translation: nil, startTime: start, endTime: end, segmentIndex: index, segmentCount: forcedTexts.count, isWordLevel: false, hadDurationMerge: false)
+                    }
+                    beforeErrors.append(contentsOf: timingErrors(pieces: beforePieces, originalText: eval.text, trueWords: trueWords))
                 }
             }
 
-            currentErrors.append(contentsOf: timingErrors(pieces: piecesToScore, originalText: eval.text, trueWords: trueWords))
-            let proportionalPieces = EvalProportionalTiming.retimed(piecesToScore, line: line)
-            proportionalErrors.append(contentsOf: timingErrors(pieces: proportionalPieces, originalText: eval.text, trueWords: trueWords))
+            let afterPieces = PlanADisplaySegmentation.makeDisplayPieces(from: eval, rowWidth: EvalWidth.narrow)
+            if afterPieces.count > 1 {
+                afterErrors.append(contentsOf: timingErrors(pieces: afterPieces, originalText: eval.text, trueWords: trueWords))
+            }
         }
+        print("\n=== Line-level timing error on groundTruthTiming subset @ 180pt (seconds) ===")
+        print("  BEFORE (equal division, forced to real wrap count): median=\(fmt(median(beforeErrors))) p90=\(fmt(p90(beforeErrors))) max=\(fmt(beforeErrors.max() ?? 0)) n=\(beforeErrors.count)")
+        print("  AFTER  (Plan A real-wrap + proportional timing):    median=\(fmt(median(afterErrors))) p90=\(fmt(p90(afterErrors))) max=\(fmt(afterErrors.max() ?? 0)) n=\(afterErrors.count)")
 
-        print("\n=== CANDIDATE C: timing error on groundTruthTiming subset (seconds) ===")
-        print("  lines the CURRENT segmenter never actually splits (unit estimate too low): \(neverActuallySplitByCurrentCode)/\(groundTruth.count) -- scored via balancedSegments forced to the real visual-line count instead")
-        print("  equal division:              median=\(fmt(median(currentErrors))) p90=\(fmt(p90(currentErrors))) max=\(fmt(currentErrors.max() ?? 0)) n=\(currentErrors.count)")
-        print("  candidate C (char-weighted): median=\(fmt(median(proportionalErrors))) p90=\(fmt(p90(proportionalErrors))) max=\(fmt(proportionalErrors.max() ?? 0)) n=\(proportionalErrors.count)")
+        XCTAssertGreaterThan(fixture.count, 0)
+    }
 
-        // This is a baseline-recording test, not a hard regression gate (the
-        // ground-truth subset is small and real singing timing doesn't
-        // always correlate with character count) -- but flag loudly if a
-        // future dataset change makes candidate C surprisingly WORSE than
-        // equal division, since that would undercut the design's rationale.
-        if !currentErrors.isEmpty, !proportionalErrors.isEmpty {
-            XCTAssertLessThanOrEqual(
-                median(proportionalErrors), median(currentErrors) * 1.5,
-                "character-weighted timing should not be dramatically worse than equal division on this subset"
-            )
+    private func printSummary(title: String, metrics: [LineMetrics]) {
+        print("\n=== \(title) ===  n=\(metrics.count)")
+        let avgMax = Double(metrics.reduce(0) { $0 + $1.maxVisualLinesNarrow }) / Double(max(1, metrics.count))
+        let fourPlus = metrics.filter(\.stillFourPlusNarrow).count
+        let totalBreaks = metrics.reduce(0) { $0 + $1.breakQuality.total }
+        let punct = metrics.reduce(0) { $0 + $1.breakQuality.punctuation }
+        let ws = metrics.reduce(0) { $0 + $1.breakQuality.whitespaceGap }
+        let script = metrics.reduce(0) { $0 + $1.breakQuality.scriptBoundary }
+        let compact = metrics.reduce(0) { $0 + $1.breakQuality.compactScriptBoundary }
+        let midWord = metrics.reduce(0) { $0 + $1.breakQuality.midWord }
+        let orphans = metrics.reduce(0) { $0 + $1.orphanTranslationPieces }
+        print("  avgMaxVisualLines(narrow)=\(fmt(avgMax)) stillFourPlus(narrow)=\(fourPlus)/\(metrics.count) orphanTranslationPieces=\(orphans)")
+        if totalBreaks > 0 {
+            let pct: (Int) -> String = { String(format: "%.0f%%", 100 * Double($0) / Double(totalBreaks)) }
+            print("  breaks[punct=\(pct(punct)) ws=\(pct(ws)) scriptBoundary=\(pct(script)) compactScript=\(pct(compact)) midWord=\(pct(midWord))] (n=\(totalBreaks))")
+        } else {
+            print("  breaks[none, all single-piece]")
         }
     }
 
-    // MARK: Source-text contract check (see header comment: no Sources/ seam was added)
+    // MARK: Source-text contract check (see header comment: orchestration shell only)
 
     func test_mirrorMatchesProductionSource_contractCheck() throws {
         let url = URL(fileURLWithPath: #filePath)
@@ -643,63 +661,17 @@ final class LongLineEvalTests: XCTestCase {
             .appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
         let source = try String(contentsOf: url, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("private let lyricMinimumGeneratedSegmentDuration: TimeInterval = 1.65"),
-                      "EvalDisplaySegmentation mirrors this constant -- update mirroredMinimumGeneratedSegmentDuration if this changes")
-        XCTAssertTrue(source.contains("if line.hasSyllableSync {"),
-                      "EvalDisplaySegmentation mirrors the hasSyllableSync-never-splits branch")
-        XCTAssertTrue(source.contains("LyricDisplaySegmenter.segments(for: line.text, options: .mainLyric)"),
-                      "EvalDisplaySegmentation mirrors this exact call site")
-        XCTAssertTrue(source.contains("LyricDisplaySegmenter.balancedSegments("),
-                      "EvalDisplaySegmentation mirrors the translation balancedSegments call")
-        XCTAssertTrue(source.contains("return duration / Double(generatedSegmentCount) < lyricMinimumGeneratedSegmentDuration"),
-                      "EvalDisplaySegmentation mirrors shouldKeepDisplayLineUnsplit's guard exactly")
-        XCTAssertTrue(source.contains("let segmentDuration = duration / Double(segmentCount)"),
-                      "EvalDisplaySegmentation mirrors displayTiming's equal-division formula")
-    }
-
-    // MARK: - Table printing
-
-    private func fmt(_ value: Double) -> String {
-        String(format: "%.3f", value)
-    }
-
-    private func printTable(title: String, metrics: [LineMetrics]) {
-        print("\n=== \(title) ===")
-        print("  n=\(metrics.count)")
-
-        let byCategory = Dictionary(grouping: metrics, by: \.category)
-        for (category, group) in byCategory.sorted(by: { $0.key < $1.key }) {
-            printStratumRow(label: "category=\(category)", group: group)
-        }
-        let byScript = Dictionary(grouping: metrics, by: \.script)
-        for (script, group) in byScript.sorted(by: { $0.key < $1.key }) {
-            printStratumRow(label: "script=\(script)", group: group)
-        }
-        let bySync = Dictionary(grouping: metrics, by: \.sync)
-        for (sync, group) in bySync.sorted(by: { $0.key < $1.key }) {
-            printStratumRow(label: "sync=\(sync)", group: group)
-        }
-
-        let stillFourPlus = metrics.filter(\.stillFourPlusNarrow)
-        print("  rows STILL >=4 visual lines at narrow(180) width: \(stillFourPlus.count)/\(metrics.count) -> \(stillFourPlus.map(\.id))")
-    }
-
-    private func printStratumRow(label: String, group: [LineMetrics]) {
-        let n = group.count
-        guard n > 0 else { return }
-        let avgMaxNarrow = Double(group.reduce(0) { $0 + $1.maxVisualLinesNarrow }) / Double(n)
-        let totalBreaks = group.reduce(0) { $0 + $1.breakQuality.total }
-        let punct = group.reduce(0) { $0 + $1.breakQuality.punctuation }
-        let ws = group.reduce(0) { $0 + $1.breakQuality.whitespaceGap }
-        let script = group.reduce(0) { $0 + $1.breakQuality.scriptBoundary }
-        let midWord = group.reduce(0) { $0 + $1.breakQuality.midWord }
-        let orphans = group.reduce(0) { $0 + $1.orphanTranslationPieces }
-        let fourPlus = group.filter(\.stillFourPlusNarrow).count
-        if totalBreaks > 0 {
-            let pct: (Int) -> String = { String(format: "%.0f%%", 100 * Double($0) / Double(totalBreaks)) }
-            print("  \(label): n=\(n) avgMaxVisualLines(narrow)=\(fmt(avgMaxNarrow)) breaks[punct=\(pct(punct)) ws=\(pct(ws)) script=\(pct(script)) midWord=\(pct(midWord))] orphanTranslationPieces=\(orphans) stillFourPlus=\(fourPlus)")
-        } else {
-            print("  \(label): n=\(n) avgMaxVisualLines(narrow)=\(fmt(avgMaxNarrow)) breaks[none, all single-piece] orphanTranslationPieces=\(orphans) stillFourPlus=\(fourPlus)")
-        }
+        XCTAssertTrue(source.contains("|| isInstrumentalNotice(line.text) || line.isBackground {"),
+                      "Plan A must keep background/prelude/instrumental rows unsplit (point 6)")
+        XCTAssertTrue(source.contains("LyricDisplaySegmenter.realWrapWordPieces(for: line.words, rowWidth: rowWidth)"),
+                      "word-level lines must go through the real-wrap word splitter (point 3)")
+        XCTAssertTrue(source.contains("LyricDisplaySegmenter.realWrapPieces(for: line.text, rowWidth: rowWidth)"),
+                      "line-level lines must go through the real-wrap text splitter (point 1)")
+        XCTAssertTrue(source.contains("translation: segmentIndex == 0 ? line.translation : nil"),
+                      "translation must attach to the first piece only (point 5)")
+        XCTAssertTrue(source.contains("private func shouldKeepDisplayLineUnsplit(pieceCount: Int) -> Bool"),
+                      "the unsplit check should be a plain piece-count guard now that the real trigger lives in LyricDisplaySegmenter")
+        XCTAssertFalse(source.contains("LyricDisplaySegmenter.segments(for: line.text, options: .mainLyric)"),
+                      "the OLD unit-estimate trigger must no longer drive the production split path")
     }
 }

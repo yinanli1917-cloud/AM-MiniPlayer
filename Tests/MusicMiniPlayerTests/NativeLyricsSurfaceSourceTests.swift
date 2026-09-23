@@ -67,7 +67,15 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains(")).union(geometryVisibleRowIndices(for: configuration))"))
     }
 
-    func testSplitDisplayLinesDoNotDuplicateFallbackTranslationAcrossSegments() throws {
+    // 2026-09-22 Plan A (founder-approved, docs/lyrics-ux-contract.md §E):
+    // translation is no longer chopped into the same piece count as the main
+    // text at all -- the full translation attaches to the FIRST split piece
+    // only, later pieces carry none. This supersedes the old guarantee this
+    // test used to assert (unmatched translation SEGMENTS left empty rather
+    // than repeating the full text) with a stronger, simpler one: only
+    // segmentIndex == 0 ever carries a translation, everywhere a line splits
+    // (word-level or line-level).
+    func testSplitDisplayLinesAttachFullTranslationToFirstPieceOnly() throws {
         let source = try readSource("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
         guard let functionStart = source.range(of: "private func makeDisplayLyricLines")?.lowerBound,
               let functionEnd = source.range(of: "private func shouldKeepDisplayLineUnsplit")?.lowerBound else {
@@ -76,9 +84,10 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         }
         let body = String(source[functionStart..<functionEnd])
 
-        XCTAssertTrue(
-            body.contains("translation: translationSegments.indices.contains(segmentIndex)\n                        ? translationSegments[segmentIndex]\n                        : nil"),
-            "Split display rows must leave unmatched translation segments empty instead of repeating the full translation on later rows."
+        let occurrences = body.components(separatedBy: "translation: segmentIndex == 0 ? line.translation : nil").count - 1
+        XCTAssertEqual(
+            occurrences, 2,
+            "Both the word-level and line-level split branches must attach the FULL translation to the first piece only (segmentIndex == 0) and nil elsewhere -- never chop it to match an unrelated split count."
         )
     }
 

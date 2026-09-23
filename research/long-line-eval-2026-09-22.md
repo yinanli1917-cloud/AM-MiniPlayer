@@ -182,3 +182,70 @@ Sources:
 - 数据集偏小（54 行），且真实数据因为磁盘缓存是活文件、抓取途中被后台清理从 149 首缩到 9 首，主要来自这 9 首歌 + 2 个仓库内既有 fixture；纯韩语/纯假名"≥3 视觉行"的真实样本目前完全靠 synthetic 补位。
 - 断点质量分类（标点/空白/脚本边界/词中间）用的是字符启发式定位，不是真正的分词器；CJK 场景下"词中间"的判定偏保守（把没有标点没有空格的相邻字都算作潜在硬失败），可能高估真正的硬失败率。
 - Candidate C 的 ground-truth 验证样本只有 11 首同风格的歌（同一首《启程》的不同句子），不足以下"比例分配更准"或"更不准"的定论,只能如实报告"这批数据上打平"。
+
+---
+
+## 结果（2026-09-22，创始人选定方案 A 后实装）
+
+创始人在候选 A/B/C 之间选了 **A**（并给出了比原始候选 A 更完整的规格：真实折行触发 + 优先级断点 + 逐字精确计时 + 行级按字符比例计时 + 翻译只挂第一段）。已在本 worktree 落地，`git rebase main` 已完成（对齐了 legibility/blank-page/artwork 三批 main 上的修复，无冲突）。
+
+### 改动范围（严格限定在"display-line construction layer"，未碰渲染器）
+
+- `Sources/MusicMiniPlayerCore/UI/LyricDisplayLineMeasurement.swift`（新文件）——只读调用 `NativeLyricsTextMeasurement`/`NativeLyricsRowMeasurement`/`NativeLyricsTextConstants`（渲染器自己的 NSLayoutManager 配方），暴露 `visualLineCount(for:rowWidth:isBackground:)`，不修改、不驱动渲染器状态。
+- `Sources/MusicMiniPlayerCore/UI/LyricDisplaySegmenter.swift`——新增 `realWrapPieces`（行级文本，优先级断点：强标点＞弱标点＞脚本边界＞空白＞纯紧凑文字系统字符边界，孤儿片段兜底合并）、`realWrapWordPieces`（逐字歌词，"就近找最大停顿"断点，lyric-align 式）、`proportionalTiming`（按字符数比例分配时长 + 时长过短兜底合并邻居）。**旧的 `segments`/`balancedSegments`/`wordSegments`/`estimatedVisualLineCount` 等单位预算函数原样保留、零改动**——它们现在是生产代码里的死代码（没有任何调用点），但删除它们、连带删除/改写它们各自的 `LyricDisplaySegmenterTests` 用例超出了这次任务"只做拆分决策改动"的范围，留作后续清理（见下方"待办"）。
+- `Sources/MusicMiniPlayerCore/UI/LyricsView.swift`——`makeDisplayLyricLines` 重写为调用上述新函数；`shouldKeepDisplayLineUnsplit`/`displayTiming` 保留原名，改造成薄封装（前者变成纯粹的 `pieceCount <= 1` 判断，后者转发到 `LyricDisplaySegmenter.proportionalTiming`）；新增歌词列宽度状态（`CacheState.segmentationRowWidth`，默认 250 即首启动窗口宽度）+ `updateLyricsSegmentationWidthIfNeeded`（首次拿到真实宽度立即生效不防抖，之后每次宽度变化走 150ms 防抖再重建，同款生成计数器防抖模式已在文件里用过——`scheduleTranslationSessionConfigUpdate`）+ `refreshDisplayLineCache(forceRebuild:)` 新增旁路参数，让宽度变化能绕开原有的"内容没变就跳过"去重门。`isBackground` 行现在显式排在 `makeDisplayLyricLines` 最前面，和 prelude/纯音乐提示一样永不拆分（规格第 6 条）。
+
+### 实装中发现并修的两个 bug（先复现再修，均已用假数据钉死）
+
+1. **脚本边界候选把词内标点也当断点**：`Don't let one mistake keep us apart` 在 250pt 下被切成 `Don'` / `t let one mistake keep us apart`——撇号被判定成"拉丁→其它符号→拉丁"两次脚本切换,抢在空白断点之前命中,直接切进单词内部,违反规格"永不切进拉丁词内部"的硬性要求。根因：`ScriptClass.other`（涵盖所有标点/符号）被当成一个独立"文字系统",任何字符转入/转出 `.other` 都被判定为脚本边界。修复：脚本边界只在**两侧都是**紧凑文字系统或拉丁字母/数字时才算数,`.other` 两侧的转换一律不算。已用 `acceptance_a`/`acceptance_b` 两个测试钉死（改动前会复现,改动后绿）。
+2. **数据集本身的时间轴 bug**：`syn-001`（60 字无空格逐字 CJK 合成用例）行级 `startTime/endTime` 写成 100–112 秒,但其 `words` 数组的真实时间戳是 0–12 秒——旧代码从不使用逐字歌词的 words 时间戳做拆分,这个不一致从未被发现;Plan A 一上来就用 words 的真实时间戳算 timing,立刻被 `acceptance_d`（逐字计时误差必须为 0）测出来。已修正 fixture 里的 `startTime`/`endTime` 为 0.0/12.0（与 words 对齐）。
+
+### 验收结果（`LongLineEvalTests`，7 个测试全绿，180pt 与 250pt 都测）
+
+| 验收点 | 结果 |
+|---|---|
+| (a) 每段 ≤2 视觉行,除非不可再拆的单 token 或时长驱动的合并 | ✅ `test_acceptance_a`（无违规） |
+| (b) 零处切进词内部 | ✅ `test_acceptance_b`（`midWord` 恒为 0） |
+| (c) 翻译整体挂第一段,其余段不带翻译 | ✅ `test_acceptance_c` |
+| (d) 逐字歌词拆分后计时误差为 0 | ✅ `test_acceptance_d`（syn-001 + 11 条 ground-truth 用真实 trueWords 重建逐字行,共同验证） |
+| (e) 没有片段短于 1.2s 下限,除非整行本来就更短 | ✅ `test_acceptance_e` |
+| (f) 打印 before/after 指标表 | ✅ `test_beforeAfterComparison_printsMetricsTable` |
+
+Before/after 汇总（180pt,54 行数据集,`test_beforeAfterComparison_printsMetricsTable` 实测输出）：
+
+| 指标 | BEFORE（旧：单位预算触发 + 均分时长） | AFTER（Plan A：真实折行触发 + 优先级断点 + 比例计时） |
+|---|---:|---:|
+| 窄宽度平均最大视觉行数 | 3.870 | **2.630** |
+| 仍 ≥4 视觉行的行数 | 24/54（44%） | **6/54（11%）** |
+| 断点=词中间硬失败占比 | 12% | **0%** |
+| 断点=标点/空白/脚本边界占比 | 88%（几乎全是"软长度阈值恰好命中空白",标点 0%） | 7% 标点 + 70% 空白 + 3% 脚本边界 + 20% 紧凑文字系统字符边界（合计 100% 非硬失败） |
+
+250pt（首启动默认宽度,长行候选本来就少）：平均最大视觉行数 3.870→3.333,仍 ≥4 行 24/54→11/54——改善幅度比 180pt 小,印证了研究笔记前半部分的发现："占满窗口"这个症状主要在窄宽度下暴露,但 Plan A 在两个宽度下都是净改善,没有以窄换宽的取舍。
+
+Ground-truth 子集（11 条真实逐字歌词,180pt）行级计时误差,BEFORE 用"按真实折行数强制拆分 + 均分"（旧单位预算在这批短行上根本不触发拆分,只能这样对照）,AFTER 用 Plan A 完整链路（真实折行触发 + 比例计时,且这批线现在会被真正拆分,不用再强制）：
+
+| | 中位数误差 | p90 误差 | 参与打分的片段数 |
+|---|---:|---:|---:|
+| BEFORE | 0.173s | 0.837s | 28 |
+| AFTER | **0.142s** | 0.934s | 15 |
+
+中位数变好,p90 略差；参与打分的片段数从 28 降到 15,因为 Plan A 下有些行现在整句只拆成 2 段（比研究笔记里"强制按真实折行数拆到 3 段"更保守）,可比片段变少,这个对比口径上不完全对等,只作为方向性参考,不作为唯一验收依据——(a)-(e) 的硬性断言才是验收线。
+
+### 已更新的既有测试（Plan A 主动改变了它们断言的行为,逐一列出）
+
+- `Tests/MusicMiniPlayerTests/NativeLyricsSurfaceSourceTests.swift` 的 `testSplitDisplayLinesDoNotDuplicateFallbackTranslationAcrossSegments` → 改名 `testSplitDisplayLinesAttachFullTranslationToFirstPieceOnly`：旧断言是"未匹配的翻译段留空,不许重复整段翻译"（哪怕改了名字这条依然部分成立）,新断言是规格第 5 条更强的版本——翻译只挂第一段,其余段永远是 `nil`,不管是逐字还是行级拆分路径。
+- `Tests/MusicMiniPlayerTests/RapidSwitchTests.swift` 的 `testWordLevelLyricsBypassDisplayChunking` → 改名 `testWordLevelLyricsSplitViaRealWrapWithExactWordTiming`：旧断言是"逐字歌词永远不拆、不许用 `wordSegments`"——这正是创始人报告的症状本身,规格第 3 条明确要求反过来。新断言：逐字歌词现在走 `realWrapWordPieces`（不是 `wordSegments`,后者是给别的调用点设计的、只按首个 ≥0.35s 停顿硬切、不测真实折行、也不找"就近平衡点"）,且每段计时必须来自该组真实 `LyricWord` 时间戳,不能是估算值。
+- `LyricDisplaySegmenterTests.swift`：**零改动**。它测的 `segments`/`balancedSegments`/`wordSegments`/`estimatedVisualLineCount` 等旧函数原样保留、没有被调用点改变行为,29 个用例全部原样通过。
+
+### 安全核查
+
+`~/Library/Application Support/nanoPod/` 目录下全部 101 个文件（含 `lyrics_cache.json`）的 mtime + 文件大小,在本次任务全部 `swift test`/`swift build` 调用前后逐字节比对（`stat -f "%N %m %z"` 排序后 diff）：**零差异**。没有测试读写这个目录,也没有产生网络流量（所有新增/改动测试只读本仓库内的 `Fixtures/long_line_eval.json`,调用的都是纯函数）。
+
+### 渲染器相关担忧：无需改动,但有两处预先存在的、与本任务无关的失败
+
+`Tests/MusicMiniPlayerTests/NativeLyricsSurfaceSourceTests.swift` 里的 `testNativeLyricsLayoutInsetsMatchV28SwiftUIRenderer` 和 `testNativeSurfaceDoesNotHostSwiftUIRowViews` 两个测试在**我改动之前的 `main`（rebase 后、Plan A 改动之前）就已经失败**——用 `git stash` 把我的改动完全移出后重跑,失败现象和失败行号完全一致。两个测试都只读取 `NativeLyricsLayerRendererView.swift`/`NativeLyricsLayerSupport.swift`/`NativeLyricsRowView.swift` 的源码文本（我完全没有碰过这几个文件）,失败原因与 Plan A 无关,是 main 分支上先前某次改动遗留的问题。按任务要求"如果 Plan A 好像需要改渲染器,停下汇报"——这两个失败**不是** Plan A 引出的,不需要为了这次任务去碰渲染器文件；已如实记录,建议开一个独立任务查一下 main 上这两个测试从哪次提交开始红的。
+
+### 待办 / 值得单独立项的点
+
+1. **`docs/lyrics-ux-contract.md` §E 有一行和 Plan A 的新行为直接冲突**："🔴 长行分段 display-only；CJK 从不重新分词；≈8 词短语保持一个单元；不做孤字平衡式补丁；**每个分段都要有翻译**" ——最后一条"每个分段都要有翻译"是旧设计（也是这次 eval 任务原本要推翻的"翻译被硬切"问题的另一种表述）,创始人选定的规格第 5 条明确改成"翻译整体只挂第一段,其余段不带"。这次任务只被要求"读"这份契约文档,没被要求改它；没有动这一行,但这是一处需要创始人或后续任务显式更新的文档-代码不一致,先在这里标出来。
+2. **旧的单位预算函数（`segments`/`balancedSegments`/`wordSegments`/`estimatedVisualLineCount`/`displayUnits` 等）现在是生产代码里的死代码**,只被自己的测试用到,没有任何生产调用点。保留是这次任务刻意的保守选择（避免不必要的测试改动、超出"只改拆分决策层"的范围）；建议 Plan A 上线并经过创始人肉眼终验后,单独开一个任务清理这批死代码 + 对应测试。
