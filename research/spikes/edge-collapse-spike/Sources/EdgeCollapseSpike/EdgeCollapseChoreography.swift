@@ -18,91 +18,94 @@ import MusicMiniPlayerCore
 public enum EdgeCollapseChoreography {
     typealias S = EdgeCollapsePlan.Step
     typealias Stage = EdgeCollapseMotion.Stage
+    typealias G = EdgeCollapseChannelGroup
 
+    /// v13 (2026-09-22). Every geometry channel moves on ONE spring per
+    /// transition, launched at speed (pure exponential ease-out: fastest on
+    /// the first frame, never re-accelerates). The shape story comes from
+    /// the axes running at different rates, not from chained stages:
+    /// - drop out: width fast, height 1.7× slower → it appears as a round
+    ///   drop, swells round, then stretches tall into the capsule;
+    /// - collapse: height fast, width slow → height goes first, then a
+    ///   narrow stalk is absorbed into the edge (ref1);
+    /// - expand: width faster than height → rounder than both ends on the
+    ///   way (ref1's bulge), then the card.
+    /// Only non-geometry channels (edge body bulge, light, corners, opacity)
+    /// may take a second stage or a delay. v12's chained geometry stages
+    /// kicked the drop a second time (founder: "卡一下顿一下").
     public static func stages(kind: EdgeCollapseTransitionKind, fromTucked: Bool, page: PlayerPage,
                               style: EdgeCollapseTuckStyle, bounce: EdgeCollapseBounce,
                               tempo: EdgeCollapseTempo) -> [EdgeCollapseMotion.Stage] {
         let k = tempo.rawValue
-        func s(_ d: Double, _ b: Double, _ delay: Double = 0) -> S { EdgeCollapsePlan.step(d, b, delay: delay, tempo: tempo) }
-        func pose(_ p: EdgeCollapseKeyPose) -> [Double] { EdgeCollapsePoses.pose(p, page: page, style: style).vector() }
-        func stage(_ at: Double, _ to: [Double], _ steps: [EdgeCollapseChannelGroup: S]) -> Stage {
-            Stage(start: at * k, to: to, plan: EdgeCollapsePlan(steps, fallback: s(0.2, 0)))
+        func s(_ d: Double, _ b: Double = 0, _ delay: Double = 0) -> S { EdgeCollapsePlan.step(d, b, delay: delay, tempo: tempo) }
+        func pose(_ p: EdgeCollapseKeyPose) -> EdgeCollapsePose { EdgeCollapsePoses.pose(p, page: page, style: style) }
+        func stage(_ at: Double, _ to: EdgeCollapsePose, _ steps: [G: S], impulse: Double) -> Stage {
+            Stage(start: at * k, to: to.vector(), plan: EdgeCollapsePlan(steps, fallback: s(0.2)), impulse: impulse)
         }
-        let landBounce = bounce == .bouncy ? 0.32 : 0.05
-        let cardEnd = EdgeCollapsePoses.cardFromCapsule(page: page, style: style).vector()
+        let cardEnd = EdgeCollapsePoses.cardFromCapsule(page: page, style: style)
 
-        // Stages hand over while the previous one is still accelerating, so
-        // the whole transition is one push: speed rises once, peaks once and
-        // falls (LiquidContinuityTests). v11 handed over after the previous
-        // stage had nearly stopped: fast → slow → kicked fast again, the
-        // hitch the founder felt as the drop came out and went back.
-        // Intermediate stages have no bounce; only the landing may bounce.
         switch kind {
         case .collapse:
+            let land = bounce == .bouncy ? 0.28 : 0
+            let tucked = pose(.tucked)
+            // Corners round up first (the squash), then settle to the sliver.
+            let first = tucked.taking([.bodyCorner], from: pose(.squash))
             return [
-                // Panel content goes first; the card loses height while width stays wide.
-                stage(0, pose(.squash), [.panel: s(0.08, 0), .dim: s(0.10, 0), .body: s(0.26, 0),
-                                         .capsule: s(0.26, 0), .hero: s(0.28, 0), .heroFade: s(0.2, 0),
-                                         .material: s(0.14, 0)]),
-                // Width pinches into a stalk narrower than both ends; black by now (ref1).
-                stage(0.04, pose(.stalk), [.body: s(0.30, 0), .capsule: s(0.30, 0),
-                                           .hero: s(0.30, 0), .heroFade: s(0.18, 0), .material: s(0.16, 0)]),
-                // Absorbed into the edge; Bouncy overshoots into the edge and settles.
-                // The black goes into the bezel; the edge light comes up after.
-                stage(0.09, pose(.tucked), [.body: s(0.34, landBounce), .capsule: s(0.32, 0),
-                                            .hero: s(0.30, 0), .heroFade: s(0.16, 0),
-                                            .stripContent: s(0.16, 0, 0.18), .glow: s(0.30, 0, 0.22)]),
+                stage(0, first, [.bodyV: s(0.22), .bodyH: s(0.40, land), .capsuleH: s(0.40), .capsuleV: s(0.22),
+                                 .bodyCorner: s(0.12), .panel: s(0.12, 0, 0.05), .material: s(0.16, 0, 0.03),
+                                 .dim: s(0.10), .hero: s(0.3), .heroFade: s(0.2),
+                                 .glow: s(0.30, 0, 0.26), .stripContent: s(0.16, 0, 0.26)], impulse: 1),
+                stage(0.10, tucked, [.bodyCorner: s(0.30)], impulse: 0),
             ]
         case .floatOut:
+            let floating = pose(.floating)
+            // The edge body swells as the drop leaves it, then goes back in;
+            // the light gathers where the drop comes out, then goes out.
+            let first = floating.taking([.bodyH, .bodyV, .bodyCorner, .glow], from: pose(.drop))
             return [
-                // The handle bulges; a small drop necks out of it (ref4).
-                // The light gathers to where the drop comes out of the bezel.
-                stage(0, pose(.drop), [.body: s(0.28, 0), .capsule: s(0.28, 0), .hero: s(0.28, 0),
-                                       .heroFade: s(0.12, 0), .stripContent: s(0.08, 0), .glow: s(0.22, 0)]),
-                // It pinches off and swells into a round blob; the handle goes back into the edge.
-                stage(0.04, pose(.blob), [.capsule: s(0.30, 0), .body: s(0.28, 0), .hero: s(0.30, 0),
-                                          .heroFade: s(0.12, 0), .glow: s(0.16, 0)]),
-                // The blob stretches into the capsule; glass comes in; text resolves from blur last.
-                stage(0.12, pose(.floating), [.capsule: s(0.42, 0), .hero: s(0.42, 0),
-                                              .capsuleContent: s(0.18, 0, 0.18), .material: s(0.26, 0, 0.10)]),
+                stage(0, first, [.capsuleH: s(0.34), .capsuleV: s(0.58), .capsuleCorner: s(0.10),
+                                 .hero: s(0.46), .heroFade: s(0.22, 0, 0.06),
+                                 .bodyH: s(0.16), .bodyV: s(0.16), .bodyCorner: s(0.16),
+                                 .glow: s(0.16), .stripContent: s(0.08),
+                                 .capsuleContent: s(0.18, 0, 0.24), .material: s(0.30, 0, 0.12)], impulse: 1),
+                stage(0.07, floating, [.bodyH: s(0.26), .bodyV: s(0.26), .bodyCorner: s(0.26), .glow: s(0.14)], impulse: 0),
             ]
         case .retract:
+            let tucked = pose(.tucked)
+            // Height goes faster than width: round again, then into the edge.
+            // The edge body comes back out to meet it, then settles.
+            let first = tucked.taking([.bodyH, .bodyV, .bodyCorner, .glow], from: pose(.drop))
             return [
-                stage(0, pose(.blob), [.capsuleContent: s(0.08, 0), .capsule: s(0.26, 0), .hero: s(0.26, 0),
-                                       .material: s(0.12, 0)]),
-                // The edge shape comes back out, bulged, and the drop necks onto it.
-                stage(0.04, pose(.drop), [.capsule: s(0.28, 0), .body: s(0.28, 0),
-                                          .hero: s(0.26, 0), .heroFade: s(0.12, 0), .glow: s(0.20, 0)]),
-                // The drop is absorbed; the handle settles.
-                stage(0.09, pose(.tucked), [.capsule: s(0.32, 0), .body: s(0.34, 0), .hero: s(0.28, 0),
-                                            .heroFade: s(0.14, 0), .stripContent: s(0.16, 0, 0.12), .glow: s(0.30, 0)]),
+                stage(0, first, [.capsuleH: s(0.46), .capsuleV: s(0.28), .capsuleCorner: s(0.10),
+                                 .hero: s(0.30), .heroFade: s(0.14),
+                                 .capsuleContent: s(0.08), .material: s(0.12),
+                                 .bodyH: s(0.20, 0, 0.10), .bodyV: s(0.20, 0, 0.10), .bodyCorner: s(0.20, 0, 0.10),
+                                 .glow: s(0.16, 0, 0.12)], impulse: 1),
+                stage(0.22, tucked, [.bodyH: s(0.26), .bodyV: s(0.26), .bodyCorner: s(0.26), .glow: s(0.30),
+                                     .stripContent: s(0.16)], impulse: 0),
             ]
         case .expand:
-            var list: [Stage] = []
-            var t0 = 0.0
-            if fromTucked {
-                list.append(stage(0, pose(.drop), [.body: s(0.22, 0), .capsule: s(0.22, 0), .hero: s(0.22, 0),
-                                                   .heroFade: s(0.1, 0), .stripContent: s(0.06, 0), .glow: s(0.18, 0)]))
-                t0 = 0.035
-            }
-            // Bulge round first (ref1), bigger than the capsule, rounder than the card.
-            list.append(stage(t0, pose(.expandBlob), [.capsuleContent: s(0.08, 0), .capsule: s(0.30, 0),
-                                                      .body: s(0.20, 0), .hero: s(0.30, 0),
-                                                      .heroFade: s(0.12, 0), .material: s(0.14, 0), .glow: s(0.14, 0)]))
-            // Stretch into the card. Only the capsule grows (one outline); the
-            // real panel fades in only after the cover has landed.
-            list.append(stage(t0 + 0.05, cardEnd, [.capsule: s(0.44, 0.14), .hero: s(0.44, 0.10),
-                                                   .panel: s(0.16, 0, 0.32), .heroFade: s(0.12, 0)]))
-            return list
+            // Width faster than height: rounder than both ends on the way.
+            // Corners swell into a blob first, then settle to the card's.
+            // The real panel is revealed in place inside the liquid.
+            let blobCorner = cardEnd.taking([.capsuleCorner], from: pose(.expandBlob))
+            return [
+                stage(0, blobCorner, [.capsuleH: s(0.30), .capsuleV: s(0.52), .capsuleCorner: s(0.12),
+                                      .bodyH: s(0.18), .bodyV: s(0.18), .bodyCorner: s(0.18),
+                                      .glow: s(0.12), .stripContent: s(0.06),
+                                      .capsuleContent: s(0.08), .heroFade: s(0.10), .hero: s(0.3),
+                                      .panel: s(0.10, 0, fromTucked ? 0.04 : 0), .material: s(0.14)], impulse: 1),
+                stage(0.07, cardEnd, [.capsuleCorner: s(0.32)], impulse: 0),
+            ]
         }
     }
 
     /// Interrupted mid-flight: one direct stage from the current value and
-    /// velocity to the new resting pose (no detour through key poses).
+    /// velocity to the new resting pose.
     public static func direct(to: [Double], tempo: EdgeCollapseTempo) -> [EdgeCollapseMotion.Stage] {
-        func s(_ d: Double, _ b: Double, _ delay: Double = 0) -> EdgeCollapsePlan.Step { EdgeCollapsePlan.step(d, b, delay: delay, tempo: tempo) }
+        func s(_ d: Double, _ b: Double = 0) -> EdgeCollapsePlan.Step { EdgeCollapsePlan.step(d, b, delay: 0, tempo: tempo) }
         return [Stage(start: 0, to: to, plan: EdgeCollapsePlan(
-            [.capsuleContent: s(0.14, 0), .stripContent: s(0.14, 0), .panel: s(0.16, 0)],
-            fallback: s(0.32, 0.15)))]
+            [.capsuleContent: s(0.14), .stripContent: s(0.14), .panel: s(0.16)],
+            fallback: s(0.32)))]
     }
 }

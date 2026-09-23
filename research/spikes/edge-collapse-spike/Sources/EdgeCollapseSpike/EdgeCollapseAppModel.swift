@@ -171,10 +171,7 @@ public final class EdgeCollapseAppModel: ObservableObject {
     // MARK: - Two-finger swipe: the collapse follows the fingers
 
     private func restCardPose() -> EdgeCollapsePose {
-        var rest = EdgeCollapsePoses.pose(.card, page: page, style: tuckStyle)
-        let h = EdgeCollapsePoses.cardHero(page)
-        rest.hero = h.rect; rest.heroCorner = h.corner; rest.heroBlur = h.blur
-        return rest
+        EdgeCollapsePoses.pose(.card, page: page, style: tuckStyle)
     }
 
     public func swipeBegan() {
@@ -204,14 +201,11 @@ public final class EdgeCollapseAppModel: ObservableObject {
         let now = CACurrentMediaTime()
         let tau = s.trackedMotionTime
         if s.commits {
-            // Carry on from where the fingers left it. The landing stage has
-            // not started yet (tau <= 0.08s < 0.09s), so it can be rebuilt
-            // with a bounce only when the release carried momentum.
-            let stages = EdgeCollapseChoreography.stages(kind: .collapse, fromTucked: false, page: page, style: tuckStyle,
-                                                         bounce: s.landingIsBouncy ? .bouncy : .settle, tempo: tempo)
+            // Carry on with the very motion the fingers were driving, from
+            // where they left it: nothing is rebuilt, so nothing can jump.
             EdgeCollapseLog.event(t0: now, from: presentation, to: .collapsing, anim: "collapse-swipe", event: "start")
             flushRecorder()
-            motion = EdgeCollapseMotion(from: tm.from, velocity: tm.velocity, stages: stages)
+            motion = tm
             motionKind = .collapse
             motionStart = now - tau
             pendingSettle = .settled
@@ -290,14 +284,7 @@ public final class EdgeCollapseAppModel: ObservableObject {
         if let motion {
             start = motion.sample(at: now - motionStart)
         } else {
-            // At rest in the card the cover is hidden under the panel; take its
-            // rect for the page showing now (album / lyrics / playlist).
-            var rest = pose
-            if from == .card {
-                let h = EdgeCollapsePoses.cardHero(page)
-                rest.hero = h.rect; rest.heroCorner = h.corner; rest.heroBlur = h.blur
-            }
-            start = (rest.vector(), Array(repeating: 0, count: EdgeCollapsePose.channelCount))
+            start = (pose.vector(), Array(repeating: 0, count: EdgeCollapsePose.channelCount))
         }
         motion = EdgeCollapseMotion(from: start.value, velocity: start.velocity, stages: stages)
         motionKind = kind
@@ -313,8 +300,11 @@ public final class EdgeCollapseAppModel: ObservableObject {
 
     // MARK: - Frame loop
 
+    /// The display link is created once and paused between motions: creating
+    /// it per transition delayed the first frame by ~15ms every time.
     private func startLink() {
-        guard link == nil, let screen = NSScreen.main else { return }
+        if let link { link.isPaused = false; return }
+        guard let screen = NSScreen.main else { return }
         let l = screen.displayLink(target: self, selector: #selector(frame(_:)))
         // Without this the system picks a low adaptive rate (measured 25-40ms
         // gaps); SwiftUI's own animations request the display maximum.
@@ -325,8 +315,7 @@ public final class EdgeCollapseAppModel: ObservableObject {
     }
 
     private func stopLink() {
-        link?.invalidate()
-        link = nil
+        link?.isPaused = true
     }
 
     @objc private func frame(_ l: CADisplayLink) { tick() }

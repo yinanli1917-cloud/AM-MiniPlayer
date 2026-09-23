@@ -55,14 +55,35 @@ private struct GlassRootView: View {
 
     // MARK: - The real nanoPod panel
 
+    /// The real panel never moves or scales: it sits at the card rect and is
+    /// seen through the liquid — clipped to the liquid's visible part, so the
+    /// liquid growing IS the panel appearing (founder 2026-09-22). A plain
+    /// rounded-rect clip (cheap), not a mask of the outline.
     private var panelView: some View {
-        let r = EdgeCollapsePoses.cardRect
+        let card = EdgeCollapsePoses.cardRect
+        let clip = liquidClip
+        let atRest = model.presentation == .card && abs(clip.rect.width - card.width) < 0.5
         return PanelLayer(edgePresentation: edgePresentation)
             .equatable()
-            .shadow(color: .black.opacity(0.35 * clamp01(pose.panelOpacity)), radius: 18, y: 8)
+            .offset(x: card.minX - clip.rect.minX, y: card.minY - clip.rect.minY)
+            .frame(width: max(clip.rect.width, 0), height: max(clip.rect.height, 0), alignment: .topLeading)
+            .clipShape(RoundedRectangle(cornerRadius: max(clip.corner, 0), style: .continuous))
+            .shadow(color: .black.opacity(atRest ? 0.35 : 0), radius: 18, y: 8)
             .opacity(clamp01(pose.panelOpacity))
-            .allowsHitTesting(pose.panelOpacity > 0.9)
-            .position(x: r.midX, y: r.midY)
+            .allowsHitTesting(atRest && pose.panelOpacity > 0.9)
+            .position(x: clip.rect.midX, y: clip.rect.midY)
+    }
+
+    /// The larger visible part of the liquid and its corner radius.
+    private var liquidClip: (rect: CGRect, corner: CGFloat) {
+        let b = CGRect(x: pose.body.maxX - max(pose.body.width, 0), y: pose.body.minY,
+                       width: max(pose.body.width, 0), height: pose.body.height)
+        let c = pose.capsule
+        let bodyArea = b.width * b.height, capArea = max(c.width, 0) * max(c.height, 0)
+        if capArea > bodyArea {
+            return (c, min(pose.capsuleCorner, min(c.width, c.height) / 2))
+        }
+        return (b, min(pose.bodyCornerInner, min(b.width, b.height) / 2))
     }
 
     // MARK: - The one liquid object
@@ -120,32 +141,23 @@ private struct GlassRootView: View {
     /// track. Paused = dimmer. Touching it brightens it at once.
     private var edgeLight: some View {
         let t = EdgeCollapseTokens.self
-        let len = max(pose.glowLength, 0)
+        let len = CGFloat(max(pose.glowLength, 0))
         let boost = store.hoverBoost
         let level = clamp01(pose.glow) * (music.isPlaying ? 1 : 0.55)
-        let halo = t.glowHalo * (1 + 0.5 * boost)
         let color = store.glowColor
-        return ZStack(alignment: .trailing) {
-            // Halo: soft light fading inward from the edge and toward both
-            // ends — gradients, not a blur filter (its first render cost a
-            // 28ms frame when the light came up).
-            Rectangle()
-                .fill(LinearGradient(colors: [color.opacity(0), color.opacity(0.55 + 0.35 * boost)],
-                                     startPoint: .leading, endPoint: .trailing))
-                .frame(width: halo, height: len + halo)
-                .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.3),
-                                             .init(color: .black, location: 0.7), .init(color: .clear, location: 1)],
-                                     startPoint: .top, endPoint: .bottom))
-            // Track and lit progress (from the bottom), on the edge itself.
-            ZStack(alignment: .bottom) {
-                Capsule().fill(color.opacity(0.28))
-                Capsule().fill(color).frame(height: len * progress)
-            }
-            .frame(width: t.glowCore, height: len)
+        let rim = EdgeRimPath(width: t.handleSize.width, height: len, edge: container.width, midY: container.height / 2)
+        return ZStack {
+            // Soft light: layered strokes of falling opacity (no blur filter).
+            rim.stroke(color.opacity(0.10 + 0.10 * boost), style: StrokeStyle(lineWidth: 8 + 4 * boost, lineCap: .round, lineJoin: .round))
+            rim.stroke(color.opacity(0.22 + 0.15 * boost), style: StrokeStyle(lineWidth: 4 + 2 * boost, lineCap: .round, lineJoin: .round))
+            // Track, then the lit part = playback progress, starting at the
+            // bottom where the sliver meets the bezel.
+            rim.stroke(color.opacity(0.30), style: StrokeStyle(lineWidth: t.glowCore, lineCap: .round, lineJoin: .round))
+            rim.trim(from: 0, to: progress)
+                .stroke(color, style: StrokeStyle(lineWidth: t.glowCore, lineCap: .round, lineJoin: .round))
         }
-        .frame(width: halo, height: len + halo, alignment: .trailing)
+        .frame(width: container.width, height: container.height)
         .opacity(level)
-        .position(x: container.width - halo / 2, y: container.height / 2)
         .allowsHitTesting(false)
     }
 
@@ -184,7 +196,8 @@ private struct GlassRootView: View {
     /// are scaled to read the same size (founder 2026-09-22).
     @ViewBuilder
     private func controlButtons(ink: Color) -> some View {
-        let ring: CGFloat = 36, stroke: CGFloat = 2.5
+        // Ring + pause reads the same size as the next glyph (founder 2026-09-22).
+        let ring: CGFloat = 26, stroke: CGFloat = 2
         ZStack {
             Circle().stroke(ink.opacity(0.25), lineWidth: stroke)
             Circle().trim(from: 0, to: progress)
@@ -193,14 +206,14 @@ private struct GlassRootView: View {
             PlayPauseControlButton(isPlaying: music.isPlaying, inkColor: ink, hoverFill: ink.opacity(0.18)) {
                 music.togglePlayPause()
             }
-            .scaleEffect(0.72)
+            .scaleEffect(0.52)
         }
         .frame(width: ring, height: ring)
         // Next: no ring (founder 2026-09-22); glyph scaled down to read the
         // same size as the pause glyph inside its progress ring.
         SkipControlButton(action: { music.nextTrack() }, direction: 1, inkColor: ink, hoverFill: ink.opacity(0.18))
-            .scaleEffect(0.78)
-            .frame(width: ring, height: ring)
+            .scaleEffect(1.05)
+            .frame(width: 32, height: ring)
     }
 
     // MARK: - Cover that flies between panel, capsule and edge
@@ -257,5 +270,29 @@ private struct PanelLayer: View, Equatable {
             .environmentObject(edgePresentation)
             .frame(width: r.width, height: r.height)
             .clipShape(RoundedRectangle(cornerRadius: EdgeCollapseTokens.cardCornerRadius, style: .continuous))
+    }
+}
+
+/// The three inner sides of the black sliver at the screen edge (top, inner
+/// side, bottom), drawn from where its bottom meets the bezel, so a trim
+/// from 0 is progress. The bezel side has no line.
+struct EdgeRimPath: Shape {
+    var width: CGFloat
+    var height: CGFloat
+    var edge: CGFloat
+    var midY: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        guard height > 0.5 else { return p }
+        let r = min(width, height / 2)
+        let top = midY - height / 2, bottom = midY + height / 2, inner = edge - width
+        p.move(to: CGPoint(x: edge, y: bottom))
+        p.addLine(to: CGPoint(x: inner + r, y: bottom))
+        p.addArc(center: CGPoint(x: inner + r, y: bottom - r), radius: r, startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false)
+        p.addLine(to: CGPoint(x: inner, y: top + r))
+        p.addArc(center: CGPoint(x: inner + r, y: top + r), radius: r, startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
+        p.addLine(to: CGPoint(x: edge, y: top))
+        return p
     }
 }

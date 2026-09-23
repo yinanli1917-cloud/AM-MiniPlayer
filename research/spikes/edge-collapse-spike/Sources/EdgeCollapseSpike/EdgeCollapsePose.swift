@@ -93,17 +93,31 @@ public struct EdgeCollapsePose: Equatable {
 
 /// Which spring/delay a channel follows.
 public enum EdgeCollapseChannelGroup: Int, CaseIterable, Sendable {
-    case body, capsule, hero, heroFade, panel, capsuleContent, stripContent, dim, material, glow
+    // Geometry is split per axis so a shape can change its proportions
+    // (round first, then tall) within ONE spring per channel.
+    case bodyH, bodyV, bodyCorner
+    case capsuleH, capsuleV, capsuleCorner
+    case hero, heroFade, panel, capsuleContent, stripContent, dim, material, glow
 
-    public static let map: [EdgeCollapseChannelGroup] = {
-        let counts: [(EdgeCollapseChannelGroup, Int)] = [
-            (.body, 6), (.capsule, 5), (.hero, 5), (.heroFade, 2), (.panel, 1),
-            (.capsuleContent, 2), (.stripContent, 1), (.dim, 1), (.material, 1), (.glow, 2),
-        ]
-        var m: [EdgeCollapseChannelGroup] = []
-        for (g, n) in counts { m.append(contentsOf: Array(repeating: g, count: n)) }
-        return m
-    }()
+    /// Channel index → group, same order as `EdgeCollapsePose.vector()`:
+    /// body maxX, minY, width, height, cornerInner, cornerEdge;
+    /// capsule minX, minY, width, height, corner; hero ×5; heroOpacity,
+    /// heroBlur; panel; capsule content ×2; strip; dim; glass; glow ×2.
+    public static let map: [EdgeCollapseChannelGroup] = [
+        .bodyH, .bodyV, .bodyH, .bodyV, .bodyCorner, .bodyCorner,
+        .capsuleH, .capsuleV, .capsuleH, .capsuleV, .capsuleCorner,
+        .hero, .hero, .hero, .hero, .hero,
+        .heroFade, .heroFade,
+        .panel,
+        .capsuleContent, .capsuleContent,
+        .stripContent,
+        .dim,
+        .material,
+        .glow, .glow,
+    ]
+
+    /// Geometry groups (the ones whose speed the eye follows).
+    public static let geometry: [EdgeCollapseChannelGroup] = [.bodyH, .bodyV, .capsuleH, .capsuleV]
 }
 
 /// Resting states and the in-between shapes the references show.
@@ -240,61 +254,58 @@ public enum EdgeCollapsePoses {
     public static func pose(_ key: EdgeCollapseKeyPose, page: PlayerPage, style: EdgeCollapseTuckStyle) -> EdgeCollapsePose {
         let card = cardRect
         let tucked = tuckedRect(style)
-        let ch = cardHero(page)
-        let isLyrics = page == .lyrics
         let parked = { (r: CGRect) in CGRect(x: r.midX - 1, y: r.midY - 1, width: 2, height: 2) }
+        let gone = CGRect(x: edge, y: tucked.minY, width: 0, height: tucked.height * 0.6)
+        // The flying cover belongs to the capsule only. The real panel never
+        // migrates: it stays where it is and the liquid reveals or covers it
+        // (founder 2026-09-22: expanding should BE the panel, not move text).
+        let capCover = capsuleCoverRect
         switch key {
         case .card:
             return EdgeCollapsePose(
                 body: card, bodyCornerInner: t.cardCornerRadius, bodyCornerEdge: t.cardCornerRadius,
                 capsule: parked(card), capsuleCorner: 1,
-                hero: ch.rect, heroCorner: ch.corner, heroOpacity: 1, heroBlur: ch.blur,
+                hero: capCover, heroCorner: t.capsuleArtworkCorner, heroOpacity: 0, heroBlur: 0,
                 panelOpacity: 1, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
                 stripContentOpacity: 0, dim: 0, glass: 1)
         case .squash:
+            // The panel is still there, now seen through the squashed liquid.
             let r = squashRect
-            let hero = isLyrics ? coverFill(r) : coverIn(r, inset: 10)
             return EdgeCollapsePose(
                 body: r, bodyCornerInner: 44, bodyCornerEdge: 36,
                 capsule: parked(r), capsuleCorner: 1,
-                hero: hero, heroCorner: isLyrics ? 0 : 20, heroOpacity: 1, heroBlur: isLyrics ? 18 : 0,
-                panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
+                hero: capCover, heroCorner: t.capsuleArtworkCorner, heroOpacity: 0, heroBlur: 0,
+                panelOpacity: 1, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
                 stripContentOpacity: 0, dim: 1, glass: 0.4)
         case .stalk:
             let r = stalkRect(style)
-            let th = tuckedHero(style)
             return EdgeCollapsePose(
                 body: r, bodyCornerInner: r.width / 2, bodyCornerEdge: r.width / 2,
                 capsule: parked(r), capsuleCorner: 1,
-                hero: coverIn(r, inset: 2), heroCorner: 5,
-                heroOpacity: 0.4, heroBlur: isLyrics ? 8 : 2,
+                hero: capCover, heroCorner: t.capsuleArtworkCorner, heroOpacity: 0, heroBlur: 0,
                 panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
                 stripContentOpacity: 0, dim: 1)
         case .tucked:
-            let th = tuckedHero(style)
-            // No black body: it has gone into the bezel; only the light stays.
-            let intoEdge = CGRect(x: edge, y: tucked.minY, width: 0, height: tucked.height)
+            // A thin black sliver joined to the bezel, so you can tell
+            // something is there; the light runs along its inner edge.
+            let d = dropRect(style)
             return EdgeCollapsePose(
-                body: intoEdge, bodyCornerInner: tucked.width / 2, bodyCornerEdge: 0,
+                body: tucked, bodyCornerInner: tucked.width / 2, bodyCornerEdge: 0,
                 capsule: CGRect(x: edge, y: midY, width: 0, height: 0), capsuleCorner: 1,
-                hero: th.rect, heroCorner: 3, heroOpacity: th.opacity, heroBlur: 0,
+                hero: coverIn(d, inset: 6), heroCorner: 8, heroOpacity: 0, heroBlur: 0,
                 panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
                 stripContentOpacity: 1, dim: 1, glow: 1, glowLength: Double(t.glowLength))
         case .drop:
             let b = bulgedRect(style)
             let d = dropRect(style)
-            let th = tuckedHero(style)
             return EdgeCollapsePose(
                 body: b, bodyCornerInner: b.width / 2, bodyCornerEdge: 0,
                 capsule: d, capsuleCorner: d.width / 2,
-                hero: coverIn(d, inset: 6),
-                heroCorner: 8, heroOpacity: 0, heroBlur: 2,
+                hero: coverIn(d, inset: 6), heroCorner: 8, heroOpacity: 0, heroBlur: 2,
                 panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
                 stripContentOpacity: 0, dim: 1, glow: 1, glowLength: Double(t.glowGatheredLength))
         case .blob:
             let r = blobRect
-            // The edge shape has gone back into the screen edge.
-            let gone = CGRect(x: edge, y: tucked.minY, width: 0, height: tucked.height * 0.6)
             return EdgeCollapsePose(
                 body: gone, bodyCornerInner: 0, bodyCornerEdge: 0,
                 capsule: r, capsuleCorner: r.width / 2,
@@ -302,22 +313,21 @@ public enum EdgeCollapsePoses {
                 panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
                 stripContentOpacity: 0, dim: 1)
         case .floating:
-            let gone = CGRect(x: edge, y: tucked.minY, width: 0, height: tucked.height * 0.6)
             return EdgeCollapsePose(
                 body: gone, bodyCornerInner: 0, bodyCornerEdge: 0,
                 capsule: capsuleRect, capsuleCorner: t.capsuleCornerRadius,
-                hero: capsuleCoverRect, heroCorner: t.capsuleArtworkCorner, heroOpacity: 1, heroBlur: 0,
+                hero: capCover, heroCorner: t.capsuleArtworkCorner, heroOpacity: 1, heroBlur: 0,
                 panelOpacity: 0, capsuleContentOpacity: 1, capsuleContentBlur: 0,
                 stripContentOpacity: 0, dim: 1, glass: 1)
         case .expandBlob:
+            // Bulging round, the liquid already shows the real panel inside
+            // it; the capsule's cover and text fade where they are.
             let r = expandBlobRect
-            let gone = CGRect(x: edge, y: tucked.minY, width: 0, height: tucked.height * 0.6)
             return EdgeCollapsePose(
                 body: gone, bodyCornerInner: 0, bodyCornerEdge: 0,
                 capsule: r, capsuleCorner: r.width / 2,
-                hero: isLyrics ? coverFill(r) : coverIn(r, inset: 16), heroCorner: isLyrics ? 0 : 24,
-                heroOpacity: 1, heroBlur: isLyrics ? 14 : 0,
-                panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
+                hero: capCover, heroCorner: t.capsuleArtworkCorner, heroOpacity: 0, heroBlur: 0,
+                panelOpacity: 1, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
                 stripContentOpacity: 0, dim: 1, glass: 1)
         }
     }
@@ -334,6 +344,16 @@ public enum EdgeCollapsePoses {
         p.capsule = cardRect
         p.capsuleCorner = t.cardCornerRadius
         return p
+    }
+}
+
+extension EdgeCollapsePose {
+    /// This pose with the channels of `groups` taken from `other`.
+    public func taking(_ groups: Set<EdgeCollapseChannelGroup>, from other: EdgeCollapsePose) -> EdgeCollapsePose {
+        var v = vector()
+        let o = other.vector()
+        for i in v.indices where groups.contains(EdgeCollapseChannelGroup.map[i]) { v[i] = o[i] }
+        return EdgeCollapsePose(vector: v)
     }
 }
 
@@ -371,6 +391,15 @@ public struct EdgeCollapseMotion {
         public var start: Double
         public var to: [Double]
         public var plan: EdgeCollapsePlan
+        /// Stage 0 only: launch at speed instead of from rest. 1 = initial
+        /// velocity ω·Δ, which turns a critically damped spring into a pure
+        /// exponential ease-out: fastest on the first frame, no overshoot.
+        /// A spring from rest eases IN first (~3% moved after 16ms), which
+        /// read as a delay (founder 2026-09-22).
+        public var impulse: Double = 0
+        public init(start: Double, to: [Double], plan: EdgeCollapsePlan, impulse: Double = 0) {
+            self.start = start; self.to = to; self.plan = plan; self.impulse = impulse
+        }
     }
     public let from: [Double]
     public let velocity: [Double]
@@ -390,6 +419,15 @@ public struct EdgeCollapseMotion {
         stages[k].to[i] - (k == 0 ? from[i] : stages[k - 1].to[i])
     }
 
+    /// Initial velocity of channel i in stage k: carried over on stage 0, or
+    /// launched by the stage's impulse (undelayed channels only).
+    private func v0(_ k: Int, _ i: Int, _ step: EdgeCollapsePlan.Step) -> Double {
+        guard k == 0 else { return 0 }
+        if abs(velocity[i]) > 1e-9 { return velocity[i] }
+        guard stages[0].impulse > 0, step.delay == 0, step.nominal > 0 else { return 0 }
+        return stages[0].impulse * (2 * Double.pi / step.nominal) * delta(0, i)
+    }
+
     /// Stage 0 channels already moving skip their delay (no mid-air freeze).
     private func delay(_ k: Int, _ i: Int, _ step: EdgeCollapsePlan.Step) -> Double {
         k == 0 && abs(velocity[i]) > 1e-3 ? 0 : step.delay
@@ -402,11 +440,11 @@ public struct EdgeCollapseMotion {
             var v = 0.0
             for k in stages.indices {
                 let step = stages[k].plan.step(for: g)
-                let v0 = k == 0 ? velocity[i] : 0
+                let v0 = self.v0(k, i, step)
                 let d = delta(k, i)
                 let tau = t - stages[k].start - delay(k, i, step)
                 if tau <= 0 {
-                    if k == 0 { v += v0 }
+                    if k == 0 { v += velocity[i] }
                     continue
                 }
                 value[i] += step.spring.value(target: d, initialVelocity: v0, time: tau)
@@ -437,9 +475,9 @@ public struct EdgeCollapseMotion {
         for k in stages.indices {
             for i in 0..<from.count {
                 let d = delta(k, i)
-                let v0 = k == 0 ? velocity[i] : 0
-                guard abs(d) > 1e-6 || abs(v0) > 1e-6 else { continue }
                 let step = stages[k].plan.step(for: EdgeCollapseChannelGroup.map[i])
+                let v0 = self.v0(k, i, step)
+                guard abs(d) > 1e-6 || abs(v0) > 1e-6 else { continue }
                 let settle = step.spring.settlingDuration(target: d, initialVelocity: v0, epsilon: 0.1)
                 longest = max(longest, stages[k].start + delay(k, i, step) + settle)
             }

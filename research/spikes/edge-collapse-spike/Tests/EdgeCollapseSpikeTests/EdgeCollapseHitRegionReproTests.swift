@@ -25,7 +25,7 @@ final class EdgeCollapseHitRegionReproTests: XCTestCase {
             XCTAssertLessThanOrEqual(region.height - light.height, 12)
             XCTAssertLessThan(region.height, 100, "\(style): a tall strip of the screen edge must not open the capsule")
         }
-        XCTAssertGreaterThanOrEqual(EdgeCollapseLayout.hoverDwell, 0.1, "passing by must not open it")
+        XCTAssertGreaterThanOrEqual(EdgeCollapseLayout.hoverDwell, 0.06, "passing by must not open it (the narrow region does most of the work; founder felt 120ms as delay)")
     }
 
     func test_cardRegion_isTheCard() {
@@ -53,14 +53,15 @@ final class EdgeCollapseGeometryTests: XCTestCase {
         }
     }
 
-    /// One object: at rest at most one shape is visible; tucked shows none
-    /// (only the edge light).
+    /// One object: at rest at most one shape is visible; tucked shows only
+    /// the black sliver joined to the bezel.
     func test_atRest_onlyOneShapeVisible() {
         for page in [PlayerPage.album, .lyrics, .playlist] {
             let c = EdgeCollapsePoses.pose(.card, page: page, style: .handle)
             XCTAssertTrue(c.body.insetBy(dx: -0.01, dy: -0.01).contains(c.capsule), "card: capsule outside body")
             let t = EdgeCollapsePoses.pose(.tucked, page: page, style: .handle)
-            XCTAssertLessThanOrEqual(t.body.width, 0.01); XCTAssertLessThanOrEqual(t.capsule.width, 0.01)
+            XCTAssertEqual(t.body, EdgeCollapsePoses.tuckedRect(.handle), "tucked: the black sliver")
+            XCTAssertLessThanOrEqual(t.capsule.width, 0.01)
             let f = EdgeCollapsePoses.pose(.floating, page: page, style: .handle)
             XCTAssertLessThanOrEqual(f.body.width, 0.01, "floating: the edge shape must be gone")
         }

@@ -118,33 +118,6 @@ final class EdgeCollapseMotionTests: XCTestCase {
         XCTAssertTrue(stalk, "no stalk (tall and narrow) on the way into the edge")
     }
 
-    /// The real panel fades in only once the cover sits where the page has it.
-    func test_expand_panelFadesInOnlyAfterCoverArrives() {
-        for page in [PlayerPage.album, .playlist, .lyrics] {
-            for fromTucked in [false, true] {
-                let m = motion(.expand, fromTucked: fromTucked, page: page)
-                let target = EdgeCollapsePoses.cardHero(page).rect
-                var t = 0.0
-                while t < m.settledDuration {
-                    let p = pose(m, t)
-                    if p.panelOpacity > 0.05 {
-                        XCTAssertEqual(p.hero.width, target.width, accuracy: max(8, target.width * 0.06), "\(page) t=\(Int(t * 1000))ms")
-                        XCTAssertEqual(p.hero.midX, target.midX, accuracy: 8, "\(page)")
-                    }
-                    t += dt
-                }
-            }
-        }
-    }
-
-    /// Lyrics page has no cover: the cover becomes a blurred fill of the card.
-    func test_lyricsPage_coverBecomesBlurredBackground() {
-        let m = motion(.expand, page: .lyrics)
-        let end = EdgeCollapsePose(vector: m.to)
-        XCTAssertTrue(end.hero.contains(EdgeCollapsePoses.cardRect), "fills the card")
-        XCTAssertGreaterThan(end.heroBlur, 15)
-    }
-
     /// At the edge the object is pure black, not glass (system glass always
     /// has a rim and never reaches black): through the drop, the neck and
     /// the round blob the glass amount is zero; it is glass only as the
@@ -152,8 +125,12 @@ final class EdgeCollapseMotionTests: XCTestCase {
     func test_floatOut_blackUntilItBecomesTheCapsule() {
         let m = motion(.floatOut)
         var t = 0.0
-        while t < 0.19 {
-            XCTAssertLessThan(pose(m, t).glass, 0.02, "t=\(Int(t * 1000))ms")
+        while t < m.nominalDuration {
+            let p = pose(m, t)
+            // While it is still a round drop (aspect within 15%), it is black.
+            if p.capsule.width > 4, abs(p.capsule.height / p.capsule.width - 1) < 0.15 {
+                XCTAssertLessThan(p.glass, 0.05, "glass on a round drop at t=\(Int(t * 1000))ms")
+            }
             t += dt
         }
         XCTAssertEqual(EdgeCollapsePose(vector: m.to).glass, 1, accuracy: 0.01)
@@ -192,6 +169,24 @@ final class EdgeCollapseMotionTests: XCTestCase {
                 }
                 t += dt
             }
+        }
+    }
+
+    /// Expanding IS the panel appearing: the panel is shown while the
+    /// liquid is still growing (not faded in at the end), and the capsule's
+    /// cover never grows or travels toward the panel (no migration).
+    func test_expand_revealsThePanelInPlace_noMigration() {
+        for fromTucked in [false, true] {
+            let m = motion(.expand, fromTucked: fromTucked)
+            var t = 0.0, sawPanelWhileGrowing = false
+            let capCover = EdgeCollapsePoses.capsuleCoverRect
+            while t < m.nominalDuration {
+                let p = pose(m, t)
+                if p.panelOpacity > 0.8, p.capsule.width < EdgeCollapsePoses.cardRect.width - 20 { sawPanelWhileGrowing = true }
+                XCTAssertLessThanOrEqual(p.hero.width, capCover.width + 1, "cover grew at t=\(Int(t * 1000))ms")
+                t += dt
+            }
+            XCTAssertTrue(sawPanelWhileGrowing, "fromTucked=\(fromTucked): panel only appeared at the end")
         }
     }
 

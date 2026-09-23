@@ -67,14 +67,20 @@ final class LiquidContinuityTests: XCTestCase {
         XCTAssertLessThan(k, 0.15, "kicked again at \(Int(at * 1000))ms")
     }
 
-    /// Tucked is only the light on the screen edge: no black body, no
-    /// outline at all (founder 2026-09-22: a black tab reads as a patch).
-    func test_tucked_isOnlyTheEdgeLight() {
+    /// Tucked: a thin black sliver joined to the bezel (founder 2026-09-22:
+    /// it must show a little so you know something is there), square on the
+    /// edge side, round inside; the light runs along its inner sides.
+    func test_tucked_isABlackSliverJoinedToTheEdge() {
         let p = EdgeCollapsePoses.pose(.tucked, page: .album, style: .handle)
+        XCTAssertEqual(p.glass, 0, "plain black, not glass")
         XCTAssertEqual(p.glow, 1)
-        XCTAssertEqual(p.glowLength, Double(EdgeCollapseTokens.glowLength))
-        let outline = LiquidOutline.path(parts: EdgeCollapsePoses.liquidParts(p), neck: EdgeCollapseTokens.liquidNeck)
-        XCTAssertTrue(outline.isEmpty, "no black shape at rest")
+        let r = EdgeCollapsePoses.tuckedRect(.handle)
+        XCTAssertLessThanOrEqual(r.width, 8, "only a little shows")
+        let path = LiquidOutline.path(parts: EdgeCollapsePoses.liquidParts(p), neck: EdgeCollapseTokens.liquidNeck).cgPath
+        let edge = EdgeCollapseTokens.containerSize.width
+        XCTAssertTrue(path.contains(CGPoint(x: edge - 0.2, y: r.minY + 0.2)), "square at the edge")
+        XCTAssertTrue(path.contains(CGPoint(x: edge - 0.2, y: r.maxY - 0.2)))
+        XCTAssertFalse(path.contains(CGPoint(x: r.minX + 0.2, y: r.minY + 0.2)), "round inside")
     }
 
     /// While a black body sits at the edge it is joined to the bezel: the

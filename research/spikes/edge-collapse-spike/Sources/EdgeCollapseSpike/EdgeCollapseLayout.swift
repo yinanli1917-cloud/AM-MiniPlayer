@@ -26,7 +26,7 @@ public enum EdgeCollapseLayout {
     }
 
     /// Seconds the cursor must rest on the tucked shape before it opens.
-    public static let hoverDwell: Double = 0.12
+    public static let hoverDwell: Double = 0.08
     static let tuckedPadInward: CGFloat = 4
     static let tuckedPadVertical: CGFloat = 6
 

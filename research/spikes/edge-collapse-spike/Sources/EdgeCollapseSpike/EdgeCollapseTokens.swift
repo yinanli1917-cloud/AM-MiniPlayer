@@ -61,7 +61,7 @@ public enum EdgeCollapseTokens {
     public static let tuckedHoverExpand: CGFloat = 10
 
     // Edge light (tucked): lit segment on the screen edge, artwork colour.
-    public static let glowLength: CGFloat = 64
+    public static let glowLength: CGFloat = 56
     /// The light gathers to this length where the drop comes out.
     public static let glowGatheredLength: CGFloat = 22
     public static let glowCore: CGFloat = 2.5

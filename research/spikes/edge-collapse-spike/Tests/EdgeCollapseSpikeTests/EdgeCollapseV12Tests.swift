@@ -64,28 +64,10 @@ final class EdgeCollapseV12Tests: XCTestCase {
         var slowFar = EdgeCollapseSwipe()
         for i in 0..<10 { slowFar.add(dx: 9, dy: 0, at: Double(i) * 0.05) }
         XCTAssertTrue(slowFar.commits, "dragged past 40% commits")
-        XCTAssertFalse(slowFar.landingIsBouncy, "a slow drag lands still")
 
         var flick = EdgeCollapseSwipe()
         flick.add(dx: 8, dy: 0, at: 0); flick.add(dx: 16, dy: 0, at: 0.016); flick.add(dx: 16, dy: 0, at: 0.032)
         XCTAssertTrue(flick.commits, "a short flick commits by projected momentum")
-        XCTAssertTrue(flick.landingIsBouncy, "momentum may bounce")
-    }
-
-    /// On release the collapse is rebuilt with or without a landing bounce;
-    /// at every point the fingers can reach, both versions are identical.
-    func test_swipe_releaseRebuild_isContinuous() {
-        let settle = motion(.collapse, .card, bounce: .settle)
-        let bouncy = motion(.collapse, .card, bounce: .bouncy)
-        var t = 0.0
-        while t <= EdgeCollapseSwipe.trackedTime * 1.02 {
-            let a = settle.sample(at: t), b = bouncy.sample(at: t)
-            for i in a.value.indices {
-                XCTAssertEqual(a.value[i], b.value[i], accuracy: 1e-9)
-                XCTAssertEqual(a.velocity[i], b.velocity[i], accuracy: 1e-6)
-            }
-            t += 0.004
-        }
     }
 
     // MARK: Track change peek
