@@ -84,6 +84,7 @@ Sources/
 │   │   ├── SBTimeoutRunner.swift      - ScriptingBridge timeout wrapper
 │   │   ├── DebugConfig.swift          - Debug configuration + NANOPOD_PROBES 每帧探针总闸（默认关；/tmp 旧探针文件会静默重新武装探针，曾写出数百 MB 挂机）
 │   │   ├── WindowAnimationCensus.swift - 缺陷5仪器：全窗口层树动画普查（挂着的 CAAnimation + NSVisualEffectView 清单），nanopod://debug/animsweep 按需一次性 dump，永不每帧
+│   │   ├── NanoPodCacheLocation.swift  - 缓存目录/文件名归属仲裁：production|testRun|isolated|override 四态 + schema 版本化文件名，防止非生产进程读写创始人真实缓存、防止双 schema 互相冲刷
 │   │   └── AppleScriptRunner.swift    - Music.app osascript execution + parsing
 │   ├── Models/
 │   │   ├── LyricModels.swift          - Lyrics data structures + shared constants
@@ -232,6 +233,8 @@ Pure ASCII input: Parallel queries to CN + inferred region (JP/KR), CN CJK title
   ✅ ScriptRunSegmenter 按脚本切段，谚文段显式 ko 源（脚本判定，非识别器猜测）
 - ❌ 和声只靠「整行括号」文本启发式，TTML x-bg 被解析器丢弃
   ✅ `LyricLine.isBackground` 数据模型字段，三路识别（x-bg / 整行括号 / 行首尾括号拆分），渲染为主行从属行（LyricsDiskCache schemaVersion 31）
+- ❌ 非生产进程（XCTest/LyricsVerifier/worktree 或 spike 构建）用默认构造共享 ~/Library/Application Support/nanoPod 缓存 + 版本不匹配时加载即丢弃、下次持久化直接覆盖对方 schema 的文件（09-22 一个 spike 跑 lyrics schema 30 把 app 的 schema 31 歌词缓存冲刷掉）
+  ✅ `NanoPodCacheLocation` 四态归属仲裁（production|testRun|isolated|override）+ schema 版本化文件名，旧版本文件只读作一次性 seed 不回写
 - Full records in `postmortem/` and `.claude/rules/banned-patterns.md`
 
 ### Matching Algorithm (Unified SearchCandidate)

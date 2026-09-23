@@ -184,6 +184,7 @@ public final class MetadataDiskCache {
     public static let negativeTTLSeconds: TimeInterval = 86400  // 24h
 
     private let fileURL: URL
+    private let legacySeedURL: URL?
     private let persistDebounce: TimeInterval
     private let queue = DispatchQueue(label: "com.yinanli.MusicMiniPlayer.metadata-disk-cache")
     private var memory: [String: MetadataCacheEntry] = [:]     // localized tier
@@ -204,6 +205,7 @@ public final class MetadataDiskCache {
 
     public init(fileURL: URL, persistDebounce: TimeInterval = 1.0) {
         self.fileURL = fileURL
+        self.legacySeedURL = NanoPodCacheLocation.legacySeedURL(for: fileURL, baseName: "metadata_cache", schemaVersion: Self.schemaVersion)
         self.persistDebounce = persistDebounce
     }
 
@@ -213,16 +215,13 @@ public final class MetadataDiskCache {
         flush()
     }
 
-    /// Default location: ~/Library/Application Support/nanoPod/metadata_cache.json
+    /// Default location: NanoPodCacheLocation-scoped directory (production:
+    /// ~/Library/Application Support/nanoPod/metadata_cache.v<schema>.json;
+    /// XCTest/dev/worktree builds isolated elsewhere — see
+    /// NanoPodCacheLocation). A same-version pre-versioning
+    /// "metadata_cache.json" is read once as a seed (never written to).
     public static func defaultURL() -> URL {
-        let fm = FileManager.default
-        let base = (try? fm.url(for: .applicationSupportDirectory,
-                                in: .userDomainMask,
-                                appropriateFor: nil,
-                                create: true)) ?? fm.temporaryDirectory
-        let dir = base.appendingPathComponent("nanoPod", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("metadata_cache.json")
+        NanoPodCacheLocation.versionedFileURL(baseName: "metadata_cache", schemaVersion: schemaVersion)
     }
 
     // ------------------------------------------------------------------------
@@ -533,10 +532,16 @@ public final class MetadataDiskCache {
     private func ensureLoaded() {
         if loaded { return }
         loaded = true
-        guard let data = try? Data(contentsOf: fileURL) else { return }
+        var data = try? Data(contentsOf: fileURL)
+        if data == nil, let legacySeedURL {
+            data = try? Data(contentsOf: legacySeedURL)
+        }
+        guard let data else { return }
         guard let envelope = try? JSONDecoder().decode(MetadataCacheFile.self, from: data) else { return }
         guard envelope.version == Self.schemaVersion else {
-            // Schema mismatch → treat the file as empty, will overwrite on next persist
+            // Schema mismatch → treat as empty. Only reachable via an injected
+            // path or a legacy seed; persist writes this version's own file,
+            // so another schema's file is never overwritten.
             return
         }
         memory = envelope.entries

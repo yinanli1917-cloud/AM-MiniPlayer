@@ -206,6 +206,7 @@ public final class LyricsDiskCache {
     public static let defaultMaxEntryCount = 450
 
     private let fileURL: URL
+    private let legacySeedURL: URL?
     private let maxEntryCount: Int
     private let queue = DispatchQueue(label: "com.yinanli.MusicMiniPlayer.lyrics-disk-cache")
     private var memory: [String: LyricsDiskCacheEntry] = [:]
@@ -213,18 +214,18 @@ public final class LyricsDiskCache {
 
     public init(fileURL: URL = LyricsDiskCache.defaultURL(), maxEntryCount: Int = LyricsDiskCache.defaultMaxEntryCount) {
         self.fileURL = fileURL
+        self.legacySeedURL = NanoPodCacheLocation.legacySeedURL(for: fileURL, baseName: "lyrics_cache", schemaVersion: Self.schemaVersion)
         self.maxEntryCount = max(1, maxEntryCount)
     }
 
+    /// Default location: NanoPodCacheLocation-scoped directory (production:
+    /// ~/Library/Application Support/nanoPod/; XCTest/dev/worktree builds:
+    /// isolated elsewhere — see NanoPodCacheLocation), filename carries the
+    /// schema version so two builds with different schemas never overwrite
+    /// each other's cache. A same-version pre-versioning file is read once
+    /// as a seed (never written to) — see legacySeedURL / ensureLoaded.
     public static func defaultURL() -> URL {
-        let fm = FileManager.default
-        let base = (try? fm.url(for: .applicationSupportDirectory,
-                                in: .userDomainMask,
-                                appropriateFor: nil,
-                                create: true)) ?? fm.temporaryDirectory
-        let dir = base.appendingPathComponent("nanoPod", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("lyrics_cache.json")
+        NanoPodCacheLocation.versionedFileURL(baseName: "lyrics_cache", schemaVersion: schemaVersion)
     }
 
     public func get(title: String, artist: String, duration: TimeInterval, album: String = "") -> LyricsDiskCacheEntry? {
@@ -386,7 +387,11 @@ public final class LyricsDiskCache {
     private func ensureLoaded() {
         if loaded { return }
         loaded = true
-        guard let data = try? Data(contentsOf: fileURL),
+        var data = try? Data(contentsOf: fileURL)
+        if data == nil, let legacySeedURL {
+            data = try? Data(contentsOf: legacySeedURL)
+        }
+        guard let data,
               let envelope = try? JSONDecoder().decode(LyricsDiskCacheFile.self, from: data),
               envelope.version == Self.schemaVersion else { return }
         memory = envelope.entries

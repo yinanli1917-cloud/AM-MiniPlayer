@@ -74,6 +74,7 @@ public final class TranslationDiskCache {
     public static let ttlSeconds: TimeInterval = 30 * 86400
 
     private let fileURL: URL
+    private let legacySeedURL: URL?
     private let persistDebounce: TimeInterval
     private let queue = DispatchQueue(label: "com.yinanli.MusicMiniPlayer.translation-disk-cache")
     private var memory: [String: TranslationCacheEntry] = [:]
@@ -89,6 +90,7 @@ public final class TranslationDiskCache {
 
     public init(fileURL: URL, persistDebounce: TimeInterval = 1.0) {
         self.fileURL = fileURL
+        self.legacySeedURL = NanoPodCacheLocation.legacySeedURL(for: fileURL, baseName: "translation_cache", schemaVersion: Self.schemaVersion)
         self.persistDebounce = persistDebounce
     }
 
@@ -96,16 +98,13 @@ public final class TranslationDiskCache {
         flush()
     }
 
-    /// Default location: ~/Library/Application Support/nanoPod/translation_cache.json
+    /// Default location: NanoPodCacheLocation-scoped directory (production:
+    /// ~/Library/Application Support/nanoPod/translation_cache.v<schema>.json;
+    /// XCTest/dev/worktree builds isolated elsewhere — see
+    /// NanoPodCacheLocation). A same-version pre-versioning
+    /// "translation_cache.json" is read once as a seed (never written to).
     public static func defaultURL() -> URL {
-        let fm = FileManager.default
-        let base = (try? fm.url(for: .applicationSupportDirectory,
-                                in: .userDomainMask,
-                                appropriateFor: nil,
-                                create: true)) ?? fm.temporaryDirectory
-        let dir = base.appendingPathComponent("nanoPod", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("translation_cache.json")
+        NanoPodCacheLocation.versionedFileURL(baseName: "translation_cache", schemaVersion: schemaVersion)
     }
 
     // ------------------------------------------------------------------------
@@ -178,7 +177,11 @@ public final class TranslationDiskCache {
     private func ensureLoaded() {
         if loaded { return }
         loaded = true
-        guard let data = try? Data(contentsOf: fileURL) else { return }
+        var data = try? Data(contentsOf: fileURL)
+        if data == nil, let legacySeedURL {
+            data = try? Data(contentsOf: legacySeedURL)
+        }
+        guard let data else { return }
         guard let envelope = try? JSONDecoder().decode(TranslationCacheFile.self, from: data) else { return }
         guard envelope.version == Self.schemaVersion else { return }
         memory = envelope.entries
