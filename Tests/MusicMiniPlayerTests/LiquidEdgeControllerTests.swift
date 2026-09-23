@@ -13,12 +13,13 @@ final class LiquidEdgeControllerTests: XCTestCase {
     private var controller: LiquidEdgeController!
     private var occluded: [Bool] = []
 
-    private func makeCard(edge: SnappablePanel.Edge) throws {
+    private func makeCard(edge: SnappablePanel.Edge, top: Bool = true) throws {
         let screen = try XCTUnwrap(NSScreen.main)
         let v = screen.visibleFrame
         let size = NSSize(width: 250, height: 316)
         let x = edge == .right ? v.maxX - size.width - 16 : v.minX + 16
-        card = SnappablePanel(contentRect: NSRect(x: x, y: v.maxY - size.height - 16, width: size.width, height: size.height),
+        let y = top ? v.maxY - size.height - 16 : v.minY + 16
+        card = SnappablePanel(contentRect: NSRect(x: x, y: y, width: size.width, height: size.height),
                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         card.level = .floating
         card.isOpaque = false
@@ -83,6 +84,29 @@ final class LiquidEdgeControllerTests: XCTestCase {
         let bounds = card.contentView!.bounds
         for r in rects.prefix(12) where r.width > 1 {
             XCTAssertGreaterThan(r.maxX, bounds.width - 40, "right-edge collapse shrank toward the wrong side: \(r)")
+        }
+    }
+
+    /// Founder 2026-09-23: the expanded shape did not match the real panel.
+    /// At the default top corner the stage window reached 12pt under the
+    /// menu bar, AppKit pushed it down, and every liquid shape was drawn
+    /// 12pt below the panel. The liquid's card must sit exactly on the
+    /// panel's frame, at every corner, on both edges.
+    func test_liquidCard_coincidesWithPanelFrame_atEveryCorner() throws {
+        for edge in [SnappablePanel.Edge.right, .left] {
+            for top in [true, false] {
+                try makeCard(edge: edge, top: top)
+                XCTAssertTrue(controller.collapse(to: edge))
+                let stage = try XCTUnwrap(controller.stageWindow).frame
+                var c = controller.geometry.card
+                if edge == .left { c.origin.x = stage.width - c.maxX }
+                let onScreen = CGRect(x: stage.minX + c.minX, y: stage.maxY - c.maxY, width: c.width, height: c.height)
+                XCTAssertEqual(onScreen.minX, card.frame.minX, accuracy: 0.01, "\(edge) top=\(top)")
+                XCTAssertEqual(onScreen.minY, card.frame.minY, accuracy: 0.01, "\(edge) top=\(top): liquid drawn off the panel vertically")
+                XCTAssertEqual(onScreen.size, card.frame.size, "\(edge) top=\(top)")
+                tearDown()
+                occluded = []
+            }
         }
     }
 
