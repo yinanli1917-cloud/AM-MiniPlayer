@@ -20,7 +20,15 @@ import SwiftUI
 public struct LiquidPart: Equatable, Sendable {
     public var rect: CGRect
     public var radius: CGFloat
-    public init(rect: CGRect, radius: CGFloat) { self.rect = rect; self.radius = radius }
+    /// How big the part really is on screen (a body running past the screen
+    /// edge is mostly off-screen). The neck between two parts is limited by
+    /// the smaller one's size, so a shrinking part's pull fades out with it
+    /// instead of dimpling its neighbour until it vanishes (founder: "卡顿的粘连").
+    public var size: CGFloat
+    public init(rect: CGRect, radius: CGFloat, size: CGFloat? = nil) {
+        self.rect = rect; self.radius = radius
+        self.size = size ?? min(rect.width, rect.height)
+    }
     var isVisible: Bool { rect.width >= 1 && rect.height >= 1 }
 }
 
@@ -62,7 +70,8 @@ public enum LiquidOutline {
         // One part fully inside the other (with margin): the outer one.
         if a.rect.insetBy(dx: 2, dy: 2).contains(b.rect) { return path(parts: [a], neck: 0) }
         if b.rect.insetBy(dx: 2, dy: 2).contains(a.rect) { return path(parts: [b], neck: 0) }
-        return contour(a, b, k: Double(neck))
+        let k = min(neck, 2 * min(max(a.size, 0), max(b.size, 0)))
+        return contour(a, b, k: Double(k))
     }
 
     /// Marching squares over the field of smin(sdfA, sdfB).

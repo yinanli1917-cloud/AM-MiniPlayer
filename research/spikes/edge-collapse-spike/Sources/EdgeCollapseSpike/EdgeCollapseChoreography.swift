@@ -87,7 +87,10 @@ public enum EdgeCollapseChoreography {
                                  .bodyH: s(0.16), .bodyV: s(0.16), .bodyCorner: s(0.16),
                                  .glow: s(0.16), .stripContent: s(0.08),
                                  .capsuleContent: s(0.18, 0, 0.24), .material: s(0.30, 0, 0.12)], impulse: 1),
-                stage(0.07, floating, [.bodyH: s(0.14), .bodyV: s(0.14), .bodyCorner: s(0.14), .glow: s(0.12)], impulse: 0),
+                // The sliver drains into the drop before the neck breaks
+                // (founder: a stub stayed at the edge after it, dimpling the
+                // capsule — the "sticky hitch").
+                stage(0.04, floating, [.bodyH: s(0.13), .bodyV: s(0.16), .bodyCorner: s(0.13), .glow: s(0.12)], impulse: 0),
             ]
         case .retract:
             let tucked = pose(.tucked)

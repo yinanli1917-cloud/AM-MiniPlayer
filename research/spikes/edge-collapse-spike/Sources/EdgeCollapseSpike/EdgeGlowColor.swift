@@ -34,7 +34,7 @@ func edgeGlowColor(_ image: NSImage) -> NSColor? {
         y += step
     }
     guard let best = weight.indices.max(by: { weight[$0] < weight[$1] }), weight[best] > 0.5 else {
-        return NSColor(white: 0.92, alpha: 1)   // grey artwork: a neutral light
+        return .controlAccentColor   // grey artwork: the system accent (white would vanish against the track)
     }
     let hue = hueSum[best] / weight[best]
     return NSColor(hue: hue, saturation: 0.62, brightness: 1.0, alpha: 1)

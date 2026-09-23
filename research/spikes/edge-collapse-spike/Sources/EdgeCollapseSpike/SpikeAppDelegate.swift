@@ -39,7 +39,7 @@ final class SpikeAppDelegate: NSObject, NSApplicationDelegate {
     let model = EdgeCollapseAppModel()
     var panel: EdgeCollapsePanel?
     var controlWindow: NSWindow?
-    var hostingView: EdgeGestureHostingView<RootContentView>?
+    var hostingView: EdgeStageView?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setvbuf(stdout, nil, _IOLBF, 0)  // log lines reach /tmp/ecs.log as they are printed
@@ -50,13 +50,9 @@ final class SpikeAppDelegate: NSObject, NSApplicationDelegate {
         print("[EdgeCollapse] launch pid=\(ProcessInfo.processInfo.processIdentifier) probe=\(EdgeCollapseProbe.isActive)")
 
         let panel = makeEdgeCollapsePanel()
-        let hostingView = EdgeGestureHostingView(rootView: RootContentView(model: model))
-        hostingView.frame = NSRect(origin: .zero, size: EdgeCollapseTokens.containerSize)
-        // The window never resizes. Without this, every per-frame pose change
-        // makes AppKit ask the hosting view for its fitting size, which
-        // re-lays-out the whole real panel with open proposals (sampled:
-        // about half of main-thread time during a transition).
-        hostingView.sizingOptions = []
+        let hostingView = EdgeStageView(model: model)
+        hostingView.panelHost.onScroll = { [weak hostingView] event in hostingView?.forwardSwipe(event) }
+        hostingView.onTapLiquid = { [weak model] in model?.requestExpand() }
         hostingView.onSwipe = { [weak model] phase in
             guard let model else { return }
             switch phase {
@@ -80,7 +76,7 @@ final class SpikeAppDelegate: NSObject, NSApplicationDelegate {
         panel.orderFrontRegardless()
         print("[EdgeCollapse] frame=\(Int(panel.frame.origin.x)),\(Int(panel.frame.origin.y)),\(Int(panel.frame.width)),\(Int(panel.frame.height)) state=card")
 
-        model.hostingView = hostingView
+        model.stage = hostingView
         self.panel = panel
         self.hostingView = hostingView
         hostingView.refreshHitRegion()

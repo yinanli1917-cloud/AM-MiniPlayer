@@ -79,18 +79,34 @@ final class EdgeCollapseMotionTests: XCTestCase {
             var neck = 0.0, detached = false, roundBlob = false, t = 0.0
             while t < m.nominalDuration {
                 let p = pose(m, t)
-                // Measured on the real outline: the parts are apart, yet the
-                // outline is still one piece = the neck.
-                let gap = p.body.minX - p.capsule.maxX
+                // Measured on the real outline: still one piece, and just
+                // right of the drop it is clearly narrower than the drop — a
+                // waist joining it to the edge = the neck.
                 let outline = LiquidOutline.path(parts: EdgeCollapsePoses.liquidParts(p), neck: EdgeCollapseTokens.liquidNeck)
                 var pieces = 0
                 outline.forEach { if case .move = $0 { pieces += 1 } }
-                if p.body.width > 1, p.capsule.width > 8, gap > 0, pieces == 1 { neck += dt }
-                if p.body.width <= 1 || pieces > 1 { detached = true }
+                if pieces == 1, p.capsule.width > 8, p.body.width > 0.5 {
+                    // Narrowest vertical span between the drop's centre and
+                    // the screen edge: a waist thinner than both parts.
+                    let cg = outline.cgPath
+                    var waist = Double.infinity
+                    var x = Double(p.capsule.midX)
+                    while x < Double(EdgeCollapseTokens.containerSize.width) - 1 {
+                        var span = 0.0, y = Double(min(p.capsule.minY, p.body.minY)) - 10
+                        while y < Double(max(p.capsule.maxY, p.body.maxY)) + 10 { if cg.contains(CGPoint(x: x, y: y)) { span += 0.5 }; y += 0.5 }
+                        waist = min(waist, span)
+                        x += 1
+                    }
+                    if waist > 0.5, waist < 0.8 * Double(max(p.capsule.height, p.body.height)) { neck += dt }
+                }
+                if p.body.width <= 0.5 || pieces > 1 { detached = true }
                 if p.capsule.width > 50, abs(p.capsule.width / p.capsule.height - 1) < 0.12 { roundBlob = true }
                 t += dt
             }
-            XCTAssertGreaterThan(neck, 0.04, "\(style): neck lasted \(Int(neck * 1000))ms")
+            // A neck forms and pinches off cleanly (>= 2 frames). The old 40ms bar
+            // was met only by leaving a stub at the edge that dimpled the
+            // capsule — the "sticky hitch" (founder 2026-09-22).
+            XCTAssertGreaterThanOrEqual(neck, 2 * dt - 1e-9, "\(style): neck lasted \(Int(neck * 1000))ms")
             XCTAssertTrue(detached)
             XCTAssertTrue(roundBlob, "\(style): no round blob")
         }
@@ -218,5 +234,24 @@ final class EdgeCollapseMotionTests: XCTestCase {
 
     func test_tempoSlowStretchesDuration() {
         XCTAssertEqual(motion(.collapse, tempo: .slow).nominalDuration, motion(.collapse).nominalDuration * 1.5, accuracy: 1e-9)
+    }
+}
+
+extension EdgeCollapseMotionTests {
+    /// After the neck breaks the edge is clean within 60ms (no stub).
+    func test_floatOut_edgeCleanSoonAfterPinchOff() {
+        let m = EdgeCollapseMotion(from: EdgeCollapsePoses.pose(.tucked, page: .album, style: .handle).vector(),
+                                   velocity: Array(repeating: 0, count: EdgeCollapsePose.channelCount),
+                                   stages: EdgeCollapseChoreography.stages(kind: .floatOut, fromTucked: false, page: .album, style: .handle, bounce: .settle, tempo: .normal))
+        var t = 0.0, pinch: Double?
+        while t < 0.5 {
+            let p = EdgeCollapsePose(vector: m.sample(at: t).value)
+            var pieces = 0
+            LiquidOutline.path(parts: EdgeCollapsePoses.liquidParts(p), neck: EdgeCollapseTokens.liquidNeck).forEach { if case .move = $0 { pieces += 1 } }
+            if pinch == nil, pieces > 1 { pinch = t }
+            if let pinch, t > pinch + 0.06 { XCTAssertLessThan(p.body.width, 1.5, "stub at the edge at t=\(Int(t * 1000))ms") }
+            t += 1.0 / 120
+        }
+        XCTAssertNotNil(pinch, "never pinched off")
     }
 }

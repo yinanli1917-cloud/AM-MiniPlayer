@@ -223,12 +223,13 @@ public enum EdgeCollapsePoses {
     /// snapped from round to flat at that frame.)
     public static func liquidParts(_ p: EdgeCollapsePose) -> [LiquidPart] {
         var b = p.body
+        let visible = min(max(b.width, 0), max(b.height, 0))
         if b.width > 0 {
             let reach: CGFloat = 12
             let w = min(max((b.maxX - (edge - reach)) / reach, 0), 1)
             b.size.width += w * (p.bodyCornerInner + 6)
         }
-        return [LiquidPart(rect: b, radius: p.bodyCornerInner),
+        return [LiquidPart(rect: b, radius: p.bodyCornerInner, size: visible),
                 LiquidPart(rect: p.capsule, radius: p.capsuleCorner)]
     }
 
@@ -255,7 +256,9 @@ public enum EdgeCollapsePoses {
         let card = cardRect
         let tucked = tuckedRect(style)
         let parked = { (r: CGRect) in CGRect(x: r.midX - 1, y: r.midY - 1, width: 2, height: 2) }
-        let gone = CGRect(x: edge, y: tucked.minY, width: 0, height: tucked.height * 0.6)
+        // Gone = drained into the drop: no width AND almost no height, so no
+        // stub is left at the edge after the neck breaks.
+        let gone = CGRect(x: edge, y: midY - 4, width: 0, height: 8)
         // The flying cover belongs to the capsule only. The real panel never
         // migrates: it stays where it is and the liquid reveals or covers it
         // (founder 2026-09-22: expanding should BE the panel, not move text).

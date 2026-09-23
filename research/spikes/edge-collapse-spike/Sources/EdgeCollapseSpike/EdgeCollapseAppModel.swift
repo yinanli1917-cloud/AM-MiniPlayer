@@ -38,9 +38,14 @@ public final class EdgeCollapseAppModel: ObservableObject {
 
     @Published public private(set) var presentation: EdgePresentation = .card
     public let poseStore = EdgeCollapsePoseStore(EdgeCollapsePoses.pose(.card, page: .album, style: .handle))
+    /// Per-frame pose goes straight to the AppKit stage (layer properties
+    /// only); nothing SwiftUI re-renders per frame.
     private var pose: EdgeCollapsePose {
         get { poseStore.pose }
-        set { poseStore.pose = newValue }
+        set { poseStore.pose = newValue; stage?.apply(newValue) }
+    }
+    weak var stage: EdgeStageView? {
+        didSet { stage?.apply(pose) }
     }
     @Published var reduceMotionFlashOpacity: Double = 0
 
@@ -73,7 +78,7 @@ public final class EdgeCollapseAppModel: ObservableObject {
     private var swipe: EdgeCollapseSwipe?
     private var trackMotion: EdgeCollapseMotion?
 
-    weak var hostingView: EdgeGestureHostingView<RootContentView>?
+    var hostingView: EdgeStageView? { stage }
 
     private var motion: EdgeCollapseMotion?
     private var motionKind: EdgeCollapseTransitionKind = .collapse
@@ -100,8 +105,8 @@ public final class EdgeCollapseAppModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] image in
                 guard let self else { return }
-                let c = image.flatMap(edgeGlowColor) ?? NSColor.white
-                withAnimation(.easeInOut(duration: 0.5)) { self.poseStore.glowColor = Color(nsColor: c) }
+                let c = image.flatMap(edgeGlowColor) ?? NSColor.controlAccentColor
+                self.stage?.setGlowColor(c)
             }
             .store(in: &cancellables)
     }
@@ -122,7 +127,7 @@ public final class EdgeCollapseAppModel: ObservableObject {
         guard presentation == .tucked else { return }
         // Respond on contact (Apple: feedback on pointer-down, not after a
         // wait): the light brightens now; the drop comes after the dwell.
-        withAnimation(.easeOut(duration: 0.12)) { poseStore.hoverBoost = 1 }
+        stage?.setHoverBoost(true)
         dwellWork?.cancel()
         guard dwell else { transition(event: .hoverEntered, settle: nil, kind: .floatOut); return }
         let work = DispatchWorkItem { [weak self] in
@@ -136,7 +141,7 @@ public final class EdgeCollapseAppModel: ObservableObject {
     public func requestHoverExit() {
         hovering = false
         dwellWork?.cancel(); dwellWork = nil
-        withAnimation(.easeOut(duration: 0.2)) { poseStore.hoverBoost = 0 }
+        stage?.setHoverBoost(false)
         guard presentation == .floating else { return }
         transition(event: .hoverExited, settle: nil, kind: .retract)
     }
@@ -294,6 +299,9 @@ public final class EdgeCollapseAppModel: ObservableObject {
         pendingSettle = settle
         recorder.begin(kind: kind.rawValue, start: now)
 
+        // The real panel is on-window only when it can be shown next (card),
+        // or prewarmed while the capsule rests (set when a motion ends).
+        stage?.panelWanted = EdgeCollapseLayout.visualLayout(for: next) == .card
         send(event)
         hostingView?.refreshHitRegion()
         startLink()
@@ -320,11 +328,35 @@ public final class EdgeCollapseAppModel: ObservableObject {
         link?.isPaused = true
     }
 
-    @objc private func frame(_ l: CADisplayLink) { tick() }
+    @objc private func frame(_ l: CADisplayLink) {
+        // Sample the motion at the time this frame will be SHOWN, not when
+        // the callback happens to run: callbacks wander by milliseconds, and
+        // at several hundred pt/s that is 1-2pt of back-and-forth per frame.
+        recorder.noteCallback(now: CACurrentMediaTime(), target: l.targetTimestamp)
+        tick(at: l.targetTimestamp)
+    }
 
-    private func tick() {
+    private var workObserver: CFRunLoopObserver?
+
+    /// Measures main-thread work for this frame: from the tick to the end of
+    /// the run-loop turn, which includes SwiftUI's update and the Core
+    /// Animation commit. Buffered; printed with the motion summary.
+    private func measureFrameWork(t: Double) {
+        let started = CACurrentMediaTime()
+        let snapshot = pose
+        if let o = workObserver { CFRunLoopRemoveObserver(CFRunLoopGetMain(), o, .commonModes) }
+        let o = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, false, 2_000_001) { [weak self] _, _ in
+            guard let self else { return }
+            self.recorder.noteWork(t: t, ms: (CACurrentMediaTime() - started) * 1000, pose: snapshot)
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), o, .commonModes)
+        workObserver = o
+    }
+
+    private func tick(at when: CFTimeInterval? = nil) {
         guard let motion else { stopLink(); return }
-        let now = CACurrentMediaTime()
+        let now = when ?? CACurrentMediaTime()
+        measureFrameWork(t: now - motionStart)
         let t = now - motionStart
         let sample = motion.sample(at: t)
         pose = EdgeCollapsePose(vector: sample.value)
@@ -338,6 +370,10 @@ public final class EdgeCollapseAppModel: ObservableObject {
             hostingView?.refreshHitRegion()
         }
         if t >= motion.settledDuration {
+            // Re-attaching the real panel costs one ~40ms frame; do it while
+            // the capsule is resting (nothing moves), so a click to expand
+            // finds it ready. Tucked: keep it off-window.
+            stage?.panelWanted = presentation == .floating || presentation == .card
             pose = EdgeCollapsePose(vector: motion.to)
             // Expand ends with the capsule being the card; under the opaque
             // panel, swap to the resting card pose (same silhouette) so the
@@ -368,6 +404,20 @@ struct EdgeCollapseFrameRecorder {
     private var samples: [String] = []
     private var active = false
 
+    private var callbackLead: [Double] = []
+    private var work: [(t: Double, ms: Double, what: String)] = []
+    mutating func noteWork(t: Double, ms: Double, pose: EdgeCollapsePose) {
+        guard active else { return }
+        work.append((t, ms, String(format: "panel=%.2f glass=%.2f content=%.2f hero=%.2f glow=%.2f body.w=%.1f cap.w=%.1f",
+                                   pose.panelOpacity, pose.glass, pose.capsuleContentOpacity, pose.heroOpacity, pose.glow,
+                                   pose.body.width, pose.capsule.width)))
+    }
+    /// How far before the frame's display time the callback ran (ms).
+    mutating func noteCallback(now: CFTimeInterval, target: CFTimeInterval) {
+        guard active else { return }
+        callbackLead.append((target - now) * 1000)
+    }
+
     mutating func begin(kind: String, start: CFTimeInterval) {
         self = EdgeCollapseFrameRecorder()
         self.kind = kind; self.start = start; active = true
@@ -391,6 +441,19 @@ struct EdgeCollapseFrameRecorder {
         active = false
         let summary = String(format: "[EdgeCollapse] frames anim=%@ frames=%d maxGapMs=%.1f atMs=%.0f durationMs=%.0f",
                              kind, frames, maxGap * 1000, maxGapAt * 1000, (last - start) * 1000)
-        return samples + [summary]
+        var lines = samples + [summary]
+        let sortedMs = work.map(\.ms).sorted()
+        if !sortedMs.isEmpty {
+            let med = sortedMs[sortedMs.count / 2], p90 = sortedMs[min(sortedMs.count - 1, sortedMs.count * 9 / 10)]
+            let over = sortedMs.filter { $0 > 8.3 }.count
+            lines.append(String(format: "[EdgeCollapse] workstats anim=%@ medianMs=%.1f p90Ms=%.1f overBudget=%d/%d", kind, med, p90, over, sortedMs.count))
+        }
+        for w in work.sorted(by: { $0.ms > $1.ms }).prefix(4) {
+            lines.append(String(format: "[EdgeCollapse] work anim=%@ t=%.0f ms=%.1f %@", kind, w.t * 1000, w.ms, w.what))
+        }
+        if let lo = callbackLead.min(), let hi = callbackLead.max() {
+            lines.append(String(format: "[EdgeCollapse] callbackLead anim=%@ minMs=%.2f maxMs=%.2f spreadMs=%.2f", kind, lo, hi, hi - lo))
+        }
+        return lines
     }
 }
