@@ -107,5 +107,65 @@ backdropLegibilityBottomBandHeight: CGFloat = 160   // point B 底部 scrim 渐�
 
 ### 顺手发现但未处理的问题（按任务范围铁律，未修）
 
-- Point B 的底部 scrim 高度 160pt 是估算值（覆盖 title/artist/shuffle-repeat/controls 的粗略带宽），未按窗口实际尺寸精确计算——真实设备上可能需要创始人微调这个 Token。
 - `FluidGradientBackground` 的 `legacyArtworkContrast` 分支（C5 `.legacy` 臂,当前生产默认）与 `.tuned` 臂对 `fluidBackdropToneLuminance` 的 `applyContrastDarken` 参数不同，两个臂各自会得到不同的 `legibilityCorrection`——这是预期行为（带函数不管哪个臂输出都补齐到带内），但两臂切换时的过渡动画未专门测试。
+
+---
+
+## 复核修正（2026-09-22，协调者二审两处必改）
+
+### 问题1：Point B scrim 在控件实际所在高度没有交付建模的对比度
+
+原实现是 160pt 单段线性渐变（0→darkenOpacity），协调者指出真实前景元素（hover 标题、shuffle/repeat 行、非 hover 标题）都不在最底部像素，而是落在渐变的 30%~70% 高度处，那里的不透明度只有 `darkenOpacity` 的一部分——对比度远达不到测试断言的 4.5。用旧渐变实测三个真实位置：
+
+| 位置（距底边） | 旧渐变 opacity 分数 | 旧渐变最终对比度 | 新方案 opacity | 新方案最终对比度 |
+|---|---|---|---|---|
+| hover 标题顶部 ≈107pt | 35.8% | **2.50** | 100%（平台区） | **4.50** |
+| shuffle/repeat 行顶部 ≈108pt | 36.1% | **2.52** | 100%（平台区） | **4.50** |
+| 非 hover 标题 ≈44pt | 14.7% | **1.41** | 100%（平台区） | **4.50** |
+
+修复：scrim 改为「平台区（distance ≤ flatHeight）恒为满 darkenOpacity + 渐隐区（flatHeight~flatHeight+fadeHeight）线性降到 0」的两段式，纯函数 `BackdropLegibilityBand.bottomBandScrimOpacity(distanceAboveBottom:darkenOpacity:)`；`MiniPlayerView` 的 `LinearGradient` 改成 3-stop（`0→clear`, `fadeFraction→darken`, `1.0→darken`）对应同一形状。
+
+`flatHeight` 推导（新 Token `backdropLegibilityBottomBandFlatHeight = 80 + 4 + 24 + 8 = 116`）：
+- `controlsHeight`(80，与 `albumOverlayContent` 本地常量同值) + shuffle/repeat 行 `.padding(.bottom, 4)` + 行自身高度（按钮 24×24）= 108pt，即两个最高前景元素（hover 标题顶 ≈107pt、shuffle 行顶 108pt）的天然位置。
+- +8pt 安全边距（文本行高/ascent 不是一个可引用的现成常量，显式留白）。
+- `fadeHeight`（新 Token `backdropLegibilityBottomBandFadeHeight = 44`）延续原 160pt 总高度（116+44=160），保持视觉「触达范围」与创始人已认可的旧尺度一致，只改内部分布。
+
+新增测试：`test_pointB_scrimAtHoverTitleTop_isFullOpacity`、`test_pointB_scrimAtShuffleRepeatRowTop_isFullOpacity`（在真实计算出的 y 位置采样 `bottomBandScrimOpacity`，用同一个 `apply()` 验证该点对比度 ≥4.5）、`test_bottomBandScrimOpacity_fadesToClearAboveTheFlatZone`（平台区/边界/渐隐区/渐隐区外四点）、`test_bottomBandScrimOpacity_zeroDarkenIsAlwaysZero`。
+
+### 问题2：常驻 `.brightness(liftAmount)` 是一个 resident CIFilter，即使值为 0 也会被合成器每帧重新求值
+
+原实现在整个已合成的 ZStack 外层加了一层 `.brightness(legibilityCorrection.liftAmount)`。协调者指出：项目已实测「合成器对每个常驻 filter 每次 recomposite 都重新求值」（CLAUDE.md Performance Traps「Resident CIGaussianBlur」+ blur economy 记忆），这层 `.brightness()` 无论 `liftAmount` 是不是 0 都会常驻存在，等于凭空加一个 WindowServer 成本。
+
+修复：删掉这层外层 `.brightness()`，把 lift 折进已经存在的内层 `.brightness(tone.textureBrightness)`。推导（`BackdropLegibilityBand.innerBrightnessDelta`）：内层 brightness 之后的链路对内层输出 x2 是仿射的——
+
+```
+final = (a + (1-a)·x2) · (1-s) · (1-d)
+  a = tone.liftOpacity（白色 screen 混合）
+  s = tone.shadeOpacity（黑色叠加）
+  d = C5 darken（未启用则为 0）
+```
+
+要把 `final` 抬高 `liftAmount`，只需把 x2 抬高 `liftAmount / ((1-a)(1-s)(1-d))`，即把这个增量直接加到 `tone.textureBrightness` 上（同一个 `.brightness()` 调用点，零新增 filter）。生产代码新增 `@State legibilityInnerBrightnessDelta`，`.brightness(tone.textureBrightness)` 改成 `.brightness(tone.textureBrightness + legibilityInnerBrightnessDelta)`；`updateTone()` 用 `innerBrightnessDelta` 算出这个增量。
+
+验证：新增 `test_pointA_nearBlackArtwork_foldedInnerBrightness_reachesExactFloor`——用折叠后的增量重跑整条解析管线，确认与 `apply()` 抽象结果数值一致（accuracy 0.0005）且仍精确落在 12.000（floor）；`test_innerBrightnessDelta_zeroWhenNoLiftNeeded` 确认无需修正时增量为 0（不改变现有 `.brightness()` 数值，字节级不变）。
+
+近黑封面数据（折叠前后一致，只是产生机制不同）：
+
+| 场景 | 修正前明度 | liftAmount | innerBrightnessDelta | 折叠后明度 | 折叠后对比度 |
+|---|---|---|---|---|---|
+| Point A 近黑封面 | 0.00376 | 0.2098 | ≈0.2098/((1-a)(1-s)(1-d)) | 0.2136 | **12.000** |
+
+### 改动文件（本次复核追加）
+
+- `Sources/MusicMiniPlayerCore/UI/Background/BackdropLegibilityBand.swift`：`fluidBackdropToneLuminance` 加 `textureBrightnessOverride` 参数；新增 `innerBrightnessDelta`、`bottomBandScrimOpacity`。
+- `Sources/MusicMiniPlayerCore/UI/MicroInteractionFeel.swift`：`backdropLegibilityBottomBandHeight` 拆成 `backdropLegibilityBottomBandFlatHeight`(116) + `backdropLegibilityBottomBandFadeHeight`(44)。
+- `Sources/MusicMiniPlayerCore/UI/Background/FluidGradientBackground.swift`：删除外层 `.brightness(legibilityCorrection.liftAmount)`；`legibilityInnerBrightnessDelta` 折进内层 `.brightness()`。
+- `Sources/MusicMiniPlayerCore/UI/MiniPlayerView.swift`：底部 scrim 改 3-stop 渐变（平台区+渐隐区）。
+- `Tests/MusicMiniPlayerTests/BackdropLegibilityBandTests.swift`：新增 6 个测试（17 个，原 11 个）。
+
+### 验证结果（复核后）
+
+- `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter BackdropLegibilityBandTests` → 17/17 通过。
+- `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter ArtworkContrastFeelTests` → 21/21 通过。
+- `swift build` → 编译通过。
+- 手感/视觉终验提醒同前：本次两处修正都改变了实际渲染像素（scrim 分布、brightness 数值来源），创始人仍需亲自过一遍真实全屏专辑页与歌词页。

@@ -125,18 +125,52 @@ public enum BackdropLegibilityBand {
     /// -> white screen-blend lift -> black shade -> (tuned-arm only) C5 extra darken.
     /// Intermediate steps are NOT clamped (the compositor works in extended range before
     /// the final display clamp) — only the returned value is clamped to 0...1.
+    /// `textureBrightnessOverride`, when provided, replaces `tone.textureBrightness` at
+    /// the `.brightness()` step — this is how a floor-correction lift is FOLDED into the
+    /// existing brightness modifier (see `innerBrightnessDelta`) instead of adding a new
+    /// resident compositing filter on top.
     static func fluidBackdropToneLuminance(
         artworkAverageLuminance: Double,
         tone: ArtworkBackgroundToneMap,
         contrastResolution: ArtworkContrastPolicy.Resolution,
-        applyContrastDarken: Bool
+        applyContrastDarken: Bool,
+        textureBrightnessOverride: Double? = nil
     ) -> Double {
         let x1 = applyContrast(artworkAverageLuminance, tone.textureContrast)
-        let x2 = applyBrightness(x1, tone.textureBrightness)
+        let x2 = applyBrightness(x1, textureBrightnessOverride ?? tone.textureBrightness)
         let x3 = applyWhiteScreen(x2, opacity: tone.liftOpacity)
         let x4 = applyBlackOverlay(x3, opacity: tone.shadeOpacity)
         let x5 = applyContrastDarken ? applyBlackOverlay(x4, opacity: contrastResolution.darkenOpacity) : x4
         return min(max(x5, 0), 1)
+    }
+
+    /// Folds a floor-correction lift into the EXISTING inner `.brightness(tone.textureBrightness)`
+    /// step instead of adding a new resident filter/modifier on top of the composited
+    /// subtree — this project has measured that the render server re-evaluates every
+    /// resident compositing filter (blur/brightness/contrast/...) on each recomposite
+    /// regardless of its value (CLAUDE.md Performance Traps, "Resident CIGaussianBlur"),
+    /// so an always-present `.brightness(liftAmount)` wrapper would cost WindowServer time
+    /// even when `liftAmount == 0`.
+    ///
+    /// Everything AFTER that inner brightness step is affine in its output x2:
+    /// `final = (a + (1-a)*x2) * (1-s) * (1-d)`, where `a` = `tone.liftOpacity` (white
+    /// screen-blend), `s` = `tone.shadeOpacity` (black overlay), `d` = the C5 darken
+    /// opacity (0 when not applied). To raise `final` by `liftAmount`, x2 must rise by
+    /// `liftAmount / ((1-a)*(1-s)*(1-d))` — i.e. that amount must be ADDED to
+    /// `tone.textureBrightness` at the existing modifier, not layered on afterwards.
+    static func innerBrightnessDelta(
+        liftAmount: Double,
+        tone: ArtworkBackgroundToneMap,
+        contrastResolution: ArtworkContrastPolicy.Resolution,
+        applyContrastDarken: Bool
+    ) -> Double {
+        guard liftAmount > 0 else { return 0 }
+        let a = tone.liftOpacity
+        let s = tone.shadeOpacity
+        let d = applyContrastDarken ? contrastResolution.darkenOpacity : 0
+        let denominator = (1 - a) * (1 - s) * (1 - d)
+        guard denominator > 0.0001 else { return 0 }
+        return liftAmount / denominator
     }
 
     // MARK: - Point B: fullscreen album bottom band (analytic replica)
@@ -158,6 +192,25 @@ public enum BackdropLegibilityBand {
         let clampedLayer1 = min(max(layer1, 0), 1)
         let clampedCover = min(max(coverBottomRowLuminance, 0), 1)
         return max(clampedLayer1, clampedCover)
+    }
+
+    /// Point B's bottom scrim shape: FULL `darkenOpacity` across the flat zone nearest
+    /// the bottom edge (must cover every real foreground element — title in hover mode,
+    /// shuffle/repeat row, SharedBottomControls — none of which sit at the very bottom
+    /// pixel, so a plain 0->darken ramp across the whole band under-darkens exactly where
+    /// the controls are), fading LINEARLY to 0 across the fade zone above the flat zone,
+    /// clear beyond both. `distanceAboveBottom` and the two heights are in device points.
+    static func bottomBandScrimOpacity(
+        distanceAboveBottom: Double,
+        darkenOpacity: Double,
+        flatHeight: Double = Double(MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFlatHeight),
+        fadeHeight: Double = Double(MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFadeHeight)
+    ) -> Double {
+        guard darkenOpacity > 0 else { return 0 }
+        if distanceAboveBottom <= flatHeight { return darkenOpacity }
+        let fadeProgress = (distanceAboveBottom - flatHeight) / max(fadeHeight, 0.0001)
+        if fadeProgress >= 1 { return 0 }
+        return darkenOpacity * (1 - fadeProgress)
     }
 
     // MARK: - SwiftUI modifier formulas (see spec's 解析模型)

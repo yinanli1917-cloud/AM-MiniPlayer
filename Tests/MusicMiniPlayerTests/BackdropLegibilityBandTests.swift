@@ -128,6 +128,54 @@ final class BackdropLegibilityBandTests: XCTestCase {
         XCTAssertTrue(contrast.isFinite)
     }
 
+    // MARK: - Point A: floor lift is FOLDED into the existing inner brightness step
+    // (no new resident filter) — coordinator review fix #2.
+
+    func test_pointA_nearBlackArtwork_foldedInnerBrightness_reachesExactFloor() {
+        let metrics = nearBlackImage.artworkVisualMetrics()
+        let tone = ArtworkBackgroundToneMap.forMetrics(metrics)
+        let contrastResolution = ArtworkContrastPolicy.resolve(
+            brightness: metrics.averageLuminance, params: .default, reduceTransparency: false
+        )
+        let preCorrection = BackdropLegibilityBand.fluidBackdropToneLuminance(
+            artworkAverageLuminance: metrics.averageLuminance,
+            tone: tone, contrastResolution: contrastResolution, applyContrastDarken: false
+        )
+        let correction = BackdropLegibilityBand.resolve(backgroundLuminance: preCorrection)
+        XCTAssertGreaterThan(correction.liftAmount, 0, "near-black artwork must need a lift")
+
+        // Exactly what production now does: fold the lift into tone.textureBrightness at
+        // the EXISTING `.brightness()` modifier, instead of a new modifier on top.
+        let delta = BackdropLegibilityBand.innerBrightnessDelta(
+            liftAmount: correction.liftAmount, tone: tone,
+            contrastResolution: contrastResolution, applyContrastDarken: false
+        )
+        let foldedFinal = BackdropLegibilityBand.fluidBackdropToneLuminance(
+            artworkAverageLuminance: metrics.averageLuminance,
+            tone: tone, contrastResolution: contrastResolution, applyContrastDarken: false,
+            textureBrightnessOverride: tone.textureBrightness + delta
+        )
+
+        // Must match the abstract apply() result (same correction, different mechanism)...
+        let expectedFinal = BackdropLegibilityBand.apply(preCorrection, correction)
+        XCTAssertEqual(foldedFinal, expectedFinal, accuracy: 0.0005)
+        // ...and must still land exactly on the 12:1 floor.
+        XCTAssertEqual(
+            BackdropLegibilityBand.whiteContrastRatio(gammaLuminance: foldedFinal),
+            MicroInteractionFeel.Tokens.backdropLegibilityFloorContrast,
+            accuracy: 0.01
+        )
+    }
+
+    func test_innerBrightnessDelta_zeroWhenNoLiftNeeded() {
+        let tone = ArtworkBackgroundToneMap.neutral
+        let contrastResolution = ArtworkContrastPolicy.resolve(brightness: 0.5, params: .default, reduceTransparency: false)
+        let delta = BackdropLegibilityBand.innerBrightnessDelta(
+            liftAmount: 0, tone: tone, contrastResolution: contrastResolution, applyContrastDarken: false
+        )
+        XCTAssertEqual(delta, 0)
+    }
+
     // MARK: - Point B: fullscreen album page bottom control band
 
     func test_pointB_whiteArtwork_finalContrastMeetsCeiling() {
@@ -148,6 +196,84 @@ final class BackdropLegibilityBandTests: XCTestCase {
             MicroInteractionFeel.Tokens.backdropLegibilityCeilingContrast,
             "white fullscreen cover's bottom control band must stay >= 4.5:1 for white shuffle/repeat icons"
         )
+    }
+
+    // MARK: - Point B: the scrim must deliver FULL darkenOpacity where the real
+    // foreground elements actually are — coordinator review fix #1. Positions per
+    // MiniPlayerView.albumOverlayContent's own layout formulas:
+    //   - hover-mode title: centre at controlsHeight(80)+4+16 = 100pt above bottom,
+    //     top edge ~107pt (half of a 12pt bold line's rendered height above centre).
+    //   - shuffle/repeat row: bottom at controlsHeight(80)+4 = 84pt, top at +24pt = 108pt.
+    // Both must fall inside the flat (full-opacity) zone.
+
+    func test_pointB_scrimAtHoverTitleTop_isFullOpacity() {
+        let whiteImageMetrics = whiteImage.artworkVisualMetrics()
+        let tone = ArtworkBackgroundToneMap.forMetrics(whiteImageMetrics)
+        let coverBottomRowLuminance = Double(whiteImage.controlAreaMaxLuminance())
+        let preCorrection = BackdropLegibilityBand.fullscreenBottomBandToneLuminance(
+            coverBottomRowLuminance: coverBottomRowLuminance,
+            artworkAverageLuminance: whiteImageMetrics.averageLuminance,
+            tone: tone
+        )
+        let correction = BackdropLegibilityBand.resolve(backgroundLuminance: preCorrection)
+        XCTAssertGreaterThan(correction.darkenOpacity, 0, "white cover must need a darken scrim")
+
+        let titleTopDistanceAboveBottom = 107.0
+        let scrimOpacityAtTitle = BackdropLegibilityBand.bottomBandScrimOpacity(
+            distanceAboveBottom: titleTopDistanceAboveBottom,
+            darkenOpacity: correction.darkenOpacity
+        )
+        XCTAssertEqual(scrimOpacityAtTitle, correction.darkenOpacity, accuracy: 0.0001,
+                        "the title's top must sit in the FULL-opacity flat zone, not a partial ramp value")
+
+        let finalAtTitle = BackdropLegibilityBand.apply(preCorrection, BackdropLegibilityBand.Correction(darkenOpacity: scrimOpacityAtTitle, liftAmount: 0))
+        XCTAssertGreaterThanOrEqual(
+            BackdropLegibilityBand.whiteContrastRatio(gammaLuminance: finalAtTitle),
+            MicroInteractionFeel.Tokens.backdropLegibilityCeilingContrast,
+            "contrast actually delivered at the title's own position must meet the ceiling, not just the modelled bottom-row value"
+        )
+    }
+
+    func test_pointB_scrimAtShuffleRepeatRowTop_isFullOpacity() {
+        let whiteImageMetrics = whiteImage.artworkVisualMetrics()
+        let tone = ArtworkBackgroundToneMap.forMetrics(whiteImageMetrics)
+        let coverBottomRowLuminance = Double(whiteImage.controlAreaMaxLuminance())
+        let preCorrection = BackdropLegibilityBand.fullscreenBottomBandToneLuminance(
+            coverBottomRowLuminance: coverBottomRowLuminance,
+            artworkAverageLuminance: whiteImageMetrics.averageLuminance,
+            tone: tone
+        )
+        let correction = BackdropLegibilityBand.resolve(backgroundLuminance: preCorrection)
+
+        // controlsHeight (80) + row bottom padding (4) + row height (24) = 108pt.
+        let shuffleRowTopDistanceAboveBottom = 80.0 + 4.0 + 24.0
+        let scrimOpacity = BackdropLegibilityBand.bottomBandScrimOpacity(
+            distanceAboveBottom: shuffleRowTopDistanceAboveBottom,
+            darkenOpacity: correction.darkenOpacity
+        )
+        XCTAssertEqual(scrimOpacity, correction.darkenOpacity, accuracy: 0.0001)
+
+        let finalAtRow = BackdropLegibilityBand.apply(preCorrection, BackdropLegibilityBand.Correction(darkenOpacity: scrimOpacity, liftAmount: 0))
+        XCTAssertGreaterThanOrEqual(
+            BackdropLegibilityBand.whiteContrastRatio(gammaLuminance: finalAtRow),
+            MicroInteractionFeel.Tokens.backdropLegibilityCeilingContrast
+        )
+    }
+
+    func test_bottomBandScrimOpacity_fadesToClearAboveTheFlatZone() {
+        let flatHeight = Double(MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFlatHeight)
+        let fadeHeight = Double(MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFadeHeight)
+
+        XCTAssertEqual(BackdropLegibilityBand.bottomBandScrimOpacity(distanceAboveBottom: 0, darkenOpacity: 0.5), 0.5)
+        XCTAssertEqual(BackdropLegibilityBand.bottomBandScrimOpacity(distanceAboveBottom: flatHeight, darkenOpacity: 0.5), 0.5,
+                        "the flat/fade boundary itself is still full opacity")
+        XCTAssertEqual(BackdropLegibilityBand.bottomBandScrimOpacity(distanceAboveBottom: flatHeight + fadeHeight / 2, darkenOpacity: 0.5), 0.25, accuracy: 0.001)
+        XCTAssertEqual(BackdropLegibilityBand.bottomBandScrimOpacity(distanceAboveBottom: flatHeight + fadeHeight, darkenOpacity: 0.5), 0, accuracy: 0.0001)
+        XCTAssertEqual(BackdropLegibilityBand.bottomBandScrimOpacity(distanceAboveBottom: flatHeight + fadeHeight + 50, darkenOpacity: 0.5), 0)
+    }
+
+    func test_bottomBandScrimOpacity_zeroDarkenIsAlwaysZero() {
+        XCTAssertEqual(BackdropLegibilityBand.bottomBandScrimOpacity(distanceAboveBottom: 0, darkenOpacity: 0), 0)
     }
 
     // MARK: - Band function contract (continuity + boundaries)

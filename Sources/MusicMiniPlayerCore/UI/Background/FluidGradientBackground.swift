@@ -29,6 +29,13 @@ public struct FluidGradientBackground: View {
     // existing pipeline's predicted output (tone map + C5 if active), so it only ever
     // makes up the residual gap rather than double-darkening on top of C5.
     @State private var legibilityCorrection = BackdropLegibilityBand.Correction.zero
+    // A floor-correction lift is FOLDED into the existing `.brightness(tone.textureBrightness)`
+    // call below (as an added delta) instead of an extra `.brightness()` modifier — this
+    // project has measured that the render server re-evaluates every resident compositing
+    // filter on each recomposite regardless of its value (CLAUDE.md Performance Traps,
+    // "Resident CIGaussianBlur"), so an always-present wrapper modifier would cost
+    // WindowServer time even at 0. Zero when no lift is needed (in-band or ceiling case).
+    @State private var legibilityInnerBrightnessDelta: Double = 0
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     private static let crossfade = Animation.easeInOut(duration: 0.6)
@@ -66,7 +73,7 @@ public struct FluidGradientBackground: View {
                         .blur(radius: legacyArtworkContrast ? 58 : contrastResolution.blurRadius)
                         .saturation(legacyArtworkContrast ? tone.textureSaturation : contrastResolution.saturation)
                         .contrast(tone.textureContrast)
-                        .brightness(tone.textureBrightness)
+                        .brightness(tone.textureBrightness + legibilityInnerBrightnessDelta)
 
                         Color.white
                             .opacity(tone.liftOpacity)
@@ -94,11 +101,6 @@ public struct FluidGradientBackground: View {
                                 .animation(.smooth(duration: MicroInteractionFeel.Tokens.artworkContrastDarkenAnimationDuration), value: legibilityCorrection.darkenOpacity)
                         }
                     }
-                    // Hue-preserving lift for a too-dark background (band floor): an
-                    // additive `.brightness` bump on the whole composited layer above,
-                    // not a screen-white wash (keeps texture color, avoids washing it
-                    // toward gray).
-                    .brightness(legibilityCorrection.liftAmount)
                     // Distinct identity per artwork: a REPLACEMENT crossfades old → new
                     // (insertion transition). REMOVAL (artwork → nil) deliberately does NOT
                     // use a removal transition: removal transitions silently skip the fade on
@@ -174,6 +176,12 @@ public struct FluidGradientBackground: View {
                     applyContrastDarken: !legacyArtworkContrast
                 )
             )
+            legibilityInnerBrightnessDelta = BackdropLegibilityBand.innerBrightnessDelta(
+                liftAmount: legibilityCorrection.liftAmount,
+                tone: tone,
+                contrastResolution: contrastResolution,
+                applyContrastDarken: !legacyArtworkContrast
+            )
             return
         }
         let metrics = artwork.artworkVisualMetrics()
@@ -190,6 +198,12 @@ public struct FluidGradientBackground: View {
                 contrastResolution: contrastResolution,
                 applyContrastDarken: !legacyArtworkContrast
             )
+        )
+        legibilityInnerBrightnessDelta = BackdropLegibilityBand.innerBrightnessDelta(
+            liftAmount: legibilityCorrection.liftAmount,
+            tone: tone,
+            contrastResolution: contrastResolution,
+            applyContrastDarken: !legacyArtworkContrast
         )
     }
 }

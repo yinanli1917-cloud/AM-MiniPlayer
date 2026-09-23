@@ -374,20 +374,31 @@ extension MiniPlayerView {
 
             ZStack {
                 // Backdrop legibility band, point B (research/spec-2026-09-22-backdrop-legibility.md):
-                // fullscreen album cover only — a bottom scrim gradient (transparent ->
-                // darkenOpacity) behind the title/artist/shuffle-repeat/controls band,
-                // appearing only when the sharp cover behind it is too bright for the
-                // white foreground to read at >= 4.5:1. Never a hard edge.
+                // fullscreen album cover only — a bottom scrim behind the
+                // title/artist/shuffle-repeat/controls band, appearing only when the
+                // sharp cover behind it is too bright for the white foreground to read at
+                // >= 4.5:1. FULL darkenOpacity across the flat zone nearest the bottom
+                // (every real foreground element sits inside it, not at the very bottom
+                // pixel — see BackdropLegibilityBand.bottomBandScrimOpacity), fading
+                // linearly to clear across the fade zone above it. Never a hard edge.
                 if fullscreenAlbumCover && bottomBandLegibilityCorrection.darkenOpacity > 0 {
                     let bandDarken = bottomBandLegibilityCorrection.darkenOpacity
+                    let flatHeight = MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFlatHeight
+                    let fadeHeight = MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFadeHeight
+                    let totalHeight = flatHeight + fadeHeight
+                    let fadeFraction = Double(fadeHeight / totalHeight)
                     VStack(spacing: 0) {
                         Spacer()
                         LinearGradient(
-                            colors: [Color.black.opacity(0), Color.black.opacity(bandDarken)],
+                            stops: [
+                                .init(color: Color.black.opacity(0), location: 0),
+                                .init(color: Color.black.opacity(bandDarken), location: fadeFraction),
+                                .init(color: Color.black.opacity(bandDarken), location: 1.0)
+                            ],
                             startPoint: .top,
                             endPoint: .bottom
                         )
-                        .frame(height: MicroInteractionFeel.Tokens.backdropLegibilityBottomBandHeight)
+                        .frame(height: totalHeight)
                     }
                     .allowsHitTesting(false)
                     .animation(.smooth(duration: MicroInteractionFeel.Tokens.artworkContrastDarkenAnimationDuration), value: bandDarken)
