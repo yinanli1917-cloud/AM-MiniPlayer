@@ -819,6 +819,18 @@ public struct LyricsView: View {
                 lyricsService.requestTranslation()
             }
         }
+        // Phase 2 piece translations (2026-09-22): a per-piece on-device
+        // translation landed in PieceTranslationCache. Rebuild the display
+        // lines so the newly-cached text is picked up -- `forceRebuild`
+        // because `lyrics` itself didn't change, so the ordinary fingerprint
+        // dedup would otherwise skip this. Row ids are unaffected (same
+        // segmentation), so this is the same cheap translation-only
+        // reconfigure path late whole-line translations already use (see
+        // LyricsLateTranslationInsertTests / configureSignature's
+        // translation hash) -- no full rebuild, no flicker.
+        .onChange(of: lyricsService.pieceTranslationVersion) { _, _ in
+            refreshDisplayLineCache(forceRebuild: true)
+        }
         .onChange(of: lyricsService.isTranslating) { _, _ in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 cache.heightCacheInvalidated = true
@@ -2049,9 +2061,25 @@ public struct LyricsView: View {
     // equal) timing, with short pieces folded into a neighbour. The full
     // translation attaches to the FIRST piece only; later pieces carry none
     // (never chopped mid-sentence to match an unrelated split count).
+    // Phase 2 (2026-09-22 founder decision, overrides the interim "translation
+    // on the first piece only"): every split piece gets its own translation
+    // via LyricPieceTranslation's three tiers -- clause-aligned pairing,
+    // then a cached async per-piece on-device translation, then (only while
+    // neither of those is available) the full translation on the first
+    // piece. `pieceCacheLookup`/`pendingPieceTranslationTexts` thread the
+    // tier-2 cache and the async-registration list through the whole
+    // function without a per-line allocation of the cache closure.
     private func makeDisplayLyricLines(from lyrics: [LyricLine], rowWidth: CGFloat) -> [DisplayLyricLine] {
         var result: [DisplayLyricLine] = []
         result.reserveCapacity(lyrics.count)
+
+        let pieceSourceCode = lyricsService.resolvedTranslationSourceLanguageCode
+        let pieceTargetCode = LyricsService.normalizedSystemTranslationLanguage(lyricsService.translationLanguage)
+        let pieceCacheLookup: (String) -> String? = { text in
+            guard let pieceSourceCode else { return nil }
+            return PieceTranslationCache.shared.translation(for: text, source: pieceSourceCode, target: pieceTargetCode)
+        }
+        var pendingPieceTranslationTexts: [String] = []
 
         for (sourceIndex, line) in lyrics.enumerated() {
             if isPreludeEllipsis(line.text) || isInstrumentalNotice(line.text) || line.isBackground {
@@ -2078,18 +2106,27 @@ public struct LyricsView: View {
                     continue
                 }
                 let segmentCount = wordGroups.count
+                let groupTexts = wordGroups.map { LyricDisplaySegmenter.displayText(forWords: $0) }
+                let (pieceTranslations, pieceTiers) = LyricPieceTranslation.pieceTranslations(
+                    originalPieces: groupTexts,
+                    fullTranslation: line.translation,
+                    cache: pieceCacheLookup
+                )
                 for (segmentIndex, group) in wordGroups.enumerated() {
                     // Timing error vs. the source data is exactly zero by
                     // construction: start/end come straight from the group's
                     // own real word timestamps, never estimated.
                     let start = group.first?.startTime ?? line.startTime
                     let end = group.last?.endTime ?? line.endTime
+                    if pieceTiers[segmentIndex] == .none {
+                        pendingPieceTranslationTexts.append(groupTexts[segmentIndex])
+                    }
                     let segmentLine = LyricLine(
-                        text: LyricDisplaySegmenter.displayText(forWords: group),
+                        text: groupTexts[segmentIndex],
                         startTime: start,
                         endTime: end,
                         words: group,
-                        translation: segmentIndex == 0 ? line.translation : nil,
+                        translation: pieceTranslations[segmentIndex],
                         isBackground: false
                     )
                     result.append(DisplayLyricLine(
@@ -2116,13 +2153,21 @@ public struct LyricsView: View {
                 continue
             }
             let segmentCount = timedPieces.count
+            let (pieceTranslations, pieceTiers) = LyricPieceTranslation.pieceTranslations(
+                originalPieces: timedPieces.map(\.text),
+                fullTranslation: line.translation,
+                cache: pieceCacheLookup
+            )
             for (segmentIndex, piece) in timedPieces.enumerated() {
+                if pieceTiers[segmentIndex] == .none {
+                    pendingPieceTranslationTexts.append(piece.text)
+                }
                 let segmentLine = LyricLine(
                     text: piece.text,
                     startTime: piece.startTime,
                     endTime: piece.endTime,
                     words: [],
-                    translation: segmentIndex == 0 ? line.translation : nil,
+                    translation: pieceTranslations[segmentIndex],
                     isBackground: false
                 )
                 result.append(DisplayLyricLine(
@@ -2133,6 +2178,10 @@ public struct LyricsView: View {
                     line: segmentLine
                 ))
             }
+        }
+
+        if pieceSourceCode != nil, lyricsService.isSystemTranslationSource, !pendingPieceTranslationTexts.isEmpty {
+            lyricsService.registerPendingPieceTranslations(pendingPieceTranslationTexts)
         }
 
         return result

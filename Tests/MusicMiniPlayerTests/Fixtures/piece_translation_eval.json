@@ -1,0 +1,119 @@
+[
+  {
+    "id": "pt-001",
+    "note": "HONEST LIMITATION found by this eval: counts match (2==2) and the pairing is actually CORRECT (clause 1 = piece 1, clause 2 = piece 2, not reordered), but ordinary Chinese phrasing compresses piece 1 more than piece 2 -- the length-rank safety check conservatively rejects this too, same as a true reordering would be rejected. Documented tradeoff: a false reject only costs a correct-but-blunt tier-3 fallback, which is judged safer than loosening the check and risking a real reordering (pt-003) slipping through.",
+    "originalPieces": ["When the rain falls down,", "I will still be here"],
+    "fullTranslation": "当雨落下时，我依然在这里等你",
+    "expectedTier": "fallbackFirstPiece",
+    "cache": null
+  },
+  {
+    "id": "pt-002",
+    "note": "Same honest-limitation shape as pt-001 with 3 pieces: the pairing is correct (not reordered) but natural per-clause length variance still flips the rank permutation on one pair, so the conservative check rejects it too.",
+    "originalPieces": ["I woke up early,", "made a cup of coffee,", "and watched the sunrise"],
+    "fullTranslation": "我很早就醒了，泡了一杯咖啡，看着日出",
+    "expectedTier": "fallbackFirstPiece",
+    "cache": null
+  },
+  {
+    "id": "pt-013",
+    "note": "clause-aligned ACCEPTED: same shape as pt-001 but with an unambiguous length gap (piece/clause 2 several times longer than piece/clause 1 on BOTH sides) -- large enough that ordinary phrasing variance cannot flip the relative order, so tier 1 correctly fires here.",
+    "originalPieces": ["Hi,", "this is a much longer trailing piece with many extra words to pad it out"],
+    "fullTranslation": "嗨，这是一段长得多的后半部分带着很多额外的字词让它变得又臭又长",
+    "expectedTier": "clauseAligned",
+    "cache": null
+  },
+  {
+    "id": "pt-014",
+    "note": "clause-aligned ACCEPTED, 3 pieces with unambiguous per-pair length gaps (short, medium, long on both sides)",
+    "originalPieces": ["Hi,", "this is a medium length piece here,", "and this final piece is by far the longest of the three with many extra padding words added"],
+    "fullTranslation": "嗨，这是中等长度的一段，而这最后一段是三段里最长的一段还加了很多额外的填充字词让它变得非常非常长",
+    "expectedTier": "clauseAligned",
+    "cache": null
+  },
+  {
+    "id": "pt-003",
+    "note": "founder's documented reordered-clause example: clause COUNT matches (2==2) but Chinese clause order is reversed relative to English -- must NOT positionally pair; falls through to tier 3 (no cache available)",
+    "originalPieces": ["I'll wait for you,", "until the end of time"],
+    "fullTranslation": "直到时间尽头，我都会等你",
+    "expectedTier": "fallbackFirstPiece",
+    "cache": null
+  },
+  {
+    "id": "pt-004",
+    "note": "original NOT split at a clause boundary (mid-phrase width-driven cut) -- tier 1 must not apply even though the translation happens to have 2 clauses",
+    "originalPieces": ["I will wait for you until", "the end of time comes"],
+    "fullTranslation": "我会一直等你，直到时间尽头",
+    "expectedTier": "fallbackFirstPiece",
+    "cache": null
+  },
+  {
+    "id": "pt-005",
+    "note": "no-punctuation translation: fullTranslation has zero clause boundaries, so it is always exactly 1 clause -- count mismatch against 2 pieces, falls to fallback",
+    "originalPieces": ["The city lights flicker,", "the night goes on forever"],
+    "fullTranslation": "城市的灯光闪烁着夜晚永远不会结束",
+    "expectedTier": "fallbackFirstPiece",
+    "cache": null
+  },
+  {
+    "id": "pt-006",
+    "note": "translation much longer than original: many extra clauses inserted by the translator -- count mismatch, falls to fallback rather than guessing which clauses correspond",
+    "originalPieces": ["Stay with me,", "always"],
+    "fullTranslation": "请留在我身边，永远，永远，永远不要离开，直到永远",
+    "expectedTier": "fallbackFirstPiece",
+    "cache": null
+  },
+  {
+    "id": "pt-007",
+    "note": "translation much shorter than original: a single terse clause covering two verbose pieces -- count mismatch, falls to fallback",
+    "originalPieces": ["Every single time I think about the way you used to smile at me,", "I remember why I fell for you"],
+    "fullTranslation": "我永远记得你的笑容",
+    "expectedTier": "fallbackFirstPiece",
+    "cache": null
+  },
+  {
+    "id": "pt-008",
+    "note": "tier 2: every piece already has its own cached per-piece translation (simulating a completed async pass) -- must win over the crude first-piece fallback",
+    "originalPieces": ["Every night I think about you girl", "we can dance until the morning light"],
+    "fullTranslation": "每晚我都想着你 我们可以一直跳舞到天亮",
+    "expectedTier": "perPieceCache",
+    "cache": {
+      "Every night I think about you girl": "每晚我都想着你",
+      "we can dance until the morning light": "我们可以一直跳舞到天亮"
+    }
+  },
+  {
+    "id": "pt-009",
+    "note": "mixed: piece 0 falls back to the full translation (no cache yet), piece 1 already cached, piece 2 has neither and must be tier none (queued for async translation) -- exercises the per-piece independence the founder decision requires",
+    "originalPieces": ["first fragment of a long line", "second fragment right after it", "third trailing fragment"],
+    "fullTranslation": "一整行的翻译文本",
+    "expectedTier": "mixed",
+    "cache": {
+      "second fragment right after it": "第二段已经翻译好了"
+    }
+  },
+  {
+    "id": "pt-010",
+    "note": "clause-aligned with weak (comma) boundaries only, Latin-to-Latin (Spanish), sanity check the rule is not CJK-specific",
+    "originalPieces": ["Bailamos toda la noche,", "hasta que salga el sol"],
+    "fullTranslation": "We danced all night long, until the sun came up",
+    "expectedTier": "clauseAligned",
+    "cache": null
+  },
+  {
+    "id": "pt-011",
+    "note": "clause-aligned rejected by length-rank mismatch even though counts match, using strong punctuation (period) instead of comma -- generalizes pt-003's rule beyond commas",
+    "originalPieces": ["A short line.", "This second line is a lot longer than the first one."],
+    "fullTranslation": "这第二段其实很长很长比第一段长得多。短的第一段。",
+    "expectedTier": "fallbackFirstPiece",
+    "cache": null
+  },
+  {
+    "id": "pt-012",
+    "note": "single unsplit piece (segmentCount==1 case) simply carries the whole translation verbatim -- not really a 'tier' decision, sanity check the pass-through path",
+    "originalPieces": ["only one piece, never split"],
+    "fullTranslation": "只有一段，从未被拆分",
+    "expectedTier": "fallbackFirstPiece",
+    "cache": null
+  }
+]

@@ -767,8 +767,8 @@ final class LongLineEvalTests: XCTestCase {
                       "word-level lines must go through the real-wrap word splitter (point 3)")
         XCTAssertTrue(source.contains("LyricDisplaySegmenter.realWrapPieces(for: line.text, rowWidth: rowWidth)"),
                       "line-level lines must go through the real-wrap text splitter (point 1)")
-        XCTAssertTrue(source.contains("translation: segmentIndex == 0 ? line.translation : nil"),
-                      "translation must attach to the first piece only (point 5)")
+        XCTAssertTrue(source.contains("LyricPieceTranslation.pieceTranslations("),
+                      "translation must be decided per piece via the three-tier LyricPieceTranslation decision (point 5, superseded 2026-09-22: every split piece gets its own translation -- clause-aligned, then per-piece cache, then the first-piece fallback -- rather than only ever attaching the full translation to the first piece)")
         XCTAssertTrue(source.contains("private func shouldKeepDisplayLineUnsplit(pieceCount: Int) -> Bool"),
                       "the unsplit check should be a plain piece-count guard now that the real trigger lives in LyricDisplaySegmenter")
         XCTAssertFalse(source.contains("LyricDisplaySegmenter.segments(for: line.text, options: .mainLyric)"),

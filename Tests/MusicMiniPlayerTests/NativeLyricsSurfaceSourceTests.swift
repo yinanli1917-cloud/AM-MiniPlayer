@@ -69,13 +69,14 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
 
     // 2026-09-22 Plan A (founder-approved, docs/lyrics-ux-contract.md §E):
     // translation is no longer chopped into the same piece count as the main
-    // text at all -- the full translation attaches to the FIRST split piece
-    // only, later pieces carry none. This supersedes the old guarantee this
-    // test used to assert (unmatched translation SEGMENTS left empty rather
-    // than repeating the full text) with a stronger, simpler one: only
-    // segmentIndex == 0 ever carries a translation, everywhere a line splits
-    // (word-level or line-level).
-    func testSplitDisplayLinesAttachFullTranslationToFirstPieceOnly() throws {
+    // text by naive equal-count slicing. Phase 2 (2026-09-22, overrides the
+    // interim "translation on the first piece only"): EVERY split piece gets
+    // its own translation via LyricPieceTranslation's three tiers -- see
+    // LyricPieceTranslationTests for the pure tier-decision logic. This test
+    // pins that BOTH split branches (word-level and line-level) route
+    // through that shared three-tier decision rather than reintroducing a
+    // naive per-branch slicing/duplication rule.
+    func testSplitDisplayLinesRouteTranslationThroughThreeTierDecision() throws {
         let source = try readSource("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
         guard let functionStart = source.range(of: "private func makeDisplayLyricLines")?.lowerBound,
               let functionEnd = source.range(of: "private func shouldKeepDisplayLineUnsplit")?.lowerBound else {
@@ -84,10 +85,18 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         }
         let body = String(source[functionStart..<functionEnd])
 
-        let occurrences = body.components(separatedBy: "translation: segmentIndex == 0 ? line.translation : nil").count - 1
+        let occurrences = body.components(separatedBy: "LyricPieceTranslation.pieceTranslations(").count - 1
         XCTAssertEqual(
             occurrences, 2,
-            "Both the word-level and line-level split branches must attach the FULL translation to the first piece only (segmentIndex == 0) and nil elsewhere -- never chop it to match an unrelated split count."
+            "Both the word-level and line-level split branches must decide each piece's translation via LyricPieceTranslation.pieceTranslations (clause-aligned -> per-piece cache -> first-piece fallback), never a naive per-branch slice/duplicate rule."
+        )
+        XCTAssertFalse(
+            body.contains("translation: segmentIndex == 0 ? line.translation : nil"),
+            "The naive 'first piece only' assignment must be gone now that every piece can carry its own translation (tiers 1/2) with the first-piece fallback only as tier 3."
+        )
+        XCTAssertTrue(
+            body.contains("pieceTiers[segmentIndex] == .none"),
+            "A piece with no tier-1/2/3 translation yet must be queued for an async per-piece translation attempt, not silently left blank forever."
         )
     }
 
