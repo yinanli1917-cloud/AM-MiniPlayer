@@ -2849,7 +2849,22 @@ private struct TranslationTaskHostCore: View {
         if let config = configAny as? TranslationSession.Configuration {
             return config
         }
-        return TranslationSession.Configuration(target: Locale.Language(identifier: "zh-Hans"))
+        // Transient bootstrap value before the first real per-song source
+        // resolves (`LyricsService.silentSystemTranslationConfiguration`,
+        // 2026-09-22 fix) — `.translationTask` needs SOME non-nil value to
+        // bind to immediately, but `serveTranslationRequests` never actually
+        // translates through it (showTranslation/lyrics gates in
+        // `performSystemTranslation` hold off until real content + a real
+        // config are ready, and `updateTranslationSessionConfig` swaps this
+        // out for the resolved config within one run-loop turn). Every
+        // `TranslationSession.Configuration` in the app must carry an
+        // explicit, non-nil `source` — never `source: nil`, which is what
+        // re-introduces the system language-picker popup — so this
+        // placeholder gets one too, even though it is essentially never live.
+        return TranslationSession.Configuration(
+            source: Locale.Language(identifier: "en"),
+            target: Locale.Language(identifier: "zh-Hans")
+        )
     }
 
     private var koreanRunConfig: TranslationSession.Configuration {

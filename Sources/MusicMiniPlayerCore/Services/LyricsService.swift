@@ -306,6 +306,28 @@ public class LyricsService: ObservableObject {
     private var currentSongTranslationID: String?
     private var translationsAreFromLyricsSource: Bool = false
     private var lastSystemTranslationLanguage: String?
+    /// The explicit source language `silentSystemTranslationConfiguration`
+    /// resolved for the CURRENT song+language pair (2026-09-22 fix) — reused
+    /// by `performSystemTranslation`'s per-line consistency gate so a line
+    /// whose own script disagrees with the song's resolved source is never
+    /// sent into the fixed-source session. `nil` until a config has resolved
+    /// for this song; recomputed fresh (not trusted stale) whenever the song
+    /// identity changes — see the guard at each call site.
+    private var resolvedSongTranslationSourceLanguage: Locale.Language?
+    /// Piece texts awaiting an async per-piece translation pass (Phase 2,
+    /// 2026-09-22 founder decision: every Plan-A split piece gets its own
+    /// translation). Registered synchronously by LyricsView whenever
+    /// `makeDisplayLyricLines` finds a piece with no tier-1 clause pairing
+    /// and no cache hit yet; drained by the SAME long-lived
+    /// `serveTranslationRequests` loop that already serves whole-line
+    /// requests, right after each `performSystemTranslation` pass.
+    private var pendingPieceTranslationTexts: Set<String> = []
+    /// Bumped whenever `performPendingPieceTranslations` lands at least one
+    /// new piece translation, so LyricsView can pick up the cache without
+    /// touching `lyrics` (an `onChange(of: lyricsService.lyrics)` there would
+    /// misclassify a piece-only update via `isTranslationOnlyWriteback`,
+    /// which only knows about whole `LyricLine`s).
+    @Published public var pieceTranslationVersion: Int = 0
 
     private var currentFetchTask: Task<Void, Never>?
     private var currentBackfillTask: Task<Void, Never>?
@@ -833,6 +855,12 @@ public class LyricsService: ObservableObject {
             translationsAreFromLyricsSource = false
             isTranslating = false
             translationFailed = false
+            // A new song's source language must be resolved fresh, never
+            // inherited from the previous track (2026-09-22 fix); stale
+            // per-piece translation requests for the old song's text are
+            // meaningless for the new one.
+            resolvedSongTranslationSourceLanguage = nil
+            pendingPieceTranslationTexts.removeAll()
 
             // The visible request is for a different song or a forced retry. Drop
             // stale rows now so terminal no-lyrics publication is not blocked by
@@ -2282,10 +2310,10 @@ public class LyricsService: ObservableObject {
             }
         }
 
-        guard let sampleText = Self.systemTranslationSampleText(
+        guard Self.systemTranslationSampleText(
             in: lyrics,
             onlyMissingTranslations: isFillingPartialSourceTranslations
-        ) else {
+        ) != nil else {
             currentSongTranslationID = translationID
             translationFailed = true
             recordDiagnosticsSystemTranslationGap(
@@ -2296,7 +2324,35 @@ public class LyricsService: ObservableObject {
             return nil
         }
 
-        guard let sourceLanguage = Self.systemTranslationSourceLanguage(for: sampleText) else {
+        // 2026-09-22 fix (macOS language-picker popup): determine an EXPLICIT
+        // song-level source and use it — the old code computed a source via
+        // `systemTranslationSourceLanguage` (a 12-line NLLanguageRecognizer
+        // sample) purely to gate on non-nil, then discarded it and always
+        // returned `Configuration(source: nil, ...)`. `source: nil` makes the
+        // framework re-detect PER BATCH; any batch it can't confidently
+        // identify (short lines, mixed script, romanized Japanese, vocables)
+        // surfaces the system language-picker. `songLevelSource` runs
+        // script-determined checks first (hard Unicode-range facts) and only
+        // falls back to a SINGLE whole-song NLLanguageRecognizer pass,
+        // constrained to Translation-supported languages — see
+        // LyricsTranslationSourceDetection.swift.
+        let songIDBeforeSourceAwait = currentSongID
+        let languageBeforeSourceAwait = translationLanguage
+        let lyricsCountBeforeSourceAwait = lyrics.count
+        let eligibleLineTexts = Self.translationEligibleLineIndices(
+            in: lyrics,
+            onlyMissingTranslations: isFillingPartialSourceTranslations
+        ).map { lyrics[$0].text }
+        let supportedLanguageCodes = await SupportedTranslationLanguagesMemo.shared.languageCodes()
+        guard currentSongID == songIDBeforeSourceAwait,
+              translationLanguage == languageBeforeSourceAwait,
+              lyrics.count == lyricsCountBeforeSourceAwait else {
+            return nil
+        }
+        guard let sourceLanguage = LyricsTranslationSourceDetection.songLevelSource(
+            eligibleLineTexts: eligibleLineTexts,
+            supportedLanguageCodes: supportedLanguageCodes
+        ) else {
             currentSongTranslationID = translationID
             translationFailed = true
             recordDiagnosticsSystemTranslationGap(
@@ -2326,7 +2382,8 @@ public class LyricsService: ObservableObject {
         switch status {
         case .installed:
             translationFailed = false
-            return TranslationSession.Configuration(source: nil, target: targetLanguage)
+            resolvedSongTranslationSourceLanguage = sourceLanguage
+            return TranslationSession.Configuration(source: sourceLanguage, target: targetLanguage)
         case .supported:
             currentSongTranslationID = translationID
             translationFailed = true
@@ -2368,6 +2425,83 @@ public class LyricsService: ObservableObject {
     public func requestTranslation() {
         translationRequestCoalescer.trigger { [weak self] in
             self?.translationRequestContinuation?.yield(())
+        }
+    }
+
+    /// The song-level source language `silentSystemTranslationConfiguration`
+    /// resolved for the CURRENT song (2026-09-22 fix), as a BCP-47 language
+    /// code (e.g. "ja", "ko", "en"). `nil` when translation comes from the
+    /// lyrics source itself (`isSystemTranslationSource == false`) or hasn't
+    /// resolved yet. Read by LyricsView to key `PieceTranslationCache`
+    /// lookups the same way `performPendingPieceTranslations` writes them.
+    public var resolvedTranslationSourceLanguageCode: String? {
+        resolvedSongTranslationSourceLanguage?.languageCode?.identifier
+    }
+
+    /// True when the current translation (if any) comes from on-device
+    /// system translation rather than the lyrics provider's own translation
+    /// (NetEase/QQ). Per-piece tier-2 translation only makes sense for the
+    /// system-translation path — a lyrics-source translation has no
+    /// resolved source language and nothing to re-translate piece-by-piece.
+    public var isSystemTranslationSource: Bool { !translationsAreFromLyricsSource }
+
+    /// Registers `texts` (already known to need a per-piece translation —
+    /// LyricsView decides this via `LyricPieceTranslation.pieceTranslations`
+    /// returning tier `.none`) and wakes the translation serve loop. A text
+    /// already pending, or already cached, is a cheap no-op wake.
+    @MainActor
+    public func registerPendingPieceTranslations(_ texts: [String]) {
+        guard !texts.isEmpty else { return }
+        let before = pendingPieceTranslationTexts.count
+        pendingPieceTranslationTexts.formUnion(texts)
+        guard pendingPieceTranslationTexts.count != before else { return }
+        requestTranslation()
+    }
+
+    /// Drains `pendingPieceTranslationTexts` using the SAME long-lived
+    /// session `serveTranslationRequests` already holds — no second
+    /// `.translationTask`. Cache hits are skipped; only genuinely new pieces
+    /// pay for a real translation call. Landed results are written straight
+    /// into `PieceTranslationCache` (never persisted to disk — see that
+    /// type's header) and `pieceTranslationVersion` bumps once per pass so
+    /// LyricsView's display-line cache picks them up without a full
+    /// `lyrics`-driven rebuild.
+    @available(macOS 15.0, *)
+    @MainActor
+    public func performPendingPieceTranslations<Executor: LyricsTranslationExecuting>(session: Executor) async {
+        guard !pendingPieceTranslationTexts.isEmpty else { return }
+        guard isSystemTranslationSource, showTranslation else {
+            pendingPieceTranslationTexts.removeAll()
+            return
+        }
+        // Undetermined song source (should be rare in steady state — a
+        // piece is only registered once a whole-line translation already
+        // exists, which implies the source resolved already). Leave the
+        // queue intact so a later wake (once the source resolves) retries.
+        guard let sourceLanguage = resolvedSongTranslationSourceLanguage else { return }
+        let sourceCode = sourceLanguage.languageCode?.identifier ?? "auto"
+        let targetCode = Self.normalizedSystemTranslationLanguage(translationLanguage)
+
+        let texts = Array(pendingPieceTranslationTexts)
+        pendingPieceTranslationTexts.removeAll()
+
+        let uncached = texts.filter {
+            PieceTranslationCache.shared.translation(for: $0, source: sourceCode, target: targetCode) == nil
+        }
+        guard !uncached.isEmpty else {
+            pieceTranslationVersion += 1
+            return
+        }
+
+        var anyLanded = false
+        await ChunkedTranslationRunner.run(lines: uncached, executor: session) { mapped in
+            for (localIndex, translated) in mapped where localIndex < uncached.count {
+                PieceTranslationCache.shared.store(translated, for: uncached[localIndex], source: sourceCode, target: targetCode)
+                anyLanded = true
+            }
+        }
+        if anyLanded {
+            pieceTranslationVersion += 1
         }
     }
 
@@ -2415,6 +2549,7 @@ public class LyricsService: ObservableObject {
             for await _ in stream {
                 if Task.isCancelled || translationServeToken != token { return }
                 await performSystemTranslation(session: session)
+                await performPendingPieceTranslations(session: session)
             }
             // Stream finished (reset or superseded). Loop re-checks the guard:
             // still the registered server → re-subscribe; otherwise exit.
@@ -2513,7 +2648,27 @@ public class LyricsService: ObservableObject {
             }
         }
 
-        let remainingIndices = eligibleIndices.filter { diskHit[$0] == nil }
+        // Per-line gate (2026-09-22 fix): a line whose OWN determinate script
+        // disagrees with the song's resolved source (a stray line in a
+        // different language than the rest of the song) is never sent into
+        // the fixed-source session — that mismatch is exactly the "batch it
+        // cannot identify" case that used to surface the system picker.
+        // `resolvedSongTranslationSourceLanguage` is nil only when the
+        // source-resolution step above hasn't run for this song yet (should
+        // not happen in steady state, since the session itself was only
+        // bound after that step succeeded); falling back to "send everything
+        // unfiltered" in that case preserves prior behavior rather than
+        // silently withholding translation.
+        let songTranslationSource = resolvedSongTranslationSourceLanguage
+        let allRemainingIndices = eligibleIndices.filter { diskHit[$0] == nil }
+        let remainingIndices: [Int]
+        if let songTranslationSource {
+            remainingIndices = allRemainingIndices.filter {
+                LyricsTranslationSourceDetection.lineIsConsistent(lyrics[$0].text, withSongSource: songTranslationSource)
+            }
+        } else {
+            remainingIndices = allRemainingIndices
+        }
 
         if remainingIndices.isEmpty {
             // Everything came from disk — no ML call, no chunking needed.
