@@ -211,6 +211,17 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
     // MARK: - Full orchestration (injected transport, zero network)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+    /// This file tests storefront/round SELECTION logic, not the token
+    /// budget (ArtworkTokenBucketBudgetTests owns that, at the real
+    /// production capacity 6/refill 6-per-minute — deliberately tight
+    /// enough that 2 rounds × 3 storefronts + 1 image download can exceed
+    /// it). An effectively unlimited bucket keeps these tests focused on
+    /// round1/round2/tie-break behavior without being coupled to the exact
+    /// budget constants.
+    private static func unlimitedBucket() -> MusicController.ArtworkITunesTokenBucket {
+        MusicController.ArtworkITunesTokenBucket(capacity: 1000)
+    }
+
     /// 1×1 transparent PNG — small, real, decodable image bytes so
     /// `NSImage(data:)` succeeds inside the orchestration path (unlike the
     /// pure `selectBestITunesArtwork` tests above, this exercises the actual
@@ -272,7 +283,7 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Gatsby Woman (2020 Remastered)", artist: "Kingo Hamada", album: "",
             priority: .nowPlaying, transport: harness.makeTransport(),
-            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: MusicController.ArtworkITunesTokenBucket()
+            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: Self.unlimitedBucket()
         )
 
         XCTAssertNotNil(image)
@@ -298,7 +309,7 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Misty (feat. Glenn Osser and His Orchestra)", artist: "Johnny Mathis", album: "",
             priority: .nowPlaying, transport: harness.makeTransport(),
-            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: MusicController.ArtworkITunesTokenBucket()
+            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: Self.unlimitedBucket()
         )
 
         XCTAssertNotNil(image)
@@ -314,7 +325,7 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Ripples", artist: "Danny Chan", album: "",
             priority: .nowPlaying, transport: harness.makeTransport(),
-            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: MusicController.ArtworkITunesTokenBucket()
+            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: Self.unlimitedBucket()
         )
 
         XCTAssertNil(image)
@@ -328,7 +339,7 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Gatsby Woman (2020 Remastered)", artist: "Kingo Hamada", album: "",
             priority: .nowPlaying, transport: harness.makeTransport(),
-            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: MusicController.ArtworkITunesTokenBucket()
+            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: Self.unlimitedBucket()
         )
 
         XCTAssertNil(image)
@@ -348,7 +359,7 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Ripples", artist: "Danny Chan", album: "",
             priority: .nowPlaying, transport: harness.makeTransport(),
-            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: MusicController.ArtworkITunesTokenBucket()
+            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: Self.unlimitedBucket()
         )
 
         XCTAssertNil(image)
@@ -365,7 +376,7 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Ripples", artist: "Danny Chan", album: "",
             priority: .nowPlaying, transport: harness.makeTransport(),
-            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: MusicController.ArtworkITunesTokenBucket()
+            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: Self.unlimitedBucket()
         )
 
         XCTAssertNil(image)

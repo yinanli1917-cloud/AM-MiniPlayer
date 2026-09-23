@@ -288,3 +288,67 @@ NANOPOD_LIVE_ARTWORK_EVAL=1 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Devel
 - **MetadataResolver（歌词元数据）应该迟早接入同一个令牌桶**——它自己也打 iTunes 多区域查询，目前完全不受这个桶影响，是"熔断器/配额看不见的流量"。这轮明确排除（创始人原话"do not touch lyrics code"），只在此记录为后续项。
 - 10 首歌/60 秒、冷播放列表铺开 60 秒两个场景数学上仍可能超过 ≤12（见上）——是否需要给后台单独配额（而非共享下限）留给创始人裁定。
 - 之前几轮记录的后续项（电台换歌通知抖动、Deezer/MusicKit 死链、`Ripples`→`漣漪` 本地化标题）均未处理，依旧有效。
+
+---
+
+## 结果补充（2026-09-22 五轮：重新配平——容量 6 + 每分钟回填 6）
+
+创始人指出：四轮那两个 ❌（10 首歌/60 秒=18、冷播放列表铺开 60 秒=16）是配的参数本身的锅——容量 8 + 每分钟回填 12，任何 60 秒窗口的数学上限就是 容量+回填=20，天生不可能保证 ≤12。要求重新配参数让数学本身站得住：**容量 6、每分钟回填 6**（上限=6+6=12，正好卡线，是实测限流线约 20–30 次/2 分钟的一半，给 MetadataResolver 留出空间），"给正在播留 3 个"这条不变。六个场景全部要求钉死 ≤12，另外加一个property-style 测试：随机需求序列（500 个种子，正在播/后台混合）验证任意滑动 60 秒窗口都不超过 12。**本轮只改生产代码 + 单元测试，串行跑，不打真网络。**
+
+### 1）为什么这次数学上能保证住
+
+令牌桶的性质：一个从满仓开始的窗口，在任意 `windowSeconds` 时间内能拿到的 token 上限 = `容量 + 回填速率 × (windowSeconds/60)`——这是纯数学事实，跟需求怎么分布、多少个消费者共用这个桶都无关。60 秒窗口下，`6 + 6 = 12`，跟创始人的验收线分毫不差、零余量。新增测试 `test_bucket_capacityPlusRefillPerMinute_isExactly12` 把这条恒等式钉死在代码里，防止以后有人改动 `capacity`/`refillPerMinute` 却没意识到这行等式的存在意义。
+
+### 2）重新跑出的六个场景（+新增 property 测试）——全部 ≤12
+
+同一份 `ArtworkTokenBucketBudgetTests.swift`，只改了桶的参数常量，实际数字由测试跑出来（不是手算）：
+
+| 场景 | 总请求数 | ≤12？ |
+|---|---:|:-:|
+| 单曲换歌，最好情况（round1 秒中） | 4 | ✅ |
+| 单曲换歌，最坏情况（内容缺口，两轮全灭） | 6 | ✅ |
+| 5 首歌 30 秒内跳曲，最坏情况 | 8 | ✅ |
+| 5 首歌 30 秒内跳曲，最好情况（round1 都能找到候选，但部分下载抢不到 token） | 8（7 次搜索 + 仅 1/5 次真正下载到图） | ✅ |
+| 10 首歌 60 秒内跳曲，最坏情况（**四轮是 18，本轮转绿**） | 11 | ✅ |
+| 冷启动 20 行播放列表，瞬间全部挂载 | 3 | ✅ |
+| 冷启动 20 行播放列表，铺开在 60 秒内逐行挂载（**四轮是 16，本轮转绿**） | 8 | ✅ |
+| **随机需求 property 测试（500 个种子，正在播/后台混合，3 分钟合成时间线）** | **单个种子最坏滑动 60 秒窗口峰值 = 11**（种子 1） | ✅ 全部 500 个种子 |
+
+`test_fiveSkipsIn30Seconds_worstCase_totalRequestsAndRollingWindowPeak`（5-skip）和 `test_cold20RowPlaylist_worstCase_totalRequestsNeverExceedsReserveFloor`（冷播放列表瞬时挂载）两个创始人点名要钉死的场景都断言 `≤12` 并通过；property 测试对 500 个随机种子逐一断言 `≤12`，全部通过（6.5 秒跑完）。
+
+### 3）5 首歌跳曲，每首正在播实际拿到几个店面（创始人点名要看的数据）
+
+`round1 storefront width per skip=[3, 0, 1, 0, 1]`（`test_fiveSkipsIn30Seconds_worstCase_totalRequestsAndRollingWindowPeak` 的真实输出，最坏情况——每首都是彻底内容缺口 + 标题带括号触发 round2）：
+
+| 跳曲序号 | 时刻 | round1 实际店面数 | 说明 |
+|---|---:|---:|---|
+| 第 1 首 | t=0s | **3**（满店面） | 桶满仓（6），第一次换歌吃满 round1(3)+round2(3)=6 |
+| 第 2 首 | t=6s | **0** | 6 秒回填 0.6 个 token（速率 1/10s），不足 1 个整数 token，round1 直接拿不到任何店面 |
+| 第 3 首 | t=12s | **1** | 累计回填到 1.2，取整为 1 |
+| 第 4 首 | t=18s | **0** | 累计到 1.4 消耗后剩 0.2，不足 1 个 |
+| 第 5 首 | t=24s | **1** | 累计回填到 1.4，取整为 1 |
+
+**如实指出一个比"退化到 1 个店面"更严重的现象**：创始人问的是"退化到 1 个店面"，但实测数据显示——按 6 秒的跳曲间隔和现在"每 10 秒回 1 个"的回填速率，中间会出现**退化到 0 个店面**的时刻（第 2、4 首），不是平滑地"越来越少但至少 1 个"。原因：`min(店面数, 可用 token, 有 token 就至少 1 个)` 这条公式本身没问题（有 token 就绝不会给 0），但按整数向下取整，6 秒内攒的 0.6 个 token 还不到 1，取整就是 0——用户在这两次跳曲上会看到**完全没有发起过 iTunes 请求**（比"只查 1 个店面拿不到"更彻底）。这不是本次要求修的行为（创始人只要求把请求预算压到 ≤12，没有要求平滑退化曲线），如实记录在这里，是否需要额外处理（比如提高最小间隔粒度、或允许攒够 0.5 个 token 也值一次搜索）留给创始人裁定。
+
+### 4）连带修的两处测试适配
+
+- `ArtworkStorefrontSelectionTests.swift`：6 处直接构造 `MusicController.ArtworkITunesTokenBucket()`（默认容量，现在是 6）的调用，之前假设"round1(3)+round2(3)=6"能完整跑完不受 token 限制——容量缩到 6 之后，`test_orchestration_round1EmptyEverywhere_fallsBackToStrippedTitleRound2` 这类"两轮都要跑完+最后还要下载 1 张图"的用例正好超支 1 个 token，图片下载被 token 门控拒绝，命中变成了 nil。这份文件测的是店面选择/round 逻辑，不是预算本身（预算已经有专门的 `ArtworkTokenBucketBudgetTests.swift`），所以给这 6 处都换成了一个"近似无限"的桶（`capacity: 1000`，同款 `ArtworkPriorityAndCircuitBreakerTests.swift` 已有的写法），让这份文件继续只测它原本要测的东西。
+- `ArtworkTokenBucketBudgetTests.swift` 里"后台风暴榨干后正在播还能不能拿到封面"的测试：桶容量从 8 缩到 6 之后，正在播离风暴仅隔 5 秒（旧回填速率下够回 1 个 token）已经不够——新回填速率每 10 秒才回 1 个——于是把间隔改成了 10 秒，注释里如实写清楚原因（不是悄悄改期望值糊弄过去）。
+
+### 5）改动/新增文件（本轮）
+- `Sources/MusicMiniPlayerCore/Services/MusicController+Artwork.swift`：`ArtworkITunesTokenBucket.capacity` 8→6、`refillPerMinute` 12→6，`reserveForNowPlaying` 不变（3）；类注释加上"capacity+refill=60秒窗口硬上限"的推导说明。
+- `Tests/MusicMiniPlayerTests/ArtworkTokenBucketBudgetTests.swift`：纯算术测试改配新参数对应的数值；新增 `test_bucket_capacityPlusRefillPerMinute_isExactly12` 钉死等式本身；六个场景测试全部改成断言 `≤12`（原来 10-skip、冷播放列表铺开两个"仅报告不断言"的测试转正）；5-skip 测试加每跳 round1 店面数记录并打印；新增 `test_property_randomDemandSequences_neverExceed12RequestsInAnySlidingWindow`（500 个种子的可复现 xorshift64* PRNG + 滑动窗口最大计数纯函数 `maxCountInAnySlidingWindow`）；后台风暴测试的正在播时间点从 t0+5s 改到 t0+10s。
+- `Tests/MusicMiniPlayerTests/ArtworkStorefrontSelectionTests.swift`：新增 `unlimitedBucket()` 私有 helper，6 处调用点从默认容量桶换成它。
+
+### 6）测试结果（本轮）
+- `ArtworkTokenBucketBudgetTests`：15/15 通过（新增 2 个：等式钉死 + property 测试）。
+- `ArtworkStorefrontSelectionTests`：17/17 通过（桶隔离修正后）。
+- `ArtworkPriorityAndCircuitBreakerTests`：16/16 通过（未受影响，本来就用 `capacity: 1000`）。
+- `ArtworkLiveStorefrontEvalTests`：确认 `XCTSkip`，本轮零真网络。
+- `RowArtworkFetchPolicyTests` 12/12、`RowArtworkStoreTests` 7/7、`TrackIdentityDisciplineTests` 19/19——均无回归。
+- `swift build`：通过，无新增警告/错误。
+
+### 7）后续项更新
+- 上面第 3 点的"退化到 0 个店面"现象是本轮新发现，追加进后续项列表，交创始人裁定要不要处理。
+- MetadataResolver 接入同一令牌桶——仍未做，依旧是后续项（本轮的容量/回填重配没有改变这条待办的性质）。
+- 之前几轮记录的后续项（电台换歌通知抖动、Deezer/MusicKit 死链、`Ripples`→`漣漪` 本地化标题）均未处理，依旧有效。

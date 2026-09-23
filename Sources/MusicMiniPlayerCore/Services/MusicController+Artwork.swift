@@ -833,22 +833,37 @@ extension MusicController {
     /// round 1 — already cost ~25 iTunes requests, against an observed
     /// ~20-30-requests-per-~2-minutes limit whose block lasts 20+ minutes
     /// and also takes down MetadataResolver's iTunes-backed lyrics metadata
-    /// calls. Capacity/refill are deliberately conservative (well under the
-    /// observed limit) to leave headroom for MetadataResolver, which is not
-    /// yet wired to this bucket (follow-up, see spec).
+    /// calls.
+    ///
+    /// Capacity/refill are chosen so the math ITSELF guarantees the
+    /// coordinator's ≤12-requests-per-any-60s-window target, for ANY demand
+    /// pattern whatsoever — not just the specific scenarios that happen to
+    /// be tested. For a token bucket starting a window with a full charge,
+    /// the maximum tokens obtainable across that window is `capacity +
+    /// refillPerMinute` (the initial burst plus everything that regenerates
+    /// during the window) — this is a hard mathematical ceiling, true
+    /// regardless of how many priorities/consumers share the bucket or how
+    /// their demand is shaped. `capacity 6 + refillPerMinute 6` → ceiling
+    /// `12`, exactly the target, with zero slack to spare (the first tuning
+    /// — capacity 8 + refill 12/min — had ceiling 20, which is why two
+    /// sustained-demand scenarios exceeded 12 in the earlier round; see
+    /// research/spec-2026-09-22-radio-artwork-storefronts.md "结果补充
+    /// （四轮/五轮）" for both derivations). 6/min is also half the observed
+    /// ~20-30-per-~2-minutes (~10-15/min) limit, leaving headroom for
+    /// MetadataResolver, which is not yet wired to this bucket (follow-up,
+    /// see spec).
     ///
     /// Same NSLock + injectable-`now:` shape as `ArtworkITunesCircuitBreaker`
     /// and `RowArtworkNegativeCache` — no real sleeps in tests.
     final class ArtworkITunesTokenBucket: @unchecked Sendable {
-        /// Max instantaneous burst. Also the ceiling on a single now-playing
-        /// round's fan-out width (3 storefronts) plus its image download,
-        /// several times over — see the derivation in
-        /// research/spec-2026-09-22-radio-artwork-storefronts.md.
-        static let capacity: Double = 8
-        /// Refill rate. 12/min = 1 token per 5s — comfortably under the
-        /// observed ~20-30/~2min (~10-15/min) limit even accounting for
-        /// MetadataResolver traffic this bucket doesn't see yet.
-        static let refillPerMinute: Double = 12
+        /// Max instantaneous burst. See the capacity+refill=ceiling
+        /// derivation above — this number is load-bearing for the ≤12/60s
+        /// guarantee, not just a convenient round number.
+        static let capacity: Double = 6
+        /// Refill rate. 6/min = 1 token per 10s. Paired with `capacity`
+        /// above so `capacity + refillPerMinute == 12` — the hard ceiling
+        /// for requests in any 60-second window, by construction.
+        static let refillPerMinute: Double = 6
         /// Tokens `.background` (playlist rows/preload) must always leave
         /// behind for `.nowPlaying` — a row storm must never starve the
         /// visible track's own cover.
