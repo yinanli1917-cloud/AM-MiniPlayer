@@ -168,9 +168,9 @@ public struct FluidGradientBackground: View {
             contrastResolution = ArtworkContrastPolicy.resolve(
                 brightness: 0.5, params: .default, reduceTransparency: reduceTransparency
             )
-            legibilityCorrection = BackdropLegibilityBand.resolve(
-                backgroundLuminance: BackdropLegibilityBand.fluidBackdropToneLuminance(
-                    artworkAverageLuminance: 0.5,
+            legibilityCorrection = BackdropLegibilityBand.resolveChannelCorrect(
+                preCorrection: BackdropLegibilityBand.fluidBackdropToneColor(
+                    artworkAverageColor: BackdropLegibilityBand.RGBColor(r: 0.5, g: 0.5, b: 0.5),
                     tone: tone,
                     contrastResolution: contrastResolution,
                     applyContrastDarken: !legacyArtworkContrast
@@ -191,9 +191,14 @@ public struct FluidGradientBackground: View {
             params: MicroInteractionFeel.artworkContrastParams,
             reduceTransparency: reduceTransparency
         )
-        legibilityCorrection = BackdropLegibilityBand.resolve(
-            backgroundLuminance: BackdropLegibilityBand.fluidBackdropToneLuminance(
-                artworkAverageLuminance: metrics.averageLuminance,
+        // Channel-correct (research/spec-2026-09-22-backdrop-legibility.md colour sweep):
+        // the TEXTURE styling decisions above (tone/contrastResolution) stay keyed off the
+        // existing gamma-mixed `averageLuminance` — that tone map is a separately-tuned,
+        // already-tested system this fix does not touch. Only the LEGIBILITY correction
+        // itself (which must be WCAG-accurate) uses the artwork's real per-channel colour.
+        legibilityCorrection = BackdropLegibilityBand.resolveChannelCorrect(
+            preCorrection: BackdropLegibilityBand.fluidBackdropToneColor(
+                artworkAverageColor: BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue),
                 tone: tone,
                 contrastResolution: contrastResolution,
                 applyContrastDarken: !legacyArtworkContrast
@@ -214,6 +219,39 @@ struct ArtworkVisualMetrics: Equatable {
     let highlightLuminance: Double
     let luminanceSpread: Double
     let averageSaturation: Double
+    // Per-channel averages (research/spec-2026-09-22-backdrop-legibility.md, colour-sweep
+    // review): `averageLuminance` mixes R/G/B in GAMMA space via Rec.709 weights BEFORE any
+    // WCAG linearization, which is only exact for actually-gray content — for a saturated
+    // colour it can diverge from the artwork's TRUE relative luminance by an order of
+    // magnitude (pure blue: gamma-mixed 0.072 vs true 0.072 happens to coincide, but pure
+    // red's gamma-mixed 0.213 understates a channel-correct pipeline's resulting contrast
+    // by several points; see BackdropLegibilityBandTests colour sweep). Callers that need
+    // WCAG-correct contrast (BackdropLegibilityBand) use these per-channel averages instead
+    // of `averageLuminance`. Default 0.5/0.5/0.5 (matches `.neutral`) so every existing call
+    // site that only sets the luminance/saturation fields keeps compiling unchanged.
+    let averageRed: Double
+    let averageGreen: Double
+    let averageBlue: Double
+
+    init(
+        averageLuminance: Double,
+        shadowLuminance: Double,
+        highlightLuminance: Double,
+        luminanceSpread: Double,
+        averageSaturation: Double,
+        averageRed: Double = 0.5,
+        averageGreen: Double = 0.5,
+        averageBlue: Double = 0.5
+    ) {
+        self.averageLuminance = averageLuminance
+        self.shadowLuminance = shadowLuminance
+        self.highlightLuminance = highlightLuminance
+        self.luminanceSpread = luminanceSpread
+        self.averageSaturation = averageSaturation
+        self.averageRed = averageRed
+        self.averageGreen = averageGreen
+        self.averageBlue = averageBlue
+    }
 
     static let neutral = ArtworkVisualMetrics(
         averageLuminance: 0.5,

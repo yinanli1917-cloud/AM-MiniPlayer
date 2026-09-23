@@ -32,6 +32,9 @@ extension NSImage {
         luminances.reserveCapacity(width * height)
         var luminanceSum = 0.0
         var saturationSum = 0.0
+        var redSum = 0.0
+        var greenSum = 0.0
+        var blueSum = 0.0
 
         for offset in stride(from: 0, to: pixelData.count, by: 4) {
             let r = Double(pixelData[offset]) / 255.0
@@ -45,6 +48,9 @@ extension NSImage {
             luminances.append(luminance)
             luminanceSum += luminance
             saturationSum += saturation
+            redSum += r
+            greenSum += g
+            blueSum += b
         }
 
         guard !luminances.isEmpty else { return .neutral }
@@ -58,7 +64,10 @@ extension NSImage {
             shadowLuminance: p10,
             highlightLuminance: p90,
             luminanceSpread: max(0, p90 - p10),
-            averageSaturation: saturationSum / count
+            averageSaturation: saturationSum / count,
+            averageRed: redSum / count,
+            averageGreen: greenSum / count,
+            averageBlue: blueSum / count
         )
     }
 
@@ -470,6 +479,52 @@ extension NSImage {
         }
 
         return maxLuminance
+    }
+
+    /// Same column scan as `controlAreaMaxLuminance`, but returns the actual (r,g,b) of
+    /// the winning (brightest-by-perceived-luminance) column instead of just its scalar
+    /// luminance — callers that need WCAG-correct (per-channel-linearized) contrast for a
+    /// saturated bottom row cannot recover that from a single mixed scalar (see
+    /// BackdropLegibilityBandTests colour sweep, research/spec-2026-09-22-backdrop-legibility.md).
+    func controlAreaMaxColor(bottomFraction: CGFloat = 0.25, columns: Int = 5) -> (r: Double, g: Double, b: Double) {
+        guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return (0.5, 0.5, 0.5) }
+
+        let inputImage = CIImage(cgImage: cgImage)
+        let width = inputImage.extent.size.width
+        let height = inputImage.extent.size.height
+        let sampleHeight = height * bottomFraction
+        let columnWidth = width / CGFloat(columns)
+        let context = Self.sharedCIContext
+
+        var maxLuminance: CGFloat = -1
+        var maxColor: (r: Double, g: Double, b: Double) = (0.5, 0.5, 0.5)
+        var bitmap = [UInt8](repeating: 0, count: 4)
+
+        for col in 0..<columns {
+            let x = inputImage.extent.origin.x + CGFloat(col) * columnWidth
+            let extentVector = CIVector(x: x, y: inputImage.extent.origin.y,
+                                        z: columnWidth, w: sampleHeight)
+
+            guard let filter = CIFilter(name: "CIAreaAverage",
+                                        parameters: [kCIInputImageKey: inputImage,
+                                                     kCIInputExtentKey: extentVector]),
+                  let outputImage = filter.outputImage else { continue }
+
+            context.render(outputImage, toBitmap: &bitmap, rowBytes: 4,
+                          bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                          format: .RGBA8, colorSpace: nil)
+
+            let r = CGFloat(bitmap[0]) / 255.0
+            let g = CGFloat(bitmap[1]) / 255.0
+            let b = CGFloat(bitmap[2]) / 255.0
+            let luminance = 0.299 * r + 0.587 * g + 0.114 * b
+            if luminance > maxLuminance {
+                maxLuminance = luminance
+                maxColor = (Double(r), Double(g), Double(b))
+            }
+        }
+
+        return maxColor
     }
 
     /// 计算图片左上角区域的感知亮度（用于判断按钮背景色）

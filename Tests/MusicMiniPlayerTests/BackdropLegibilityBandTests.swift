@@ -45,6 +45,69 @@ final class BackdropLegibilityBandTests: XCTestCase {
     private var midGrayImage: NSImage { makeSolidImage(white: 0.5) }
     private var twoToneImage: NSImage { makeTwoToneImage() }
 
+    private func makeSolidColorImage(size: Int = 64, r: CGFloat, g: CGFloat, b: CGFloat) -> NSImage {
+        let image = NSImage(size: NSSize(width: size, height: size))
+        image.lockFocus()
+        NSColor(srgbRed: r, green: g, blue: b, alpha: 1).setFill()
+        NSRect(x: 0, y: 0, width: size, height: size).fill()
+        image.unlockFocus()
+        return image
+    }
+
+    /// top/bottom halves (NSRect y=0 is the BOTTOM in AppKit's flipped-off coordinate
+    /// space used by `lockFocus`, matching `controlAreaMaxLuminance`'s own bottom-fraction
+    /// sampling — `bottomColor` really does land in the sampled control band).
+    private func makeHorizontalSplitImage(size: Int = 64, topColor: NSColor, bottomColor: NSColor) -> NSImage {
+        let image = NSImage(size: NSSize(width: size, height: size))
+        image.lockFocus()
+        topColor.setFill()
+        NSRect(x: 0, y: size / 2, width: size, height: size / 2).fill()
+        bottomColor.setFill()
+        NSRect(x: 0, y: 0, width: size, height: size / 2).fill()
+        image.unlockFocus()
+        return image
+    }
+
+    private func makeVerticalSplitImage(size: Int = 64, leftColor: NSColor, rightColor: NSColor) -> NSImage {
+        let image = NSImage(size: NSSize(width: size, height: size))
+        image.lockFocus()
+        leftColor.setFill()
+        NSRect(x: 0, y: 0, width: size / 2, height: size).fill()
+        rightColor.setFill()
+        NSRect(x: size / 2, y: 0, width: size / 2, height: size).fill()
+        image.unlockFocus()
+        return image
+    }
+
+    /// `baseColor` fills the whole image, `bottomQuarterColor` overwrites the bottom 25%
+    /// (y=0...size/4 in lockFocus's bottom-origin space) — the region `controlAreaMaxLuminance`
+    /// / `controlAreaMaxColor` actually sample (`bottomFraction` default 0.25).
+    private func makeBottomQuarterImage(size: Int = 64, baseColor: NSColor, bottomQuarterColor: NSColor) -> NSImage {
+        let image = NSImage(size: NSSize(width: size, height: size))
+        image.lockFocus()
+        baseColor.setFill()
+        NSRect(x: 0, y: 0, width: size, height: size).fill()
+        bottomQuarterColor.setFill()
+        NSRect(x: 0, y: 0, width: size, height: size / 4).fill()
+        image.unlockFocus()
+        return image
+    }
+
+    private func makeCheckerboardImage(size: Int = 64, squares: Int = 8) -> NSImage {
+        let image = NSImage(size: NSSize(width: size, height: size))
+        image.lockFocus()
+        let squareSize = size / squares
+        for row in 0..<squares {
+            for col in 0..<squares {
+                let isWhite = (row + col).isMultiple(of: 2)
+                (isWhite ? NSColor.white : NSColor.black).setFill()
+                NSRect(x: col * squareSize, y: row * squareSize, width: squareSize, height: squareSize).fill()
+            }
+        }
+        image.unlockFocus()
+        return image
+    }
+
     // MARK: - Point A: FluidGradientBackground (lyrics / playlist / non-fullscreen album)
     //
     // `applyContrastDarken: false` matches the shipping default arm — `.legacy`, per the
@@ -336,5 +399,189 @@ final class BackdropLegibilityBandTests: XCTestCase {
             MicroInteractionFeel.Tokens.backdropLegibilityFloorContrast,
             accuracy: 0.01
         )
+    }
+
+    // MARK: - Brute-force sweep (coordinator review, 2026-09-22 round 3)
+    //
+    // One combined table across three categories, all exercised through the REAL
+    // `artworkVisualMetrics()` / `controlAreaMaxColor()` (or `controlAreaMaxLuminance()`
+    // for the grayscale high-variance fixtures) + tone map + band path — not hand-fed
+    // metrics. `applyContrastDarken: false` throughout (shipping `.legacy` default, see
+    // the Point A section note above).
+
+    private static let ceiling = MicroInteractionFeel.Tokens.backdropLegibilityCeilingContrast
+    private static let floor = MicroInteractionFeel.Tokens.backdropLegibilityFloorContrast
+    private static let boundaryTolerance = 0.01
+    private static let hoverTitleTopDistance = 107.0
+    private static let shuffleRowTopDistance = 80.0 + 4.0 + 24.0 // controlsHeight + row padding + row height
+
+    private struct PointAResult {
+        let preColor: BackdropLegibilityBand.RGBColor
+        let correction: BackdropLegibilityBand.Correction
+        let finalContrast: Double
+    }
+
+    private func evaluatePointA(_ image: NSImage) -> (metrics: ArtworkVisualMetrics, result: PointAResult) {
+        let metrics = image.artworkVisualMetrics()
+        let tone = ArtworkBackgroundToneMap.forMetrics(metrics)
+        let contrastResolution = ArtworkContrastPolicy.resolve(
+            brightness: metrics.averageLuminance, params: .default, reduceTransparency: false
+        )
+        let preColor = BackdropLegibilityBand.fluidBackdropToneColor(
+            artworkAverageColor: BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue),
+            tone: tone, contrastResolution: contrastResolution, applyContrastDarken: false
+        )
+        let correction = BackdropLegibilityBand.resolveChannelCorrect(preCorrection: preColor)
+        let final = BackdropLegibilityBand.apply(preColor, correction)
+        let contrast = BackdropLegibilityBand.whiteContrastRatio(relativeLuminance: BackdropLegibilityBand.relativeLuminance(final))
+        return (metrics, PointAResult(preColor: preColor, correction: correction, finalContrast: contrast))
+    }
+
+    /// Contrast actually delivered at the title/shuffle-row positions — production only
+    /// ever renders the DARKEN portion of the point-B correction (never a lift), so this
+    /// mirrors that: the scrim opacity at `distance`, applied on top of the pre-correction
+    /// colour, ignoring any lift `resolveChannelCorrect` may have also computed.
+    private func pointBContrastAtDistance(_ distance: Double, preColor: BackdropLegibilityBand.RGBColor, darkenOpacity: Double) -> Double {
+        let scrimOpacity = BackdropLegibilityBand.bottomBandScrimOpacity(distanceAboveBottom: distance, darkenOpacity: darkenOpacity)
+        let final = BackdropLegibilityBand.apply(preColor, BackdropLegibilityBand.Correction(darkenOpacity: scrimOpacity, liftAmount: 0))
+        return BackdropLegibilityBand.whiteContrastRatio(relativeLuminance: BackdropLegibilityBand.relativeLuminance(final))
+    }
+
+    func test_bruteForceSweep_grayscaleSaturatedHighVariance() {
+        var rows: [String] = []
+        rows.append("category            | fixture              | avgLum | pointA contrast | pointB@title | pointB@row | note")
+        rows.append(String(repeating: "-", count: 100))
+
+        // MARK: Part 1 — grayscale sweep, 0.00...1.00 step 0.02 (51 points).
+        var gray = 0.0
+        while gray <= 1.0 + 1e-9 {
+            let clampedGray = min(gray, 1.0)
+            let image = makeSolidImage(white: CGFloat(clampedGray))
+            let (metrics, pointA) = evaluatePointA(image)
+
+            XCTAssertGreaterThanOrEqual(pointA.finalContrast, Self.ceiling - Self.boundaryTolerance,
+                                         "gray \(clampedGray) pointA below ceiling: \(pointA.finalContrast)")
+            XCTAssertLessThanOrEqual(pointA.finalContrast, Self.floor + Self.boundaryTolerance,
+                                      "gray \(clampedGray) pointA above floor: \(pointA.finalContrast)")
+
+            let tone = ArtworkBackgroundToneMap.forMetrics(metrics)
+            let coverColorRaw = image.controlAreaMaxColor()
+            let coverColor = BackdropLegibilityBand.RGBColor(r: coverColorRaw.r, g: coverColorRaw.g, b: coverColorRaw.b)
+            let averageColor = BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue)
+            let preColorB = BackdropLegibilityBand.fullscreenBottomBandToneColor(coverBottomRowColor: coverColor, artworkAverageColor: averageColor, tone: tone)
+            let correctionB = BackdropLegibilityBand.resolveChannelCorrect(preCorrection: preColorB)
+            let titleContrast = pointBContrastAtDistance(Self.hoverTitleTopDistance, preColor: preColorB, darkenOpacity: correctionB.darkenOpacity)
+            let rowContrast = pointBContrastAtDistance(Self.shuffleRowTopDistance, preColor: preColorB, darkenOpacity: correctionB.darkenOpacity)
+
+            XCTAssertGreaterThanOrEqual(titleContrast, Self.ceiling - Self.boundaryTolerance, "gray \(clampedGray) pointB@title below ceiling: \(titleContrast)")
+            XCTAssertGreaterThanOrEqual(rowContrast, Self.ceiling - Self.boundaryTolerance, "gray \(clampedGray) pointB@row below ceiling: \(rowContrast)")
+
+            rows.append(String(format: "gray                | %.2f                 | %.4f | %14.3f | %12.3f | %10.3f |",
+                                clampedGray, metrics.averageLuminance, pointA.finalContrast, titleContrast, rowContrast))
+            gray += 0.02
+        }
+
+        // MARK: Part 2 — saturated solids. Reports divergence vs the OLD gray-luminance
+        // approximation (scalar `resolve`/`fluidBackdropToneLuminance` fed the gamma-mixed
+        // `averageLuminance` directly) alongside the NEW channel-correct result production
+        // now uses.
+        let saturatedSwatches: [(String, CGFloat, CGFloat, CGFloat)] = [
+            ("red", 1, 0, 0), ("green", 0, 1, 0), ("blue", 0, 0, 1),
+            ("yellow", 1, 1, 0), ("cyan", 0, 1, 1), ("magenta", 1, 0, 1),
+            ("dark_navy", 0.05, 0.05, 0.2), ("pale_pastel", 0.9, 0.85, 0.95),
+        ]
+        var flaggedDivergences: [String] = []
+        for (name, r, g, b) in saturatedSwatches {
+            let image = makeSolidColorImage(r: r, g: g, b: b)
+            let (metrics, pointA) = evaluatePointA(image)
+
+            // OLD gray-luminance approximation, for comparison only.
+            let tone = ArtworkBackgroundToneMap.forMetrics(metrics)
+            let contrastResolution = ArtworkContrastPolicy.resolve(brightness: metrics.averageLuminance, params: .default, reduceTransparency: false)
+            let grayPre = BackdropLegibilityBand.fluidBackdropToneLuminance(
+                artworkAverageLuminance: metrics.averageLuminance, tone: tone, contrastResolution: contrastResolution, applyContrastDarken: false
+            )
+            let grayCorrection = BackdropLegibilityBand.resolve(backgroundLuminance: grayPre)
+            let grayFinal = BackdropLegibilityBand.apply(grayPre, grayCorrection)
+            let grayApproxContrast = BackdropLegibilityBand.whiteContrastRatio(gammaLuminance: grayFinal)
+            let divergence = pointA.finalContrast - grayApproxContrast
+            if abs(divergence) > 0.3 {
+                flaggedDivergences.append("\(name): channel-correct=\(String(format: "%.3f", pointA.finalContrast)) gray-approx=\(String(format: "%.3f", grayApproxContrast)) diff=\(String(format: "%.3f", divergence))")
+            }
+
+            XCTAssertGreaterThanOrEqual(pointA.finalContrast, Self.ceiling - Self.boundaryTolerance, "\(name) pointA below ceiling: \(pointA.finalContrast)")
+            XCTAssertLessThanOrEqual(pointA.finalContrast, Self.floor + Self.boundaryTolerance, "\(name) pointA above floor: \(pointA.finalContrast)")
+
+            let coverColorRaw = image.controlAreaMaxColor()
+            let coverColor = BackdropLegibilityBand.RGBColor(r: coverColorRaw.r, g: coverColorRaw.g, b: coverColorRaw.b)
+            let averageColor = BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue)
+            let preColorB = BackdropLegibilityBand.fullscreenBottomBandToneColor(coverBottomRowColor: coverColor, artworkAverageColor: averageColor, tone: tone)
+            let correctionB = BackdropLegibilityBand.resolveChannelCorrect(preCorrection: preColorB)
+            let titleContrast = pointBContrastAtDistance(Self.hoverTitleTopDistance, preColor: preColorB, darkenOpacity: correctionB.darkenOpacity)
+            let rowContrast = pointBContrastAtDistance(Self.shuffleRowTopDistance, preColor: preColorB, darkenOpacity: correctionB.darkenOpacity)
+
+            XCTAssertGreaterThanOrEqual(titleContrast, Self.ceiling - Self.boundaryTolerance, "\(name) pointB@title below ceiling: \(titleContrast)")
+            XCTAssertGreaterThanOrEqual(rowContrast, Self.ceiling - Self.boundaryTolerance, "\(name) pointB@row below ceiling: \(rowContrast)")
+
+            rows.append(String(format: "saturated           | %-20@ | %.4f | %14.3f | %12.3f | %10.3f | gray-approx=%.3f diff=%.3f",
+                                name as NSString, metrics.averageLuminance, pointA.finalContrast, titleContrast, rowContrast, grayApproxContrast, divergence))
+        }
+
+        // MARK: Part 3 — high-variance artworks. Point B uses `controlAreaMaxLuminance`
+        // (scalar) as instructed — these fixtures are pure black/white so the scalar and
+        // channel-correct models agree exactly. Point A is diagnostic-only (no assert):
+        // mean-based (averageLuminance) vs p90-highlight-based (highlightLuminance) as the
+        // representative input luminance.
+        let highVarianceFixtures: [(String, NSImage)] = [
+            ("half_vertical", makeVerticalSplitImage(leftColor: .white, rightColor: .black)),
+            ("half_horizontal", makeHorizontalSplitImage(topColor: .white, bottomColor: .black)),
+            ("white_black_bottomQ", makeBottomQuarterImage(baseColor: .white, bottomQuarterColor: .black)),
+            ("black_white_bottomQ", makeBottomQuarterImage(baseColor: .black, bottomQuarterColor: .white)),
+            ("checkerboard", makeCheckerboardImage()),
+        ]
+        for (name, image) in highVarianceFixtures {
+            let metrics = image.artworkVisualMetrics()
+            let tone = ArtworkBackgroundToneMap.forMetrics(metrics)
+            let contrastResolution = ArtworkContrastPolicy.resolve(brightness: metrics.averageLuminance, params: .default, reduceTransparency: false)
+
+            // Point A diagnostics (no assert): mean-based vs p90-highlight-based.
+            let meanPre = BackdropLegibilityBand.fluidBackdropToneLuminance(
+                artworkAverageLuminance: metrics.averageLuminance, tone: tone, contrastResolution: contrastResolution, applyContrastDarken: false
+            )
+            let meanFinal = BackdropLegibilityBand.apply(meanPre, BackdropLegibilityBand.resolve(backgroundLuminance: meanPre))
+            let meanContrast = BackdropLegibilityBand.whiteContrastRatio(gammaLuminance: meanFinal)
+
+            let p90Pre = BackdropLegibilityBand.fluidBackdropToneLuminance(
+                artworkAverageLuminance: metrics.highlightLuminance, tone: tone, contrastResolution: contrastResolution, applyContrastDarken: false
+            )
+            let p90Final = BackdropLegibilityBand.apply(p90Pre, BackdropLegibilityBand.resolve(backgroundLuminance: p90Pre))
+            let p90Contrast = BackdropLegibilityBand.whiteContrastRatio(gammaLuminance: p90Final)
+
+            // Point B: scalar `controlAreaMaxLuminance`, asserted >= ceiling.
+            let coverLuminance = Double(image.controlAreaMaxLuminance())
+            let preColorB = BackdropLegibilityBand.fullscreenBottomBandToneLuminance(
+                coverBottomRowLuminance: coverLuminance, artworkAverageLuminance: metrics.averageLuminance, tone: tone
+            )
+            let correctionB = BackdropLegibilityBand.resolve(backgroundLuminance: preColorB)
+            let scrimAtTitle = BackdropLegibilityBand.bottomBandScrimOpacity(distanceAboveBottom: Self.hoverTitleTopDistance, darkenOpacity: correctionB.darkenOpacity)
+            let scrimAtRow = BackdropLegibilityBand.bottomBandScrimOpacity(distanceAboveBottom: Self.shuffleRowTopDistance, darkenOpacity: correctionB.darkenOpacity)
+            let titleFinal = BackdropLegibilityBand.apply(preColorB, BackdropLegibilityBand.Correction(darkenOpacity: scrimAtTitle, liftAmount: 0))
+            let rowFinal = BackdropLegibilityBand.apply(preColorB, BackdropLegibilityBand.Correction(darkenOpacity: scrimAtRow, liftAmount: 0))
+            let titleContrast = BackdropLegibilityBand.whiteContrastRatio(gammaLuminance: titleFinal)
+            let rowContrast = BackdropLegibilityBand.whiteContrastRatio(gammaLuminance: rowFinal)
+
+            XCTAssertGreaterThanOrEqual(titleContrast, Self.ceiling - Self.boundaryTolerance, "\(name) pointB@title below ceiling: \(titleContrast)")
+            XCTAssertGreaterThanOrEqual(rowContrast, Self.ceiling - Self.boundaryTolerance, "\(name) pointB@row below ceiling: \(rowContrast)")
+
+            rows.append(String(format: "high-variance       | %-20@ | %.4f | mean=%.3f p90=%.3f (diag) | %12.3f | %10.3f |",
+                                name as NSString, metrics.averageLuminance, meanContrast, p90Contrast, titleContrast, rowContrast))
+        }
+
+        let table = rows.joined(separator: "\n")
+        print("\n=== BackdropLegibilityBand brute-force sweep ===\n\(table)\n")
+        if !flaggedDivergences.isEmpty {
+            print("Flagged gray-approximation divergences (> 0.3 contrast, all now fixed via channel-correct model):")
+            for line in flaggedDivergences { print("  - \(line)") }
+        }
     }
 }

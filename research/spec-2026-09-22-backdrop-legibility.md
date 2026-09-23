@@ -169,3 +169,60 @@ final = (a + (1-a)·x2) · (1-s) · (1-d)
 - `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter ArtworkContrastFeelTests` → 21/21 通过。
 - `swift build` → 编译通过。
 - 手感/视觉终验提醒同前：本次两处修正都改变了实际渲染像素（scrim 分布、brightness 数值来源），创始人仍需亲自过一遍真实全屏专辑页与歌词页。
+
+---
+
+## 暴力扫描复核（2026-09-22，协调者三审）
+
+一个测试 `test_bruteForceSweep_grayscaleSaturatedHighVariance` 覆盖三类夹具，全部经真实 `artworkVisualMetrics()` / `controlAreaMaxColor()`（或高方差夹具用 `controlAreaMaxLuminance()`）+ tone map + band 全链路，不手喂 metrics。
+
+### 发现：饱和色下旧标量模型（gamma 混合后再当灰度处理）严重失真
+
+`averageLuminance` 是「先按 Rec.709 权重混合 R/G/B（gamma 空间）,再线性化」，这对灰色（R=G=B）精确无误，但对饱和色是错的——正确做法是「先线性化每个通道，再混合」（WCAG 定义本身）。两者对饱和色可以差一个数量级。实测（Point A，`.legacy` 臂）：
+
+| 颜色 | 旧模型宣称对比度 | 真实（channel-correct）对比度 | 偏差 |
+|---|---|---|---|
+| 纯红 | 12.000（宣称已在 floor，安全） | **6.518** | −5.482 |
+| 纯品红 | 12.000（宣称安全） | **5.436** | −6.564 |
+| 纯蓝 | 12.000 | 11.320 | −0.680 |
+| 纯绿 | 5.562 | 4.500 | −1.062 |
+| 青色 | 5.259 | 4.500 | −0.759 |
+| 黄色 | 4.815 | 4.500 | −0.315 |
+| 深藏青 | 12.000 | 12.000 | 0.000 |
+| 淡粉彩 | 4.500 | 4.500 | −0.000 |
+
+8 种色板里 6 种偏差 > 0.3（红、品红、蓝、绿、青、黄），最严重的红/品红偏差超过 5–6.5 个对比度单位——旧模型会把「实际只有 5.4:1」的品红背景误判成「已经在 12:1 floor，安全」，即错误地不去修正一个本该继续压暗/提亮的背景。这是会影响真实彩色专辑封面（远比灰阶封面常见）的真实缺陷，按协调者指示做了通用修复（非按颜色分支）。
+
+### 修复：`BackdropLegibilityBand` 新增 channel-correct 路径，通用适用于任意色相
+
+- `NSImage+AverageColor.swift`：`artworkVisualMetrics()` 顺带累加 R/G/B 均值，`ArtworkVisualMetrics` 新增 `averageRed/averageGreen/averageBlue`（默认值 0.5，纯加法，不影响任何既有调用点）；新增 `controlAreaMaxColor()`（与 `controlAreaMaxLuminance()` 同一套列扫描，返回胜出列的真实 RGB 而非单一标量）。
+- `BackdropLegibilityBand.swift` 新增：
+  - `RGBColor`、`relativeLuminance(_:)`（真 WCAG：先线性化每通道再按 Rec.709 权重混合）、`whiteContrastRatio(relativeLuminance:)`。
+  - `resolveChannelCorrect(preCorrection:)`：对三通道统一施加的 darken/lift（黑色蒙层乘法、brightness 加法在真实合成器里本来就是逐通道且系数对三通道相同），用二分法解出让「真实 relative luminance」精确落在 ceiling/floor 边界所需的 alpha/delta——三通道混合后没有闭式解，二分法通用适配任意色相，无按颜色分支。
+  - `fluidBackdropToneColor` / `fullscreenBottomBandToneColor`：把已有的 `fluidBackdropToneLuminance` / `fullscreenBottomBandToneLuminance` 逐通道复用（同一套 contrast/brightness/screen/shade/C5 公式，只是分别喂 R、G、B）。
+- 保留原有标量 API（`resolve`/`fluidBackdropToneLuminance`/`fullscreenBottomBandToneLuminance`/`apply(Double,...)`）不变——对灰度输入两条路径数值完全一致（灰度时 `relativeLuminance` 退化成 `srgbToLinear(x)`，与旧公式恒等），17 个既有测试全部原样通过，无需改动。
+- 生产改线：`FluidGradientBackground.updateTone()` 与 `MiniPlayerView` 的 point B correction 改喂 `metrics.averageRed/averageGreen/averageBlue`（或 `controlAreaMaxColor()`）到 channel-correct 路径；`tone`/`contrastResolution` 本身（决定纹理明暗风格的、已经独立调好参的系统）仍然吃旧的 `averageLuminance` 标量——只有「legibility 修正量」本身需要 WCAG 精确，纹理风格决策不在本次修复范围内。
+- `innerBrightnessDelta`（fold 进内层 `.brightness()`）公式不变仍然成立：链路里 `a`(liftOpacity)/`s`(shadeOpacity)/`d`(C5 darken) 对三通道是同一组标量系数，所以「往三通道均匀加 delta」这件事，无论 delta 来自闭式解还是二分法，折算成内层 brightness 增量的公式完全一样，代数上可推导验证（无需改这个函数）。
+
+### 三类夹具的扫描结果（表格节选，完整表在测试输出里，`swift test` 跑一次即可复现）
+
+**Part 1 灰度扫描**（0.00→1.00，step 0.02，51 点，Point A 断言落在 [4.5,12.0]±0.01，Point B 在 hover 标题顶/shuffle 行顶 断言 ≥4.5）——51 点全部通过；灰度 0.60 起 Point B 已在 ceiling（4.500）钉住，灰度 0.78 起 Point A 也钉在 4.500；极暗灰度（≤0.38）Point B 天然对比度 11–21（生产从不对 Point B 做提亮，只做压暗，暗封面本就高对比，不违反 ≥4.5 要求）。
+
+**Part 2 饱和色**（见上表 8 种，全部通过 Point A 在带内 + Point B ≥4.5 的断言；divergence 报告见上）。
+
+**Part 3 高方差**（5 种：垂直/水平对半黑白、白底黑下四分之一、黑底白下四分之一、棋盘格）——Point B 用标量 `controlAreaMaxLuminance()`（按指示），5/5 全部 ≥4.5（`black_white_bottomQ` 底部四分之一是纯白，`controlAreaMaxColor`/`controlAreaMaxLuminance` 精确捕到它，触发压暗，最终仍钉在 4.500）；Point A mean-based 与 p90-highlight-based 对比度仅打印记录，不断言（例如 `white_black_bottomQ`：mean 对比度 6.330 vs p90 对比度 4.500——p90 更保守，因为它把最亮 10% 像素当代表值）。
+
+### 改动文件（本次暴力扫描复核追加）
+
+- `Sources/MusicMiniPlayerCore/Utils/NSImage+AverageColor.swift`：`artworkVisualMetrics()` 加 R/G/B 均值累加；新增 `controlAreaMaxColor()`。
+- `Sources/MusicMiniPlayerCore/UI/Background/FluidGradientBackground.swift`：`ArtworkVisualMetrics` 加 `averageRed/averageGreen/averageBlue` 字段（自定义 init 给默认值，保持所有既有调用点不变）；`updateTone()` 改用 channel-correct 路径。
+- `Sources/MusicMiniPlayerCore/UI/Background/BackdropLegibilityBand.swift`：新增 `RGBColor`、`relativeLuminance`、`whiteContrastRatio(relativeLuminance:)`、`resolveChannelCorrect`、`fluidBackdropToneColor`、`fullscreenBottomBandToneColor`、`bisectRoot`。
+- `Sources/MusicMiniPlayerCore/UI/MiniPlayerView.swift`：point B 状态从标量 `artworkAverageLuminance`/`artworkBottomRowLuminance` 改成 `BackdropLegibilityBand.RGBColor`；`bottomBandLegibilityCorrection` 改走 `resolveChannelCorrect`。
+- `Tests/MusicMiniPlayerTests/BackdropLegibilityBandTests.swift`：新增 6 个夹具构造器（纯色、垂直/水平对半、下四分之一、棋盘格）+ 1 个综合暴力扫描测试（18 个测试，原 17 个）。
+
+### 验证结果（暴力扫描复核后）
+
+- `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter BackdropLegibilityBandTests` → 18/18 通过。
+- `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter ArtworkContrastFeelTests` → 21/21 通过（无回归）。
+- `swift build` → 编译通过。
+- 手感/视觉终验提醒同前：本次改动进一步改变了彩色封面下的实际压暗/提亮量，创始人仍需亲自用几张高饱和度真实专辑封面（不只是灰阶测试图）在全屏专辑页与歌词页过一遍。

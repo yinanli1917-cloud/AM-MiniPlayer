@@ -34,8 +34,11 @@ public struct MiniPlayerView: View {
     // Backdrop legibility band (research/spec-2026-09-22-backdrop-legibility.md, point B):
     // the fullscreen album page's bottom control band background prediction inputs,
     // refreshed alongside `artworkTone` from the same `artworkVisualMetrics()` call.
-    @State private var artworkAverageLuminance: Double = 0.5
-    @State private var artworkBottomRowLuminance: Double = 0.5
+    // Per-channel colour (not just luminance) — channel-correct WCAG contrast needs the
+    // real hue, not a gamma-mixed scalar (colour-sweep review found a scalar model can
+    // claim a saturated background is safely within the band when it is actually not).
+    @State private var artworkAverageColor = BackdropLegibilityBand.RGBColor(r: 0.5, g: 0.5, b: 0.5)
+    @State private var artworkBottomRowColor = BackdropLegibilityBand.RGBColor(r: 0.5, g: 0.5, b: 0.5)
     @State private var effectArtwork: NSImage?
     @State private var effectArtworkSignature: String = ""
 
@@ -217,16 +220,17 @@ public struct MiniPlayerView: View {
                 if let artwork = newArtwork {
                     let metrics = artwork.artworkVisualMetrics()
                     artworkTone = ArtworkBackgroundToneMap.forMetrics(metrics)
-                    artworkAverageLuminance = metrics.averageLuminance
-                    artworkBottomRowLuminance = Double(artwork.controlAreaMaxLuminance())
+                    artworkAverageColor = BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue)
+                    let bottomColor = artwork.controlAreaMaxColor()
+                    artworkBottomRowColor = BackdropLegibilityBand.RGBColor(r: bottomColor.r, g: bottomColor.g, b: bottomColor.b)
                 }
             } else {
                 artworkBrightness = 0.5
                 topLeftLuminance = 0.5
                 topRightLuminance = 0.5
                 artworkTone = .neutral
-                artworkAverageLuminance = 0.5
-                artworkBottomRowLuminance = 0.5
+                artworkAverageColor = BackdropLegibilityBand.RGBColor(r: 0.5, g: 0.5, b: 0.5)
+                artworkBottomRowColor = BackdropLegibilityBand.RGBColor(r: 0.5, g: 0.5, b: 0.5)
             }
         }
         .onChange(of: musicController.artworkLuminance) { _, _ in
@@ -263,8 +267,9 @@ public struct MiniPlayerView: View {
             if let artwork = musicController.currentArtwork {
                 let metrics = artwork.artworkVisualMetrics()
                 artworkTone = ArtworkBackgroundToneMap.forMetrics(metrics)
-                artworkAverageLuminance = metrics.averageLuminance
-                artworkBottomRowLuminance = Double(artwork.controlAreaMaxLuminance())
+                artworkAverageColor = BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue)
+                let bottomColor = artwork.controlAreaMaxColor()
+                artworkBottomRowColor = BackdropLegibilityBand.RGBColor(r: bottomColor.r, g: bottomColor.g, b: bottomColor.b)
             }
         }
         // Keep hover state coherent when returning to the album page.
@@ -325,15 +330,16 @@ public struct MiniPlayerView: View {
     // the fullscreen album page's bottom control band (title/artist/shuffle-repeat/
     // SharedBottomControls) sits over the hero cover fading into the Layer-1 blurred
     // backing image — conservatively the worse (brighter) of the two, per
-    // `fullscreenBottomBandToneLuminance`. Only produces a darken (never a lift): the
-    // sharp/near cover, not a shade-darkened backdrop, is what dominates this band.
+    // `fullscreenBottomBandToneColor`. Channel-correct (colour-sweep review): a saturated
+    // cover's gamma-mixed luminance can look "safely dark" while its true WCAG relative
+    // luminance is not, so this resolves against the real per-channel colour, not a scalar.
     private var bottomBandLegibilityCorrection: BackdropLegibilityBand.Correction {
-        let preCorrection = BackdropLegibilityBand.fullscreenBottomBandToneLuminance(
-            coverBottomRowLuminance: artworkBottomRowLuminance,
-            artworkAverageLuminance: artworkAverageLuminance,
+        let preCorrection = BackdropLegibilityBand.fullscreenBottomBandToneColor(
+            coverBottomRowColor: artworkBottomRowColor,
+            artworkAverageColor: artworkAverageColor,
             tone: artworkTone
         )
-        return BackdropLegibilityBand.resolve(backgroundLuminance: preCorrection)
+        return BackdropLegibilityBand.resolveChannelCorrect(preCorrection: preCorrection)
     }
 
     private func refreshEffectArtwork() {
