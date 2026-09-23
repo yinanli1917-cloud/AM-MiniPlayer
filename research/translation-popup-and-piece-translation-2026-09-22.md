@@ -59,10 +59,35 @@ return TranslationSession.Configuration(source: nil, target: targetLanguage)
 
 **行级"跳过多少行"统计**（`test_lineIsConsistent_skipCountsPerSong_printed` 实测）：13 个能判定出 source 的曲目里,每一首的每一行全部落在"一致"范围内（0 行被行级门拦下）——因为这批数据集本身每首歌语言单一,没有夹杂真正冲突脚本的行;`fixture-newjeans-howsweet`（真实的韩语+英语混排曲）也全数通过,证明行级门不会误伤"歌曲本来就该混着播"的正常内容。行级门在单元测试里另外用构造的冲突样本（日语曲夹一句纯韩语）验证了它确实会拦。
 
+### Eval 追加：创始人真实缓存全量核查（2026-09-23，创始人复审要求）
+
+创始人复审后指出：14 首（5 首真实 + 9 首自撰）样本太小,不足以信"0 判错";而且没有验证新加的行级门会不会反而**降低**翻译覆盖率。创始人把一份只读的真实缓存快照拷进了 worktree（`.eval-local/lyrics_cache.json` + `.eval-local/translation_cache.json`,已加入 `.gitignore`,新测试 `RealCacheTranslationCoverageEvalTests` 在这个目录不存在时直接 `XCTSkip`,不进 CI、不碰真实路径）。
+
+用项目自己的 `LyricsDiskCacheEntry`/`CachedLyricLine`/`TranslationCacheEntry` 类型解码（顶层 `{version, entries}` 信封结构体是 `private` 的,在测试文件里按各自文件头注释里写明的形状本地重声明,字段本身不是秘密）。24 条原始缓存条目按 `cacheKeys()` 的多 key 去重后是 **8 首不重复的真实歌曲**——这就是创始人这份快照里"每一首歌"的全部,已经全量跑过,不是抽样。
+
+**全量结果表**（`test_realCacheSourceDetectionAndCoverageEval` 实测输出）：
+
+| # | 来源/专辑 | 判定方法 | 判定语言 | 置信度 | 总行数 | 旧逻辑发送数 | 新逻辑发送数 | 被行级门拦下 |
+|---:|---|---|---|---:|---:|---:|---:|---:|
+| 1 | NetEase / Make Way for Dionne Warwick | recognizer | en | 1.00 | 30 | 30 | 30 | 0 |
+| 2 | LRCLIB-Search / The Essential Billie Holiday | recognizer | en | 1.00 | 15 | 15 | 15 | 0 |
+| 3 | LRCLIB / Sinatra The Musical: His Way | recognizer | en | 1.00 | 35 | 35 | 35 | 0 |
+| 4 | NetEase / La Vie En Rose (Deluxe Edition) | recognizer | en | 0.94 | 14 | 14 | 14 | 0 |
+| 5 | NetEase / Just Call Me Penny | kana | ja | 1.00 | 22 | 22 | 22 | 0 |
+| 6 | NetEase / TWILIGHT ZONE | kana | ja | 1.00 | 19 | 19 | 19 | 0 |
+| 7 | QQ / 一生也在等... | hanDominance | zh-Hans | 1.00 | 47 | 47 | 47 | 0 |
+| 8 | LRCLIB-Search / Dear Uranus | hanDominance | zh-Hant | 1.00 | 42 | 42 | 42 | 0 |
+
+**总覆盖率：旧 224 行 → 新 224 行,保留 100.0%,0 首歌覆盖率下降 >10%,0 处行级门误伤。**
+
+**Fingerprint 交叉核查**（翻译快照 `translation_cache.json` 共 25 条记录,按内容指纹——`firstRealLineSHA256|lineCount`,与 `TranslationDiskCache` 自己判定"这条缓存翻译是否还适用于当前歌词"用的同一把 key——和这 8 首歌逐一比对）：**0 条命中**。也就是说这份翻译快照里的 25 条记录,没有一条对应这份歌词快照里的这 8 首歌——两份快照抓取时覆盖的是创始人真实曲库的不同子集,不是"核查没发现问题",是"这次核查没有可核对的重叠数据"。如实报告,没有伪造一个"命中"来凑数。
+
+**没有发现需要通用修复的问题**——0 判错、0 覆盖率下降、0 语言对分歧,所以本轮没有新的代码改动。**诚实的局限**：这 8 首真实歌曲全部是单一脚本占优（4 首纯英文、2 首日文带假名、2 首中文）,没有一首是混排曲（比如更早那批用 NewJeans 真实歌词做的混排验证不在这份快照里）——行级门在"确定性脚本冲突"场景下的效果,这份真实数据没有机会验证到,只能靠此前的单元测试（构造的日语曲夹韩语行）和 NewJeans fixture 佐证。
+
 ### 已知局限
 
 - 罗马音（romanized）内容天生无法用脚本或 NLLanguageRecognizer 可靠识别源语言,見上。
-- Eval 数据集偏小,真实数据只覆盖英/中/日/韩四种语言家族;西语系/印地语/泰语/阿拉伯语/繁体中文全靠自撰 synthetic 短句补位,不是真实歌词,准确率数字在更大规模真实数据上可能有偏差。
+- Eval 数据集（含创始人真实缓存全量核查）目前只覆盖英/中/日/韩四种语言家族的真实数据,且真实数据里没有混排曲样本;西语系/印地语/泰语/阿拉伯语/繁体中文全靠自撰 synthetic 短句补位,不是真实歌词,准确率数字在更大规模、更多语系的真实数据上可能有偏差。
 - 行级一致性门只按"确定性脚本冲突"过滤,无法识别"同一脚本、不同语言"的混排（比如拉丁字母写的西班牙语句子夹进英语曲——两边都是 `.unknown`,会被送进同一个 session,翻译出来可能是错的,但这属于翻译准确率问题,不是本次修的弹窗问题）。
 
 ---
@@ -120,4 +145,6 @@ pt-010: Bailamos toda la noche,=>We danced all night long, | hasta que salga el 
 
 ## 安全核查
 
-本任务运行环境是一个 git worktree 隔离的会话,沙盒规则硬性禁止任何触碰 worktree 之外路径的命令（包括 `~/Library/Application Support/nanoPod/`——`ls`/`stat`/`find` 单独尝试均被拒绝,报错"a worktree-isolated agent's git operations must target its own worktree"）,因此**没有能力**按字面要求生成该目录的 mtime+size 前后对比清单。改用静态核查代替：所有新增/改动的测试文件（`LyricsTranslationSourceDetectionTests.swift`/`TranslationConfigurationSourceScanTests.swift`/`LyricPieceTranslationTests.swift`）逐一 grep 过 `Application Support`/`FileManager.default.url`/`NSHomeDirectory` 等字样,**零命中**——它们只读仓库内的 `Fixtures/*.json` 和调用纯函数（`LyricsTranslationSourceDetection`/`LyricPieceTranslation`）,新增的 `PieceTranslationCache`（见其文件头注释）明确设计成纯内存、不落盘。没有一次 `swift test`/`swift build` 触发网络请求（`LyricsTranslationSourceDetection` 只用 `NaturalLanguage` 框架的 `NLLanguageRecognizer`,离线、设备端、非 Translation framework）。
+本任务运行环境是一个 git worktree 隔离的会话,沙盒规则硬性禁止任何触碰 worktree 之外路径的命令（包括 `~/Library/Application Support/nanoPod/`——`ls`/`stat`/`find` 单独尝试均被拒绝,报错"a worktree-isolated agent's git operations must target its own worktree"）,因此**没有能力**按字面要求生成该目录的 mtime+size 前后对比清单。改用静态核查代替：所有新增/改动的测试文件（`LyricsTranslationSourceDetectionTests.swift`/`TranslationConfigurationSourceScanTests.swift`/`LyricPieceTranslationTests.swift`/`RealCacheTranslationCoverageEvalTests.swift`）逐一 grep 过 `Application Support`/`FileManager.default.url`/`NSHomeDirectory` 等字样,**零命中**——它们只读仓库内的 `Fixtures/*.json`（以及创始人手动拷进 worktree 的 `.eval-local/*.json` 只读快照）和调用纯函数（`LyricsTranslationSourceDetection`/`LyricPieceTranslation`）,新增的 `PieceTranslationCache`（见其文件头注释）明确设计成纯内存、不落盘。没有一次 `swift test`/`swift build` 触发网络请求（`LyricsTranslationSourceDetection` 只用 `NaturalLanguage` 框架的 `NLLanguageRecognizer`,离线、设备端、非 Translation framework）。
+
+**`.eval-local/` 处理**（创始人 2026-09-23 提供的真实缓存只读快照）：已加入 `.gitignore`（第一时间做的,在读取快照内容之前）;`RealCacheTranslationCoverageEvalTests` 只 `Data(contentsOf:)` 读取这两个 JSON 文件,整个测试文件里没有任何写入调用;目录不存在时 `XCTSkip`,不会进 CI、也不会因为这份本地快照缺失而报红。`git status`/`git log` 复核过,`.eval-local/` 从未出现在任何一次 `git add`/`git commit` 里。

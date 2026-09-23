@@ -94,27 +94,62 @@ public enum LyricsTranslationSourceDetection {
         eligibleLineTexts: [String],
         supportedLanguageCodes: Set<String> = fallbackSupportedLanguageCodes
     ) -> Locale.Language? {
+        diagnostics(eligibleLineTexts: eligibleLineTexts, supportedLanguageCodes: supportedLanguageCodes).language
+    }
+
+    /// How `songLevelSource` decided (or failed to decide) a song's source.
+    public enum DetectionMethod: String, Equatable {
+        case kana, hanDominance, script, recognizer, undetermined
+    }
+
+    /// Richer result for eval/debugging call sites that want to know HOW a
+    /// decision was reached, not just the answer -- `songLevelSource` itself
+    /// stays the single source of truth by delegating here and discarding
+    /// the extra fields, so the two never drift apart.
+    public struct Diagnostics: Equatable {
+        public let language: Locale.Language?
+        public let method: DetectionMethod
+        /// Only meaningful for `.recognizer` (NLLanguageRecognizer's own
+        /// confidence for the winning hypothesis); `1.0` for the
+        /// script-determined tiers (hard Unicode-range facts, not a
+        /// statistical guess), `nil` when `.undetermined`.
+        public let confidence: Double?
+    }
+
+    public static func diagnostics(
+        eligibleLineTexts: [String],
+        supportedLanguageCodes: Set<String> = fallbackSupportedLanguageCodes
+    ) -> Diagnostics {
         let lines = eligibleLineTexts
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        guard !lines.isEmpty else { return nil }
+        guard !lines.isEmpty else { return Diagnostics(language: nil, method: .undetermined, confidence: nil) }
         let sampleText = lines.joined(separator: "\n")
 
         let hasKana = lines.contains { LanguageUtils.containsJapanese($0) }
-        if hasKana { return Locale.Language(identifier: "ja") }
+        if hasKana {
+            return Diagnostics(language: Locale.Language(identifier: "ja"), method: .kana, confidence: 1.0)
+        }
 
         let hanCount = lines.filter { LanguageUtils.containsChinese($0) }.count
         if Double(hanCount) / Double(lines.count) > minimumHanDominance {
             let isTraditional = LanguageUtils.containsTraditionalOnlyChars(sampleText)
                 && !LanguageUtils.containsSimplifiedOnlyChars(sampleText)
-            return Locale.Language(identifier: isTraditional ? "zh-Hant" : "zh-Hans")
+            let language = Locale.Language(identifier: isTraditional ? "zh-Hant" : "zh-Hans")
+            return Diagnostics(language: language, method: .hanDominance, confidence: 1.0)
         }
 
         if let scriptLanguage = dominantDeterminateScriptLanguage(in: sampleText) {
-            return scriptLanguage
+            return Diagnostics(language: scriptLanguage, method: .script, confidence: 1.0)
         }
 
-        return recognizerDeterminedLanguage(sampleText: sampleText, supportedLanguageCodes: supportedLanguageCodes)
+        let (recognized, confidence) = recognizerDeterminedLanguageWithConfidence(
+            sampleText: sampleText, supportedLanguageCodes: supportedLanguageCodes
+        )
+        guard let recognized else {
+            return Diagnostics(language: nil, method: .undetermined, confidence: confidence)
+        }
+        return Diagnostics(language: recognized, method: .recognizer, confidence: confidence)
     }
 
     /// Sums `ScriptRunSegmenter`-determinate run letter counts across the
@@ -138,20 +173,25 @@ public enum LyricsTranslationSourceDetection {
         return Locale.Language(identifier: identifier)
     }
 
-    private static func recognizerDeterminedLanguage(
+    /// Returns (language, confidence). `language` is nil when the winner
+    /// misses the confidence floor or its margin over the runner-up, but
+    /// `confidence` (the raw top-hypothesis value) is still returned for
+    /// diagnostics even in that case.
+    private static func recognizerDeterminedLanguageWithConfidence(
         sampleText: String,
         supportedLanguageCodes: Set<String>
-    ) -> Locale.Language? {
+    ) -> (Locale.Language?, Double?) {
         let recognizer = NLLanguageRecognizer()
         recognizer.languageConstraints = supportedLanguageCodes.map { NLLanguage($0) }
         recognizer.processString(sampleText)
         let hypotheses = recognizer.languageHypotheses(withMaximum: 2)
             .sorted { $0.value > $1.value }
-        guard let best = hypotheses.first, best.value >= minimumConfidence else { return nil }
+        guard let best = hypotheses.first else { return (nil, nil) }
+        guard best.value >= minimumConfidence else { return (nil, best.value) }
         if hypotheses.count > 1, best.value - hypotheses[1].value < minimumConfidenceMargin {
-            return nil
+            return (nil, best.value)
         }
-        return Locale.Language(identifier: best.key.rawValue)
+        return (Locale.Language(identifier: best.key.rawValue), best.value)
     }
 
     // ------------------------------------------------------------------
