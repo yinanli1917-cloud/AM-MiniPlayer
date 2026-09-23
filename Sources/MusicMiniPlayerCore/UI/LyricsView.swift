@@ -531,6 +531,17 @@ public struct LyricsView: View {
     /// identical commits 1-4ms apart) and every redundant commit re-pokes the
     /// native surface = a visible "refresh". 0 = nothing committed yet.
     @State private var lastCommittedRowsFingerprint: Int = 0
+    /// The last-logged `🧩 piece-translation tiers` summary signature (tier
+    /// counts + reason, NOT the track title -- a track change already gets
+    /// its own line because the signature is reset to nil below). 2026-09-23
+    /// fix #3 (founder-requested): `makeDisplayLyricLines` now re-runs on
+    /// every `pieceTranslationSourceVersion`/`pieceTranslationVersion` bump,
+    /// so without this dedup the SAME line would print on every rebuild even
+    /// when the tier counts did not change; this keeps the log emitting
+    /// exactly once per DISTINCT state (bounded, never per-frame) while still
+    /// re-emitting when a piece actually moves tiers, so the log reflects the
+    /// FINAL state a song settles into, not only the first attempt.
+    @State private var lastLoggedPieceTierSummarySignature: String?
     /// Plan A (2026-09-22, docs/lyrics-ux-contract.md §E): the split decision
     /// for a long line now needs the REAL lyrics column width (real
     /// NSLayoutManager wrap, not a unit estimate) -- so unlike the other
@@ -581,6 +592,13 @@ public struct LyricsView: View {
     // MARK: - Body
 
     public var body: some View {
+        // Kept as a plain local `let` (not inlined into the `.onChange(of:)`
+        // below) because SwiftUI's body type-checker chokes on the modifier
+        // chain when the "of:" argument itself is a compound expression
+        // ("unable to type-check this expression in reasonable time") --
+        // see the 2026-09-23 fix #2 comment at that onChange for why the two
+        // counters are combined at all.
+        let pieceTranslationCombinedVersion = lyricsService.pieceTranslationVersion + lyricsService.pieceTranslationSourceVersion
         ZStack {
             backgroundLayer
             VStack(spacing: 0) {
@@ -828,7 +846,24 @@ public struct LyricsView: View {
         // reconfigure path late whole-line translations already use (see
         // LyricsLateTranslationInsertTests / configureSignature's
         // translation hash) -- no full rebuild, no flicker.
-        .onChange(of: lyricsService.pieceTranslationVersion) { _, _ in
+        //
+        // 2026-09-23 fix #2 (founder repro: "It just didn't seem fair, wasn't
+        // going ... that were a part of me" -- pieces past the first never
+        // translated): watched together with `pieceTranslationSourceVersion`
+        // (summed -- both are monotonically-increasing counters, so the sum
+        // changes whenever either one does; a second separate `.onChange`
+        // here made the body's modifier chain too complex for the type
+        // checker -- "unable to type-check this expression in reasonable
+        // time" -- so it is folded into this one instead of added as a new
+        // modifier). `makeDisplayLyricLines` only REGISTERS a piece for
+        // tier-2 translation while it is running, gated on
+        // `resolvedTranslationSourceLanguageCode` already being non-nil at
+        // that moment. The real log showed display lines get built before
+        // the source resolves, so registration is skipped that first time --
+        // and nothing asked for a rebuild once the source (and session)
+        // caught up. `pieceTranslationSourceVersion` is exactly that missing
+        // signal.
+        .onChange(of: pieceTranslationCombinedVersion) { _, _ in
             refreshDisplayLineCache(forceRebuild: true)
         }
         .onChange(of: lyricsService.isTranslating) { _, _ in
@@ -2220,16 +2255,34 @@ public struct LyricsView: View {
             } else {
                 tier3Reason = "n/a"
             }
-            DebugLogger.log(
-                "Translation",
-                "🧩 piece-translation tiers for '\(musicController.currentTrackTitle)': " +
-                "lines_split=\(splitLineCount) " +
-                "tier1_clauseAligned=\(splitLineTierCounts[.clauseAligned] ?? 0) " +
-                "tier2_perPieceCache=\(splitLineTierCounts[.perPieceCache] ?? 0) " +
-                "tier3_fallbackFirstPiece=\(splitLineTierCounts[.fallbackFirstPiece] ?? 0) " +
-                "pendingNone=\(splitLineTierCounts[.none] ?? 0) " +
-                "tier3Reason=\(tier3Reason)"
-            )
+            // 2026-09-23 fix #3: only emit when the signature (track + tier
+            // counts + reason) actually differs from the last emission --
+            // `makeDisplayLyricLines` now re-runs on every
+            // `pieceTranslationSourceVersion`/`pieceTranslationVersion` bump
+            // (fix #2 above), so an unguarded log call here would print the
+            // SAME line repeatedly while nothing is actually changing.
+            // Comparing the full signature (not just a "did it change"
+            // bool) means a song that genuinely moves tiers across several
+            // rebuilds still gets one fresh line per distinct state, so the
+            // log reflects the FINAL settled state, not only the first one.
+            let signature = "\(musicController.currentTrackTitle)|\(splitLineCount)|" +
+                "\(splitLineTierCounts[.clauseAligned] ?? 0)|" +
+                "\(splitLineTierCounts[.perPieceCache] ?? 0)|" +
+                "\(splitLineTierCounts[.fallbackFirstPiece] ?? 0)|" +
+                "\(splitLineTierCounts[.none] ?? 0)|\(tier3Reason)"
+            if signature != lastLoggedPieceTierSummarySignature {
+                lastLoggedPieceTierSummarySignature = signature
+                DebugLogger.log(
+                    "Translation",
+                    "🧩 piece-translation tiers for '\(musicController.currentTrackTitle)': " +
+                    "lines_split=\(splitLineCount) " +
+                    "tier1_clauseAligned=\(splitLineTierCounts[.clauseAligned] ?? 0) " +
+                    "tier2_perPieceCache=\(splitLineTierCounts[.perPieceCache] ?? 0) " +
+                    "tier3_fallbackFirstPiece=\(splitLineTierCounts[.fallbackFirstPiece] ?? 0) " +
+                    "pendingNone=\(splitLineTierCounts[.none] ?? 0) " +
+                    "tier3Reason=\(tier3Reason)"
+                )
+            }
         }
 
         return result

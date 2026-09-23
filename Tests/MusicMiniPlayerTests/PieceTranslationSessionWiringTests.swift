@@ -152,9 +152,18 @@ final class PieceTranslationSessionWiringTests: XCTestCase {
         service.registerPendingPieceTranslations(["finally let my guard down"])
 
         let executor = FakeExecutor()
+        // `pieceTranslationVersion` is bumped on `LyricsService.shared` -- a
+        // process-wide singleton other test files also drive through many
+        // piece-translation landings, so polling for it to become NONZERO
+        // (rather than to CHANGE from a captured baseline) is only safe when
+        // this happens to be the first test in the process to touch it.
+        // Poll the outcome that actually matters instead: THIS test's own
+        // fresh `executor` (never touched by any other test) receiving the
+        // pending piece.
+        let pieceTranslationVersionBefore = service.pieceTranslationVersion
         let serveTask = Task { await service.serveTranslationRequests(with: executor) }
         let deadline = Date().addingTimeInterval(3.0)
-        while service.pieceTranslationVersion == 0, Date() < deadline {
+        while !executor.calls.contains(where: { $0.contains("finally let my guard down") }), Date() < deadline {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
         serveTask.cancel()
@@ -164,7 +173,10 @@ final class PieceTranslationSessionWiringTests: XCTestCase {
             "the fake translator must actually have been asked to translate the pending piece " +
             "(proves performPendingPieceTranslations ran, not just that it was registered)"
         )
-        XCTAssertGreaterThan(service.pieceTranslationVersion, 0, "landing a piece translation must bump pieceTranslationVersion")
+        XCTAssertGreaterThan(
+            service.pieceTranslationVersion, pieceTranslationVersionBefore,
+            "landing a piece translation must bump pieceTranslationVersion"
+        )
 
         // ---- Mechanism check #3 (the founder's acceptance bar) ------------
         // After servicing, EVERY piece has its own translation.

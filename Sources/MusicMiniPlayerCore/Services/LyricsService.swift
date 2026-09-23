@@ -340,6 +340,21 @@ public class LyricsService: ObservableObject {
     /// misclassify a piece-only update via `isTranslationOnlyWriteback`,
     /// which only knows about whole `LyricLine`s).
     @Published public var pieceTranslationVersion: Int = 0
+    /// Bumped whenever `resolvedSongTranslationSourceLanguage` resolves to a
+    /// NEW value (2026-09-23 fix #2, founder repro: "It just didn't seem
+    /// fair, wasn't going ... that were a part of me" -- a Plan-A split line
+    /// whose pieces past the first NEVER got a translation, root-caused to
+    /// event ORDER: `LyricsView.makeDisplayLyricLines` builds display lines
+    /// -- and decides which pieces need tier-2 registration -- using
+    /// whatever `resolvedTranslationSourceLanguageCode` already holds AT
+    /// THAT MOMENT; the actual log showed lines built (source still nil, so
+    /// the `pieceSourceCode != nil` registration gate skipped every piece)
+    /// followed by the source resolving and the session coming up, with
+    /// nothing ever asking `makeDisplayLyricLines` to run again. LyricsView
+    /// observes this counter and re-runs the build/registration pass
+    /// whenever it changes, so a source that resolves AFTER the first build
+    /// still gets its pending pieces registered.
+    @Published public private(set) var pieceTranslationSourceVersion: Int = 0
     /// The human-readable reason string from the most recent
     /// `recordDiagnosticsSystemTranslationGap` call (e.g. "language pair
     /// supported but not installed", "source language not identifiable") --
@@ -2426,7 +2441,14 @@ public class LyricsService: ObservableObject {
         case .installed:
             translationFailed = false
             lastTranslationSessionGapReason = nil
-            resolvedSongTranslationSourceLanguage = sourceLanguage
+            // 2026-09-23 fix #2: only bump the version (and only on an
+            // actual change) so a redundant re-resolve of the SAME language
+            // for the SAME song doesn't force LyricsView to rebuild display
+            // lines on every debounce tick — see `pieceTranslationSourceVersion`.
+            if resolvedSongTranslationSourceLanguage != sourceLanguage {
+                resolvedSongTranslationSourceLanguage = sourceLanguage
+                pieceTranslationSourceVersion += 1
+            }
             // When there was no whole-line work to do (source already
             // complete), record this resolution so repeated calls for the
             // same song+target short-circuit at the `currentSongTranslationID`
