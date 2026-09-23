@@ -79,9 +79,14 @@ final class EdgeCollapseMotionTests: XCTestCase {
             var neck = 0.0, detached = false, roundBlob = false, t = 0.0
             while t < m.nominalDuration {
                 let p = pose(m, t)
+                // Measured on the real outline: the parts are apart, yet the
+                // outline is still one piece = the neck.
                 let gap = p.body.minX - p.capsule.maxX
-                if p.body.width > 1, p.capsule.width > 8, gap > 0, gap < EdgeCollapseTokens.containerSpacing { neck += dt }
-                if p.body.width <= 1 || gap > EdgeCollapseTokens.containerSpacing { detached = true }
+                let outline = LiquidOutline.path(parts: EdgeCollapsePoses.liquidParts(p), neck: EdgeCollapseTokens.liquidNeck)
+                var pieces = 0
+                outline.forEach { if case .move = $0 { pieces += 1 } }
+                if p.body.width > 1, p.capsule.width > 8, gap > 0, pieces == 1 { neck += dt }
+                if p.body.width <= 1 || pieces > 1 { detached = true }
                 if p.capsule.width > 50, abs(p.capsule.width / p.capsule.height - 1) < 0.12 { roundBlob = true }
                 t += dt
             }

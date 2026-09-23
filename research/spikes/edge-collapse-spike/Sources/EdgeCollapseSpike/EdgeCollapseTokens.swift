@@ -62,8 +62,8 @@ public enum EdgeCollapseTokens {
 
     // Droplet on hover
     public static let dropDiameter: CGFloat = 22
-    public static let dropNeckGap: CGFloat = 5     // < containerSpacing → neck
-    public static let blobDiameter: CGFloat = 76
+    public static let dropNeckGap: CGFloat = 2     // < containerSpacing → neck
+    public static let blobDiameter: CGFloat = 84
 
     // Hover capsule
     public static let capsuleArtwork: CGFloat = 96
@@ -91,7 +91,7 @@ public enum EdgeCollapseTokens {
     public static let edgeDimInnerOpacity: Double = 0.12
     /// Width of the smooth union between the edge body and the capsule:
     /// parts closer than this grow a liquid neck (LiquidOutline).
-    public static let liquidNeck: CGFloat = 14
+    public static let liquidNeck: CGFloat = 18
 
     public static let reduceMotionCrossfadeDuration: TimeInterval = 0.18
 

@@ -194,6 +194,22 @@ public enum EdgeCollapsePoses {
         }
     }
 
+    /// The two parts of the one liquid outline for a pose. A body near the
+    /// screen edge is extended past it, continuously with its distance to the
+    /// edge, so at the edge it has no right-hand corners and joins the bezel.
+    /// (v11 switched the extension on at maxX >= edge - 0.5: the corners
+    /// snapped from round to flat at that frame.)
+    public static func liquidParts(_ p: EdgeCollapsePose) -> [LiquidPart] {
+        var b = p.body
+        if b.width > 0 {
+            let reach: CGFloat = 12
+            let w = min(max((b.maxX - (edge - reach)) / reach, 0), 1)
+            b.size.width += w * (p.bodyCornerInner + 6)
+        }
+        return [LiquidPart(rect: b, radius: p.bodyCornerInner),
+                LiquidPart(rect: p.capsule, radius: p.capsuleCorner)]
+    }
+
     /// A cover square centred in `r`, inset.
     static func coverIn(_ r: CGRect, inset: CGFloat) -> CGRect {
         let s = max(min(r.width, r.height) - inset * 2, 0)

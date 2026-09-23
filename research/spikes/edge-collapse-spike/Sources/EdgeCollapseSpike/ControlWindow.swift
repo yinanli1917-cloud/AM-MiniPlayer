@@ -19,25 +19,12 @@ struct ControlPanelView: View {
 
     var body: some View {
         Form {
-            Section("State") {
-                LabeledContent("presentation") {
-                    Text(model.presentation.rawValue)
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
-                LabeledContent("track") {
-                    Text(model.trackTitle)
-                        .lineLimit(1)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
             Section("Actions") {
                 HStack(spacing: 10) {
+                    // No live state here: re-laying out this Form on every
+                    // state change cost a ~23ms frame on the edge panel.
                     Button("Collapse") { model.requestCollapse() }
-                        .disabled(model.presentation != .card)
                     Button("Expand") { model.requestExpand() }
-                        .disabled(model.presentation != .tucked && model.presentation != .floating)
                     Button("Next track") { model.nextTrack() }
                 }
                 Text("Two-finger swipe right on the panel = tuck into the edge. Rest the cursor on the black edge handle = a drop comes out and becomes the capsule. Click the capsule or the handle = back to the panel.")

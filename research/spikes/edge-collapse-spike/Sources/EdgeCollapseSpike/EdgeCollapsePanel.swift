@@ -57,7 +57,10 @@ func makeEdgeCollapsePanel() -> EdgeCollapsePanel {
     panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
     panel.backgroundColor = .clear
     panel.isOpaque = false
-    panel.hasShadow = true
+    // No window shadow: it outlines whatever is drawn (a rim around the
+    // black edge handle), and toggling it per state cost a ~31ms frame each
+    // time (WindowServer recomputes it). The card draws its own shadow.
+    panel.hasShadow = false
     panel.isMovableByWindowBackground = false
     // Click-through for transparent regions is done via the hosting view's
     // own `hitTest` (below), not by toggling this — verified: an NSWindow

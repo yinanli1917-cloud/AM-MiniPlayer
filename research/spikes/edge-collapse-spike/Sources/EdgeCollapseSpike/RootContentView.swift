@@ -58,6 +58,7 @@ private struct GlassRootView: View {
         let r = EdgeCollapsePoses.cardRect
         return PanelLayer(edgePresentation: edgePresentation)
             .equatable()
+            .shadow(color: .black.opacity(0.35 * clamp01(pose.panelOpacity)), radius: 18, y: 8)
             .opacity(clamp01(pose.panelOpacity))
             .allowsHitTesting(pose.panelOpacity > 0.9)
             .position(x: r.midX, y: r.midY)
@@ -65,17 +66,7 @@ private struct GlassRootView: View {
 
     // MARK: - The one liquid object
 
-    /// Edge body + capsule as one outline. A body flush with the screen edge
-    /// is extended past it, so it has no right-hand corners or rim: at the
-    /// edge it is continuous with the black bezel.
-    private var parts: [LiquidPart] {
-        var b = pose.body
-        if b.width > 0.5, b.maxX >= container.width - 0.5 {
-            b.size.width += pose.bodyCornerInner + 4
-        }
-        return [LiquidPart(rect: b, radius: pose.bodyCornerInner),
-                LiquidPart(rect: pose.capsule, radius: pose.capsuleCorner)]
-    }
+    private var parts: [LiquidPart] { EdgeCollapsePoses.liquidParts(pose) }
 
     private var shape: LiquidShape { LiquidShape(parts: parts, neck: EdgeCollapseTokens.liquidNeck) }
 
@@ -150,10 +141,8 @@ private struct GlassRootView: View {
         .position(x: r.midX, y: r.midY)
     }
 
-    /// Two buttons of the same visual size (founder 2026-09-22): each sits in
-    /// a 36pt ring of the same stroke; pause/play's ring shows progress,
-    /// next's ring is the plain track. Glyphs scaled to a matching height
-    /// (nanoPod's play glyph is 21pt regular, the skip glyph 13.6pt semibold).
+    /// Pause/play inside a progress ring; next without a ring. The two glyphs
+    /// are scaled to read the same size (founder 2026-09-22).
     @ViewBuilder
     private func controlButtons(ink: Color) -> some View {
         let ring: CGFloat = 36, stroke: CGFloat = 2.5
@@ -168,12 +157,11 @@ private struct GlassRootView: View {
             .scaleEffect(0.72)
         }
         .frame(width: ring, height: ring)
-        ZStack {
-            Circle().stroke(ink.opacity(0.25), lineWidth: stroke)
-            SkipControlButton(action: { music.nextTrack() }, direction: 1, inkColor: ink, hoverFill: ink.opacity(0.18))
-                .scaleEffect(1.08)
-        }
-        .frame(width: ring, height: ring)
+        // Next: no ring (founder 2026-09-22); glyph scaled down to read the
+        // same size as the pause glyph inside its progress ring.
+        SkipControlButton(action: { music.nextTrack() }, direction: 1, inkColor: ink, hoverFill: ink.opacity(0.18))
+            .scaleEffect(0.78)
+            .frame(width: ring, height: ring)
     }
 
     // MARK: - Cover that flies between panel, capsule and edge
