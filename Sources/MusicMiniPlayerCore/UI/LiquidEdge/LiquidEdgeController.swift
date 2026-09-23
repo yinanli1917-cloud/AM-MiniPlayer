@@ -39,7 +39,7 @@ public final class LiquidEdgeController {
     private(set) var stageWindow: LiquidEdgeStageWindow?
     private var stage: LiquidEdgeStageView?
     private var side: LiquidEdgeSide = .right
-    private var geometry = LiquidEdgeGeometry.reference
+    private(set) var geometry = LiquidEdgeGeometry.reference
     /// The card's rect in stage coordinates as it is on screen (not mirrored).
     private var cardInStage = CGRect.zero
 
@@ -126,20 +126,16 @@ public final class LiquidEdgeController {
         let visible = screen.visibleFrame
         let f = card.frame
         let m = LiquidEdgeTokens.stageMargin
+        // The screen edge the liquid joins.
+        let edgeScreenX = side == .right ? max(visible.maxX, f.maxX) : min(visible.minX, f.minX)
         var s = CGRect(x: 0, y: f.minY - m, width: 0, height: f.height + 2 * m)
         if side == .right {
             s.origin.x = f.minX - m
-            s.size.width = max(visible.maxX, f.maxX) - s.minX
+            s.size.width = edgeScreenX - s.minX
         } else {
-            s.origin.x = min(visible.minX, f.minX)
+            s.origin.x = edgeScreenX
             s.size.width = f.maxX + m - s.minX
         }
-        // Card in stage coordinates (top-left origin), as on screen.
-        cardInStage = CGRect(x: f.minX - s.minX, y: s.maxY - f.maxY, width: f.width, height: f.height)
-        // Canonical (edge on the right).
-        let canonicalCard = side == .right ? cardInStage
-            : CGRect(x: s.width - cardInStage.maxX, y: cardInStage.minY, width: f.width, height: f.height)
-        geometry = LiquidEdgeGeometry(card: canonicalCard, edgeX: s.width)
 
         let window = stageWindow ?? LiquidEdgeStageWindow()
         let view = stage ?? LiquidEdgeStageView(frame: .zero)
@@ -153,15 +149,24 @@ public final class LiquidEdgeController {
             }
         }
         window.setFrame(s, display: false)
-        view.frame = CGRect(origin: .zero, size: s.size)
-        view.side = side
-        view.geometry = geometry
         window.contentView = view
         window.level = card.level
         window.orderFront(nil)
         window.order(.below, relativeTo: card.windowNumber)
         stageWindow = window
         stage = view
+
+        // Geometry from where the stage actually is, so the liquid's card
+        // sits exactly on the panel whatever the window server did.
+        let a = window.frame
+        cardInStage = CGRect(x: f.minX - a.minX, y: a.maxY - f.maxY, width: f.width, height: f.height)
+        let canonicalCard = side == .right ? cardInStage
+            : CGRect(x: a.width - cardInStage.maxX, y: cardInStage.minY, width: f.width, height: f.height)
+        let edgeInStage = edgeScreenX - a.minX
+        geometry = LiquidEdgeGeometry(card: canonicalCard, edgeX: side == .right ? edgeInStage : a.width - edgeInStage)
+        view.frame = CGRect(origin: .zero, size: a.size)
+        view.side = side
+        view.geometry = geometry
     }
 
     // MARK: - Panel window

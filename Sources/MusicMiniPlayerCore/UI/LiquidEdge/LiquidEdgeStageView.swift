@@ -109,6 +109,13 @@ final class LiquidEdgeStageWindow: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
+    /// The stage reaches a margin past the panel on every side; at a top
+    /// corner that is under the menu bar, and AppKit's default constraint
+    /// pushed the whole stage down 12pt, drawing every liquid shape below
+    /// the panel (founder 2026-09-23). It only ever draws, so leave it where
+    /// it is put.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+
     init() {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         isFloatingPanel = true
