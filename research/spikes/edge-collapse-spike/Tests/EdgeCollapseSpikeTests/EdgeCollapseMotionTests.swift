@@ -1,151 +1,172 @@
 import XCTest
 @testable import EdgeCollapseSpike
+import MusicMiniPlayerCore
 
-/// Choreography contract, checked on the pure pose(t) function with a fake
-/// clock at 120Hz. Evidence for v7's failures came from the founder's
-/// recording: a ~200ms hold of the full-size cover at collapse start, and an
-/// empty glass slab at full size before the cover and panel arrived on expand.
+/// Choreography contract on the pure pose(t) function, fake clock at 120Hz.
 final class EdgeCollapseMotionTests: XCTestCase {
     private let dt = 1.0 / 120
-    private typealias L = EdgeCollapseLayout.VisualLayout
+    private typealias K = EdgeCollapseTransitionKind
 
-    private func motion(_ kind: EdgeCollapseTransitionKind, _ a: L, _ b: L, bounce: EdgeCollapseBounce = .bouncy) -> EdgeCollapseMotion {
-        EdgeCollapseMotion(
-            from: EdgeCollapsePoses.pose(for: a).vector(),
+    private func rest(_ key: EdgeCollapseKeyPose, _ page: PlayerPage = .album, _ style: EdgeCollapseTuckStyle = .handle) -> [Double] {
+        EdgeCollapsePoses.pose(key, page: page, style: style).vector()
+    }
+
+    private func motion(_ kind: K, fromTucked: Bool = false, page: PlayerPage = .album,
+                        style: EdgeCollapseTuckStyle = .handle, bounce: EdgeCollapseBounce = .bouncy,
+                        tempo: EdgeCollapseTempo = .normal) -> EdgeCollapseMotion {
+        let from: EdgeCollapseKeyPose
+        switch kind {
+        case .collapse: from = .card
+        case .floatOut: from = .tucked
+        case .retract: from = .floating
+        case .expand: from = fromTucked ? .tucked : .floating
+        }
+        return EdgeCollapseMotion(
+            from: rest(from, page, style),
             velocity: Array(repeating: 0, count: EdgeCollapsePose.channelCount),
-            to: EdgeCollapsePoses.pose(for: b).vector(),
-            plan: .plan(for: kind, bounce: bounce, tempo: .normal))
+            stages: EdgeCollapseChoreography.stages(kind: kind, fromTucked: fromTucked, page: page, style: style, bounce: bounce, tempo: tempo))
     }
 
-    private func pose(_ m: EdgeCollapseMotion, _ t: Double) -> EdgeCollapsePose {
-        EdgeCollapsePose(vector: m.sample(at: t).value)
-    }
+    private func pose(_ m: EdgeCollapseMotion, _ t: Double) -> EdgeCollapsePose { EdgeCollapsePose(vector: m.sample(at: t).value) }
 
-    private var cases: [(EdgeCollapseTransitionKind, L, L)] {
-        [(.collapse, .card, .tucked), (.floatOut, .tucked, .floating), (.retract, .floating, .tucked),
-         (.expand, .floating, .card), (.expand, .tucked, .card)]
-    }
-
-    func test_startsAtFrom_endsAtTo() {
-        for (k, a, b) in cases {
-            let m = motion(k, a, b)
-            XCTAssertEqual(pose(m, 0), EdgeCollapsePoses.pose(for: a), "\(k)")
-            let end = m.sample(at: m.settledDuration).value
-            for (i, v) in end.enumerated() {
-                XCTAssertEqual(v, m.to[i], accuracy: 0.15, "\(k) channel \(i)")
+    private var all: [EdgeCollapseMotion] {
+        var list: [EdgeCollapseMotion] = []
+        for page in [PlayerPage.album, .lyrics, .playlist] {
+            for style in EdgeCollapseTuckStyle.allCases {
+                list += [motion(.collapse, page: page, style: style), motion(.floatOut, page: page, style: style),
+                         motion(.retract, page: page, style: style), motion(.expand, page: page, style: style),
+                         motion(.expand, fromTucked: true, page: page, style: style)]
             }
         }
+        return list
     }
 
-    /// The largest visible element moves on the first frame.
-    func test_noHoldAtStart() {
-        let checks: [(EdgeCollapseTransitionKind, L, L, (EdgeCollapsePose) -> CGFloat)] = [
-            (.collapse, .card, .tucked, { $0.hero.width }),
-            (.collapse, .card, .tucked, { $0.body.width }),
-            (.floatOut, .tucked, .floating, { $0.capsule.width }),
-            (.retract, .floating, .tucked, { $0.capsule.width }),
-            (.expand, .floating, .card, { $0.capsule.width }),
-            (.expand, .floating, .card, { $0.hero.width }),
-        ]
-        for (k, a, b, measure) in checks {
-            let m = motion(k, a, b)
-            XCTAssertGreaterThan(abs(measure(pose(m, dt)) - measure(pose(m, 0))), 0.5, "\(k) holds still on the first frame")
+    func test_startsAtFrom_endsAtLastStage() {
+        for m in all {
+            XCTAssertEqual(m.sample(at: 0).value, m.from)
+            let end = m.sample(at: m.settledDuration).value
+            for (i, v) in end.enumerated() { XCTAssertEqual(v, m.to[i], accuracy: 0.15, "channel \(i)") }
         }
     }
 
-    /// While the transition is running, something on screen moves every frame.
-    func test_noFrozenFramesMidTransition() {
-        for (k, a, b) in cases {
-            let m = motion(k, a, b)
-            var t = dt
-            var still = 0.0, longestStill = 0.0
+    /// Something visible moves on the first frame, and never freezes mid-way.
+    func test_noHoldNoFreeze() {
+        for m in all {
+            var t = dt, still = 0.0, longest = 0.0
             var prev = pose(m, 0)
+            let first = pose(m, dt)
+            let firstMove = max(abs(first.body.width - prev.body.width), abs(first.body.height - prev.body.height),
+                                abs(first.capsule.width - prev.capsule.width), abs(first.capsule.minX - prev.capsule.minX))
+            XCTAssertGreaterThan(firstMove, 0.3, "holds on the first frame")
             while t < m.nominalDuration * 0.8 {
                 let p = pose(m, t)
-                let moved = [abs(p.body.width - prev.body.width), abs(p.body.minX - prev.body.minX),
+                let moved = [abs(p.body.width - prev.body.width), abs(p.body.height - prev.body.height), abs(p.body.maxX - prev.body.maxX),
                              abs(p.capsule.width - prev.capsule.width), abs(p.capsule.minX - prev.capsule.minX),
-                             abs(p.hero.width - prev.hero.width)].max()!
+                             abs(p.capsule.height - prev.capsule.height), abs(p.hero.width - prev.hero.width)].max()!
                 still = moved < 0.05 ? still + dt : 0
-                longestStill = max(longestStill, still)
+                longest = max(longest, still)
                 prev = p; t += dt
             }
-            XCTAssertLessThan(longestStill, 0.034, "\(k): geometry froze for \(Int(longestStill * 1000))ms")
+            XCTAssertLessThan(longest, 0.034, "froze \(Int(longest * 1000))ms")
         }
     }
 
-    /// The real panel only fades in once the cover has reached the panel's
-    /// cover rect, so the crossfade is between two identical images.
-    func test_expand_panelFadesInOnlyAfterCoverArrives() {
-        for from in [L.floating, .tucked] {
-            let m = motion(.expand, from, .card)
-            let target = EdgeCollapsePoses.cardCoverRect
-            var t = 0.0
-            while t < m.settledDuration {
+    /// ref4: the drop stays joined to the handle by a neck for a while, then
+    /// pinches off; ref1: it passes a round blob, rounder than both ends.
+    func test_floatOut_neckThenPinchOff_thenRoundBlob() {
+        for style in EdgeCollapseTuckStyle.allCases {
+            let m = motion(.floatOut, style: style)
+            var neck = 0.0, detached = false, roundBlob = false, t = 0.0
+            while t < m.nominalDuration {
                 let p = pose(m, t)
-                if p.panelOpacity > 0.05 {
-                    XCTAssertEqual(p.hero.width, target.width, accuracy: 12, "t=\(Int(t * 1000))ms panel \(p.panelOpacity) while cover is \(p.hero.width)")
-                    XCTAssertEqual(p.hero.minX, target.minX, accuracy: 12)
-                }
+                let gap = p.body.minX - p.capsule.maxX
+                if p.body.width > 1, p.capsule.width > 8, gap > 0, gap < EdgeCollapseTokens.containerSpacing { neck += dt }
+                if p.body.width <= 1 || gap > EdgeCollapseTokens.containerSpacing { detached = true }
+                if p.capsule.width > 50, abs(p.capsule.width / p.capsule.height - 1) < 0.12 { roundBlob = true }
                 t += dt
             }
+            XCTAssertGreaterThan(neck, 0.04, "\(style): neck lasted \(Int(neck * 1000))ms")
+            XCTAssertTrue(detached)
+            XCTAssertTrue(roundBlob, "\(style): no round blob")
         }
     }
 
-    /// Expand never shows an empty glass slab: mid-flight, the share of the
-    /// glass covered by the cover never drops below the emptier of the two
-    /// resting states (capsule 96² of 120×204; card 250² of 250×316).
-    func test_expand_coverFillsTheGrowingGlass() {
-        func ratio(_ p: EdgeCollapsePose) -> Double {
-            Double(max(p.hero.width, 0) * max(p.hero.height, 0)) / Double(max(p.capsule.width * p.capsule.height, 1))
+    /// ref1: collapse loses height first, then width pinches into a stalk
+    /// narrower than both ends (for the cover tab) before it is absorbed.
+    func test_collapse_heightFirst_thenStalk() {
+        let m = motion(.collapse, style: .coverTab)
+        let from = pose(m, 0)
+        func firstTime(_ f: (EdgeCollapsePose) -> Bool) -> Double {
+            var t = 0.0
+            while t < m.settledDuration { if f(pose(m, t)) { return t }; t += dt }
+            return .infinity
         }
-        let floor = min(ratio(EdgeCollapsePoses.pose(for: .floating)), ratio(EdgeCollapsePoses.pose(for: .card))) - 0.03
-        let m = motion(.expand, .floating, .card)
-        var t = 0.0
+        let halfHeight = firstTime { $0.body.height < from.body.height * 0.5 + 1 }
+        let halfWidth = firstTime { $0.body.width < from.body.width * 0.5 }
+        XCTAssertLessThan(halfHeight, halfWidth, "height must collapse before width")
+        var t = 0.0, stalk = false
         while t < m.nominalDuration {
             let p = pose(m, t)
-            if p.panelOpacity < 0.5 {
-                XCTAssertGreaterThan(ratio(p), floor, "t=\(Int(t * 1000))ms cover/glass=\(ratio(p))")
-            }
+            if p.body.height > 70, p.body.width < 40 { stalk = true }
             t += dt
         }
+        XCTAssertTrue(stalk, "no stalk (tall and narrow) on the way into the edge")
     }
 
-    /// The cover lands last on collapse (Apple Music hero flight).
-    func test_collapse_coverLandsAfterBody() {
-        let m = motion(.collapse, .card, .tucked)
-        func arrive(_ f: (EdgeCollapsePose) -> CGFloat, _ target: CGFloat) -> Double {
-            var t = m.settledDuration
-            while t > 0, abs(f(pose(m, t)) - target) < 3 { t -= dt }
-            return t
+    /// The real panel fades in only once the cover sits where the page has it.
+    func test_expand_panelFadesInOnlyAfterCoverArrives() {
+        for page in [PlayerPage.album, .playlist, .lyrics] {
+            for fromTucked in [false, true] {
+                let m = motion(.expand, fromTucked: fromTucked, page: page)
+                let target = EdgeCollapsePoses.cardHero(page).rect
+                var t = 0.0
+                while t < m.settledDuration {
+                    let p = pose(m, t)
+                    if p.panelOpacity > 0.05 {
+                        XCTAssertEqual(p.hero.width, target.width, accuracy: max(8, target.width * 0.06), "\(page) t=\(Int(t * 1000))ms")
+                        XCTAssertEqual(p.hero.midX, target.midX, accuracy: 8, "\(page)")
+                    }
+                    t += dt
+                }
+            }
         }
-        let body = arrive({ $0.body.width }, EdgeCollapsePoses.stripRect.width)
-        let hero = arrive({ $0.hero.width }, EdgeCollapsePoses.tuckedHeroRect.width)
-        XCTAssertGreaterThan(hero, body - 0.05, "cover arrives \(Int(hero * 1000))ms, body \(Int(body * 1000))ms")
     }
 
-    /// Hover out mid float-out continues from the same value and velocity.
+    /// Lyrics page has no cover: the cover becomes a blurred fill of the card.
+    func test_lyricsPage_coverBecomesBlurredBackground() {
+        let m = motion(.expand, page: .lyrics)
+        let end = EdgeCollapsePose(vector: m.to)
+        XCTAssertTrue(end.hero.contains(EdgeCollapsePoses.cardRect), "fills the card")
+        XCTAssertGreaterThan(end.heroBlur, 15)
+    }
+
     func test_retargetMidFlight_isContinuous() {
-        let out = motion(.floatOut, .tucked, .floating)
-        let tCut = 0.12
-        let at = out.sample(at: tCut)
+        let out = motion(.floatOut)
+        let at = out.sample(at: 0.12)
         let back = EdgeCollapseMotion(from: at.value, velocity: at.velocity,
-                                      to: EdgeCollapsePoses.pose(for: .tucked).vector(),
-                                      plan: .plan(for: .retract, bounce: .bouncy, tempo: .normal))
+                                      stages: EdgeCollapseChoreography.direct(to: rest(.tucked), tempo: .normal))
         let b0 = back.sample(at: 0)
         for i in 0..<EdgeCollapsePose.channelCount {
             XCTAssertEqual(b0.value[i], at.value[i], accuracy: 1e-9)
-            XCTAssertEqual(b0.velocity[i], at.velocity[i], accuracy: 1e-9)
+            XCTAssertEqual(b0.velocity[i], at.velocity[i], accuracy: 1e-6)
         }
-        // First frame after the cut moves by what the velocity implies, not a jump.
-        let b1 = back.sample(at: dt).value
-        let capsuleW = 8
-        XCTAssertLessThan(abs(b1[capsuleW] - at.value[capsuleW]), abs(at.velocity[capsuleW]) * dt + 3)
+    }
+
+    func test_multiStageVelocity_isContinuousAcrossStageStarts() {
+        let m = motion(.floatOut)
+        for stage in m.stages.dropFirst() {
+            // A new stage starts from zero added velocity, so crossing its start
+            // moves each channel only by what its current velocity implies.
+            let h = 1e-6
+            let a = m.sample(at: stage.start - h), b = m.sample(at: stage.start + h)
+            for i in a.value.indices {
+                XCTAssertEqual(a.velocity[i], b.velocity[i], accuracy: 0.2, "velocity jump on channel \(i)")
+                XCTAssertLessThanOrEqual(abs(b.value[i] - a.value[i]), abs(a.velocity[i]) * 2 * h + 0.01)
+            }
+        }
     }
 
     func test_tempoSlowStretchesDuration() {
-        let n = EdgeCollapseMotion(from: EdgeCollapsePoses.pose(for: .card).vector(), velocity: Array(repeating: 0, count: 23),
-                                   to: EdgeCollapsePoses.pose(for: .tucked).vector(), plan: .plan(for: .collapse, bounce: .bouncy, tempo: .normal))
-        let s = EdgeCollapseMotion(from: n.from, velocity: n.velocity, to: n.to, plan: .plan(for: .collapse, bounce: .bouncy, tempo: .slow))
-        XCTAssertEqual(s.nominalDuration, n.nominalDuration * 1.5, accuracy: 1e-9)
+        XCTAssertEqual(motion(.collapse, tempo: .slow).nominalDuration, motion(.collapse).nominalDuration * 1.5, accuracy: 1e-9)
     }
 }

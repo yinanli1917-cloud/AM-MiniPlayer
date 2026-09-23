@@ -40,7 +40,17 @@ struct ControlPanelView: View {
                         .disabled(model.presentation != .tucked && model.presentation != .floating)
                     Button("Next track") { model.nextTrack() }
                 }
-                Text("Two-finger swipe right on the panel = tuck into the edge. Hover the edge strip = capsule with cover, title, pause, next. Click the capsule or the strip = back to the panel.")
+                Text("Two-finger swipe right on the panel = tuck into the edge. Rest the cursor on the edge handle = a drop comes out and becomes the capsule. Click the capsule or the handle = back to the panel.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Edge") {
+                Picker("Tucked", selection: $model.tuckStyle) {
+                    ForEach(EdgeCollapseTuckStyle.allCases) { t in Text(t.rawValue).tag(t) }
+                }
+                .pickerStyle(.segmented)
+                Text("Handle: 6×56, progress fills from the bottom. Cover tab: 26×68, tiny cover and a progress line.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -57,7 +67,7 @@ struct ControlPanelView: View {
                     ForEach(EdgeCollapseBounce.allCases) { b in Text(b.rawValue).tag(b) }
                 }
                 .pickerStyle(.segmented)
-                Text("Collapse only. Bouncy: the strip tucks past the edge and pops back out. Settle: no rebound.")
+                Text("Collapse only. Bouncy: the handle overshoots into the edge and settles back. Settle: no rebound.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

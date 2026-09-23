@@ -1,51 +1,75 @@
 import XCTest
 @testable import EdgeCollapseSpike
+import MusicMiniPlayerCore
 
-/// Repro (founder recording 2026-09-20 22:41): hover flapped between float-out
-/// and retract because the hover region (64pt wide) did not cover the capsule
-/// drawn on screen (148pt wide). The region must cover everything drawn.
+/// Hover / click regions (founder 2026-09-20: hover flapped; 2026-09-22: the
+/// tucked region fired while the cursor only passed near the edge).
 final class EdgeCollapseHitRegionReproTests: XCTestCase {
-    func test_floatingHitRegion_coversCapsuleAndStrip() {
-        let pose = EdgeCollapsePoses.pose(for: .floating)
-        let region = EdgeCollapseLayout.hitRegion(for: .floating)
-        XCTAssertTrue(region.contains(pose.capsule), "capsule \(pose.capsule) outside \(region)")
-        XCTAssertTrue(region.contains(pose.body), "strip \(pose.body) outside \(region)")
+    func test_floatingRegion_coversCapsule() {
+        for style in EdgeCollapseTuckStyle.allCases {
+            let region = EdgeCollapseLayout.hitRegion(for: .floating, style: style)
+            XCTAssertTrue(region.contains(EdgeCollapsePoses.capsuleRect))
+            XCTAssertTrue(region.contains(EdgeCollapsePoses.tuckedRect(style)))
+        }
     }
 
-    func test_tuckedHitRegion_coversStrip_andStaysNarrow() {
-        let pose = EdgeCollapsePoses.pose(for: .tucked)
-        let region = EdgeCollapseLayout.hitRegion(for: .tucked)
-        XCTAssertTrue(region.contains(pose.body))
-        XCTAssertLessThanOrEqual(region.width, 20, "tucked must not block clicks on the screen content next to the edge")
+    func test_tuckedRegion_isOnlyTheEdgeShapePlusAFewPoints() {
+        for style in EdgeCollapseTuckStyle.allCases {
+            let shape = EdgeCollapsePoses.tuckedRect(style)
+            let region = EdgeCollapseLayout.hitRegion(for: .tucked, style: style)
+            XCTAssertTrue(region.contains(shape))
+            XCTAssertLessThanOrEqual(region.width - shape.width, 4)
+            XCTAssertLessThanOrEqual(region.height - shape.height, 12)
+            XCTAssertLessThan(region.height, 100, "\(style): a tall strip of the screen edge must not open the capsule")
+        }
+        XCTAssertGreaterThanOrEqual(EdgeCollapseLayout.hoverDwell, 0.1, "passing by must not open it")
     }
 
-    func test_cardHitRegion_isTheCard() {
-        XCTAssertEqual(EdgeCollapseLayout.hitRegion(for: .card), EdgeCollapsePoses.cardRect)
+    func test_cardRegion_isTheCard() {
+        XCTAssertEqual(EdgeCollapseLayout.hitRegion(for: .card, style: .handle), EdgeCollapsePoses.cardRect)
     }
 }
 
-/// Tucked footprint = the app's own edge-hidden panel (founder 2026-09-22).
 final class EdgeCollapseGeometryTests: XCTestCase {
     private let container = CGRect(origin: .zero, size: EdgeCollapseTokens.containerSize)
 
-    func test_tuckedStrip_matchesAppEdgeFootprint() {
-        let strip = EdgeCollapsePoses.pose(for: .tucked).body
-        XCTAssertEqual(strip.width, 6, "SnappablePanel.edgeHiddenVisibleWidth")
-        XCTAssertEqual(strip.height, EdgeCollapseTokens.cardSize.height)
-        XCTAssertEqual(strip.maxX, container.maxX, "flush with the screen edge")
+    /// Card = the real app window: 250×316, corner 16, 16pt off the edge.
+    func test_card_matchesRealApp() {
+        let c = EdgeCollapsePoses.cardRect
+        XCTAssertEqual(c.size, CGSize(width: 250, height: 316))
+        XCTAssertEqual(container.maxX - c.maxX, 16, "SnappablePanel.cornerMargin — the card is not flush")
+        XCTAssertEqual(EdgeCollapseTokens.cardCornerRadius, 16, "MiniPlayerView clip radius")
     }
 
-    func test_capsuleAndStrip_separateAtRest() {
-        let pose = EdgeCollapsePoses.pose(for: .floating)
-        let gap = pose.body.minX - pose.capsule.maxX
-        XCTAssertGreaterThan(gap, EdgeCollapseTokens.containerSpacing, "gap must exceed container spacing or they blend at rest")
+    func test_tuckedShape_isShortAndFlush() {
+        for style in EdgeCollapseTuckStyle.allCases {
+            let r = EdgeCollapsePoses.tuckedRect(style)
+            XCTAssertEqual(r.maxX, container.maxX)
+            XCTAssertLessThanOrEqual(r.height, 72)
+            XCTAssertLessThanOrEqual(r.width, 26)
+        }
     }
 
-    func test_everyPose_fitsInsideWindow() {
-        for layout in [EdgeCollapseLayout.VisualLayout.card, .tucked, .floating] {
-            let p = EdgeCollapsePoses.pose(for: layout)
-            for r in [p.body, p.capsule, p.hero] {
-                XCTAssertTrue(container.insetBy(dx: -0.01, dy: -0.01).contains(r), "\(layout): \(r)")
+    /// One object: at rest only one glass shape is visible.
+    func test_atRest_onlyOneShapeVisible() {
+        for style in EdgeCollapseTuckStyle.allCases {
+            for page in [PlayerPage.album, .lyrics, .playlist] {
+                for key in [EdgeCollapseKeyPose.card, .tucked] {
+                    let p = EdgeCollapsePoses.pose(key, page: page, style: style)
+                    XCTAssertTrue(p.body.insetBy(dx: -0.01, dy: -0.01).contains(p.capsule), "\(key): capsule outside body")
+                }
+                let f = EdgeCollapsePoses.pose(.floating, page: page, style: style)
+                XCTAssertLessThanOrEqual(f.body.width, 0.01, "floating: the edge shape must be gone")
+            }
+        }
+    }
+
+    func test_everyKeyPose_fitsInsideWindow() {
+        for key in EdgeCollapseKeyPose.allCases {
+            for page in [PlayerPage.album, .playlist] {
+                let p = EdgeCollapsePoses.pose(key, page: page, style: .coverTab)
+                XCTAssertTrue(container.insetBy(dx: -0.01, dy: -0.01).contains(p.capsule), "\(key) capsule \(p.capsule)")
+                XCTAssertLessThanOrEqual(p.body.maxX, container.maxX + 0.01)
             }
         }
     }

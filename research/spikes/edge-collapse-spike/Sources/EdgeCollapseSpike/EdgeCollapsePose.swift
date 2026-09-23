@@ -1,51 +1,45 @@
 /**
- * [INPUT]: EdgeCollapseLayout.VisualLayout (card / tucked / floating).
- * [OUTPUT]: EdgeCollapsePose — every on-screen channel of the composition as
- *           plain numbers; EdgeCollapsePoses.pose(for:) — the three resting
- *           poses; EdgeCollapsePlan — which spring and delay each channel
- *           group gets per transition; EdgeCollapseMotion — pose as a pure
- *           function of time (Apple's own `Spring` math), with velocity so a
- *           transition started mid-flight continues without a jump.
+ * [INPUT]: key pose name + current page (album / lyrics / playlist) + tuck style.
+ * [OUTPUT]: EdgeCollapsePose — every on-screen channel as plain numbers;
+ *           EdgeCollapsePoses — resting and in-between key poses;
+ *           EdgeCollapsePlan — spring + delay per channel group;
+ *           EdgeCollapseMotion — pose as a pure function of time: a chain of
+ *           spring stages added on top of each other (spring superposition),
+ *           so a shape can bulge, neck and then stretch in one continuous
+ *           motion, and a new motion can start from any value + velocity.
  * [POS]: App-portable pure data + math; no views, no clocks.
- * [PROTOCOL]: v8 (2026-09-22). The model samples EdgeCollapseMotion once per
- *             display frame and assigns the pose without any SwiftUI
- *             animation. v7 issued ten withAnimation calls into one
- *             @Published struct per transition; the founder's recording
- *             showed holds and jumps that the plan did not contain.
- *             Stagger rule: the element that is largest on screen starts
- *             moving on the first frame; "lands last" comes from a longer
- *             spring, never from a delay on a visible element.
+ * [PROTOCOL]: v9 (2026-09-22). One object: glass "body" is the card, the
+ *             squashed card, the stalk and the edge handle; glass "bud" is
+ *             the drop that pinches off the handle and becomes the capsule.
+ *             At rest only one of them is visible (the other is inside it or
+ *             has zero width). The body's horizontal channel is its RIGHT
+ *             edge, so a spring overshoot pushes it into the screen edge
+ *             instead of pulling it off the edge.
  */
 
 import SwiftUI
+import MusicMiniPlayerCore
 
 public struct EdgeCollapsePose: Equatable {
-    // Edge body (glass id "body"): the card in `.card`, the 6pt strip otherwise.
     public var body: CGRect
     public var bodyCornerInner: CGFloat
     public var bodyCornerEdge: CGFloat
-    // Hover capsule (glass id "capsule"): parked inside the body when not floating.
-    public var capsule: CGRect
+    public var capsule: CGRect          // glass "bud"
     public var capsuleCorner: CGFloat
-    // Cover image that flies between the panel, the capsule and the edge.
     public var hero: CGRect
     public var heroCorner: CGFloat
     public var heroOpacity: Double
     public var heroBlur: CGFloat
-    // The real nanoPod panel (MiniPlayerView) on top of the card.
     public var panelOpacity: Double
-    // Title, artist and the two buttons inside the capsule.
     public var capsuleContentOpacity: Double
     public var capsuleContentBlur: CGFloat
-    // Progress fill inside the 6pt strip.
     public var stripContentOpacity: Double
-    // Dimming layer on the glass (black at the screen edge).
     public var dim: Double
 
     public static let channelCount = 23
 
     public func vector() -> [Double] {
-        [body.minX, body.minY, body.width, body.height, bodyCornerInner, bodyCornerEdge,
+        [body.maxX, body.minY, body.width, body.height, bodyCornerInner, bodyCornerEdge,
          capsule.minX, capsule.minY, capsule.width, capsule.height, capsuleCorner,
          hero.minX, hero.minY, hero.width, hero.height, heroCorner,
          heroOpacity, heroBlur,
@@ -57,7 +51,7 @@ public struct EdgeCollapsePose: Equatable {
 
     public init(vector v: [Double]) {
         precondition(v.count == Self.channelCount)
-        body = CGRect(x: v[0], y: v[1], width: v[2], height: v[3])
+        body = CGRect(x: v[0] - v[2], y: v[1], width: v[2], height: v[3])
         bodyCornerInner = v[4]; bodyCornerEdge = v[5]
         capsule = CGRect(x: v[6], y: v[7], width: v[8], height: v[9])
         capsuleCorner = v[10]
@@ -84,11 +78,10 @@ public struct EdgeCollapsePose: Equatable {
     }
 }
 
-/// Which spring/delay a channel follows. One group per thing the eye tracks.
+/// Which spring/delay a channel follows.
 public enum EdgeCollapseChannelGroup: Int, CaseIterable, Sendable {
     case body, capsule, hero, heroFade, panel, capsuleContent, stripContent, dim
 
-    /// Channel index → group, same order as `EdgeCollapsePose.vector()`.
     public static let map: [EdgeCollapseChannelGroup] = {
         let counts: [(EdgeCollapseChannelGroup, Int)] = [
             (.body, 6), (.capsule, 5), (.hero, 5), (.heroFade, 2), (.panel, 1),
@@ -100,157 +93,239 @@ public enum EdgeCollapseChannelGroup: Int, CaseIterable, Sendable {
     }()
 }
 
+/// Resting states and the in-between shapes the references show.
+public enum EdgeCollapseKeyPose: String, CaseIterable, Sendable {
+    case card, tucked, floating
+    /// Collapse, ref1: height goes first while width stays wide.
+    case squash
+    /// Collapse, ref1: a stalk narrower than both ends, right at the edge.
+    case stalk
+    /// Hover, ref4: the handle bulges and a small drop necks out of it.
+    case drop
+    /// Hover / expand, ref1: a round blob, rounder than both ends.
+    case blob
+    /// Expand, ref1: the capsule bulges round before stretching into the card.
+    case expandBlob
+}
+
 public enum EdgeCollapsePoses {
-    static var container: CGSize { EdgeCollapseTokens.containerSize }
+    static var t: EdgeCollapseTokens.Type { EdgeCollapseTokens.self }
+    static var edge: CGFloat { t.containerSize.width }
+    static var midY: CGFloat { t.containerSize.height / 2 }
 
-    /// Card rect: flush with the screen edge, vertically centred.
+    // MARK: Rects
+
     public static var cardRect: CGRect {
-        let s = EdgeCollapseTokens.cardSize
-        return CGRect(x: container.width - s.width, y: (container.height - s.height) / 2, width: s.width, height: s.height)
+        let s = t.cardSize
+        return CGRect(x: edge - t.cardEdgeMargin - s.width, y: midY - s.height / 2, width: s.width, height: s.height)
     }
 
-    /// Fullscreen-cover mode: the cover fills the card width, flush top.
-    public static var cardCoverRect: CGRect {
-        let c = cardRect
-        return CGRect(x: c.minX, y: c.minY, width: c.width, height: c.width)
+    public static func tuckedRect(_ style: EdgeCollapseTuckStyle) -> CGRect {
+        let s = style == .handle ? t.handleSize : t.tabSize
+        return CGRect(x: edge - s.width, y: midY - s.height / 2, width: s.width, height: s.height)
     }
 
-    /// Tucked strip: the same footprint as the app's edge-hidden panel
-    /// (SnappablePanel.edgeHiddenVisibleWidth = 6pt, full panel height).
-    public static var stripRect: CGRect {
-        let c = cardRect
-        let w = EdgeCollapseTokens.stripWidth
-        return CGRect(x: container.width - w, y: c.minY, width: w, height: c.height)
+    /// The tucked shape bulged (rounder) while the drop squeezes out.
+    static func bulgedRect(_ style: EdgeCollapseTuckStyle) -> CGRect {
+        let r = tuckedRect(style)
+        let w = r.width + 6, h = r.height * 0.72
+        return CGRect(x: edge - w, y: midY - h / 2, width: w, height: h)
     }
 
-    /// Hover capsule: a vertical card floating a small gap off the strip.
     public static var capsuleRect: CGRect {
-        let t = EdgeCollapseTokens.self
-        let size = t.capsuleSize
-        let maxX = stripRect.minX - t.capsuleStripGap
-        return CGRect(x: maxX - size.width, y: (container.height - size.height) / 2, width: size.width, height: size.height)
+        let s = t.capsuleSize
+        return CGRect(x: edge - t.capsuleEdgeGap - s.width, y: midY - s.height / 2, width: s.width, height: s.height)
     }
 
     public static var capsuleCoverRect: CGRect {
-        let t = EdgeCollapseTokens.self
         let c = capsuleRect
         return CGRect(x: c.midX - t.capsuleArtwork / 2, y: c.minY + t.capsulePadding, width: t.capsuleArtwork, height: t.capsuleArtwork)
     }
 
-    /// Where the cover disappears into the edge: a speck on the strip at the
-    /// cover's own height, so it slides into the edge rather than dropping.
-    public static var tuckedHeroRect: CGRect {
-        let s = stripRect
-        let side = EdgeCollapseTokens.stripWidth
-        return CGRect(x: s.minX, y: cardCoverRect.midY - side / 2, width: side, height: side)
+    static func dropRect(_ style: EdgeCollapseTuckStyle) -> CGRect {
+        let d = t.dropDiameter
+        let maxX = bulgedRect(style).minX - t.dropNeckGap
+        return CGRect(x: maxX - d, y: midY - d / 2, width: d, height: d)
     }
 
-    public static func pose(for layout: EdgeCollapseLayout.VisualLayout) -> EdgeCollapsePose {
-        let t = EdgeCollapseTokens.self
-        switch layout {
+    static var blobRect: CGRect {
+        let d = t.blobDiameter
+        return CGRect(x: capsuleRect.midX - d / 2, y: midY - d / 2, width: d, height: d)
+    }
+
+    static var expandBlobRect: CGRect {
+        let d: CGFloat = 196
+        let cx = (capsuleRect.midX + cardRect.midX) / 2
+        return CGRect(x: cx - d / 2, y: midY - d / 2, width: d, height: d)
+    }
+
+    static var squashRect: CGRect {
+        let c = cardRect
+        let w = c.width * 0.92, h = c.height * 0.46
+        return CGRect(x: c.maxX + 2 - w, y: midY - h / 2, width: w, height: h)
+    }
+
+    static func stalkRect(_ style: EdgeCollapseTuckStyle) -> CGRect {
+        let w: CGFloat = style == .handle ? 16 : 30
+        let h = tuckedRect(style).height * 1.6
+        return CGRect(x: edge - 6 - w, y: midY - h / 2, width: w, height: h)
+    }
+
+    /// Where the cover sits in the real panel on each page.
+    public static func cardHero(_ page: PlayerPage) -> (rect: CGRect, corner: CGFloat, blur: CGFloat) {
+        let c = cardRect
+        switch page {
+        case .album:
+            return (CGRect(x: c.minX, y: c.minY, width: c.width, height: c.width), t.cardCornerRadius, 0)
+        case .playlist:
+            // MiniPlayerView playlist page: min(w*0.18, 60), 12+12 in, 36+8+12 down.
+            let s = min(c.width * 0.18, 60)
+            return (CGRect(x: c.minX + 24, y: c.minY + 56, width: s, height: s), 6, 0)
+        case .lyrics:
+            // No cover on the lyrics page: the cover fills the card, blurred —
+            // it becomes the page's own artwork-coloured background.
+            let s = max(c.width, c.height)
+            return (CGRect(x: c.midX - s / 2, y: c.midY - s / 2, width: s, height: s), 0, t.lyricsBackdropBlur)
+        }
+    }
+
+    /// A cover square centred in `r`, inset.
+    static func coverIn(_ r: CGRect, inset: CGFloat) -> CGRect {
+        let s = max(min(r.width, r.height) - inset * 2, 0)
+        return CGRect(x: r.midX - s / 2, y: r.midY - s / 2, width: s, height: s)
+    }
+
+    /// Fill `r` with a square cover (aspect fill).
+    static func coverFill(_ r: CGRect) -> CGRect {
+        let s = max(r.width, r.height)
+        return CGRect(x: r.midX - s / 2, y: r.midY - s / 2, width: s, height: s)
+    }
+
+    static func tuckedHero(_ style: EdgeCollapseTuckStyle) -> (rect: CGRect, opacity: Double) {
+        let r = tuckedRect(style)
+        switch style {
+        case .handle:
+            return (CGRect(x: r.midX - 3, y: r.midY - 3, width: 6, height: 6), 0)
+        case .coverTab:
+            let a = t.tabArtwork
+            return (CGRect(x: r.midX - a / 2 - 1, y: r.minY + 5, width: a, height: a), 1)
+        }
+    }
+
+    // MARK: Poses
+
+    public static func pose(_ key: EdgeCollapseKeyPose, page: PlayerPage, style: EdgeCollapseTuckStyle) -> EdgeCollapsePose {
+        let card = cardRect
+        let tucked = tuckedRect(style)
+        let ch = cardHero(page)
+        let isLyrics = page == .lyrics
+        let parked = { (r: CGRect) in CGRect(x: r.midX - 1, y: r.midY - 1, width: 2, height: 2) }
+        switch key {
         case .card:
             return EdgeCollapsePose(
-                body: cardRect, bodyCornerInner: t.cardCornerRadius, bodyCornerEdge: t.cardCornerRadius,
-                capsule: cardRect, capsuleCorner: t.cardCornerRadius,
-                hero: cardCoverRect, heroCorner: t.cardCornerRadius, heroOpacity: 1, heroBlur: 0,
+                body: card, bodyCornerInner: t.cardCornerRadius, bodyCornerEdge: t.cardCornerRadius,
+                capsule: coverIn(card, inset: 40), capsuleCorner: t.cardCornerRadius,
+                hero: ch.rect, heroCorner: ch.corner, heroOpacity: 1, heroBlur: ch.blur,
                 panelOpacity: 1, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
                 stripContentOpacity: 0, dim: 0)
-        case .tucked:
+        case .squash:
+            let r = squashRect
+            let hero = isLyrics ? coverFill(r) : coverIn(r, inset: 10)
             return EdgeCollapsePose(
-                body: stripRect, bodyCornerInner: t.stripCornerRadius, bodyCornerEdge: 0,
-                capsule: stripRect, capsuleCorner: t.stripCornerRadius,
-                hero: tuckedHeroRect, heroCorner: t.stripCornerRadius, heroOpacity: 0, heroBlur: t.heroTuckBlur,
+                body: r, bodyCornerInner: 44, bodyCornerEdge: 36,
+                capsule: parked(r), capsuleCorner: 1,
+                hero: hero, heroCorner: isLyrics ? 0 : 20, heroOpacity: 1, heroBlur: isLyrics ? 18 : 0,
+                panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
+                stripContentOpacity: 0, dim: 1)
+        case .stalk:
+            let r = stalkRect(style)
+            let th = tuckedHero(style)
+            return EdgeCollapsePose(
+                body: r, bodyCornerInner: r.width / 2, bodyCornerEdge: r.width / 2,
+                capsule: parked(r), capsuleCorner: 1,
+                hero: style == .coverTab ? th.rect : coverIn(r, inset: 2), heroCorner: 5,
+                heroOpacity: style == .coverTab ? 1 : 0.4, heroBlur: isLyrics ? 8 : 2,
+                panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
+                stripContentOpacity: 0, dim: 1)
+        case .tucked:
+            let th = tuckedHero(style)
+            return EdgeCollapsePose(
+                body: tucked, bodyCornerInner: tucked.width / 2, bodyCornerEdge: 0,
+                capsule: parked(tucked), capsuleCorner: 1,
+                hero: th.rect, heroCorner: style == .coverTab ? 5 : 3, heroOpacity: th.opacity, heroBlur: 0,
                 panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
                 stripContentOpacity: 1, dim: 1)
-        case .floating:
+        case .drop:
+            let b = bulgedRect(style)
+            let d = dropRect(style)
+            let th = tuckedHero(style)
             return EdgeCollapsePose(
-                body: stripRect, bodyCornerInner: t.stripCornerRadius, bodyCornerEdge: 0,
+                body: b, bodyCornerInner: b.width / 2, bodyCornerEdge: 0,
+                capsule: d, capsuleCorner: d.width / 2,
+                hero: style == .coverTab ? coverIn(d, inset: 3) : coverIn(d, inset: 6),
+                heroCorner: 8, heroOpacity: style == .coverTab ? th.opacity : 0, heroBlur: 2,
+                panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
+                stripContentOpacity: 0, dim: 1)
+        case .blob:
+            let r = blobRect
+            // The edge shape has gone back into the screen edge.
+            let gone = CGRect(x: edge, y: tucked.minY, width: 0, height: tucked.height * 0.6)
+            return EdgeCollapsePose(
+                body: gone, bodyCornerInner: 0, bodyCornerEdge: 0,
+                capsule: r, capsuleCorner: r.width / 2,
+                hero: coverIn(r, inset: 12), heroCorner: 16, heroOpacity: 1, heroBlur: 1,
+                panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
+                stripContentOpacity: 0, dim: 1)
+        case .floating:
+            let gone = CGRect(x: edge, y: tucked.minY, width: 0, height: tucked.height * 0.6)
+            return EdgeCollapsePose(
+                body: gone, bodyCornerInner: 0, bodyCornerEdge: 0,
                 capsule: capsuleRect, capsuleCorner: t.capsuleCornerRadius,
                 hero: capsuleCoverRect, heroCorner: t.capsuleArtworkCorner, heroOpacity: 1, heroBlur: 0,
                 panelOpacity: 0, capsuleContentOpacity: 1, capsuleContentBlur: 0,
                 stripContentOpacity: 0, dim: 1)
+        case .expandBlob:
+            let r = expandBlobRect
+            let gone = CGRect(x: edge, y: tucked.minY, width: 0, height: tucked.height * 0.6)
+            return EdgeCollapsePose(
+                body: gone, bodyCornerInner: 0, bodyCornerEdge: 0,
+                capsule: r, capsuleCorner: r.width / 2,
+                hero: isLyrics ? coverFill(r) : coverIn(r, inset: 16), heroCorner: isLyrics ? 0 : 24,
+                heroOpacity: 1, heroBlur: isLyrics ? 14 : 0,
+                panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
+                stripContentOpacity: 0, dim: 0.6)
         }
+    }
+
+    /// Card pose with the capsule grown to the card too (end of an expand
+    /// from the capsule: both glass ids fill the card, one visible shape).
+    static func cardFromCapsule(page: PlayerPage, style: EdgeCollapseTuckStyle) -> EdgeCollapsePose {
+        var p = pose(.card, page: page, style: style)
+        p.capsule = cardRect
+        p.capsuleCorner = t.cardCornerRadius
+        return p
     }
 }
 
-/// One spring + delay per channel group for one transition.
+/// One spring + delay per channel group.
 public struct EdgeCollapsePlan {
     public struct Step {
         public var spring: Spring
         public var delay: Double
-        /// The duration the eye reads as "done" (the spring's nominal duration).
         public var nominal: Double
     }
     public var steps: [EdgeCollapseChannelGroup: Step]
+    public var fallback: Step
 
-    public func step(for group: EdgeCollapseChannelGroup) -> Step {
-        steps[group] ?? Step(spring: Spring(duration: 0.2, bounce: 0), delay: 0, nominal: 0.2)
+    public init(_ steps: [EdgeCollapseChannelGroup: Step], fallback: Step) {
+        self.steps = steps; self.fallback = fallback
     }
 
-    public static func plan(for kind: EdgeCollapseTransitionKind, bounce: EdgeCollapseBounce, tempo: EdgeCollapseTempo) -> EdgeCollapsePlan {
+    public func step(for group: EdgeCollapseChannelGroup) -> Step { steps[group] ?? fallback }
+
+    public static func step(_ d: Double, _ b: Double, delay: Double = 0, tempo: EdgeCollapseTempo) -> Step {
         let k = tempo.rawValue
-        func s(_ d: Double, _ b: Double, _ delay: Double = 0) -> Step {
-            Step(spring: Spring(duration: d * k, bounce: b), delay: delay * k, nominal: d * k)
-        }
-        let rebound = bounce == .bouncy ? 0.24 : 0.0
-        switch kind {
-        case .collapse:
-            // The panel content goes in the first 100ms; the glass body pulls
-            // into the edge with a rebound (it tucks past the edge and pops
-            // back out to 6pt); the cover shrinks toward the edge from the
-            // first frame on a longer spring so it lands last, and fades once
-            // it is small.
-            return EdgeCollapsePlan(steps: [
-                .panel: s(0.10, 0),
-                .dim: s(0.14, 0),
-                .body: s(0.46, rebound),
-                .capsule: s(0.40, 0.10),
-                .hero: s(0.58, 0.12),
-                .heroFade: s(0.24, 0, 0.22),
-                .capsuleContent: s(0.10, 0),
-                .stripContent: s(0.20, 0, 0.30),
-            ])
-        case .floatOut:
-            // The capsule buds out of the strip on the first frame; the cover
-            // grows with it on a slightly longer spring; text and buttons
-            // resolve from blur once the shape has mostly arrived.
-            return EdgeCollapsePlan(steps: [
-                .capsule: s(0.40, 0.28),
-                .hero: s(0.44, 0.28),
-                .heroFade: s(0.12, 0),
-                .capsuleContent: s(0.18, 0, 0.12),
-                .stripContent: s(0.12, 0),
-                .body: s(0.30, 0),
-                .panel: s(0.10, 0),
-                .dim: s(0.10, 0),
-            ])
-        case .retract:
-            return EdgeCollapsePlan(steps: [
-                .capsuleContent: s(0.08, 0),
-                .capsule: s(0.32, 0.12),
-                .hero: s(0.30, 0),
-                .heroFade: s(0.14, 0, 0.10),
-                .stripContent: s(0.18, 0, 0.20),
-                .body: s(0.30, 0),
-                .panel: s(0.10, 0),
-                .dim: s(0.10, 0),
-            ])
-        case .expand:
-            // The capsule and the strip grow into the card together; the
-            // cover grows into the panel's cover from the first frame; the
-            // real panel fades in only once the cover has arrived, so the
-            // crossfade is between two identical images at the same rect.
-            return EdgeCollapsePlan(steps: [
-                .capsuleContent: s(0.08, 0),
-                .stripContent: s(0.08, 0),
-                .capsule: s(0.42, 0.18),
-                .body: s(0.44, 0.14),
-                .hero: s(0.42, 0.16),
-                .heroFade: s(0.10, 0),
-                .panel: s(0.16, 0, 0.30),
-                .dim: s(0.20, 0, 0.26),
-            ])
-        }
+        return Step(spring: Spring(duration: d * k, bounce: b), delay: delay * k, nominal: d * k)
     }
 }
 
@@ -258,58 +333,87 @@ public enum EdgeCollapseTransitionKind: String, Sendable, CaseIterable {
     case collapse, floatOut, retract, expand
 }
 
-/// Pose as a pure function of time. `from`/`velocity` come from wherever the
-/// previous motion was at the moment this one started.
+/// A chain of spring stages. Stage k starts at `start` and moves every
+/// channel by (its target − the previous stage's target); the stages add up,
+/// so the path bends through each key pose without stopping at it.
 public struct EdgeCollapseMotion {
+    public struct Stage {
+        public var start: Double
+        public var to: [Double]
+        public var plan: EdgeCollapsePlan
+    }
     public let from: [Double]
     public let velocity: [Double]
-    public let to: [Double]
-    public let plan: EdgeCollapsePlan
+    public let stages: [Stage]
 
-    public init(from: [Double], velocity: [Double], to: [Double], plan: EdgeCollapsePlan) {
-        self.from = from; self.velocity = velocity; self.to = to; self.plan = plan
+    public var to: [Double] { stages.last?.to ?? from }
+
+    public init(from: [Double], velocity: [Double], stages: [Stage]) {
+        self.from = from; self.velocity = velocity; self.stages = stages
     }
 
-    /// A channel already moving when this motion starts ignores its delay,
-    /// so an interrupted transition never freezes mid-air.
-    private func delay(_ i: Int, _ step: EdgeCollapsePlan.Step) -> Double {
-        abs(velocity[i]) > 1e-3 ? 0 : step.delay
+    public init(from: [Double], velocity: [Double], to: [Double], plan: EdgeCollapsePlan) {
+        self.init(from: from, velocity: velocity, stages: [Stage(start: 0, to: to, plan: plan)])
+    }
+
+    private func delta(_ k: Int, _ i: Int) -> Double {
+        stages[k].to[i] - (k == 0 ? from[i] : stages[k - 1].to[i])
+    }
+
+    /// Stage 0 channels already moving skip their delay (no mid-air freeze).
+    private func delay(_ k: Int, _ i: Int, _ step: EdgeCollapsePlan.Step) -> Double {
+        k == 0 && abs(velocity[i]) > 1e-3 ? 0 : step.delay
     }
 
     public func sample(at t: Double) -> (value: [Double], velocity: [Double]) {
-        var value = from, vel = velocity
+        var value = from, vel = Array(repeating: 0.0, count: from.count)
         for i in 0..<from.count {
-            let step = plan.step(for: EdgeCollapseChannelGroup.map[i])
-            let tau = t - delay(i, step)
-            let delta = to[i] - from[i]
-            if tau <= 0 {
-                value[i] = from[i]
-                vel[i] = velocity[i]
-                continue
+            let g = EdgeCollapseChannelGroup.map[i]
+            var v = 0.0
+            for k in stages.indices {
+                let step = stages[k].plan.step(for: g)
+                let v0 = k == 0 ? velocity[i] : 0
+                let d = delta(k, i)
+                let tau = t - stages[k].start - delay(k, i, step)
+                if tau <= 0 {
+                    if k == 0 { v += v0 }
+                    continue
+                }
+                value[i] += step.spring.value(target: d, initialVelocity: v0, time: tau)
+                v += step.spring.velocity(target: d, initialVelocity: v0, time: tau)
             }
-            value[i] = from[i] + step.spring.value(target: delta, initialVelocity: velocity[i], time: tau)
-            vel[i] = step.spring.velocity(target: delta, initialVelocity: velocity[i], time: tau)
+            vel[i] = v
         }
         return (value, vel)
     }
 
     /// When the eye reads the transition as finished (state settles here).
     public var nominalDuration: Double {
-        EdgeCollapseChannelGroup.allCases.map { g in
-            let s = plan.step(for: g); return s.delay + s.nominal
-        }.max() ?? 0
+        var longest = 0.0
+        for k in stages.indices {
+            for g in EdgeCollapseChannelGroup.allCases {
+                let moves = EdgeCollapseChannelGroup.map.indices.contains { EdgeCollapseChannelGroup.map[$0] == g && abs(delta(k, $0)) > 1e-6 }
+                guard moves else { continue }
+                let s = stages[k].plan.step(for: g)
+                longest = max(longest, stages[k].start + s.delay + s.nominal)
+            }
+        }
+        return longest
     }
 
     /// When every channel is within 0.1 of its target (motion stops here).
     public var settledDuration: Double {
-        var longest = 0.0
-        for i in 0..<from.count {
-            let step = plan.step(for: EdgeCollapseChannelGroup.map[i])
-            let delta = to[i] - from[i]
-            guard abs(delta) > 1e-6 || abs(velocity[i]) > 1e-6 else { continue }
-            let settle = step.spring.settlingDuration(target: delta, initialVelocity: velocity[i], epsilon: 0.1)
-            longest = max(longest, delay(i, step) + settle)
+        var longest = nominalDuration
+        for k in stages.indices {
+            for i in 0..<from.count {
+                let d = delta(k, i)
+                let v0 = k == 0 ? velocity[i] : 0
+                guard abs(d) > 1e-6 || abs(v0) > 1e-6 else { continue }
+                let step = stages[k].plan.step(for: EdgeCollapseChannelGroup.map[i])
+                let settle = step.spring.settlingDuration(target: d, initialVelocity: v0, epsilon: 0.1)
+                longest = max(longest, stages[k].start + delay(k, i, step) + settle)
+            }
         }
-        return max(longest, nominalDuration)
+        return longest
     }
 }

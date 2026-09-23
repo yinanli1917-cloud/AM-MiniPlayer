@@ -1,14 +1,12 @@
 /**
- * [INPUT]: EdgePresentation.
- * [OUTPUT]: visualLayout(for:) (5 states → 3 resting layouts) and
- *           hitRegion(for:) — the hover/click region, derived from the SAME
- *           poses the view draws.
+ * [INPUT]: EdgePresentation + tuck style.
+ * [OUTPUT]: visualLayout(for:) and hitRegion(for:style:) — the hover / click
+ *           region, derived from the SAME poses the view draws.
  * [POS]: Pure geometry, app-portable.
- * [PROTOCOL]: v7 kept a second, stale set of floating rects for hit-testing
- *             (64pt wide vs a 148pt capsule on screen); the cursor on the
- *             capsule's left half counted as "left", so hover flapped
- *             (EdgeCollapseHitRegionReproTests). Never derive hit regions
- *             from anything but EdgeCollapsePoses.
+ * [PROTOCOL]: Tucked region = the edge shape plus a few points, nothing
+ *             more (founder 2026-09-22: v8's 16×316 region fired while the
+ *             cursor merely passed by the edge). Hover also needs a dwell
+ *             (EdgeCollapseTokens.hoverDwell) before the capsule comes out.
  */
 
 import CoreGraphics
@@ -27,17 +25,26 @@ public enum EdgeCollapseLayout {
         }
     }
 
-    public static func hitRegion(for state: EdgePresentation) -> CGRect {
+    /// Seconds the cursor must rest on the tucked shape before it opens.
+    public static let hoverDwell: Double = 0.12
+    static let tuckedPadInward: CGFloat = 4
+    static let tuckedPadVertical: CGFloat = 6
+
+    public static func tuckedRegion(style: EdgeCollapseTuckStyle) -> CGRect {
+        let r = EdgeCollapsePoses.tuckedRect(style)
+        return CGRect(x: r.minX - tuckedPadInward, y: r.minY - tuckedPadVertical,
+                      width: r.width + tuckedPadInward, height: r.height + tuckedPadVertical * 2)
+    }
+
+    public static func hitRegion(for state: EdgePresentation, style: EdgeCollapseTuckStyle) -> CGRect {
         let container = CGRect(origin: .zero, size: EdgeCollapseTokens.containerSize)
         switch visualLayout(for: state) {
         case .card:
             return EdgeCollapsePoses.cardRect
         case .tucked:
-            let s = EdgeCollapsePoses.stripRect
-            let pad = EdgeCollapseTokens.tuckedHoverExpand
-            return CGRect(x: s.minX - pad, y: s.minY, width: s.width + pad, height: s.height)
+            return tuckedRegion(style: style)
         case .floating:
-            let u = EdgeCollapsePoses.stripRect.union(EdgeCollapsePoses.capsuleRect)
+            let u = tuckedRegion(style: style).union(EdgeCollapsePoses.capsuleRect)
             let pad = EdgeCollapseTokens.floatingHoverExitExpand
             return u.insetBy(dx: -pad, dy: -pad).intersection(container)
         }

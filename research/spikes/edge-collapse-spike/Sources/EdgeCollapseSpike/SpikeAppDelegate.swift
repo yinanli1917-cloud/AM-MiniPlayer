@@ -97,7 +97,7 @@ final class SpikeAppDelegate: NSObject, NSApplicationDelegate {
         DistributedNotificationCenter.default().addObserver(
             forName: EdgeCollapseProbeNotification.hover, object: nil, queue: .main
         ) { [weak model] _ in
-            Task { @MainActor in model?.requestHoverEnter() }
+            Task { @MainActor in model?.requestHoverEnter(dwell: false) }
         }
         DistributedNotificationCenter.default().addObserver(
             forName: EdgeCollapseProbeNotification.unhover, object: nil, queue: .main

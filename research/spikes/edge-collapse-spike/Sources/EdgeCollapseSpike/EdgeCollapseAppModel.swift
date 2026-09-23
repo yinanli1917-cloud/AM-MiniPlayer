@@ -32,7 +32,7 @@ public final class EdgeCollapsePoseStore: ObservableObject {
 public final class EdgeCollapseAppModel: ObservableObject {
 
     @Published public private(set) var presentation: EdgePresentation = .card
-    public let poseStore = EdgeCollapsePoseStore(EdgeCollapsePoses.pose(for: .card))
+    public let poseStore = EdgeCollapsePoseStore(EdgeCollapsePoses.pose(.card, page: .album, style: .handle))
     private var pose: EdgeCollapsePose {
         get { poseStore.pose }
         set { poseStore.pose = newValue }
@@ -43,6 +43,15 @@ public final class EdgeCollapseAppModel: ObservableObject {
     @Published public var bounce: EdgeCollapseBounce = .bouncy
     @Published public var tempo: EdgeCollapseTempo = .normal
     @Published public var reduceMotionOverride: Bool?
+    @Published public var tuckStyle: EdgeCollapseTuckStyle = .handle {
+        didSet {
+            guard motion == nil, presentation == .tucked else { hostingView?.refreshHitRegion(); return }
+            pose = EdgeCollapsePoses.pose(.tucked, page: page, style: tuckStyle)
+            hostingView?.refreshHitRegion()
+        }
+    }
+    private var page: PlayerPage { MusicController.shared.currentPage }
+    private var dwellWork: DispatchWorkItem?
 
     weak var hostingView: EdgeGestureHostingView<RootContentView>?
 
@@ -68,12 +77,22 @@ public final class EdgeCollapseAppModel: ObservableObject {
         transition(event: .collapseRequested(edge), settle: .settled, kind: .collapse)
     }
 
-    public func requestHoverEnter() {
+    /// The cursor has to rest on the tucked shape for `hoverDwell` before the
+    /// capsule comes out; passing by the edge does nothing.
+    public func requestHoverEnter(dwell: Bool = true) {
         guard presentation == .tucked else { return }
-        transition(event: .hoverEntered, settle: nil, kind: .floatOut)
+        dwellWork?.cancel()
+        guard dwell else { transition(event: .hoverEntered, settle: nil, kind: .floatOut); return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.presentation == .tucked else { return }
+            self.transition(event: .hoverEntered, settle: nil, kind: .floatOut)
+        }
+        dwellWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + EdgeCollapseLayout.hoverDwell, execute: work)
     }
 
     public func requestHoverExit() {
+        dwellWork?.cancel(); dwellWork = nil
         guard presentation == .floating else { return }
         transition(event: .hoverExited, settle: nil, kind: .retract)
     }
@@ -86,7 +105,7 @@ public final class EdgeCollapseAppModel: ObservableObject {
     public func nextTrack() { MusicController.shared.nextTrack() }
 
     func activeHitRegion() -> CGRect {
-        EdgeCollapseLayout.hitRegion(for: presentation)
+        EdgeCollapseLayout.hitRegion(for: presentation, style: tuckStyle)
     }
 
     // MARK: - Transitions
@@ -102,7 +121,26 @@ public final class EdgeCollapseAppModel: ObservableObject {
         let next = EdgeCollapseReducer.reduce(state: from, event: event)
         guard next != from else { return }
         let now = CACurrentMediaTime()
-        let target = EdgeCollapsePoses.pose(for: EdgeCollapseLayout.visualLayout(for: next))
+        let page = self.page
+        let stages: [EdgeCollapseMotion.Stage]
+        // Interrupted = the previous motion is still visibly under way. Its
+        // settling tail (sub-point) does not count, so a hover right after a
+        // collapse still gets the full drop choreography.
+        let interrupted = motion.map { now - motionStart < $0.nominalDuration } ?? false
+        if interrupted {
+            let key: EdgeCollapseKeyPose
+            switch EdgeCollapseLayout.visualLayout(for: next) {
+            case .card: key = .card
+            case .tucked: key = .tucked
+            case .floating: key = .floating
+            }
+            stages = EdgeCollapseChoreography.direct(
+                to: EdgeCollapsePoses.pose(key, page: page, style: tuckStyle).vector(), tempo: tempo)
+        } else {
+            stages = EdgeCollapseChoreography.stages(
+                kind: kind, fromTucked: from == .tucked, page: page, style: tuckStyle, bounce: bounce, tempo: tempo)
+        }
+        let target = EdgeCollapsePose(vector: stages.last!.to)
         EdgeCollapseLog.event(t0: now, from: from, to: next, anim: kind.rawValue, event: "start")
         flushRecorder()
 
@@ -122,10 +160,16 @@ public final class EdgeCollapseAppModel: ObservableObject {
         if let motion {
             start = motion.sample(at: now - motionStart)
         } else {
-            start = (pose.vector(), Array(repeating: 0, count: EdgeCollapsePose.channelCount))
+            // At rest in the card the cover is hidden under the panel; take its
+            // rect for the page showing now (album / lyrics / playlist).
+            var rest = pose
+            if from == .card {
+                let h = EdgeCollapsePoses.cardHero(page)
+                rest.hero = h.rect; rest.heroCorner = h.corner; rest.heroBlur = h.blur
+            }
+            start = (rest.vector(), Array(repeating: 0, count: EdgeCollapsePose.channelCount))
         }
-        let plan = EdgeCollapsePlan.plan(for: kind, bounce: bounce, tempo: tempo)
-        motion = EdgeCollapseMotion(from: start.value, velocity: start.velocity, to: target.vector(), plan: plan)
+        motion = EdgeCollapseMotion(from: start.value, velocity: start.velocity, stages: stages)
         motionKind = kind
         motionStart = now
         pendingSettle = settle
