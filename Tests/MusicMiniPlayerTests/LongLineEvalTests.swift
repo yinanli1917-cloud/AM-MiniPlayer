@@ -130,12 +130,35 @@ private struct EvalDisplayPiece {
     let segmentIndex: Int
     let segmentCount: Int
     let isWordLevel: Bool
-    /// True when this line's piece set is the result of `proportionalTiming`
-    /// folding at least one too-short piece into a neighbour (Plan A point 4:
-    /// "merge... rather than flash"). A merged piece is allowed to exceed the
-    /// 2-visual-line target -- avoiding the flash explicitly takes priority
-    /// over the line-count bound in that specific, documented trade-off.
+    /// True when THIS SPECIFIC piece's text is the result of
+    /// `proportionalTiming` folding a too-short piece into a neighbour (Plan
+    /// A point 4: "merge... rather than flash") -- checked per piece, not
+    /// per line, so an unrelated too-long piece in the same line can't hide
+    /// behind a merge that happened elsewhere. A merged piece is allowed to
+    /// exceed the 2-visual-line target -- avoiding the flash explicitly
+    /// takes priority over the line-count bound in that specific, documented
+    /// trade-off.
     let hadDurationMerge: Bool
+    /// Mirrors `LyricTimedPiece.durationBelowFloorToAvoidVisualWall`: true
+    /// when this piece's duration is intentionally below the floor because
+    /// every merge direction would have exceeded the visual-line budget.
+    let durationBelowFloorToAvoidVisualWall: Bool
+
+    init(
+        text: String, translation: String?, startTime: TimeInterval, endTime: TimeInterval,
+        segmentIndex: Int, segmentCount: Int, isWordLevel: Bool, hadDurationMerge: Bool,
+        durationBelowFloorToAvoidVisualWall: Bool = false
+    ) {
+        self.text = text
+        self.translation = translation
+        self.startTime = startTime
+        self.endTime = endTime
+        self.segmentIndex = segmentIndex
+        self.segmentCount = segmentCount
+        self.isWordLevel = isWordLevel
+        self.hadDurationMerge = hadDurationMerge
+        self.durationBelowFloorToAvoidVisualWall = durationBelowFloorToAvoidVisualWall
+    }
 }
 
 // MARK: - PLAN A orchestration mirror (thin -- see header comment)
@@ -169,7 +192,7 @@ private enum PlanADisplaySegmentation {
         }
 
         let textPieces = LyricDisplaySegmenter.realWrapPieces(for: line.text, rowWidth: rowWidth, options: options)
-        let timed = LyricDisplaySegmenter.proportionalTiming(for: textPieces, lineStart: line.startTime, lineEnd: line.endTime, options: options)
+        let timed = LyricDisplaySegmenter.proportionalTiming(for: textPieces, lineStart: line.startTime, lineEnd: line.endTime, rowWidth: rowWidth, options: options)
         guard timed.count > 1 else {
             // A duration-driven merge can collapse ALL pieces back into one
             // (production falls back to the pristine original `line` in this
@@ -183,14 +206,29 @@ private enum PlanADisplaySegmentation {
             }
             return [piece]
         }
-        let merged = timed.count < textPieces.count
+        // PER-PIECE, not per-line: a piece counts as "merged" only if ITS OWN
+        // text isn't one of the original (pre-merge) pieces verbatim -- a
+        // blanket per-line flag would exempt an UNRELATED, genuinely-too-long
+        // piece in the same line just because some OTHER piece happened to
+        // merge (this hid a real splitter gap during 2026-09-22 review: a
+        // CJK+emoji fragment measured 5 lines on its own, untouched by any
+        // merge, but was masked by a same-line merge on a different piece).
+        var remainingOriginals = textPieces
         return timed.enumerated().map { index, piece in
-            EvalDisplayPiece(
+            let merged: Bool
+            if let originalIndex = remainingOriginals.firstIndex(of: piece.text) {
+                remainingOriginals.remove(at: originalIndex)
+                merged = false
+            } else {
+                merged = true
+            }
+            return EvalDisplayPiece(
                 text: piece.text,
                 translation: index == 0 ? line.translation : nil,
                 startTime: piece.startTime, endTime: piece.endTime,
                 segmentIndex: index, segmentCount: timed.count,
-                isWordLevel: false, hadDurationMerge: merged
+                isWordLevel: false, hadDurationMerge: merged,
+                durationBelowFloorToAvoidVisualWall: piece.durationBelowFloorToAvoidVisualWall
             )
         }
     }
@@ -272,8 +310,25 @@ private func scriptTag(_ ch: Character) -> ScriptTag {
         || (0x0E00...0x0E7F).contains(Int(scalar.value)) {
         return .compact
     }
-    if scalar.isASCII, CharacterSet.letters.contains(scalar) { return .latin }
+    if scalar.isASCII, CharacterSet.letters.contains(scalar) || CharacterSet.decimalDigits.contains(scalar) { return .latin }
     return .other
+}
+
+/// Independent of the splitter's own recursion (founder review 2026-09-22:
+/// acceptance (a) must not let a splitter miss self-exempt by re-running the
+/// same splitter on its own output). A piece is unbreakable ONLY if it is a
+/// single Latin word/token: every glyph is Latin-script (letters/digits), no
+/// whitespace, no punctuation anywhere inside it. Any compact-script
+/// (CJK/kana/hangul/thai) run of >= 2 glyphs is ALWAYS considered breakable
+/// at a character boundary, regardless of what the production splitter
+/// actually does with it -- a splitter gap there is a genuine violation, not
+/// an exemption.
+private func isIndependentlyUnbreakable(_ text: String) -> Bool {
+    let chars = Array(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    guard chars.count > 1 else { return true } // 0 or 1 glyph: nothing to cut between
+    return chars.allSatisfy { ch in
+        !ch.isWhitespace && !isBoundaryPunctuation(ch) && scriptTag(ch) == .latin
+    }
 }
 
 private func isBoundaryPunctuation(_ ch: Character) -> Bool {
@@ -462,17 +517,51 @@ final class LongLineEvalTests: XCTestCase {
                     guard lines > LyricRealWrapSplitOptions.default.maxVisualLinesPerPiece else { continue }
                     // Exempt: (i) a duration-driven merge (point 4's explicit
                     // "merge... rather than flash" trade-off), or (ii) a
-                    // genuinely unbreakable token -- re-running the real-wrap
-                    // splitter on the piece's OWN text at this width still
-                    // returns it whole.
+                    // genuinely unbreakable token, defined INDEPENDENTLY of the
+                    // splitter (see isIndependentlyUnbreakable) so a splitter
+                    // miss can never self-exempt by re-running the same
+                    // splitter on its own output.
                     if piece.hadDurationMerge { continue }
-                    let reSplit = LyricDisplaySegmenter.realWrapPieces(for: piece.text, rowWidth: width)
-                    if reSplit.count <= 1 { continue }
-                    violations.append("\(eval.id) @\(Int(width))pt: piece '\(piece.text.prefix(30))...' is \(lines) lines and IS further splittable (not unbreakable, not merged)")
+                    if isIndependentlyUnbreakable(piece.text) { continue }
+                    violations.append("\(eval.id) @\(Int(width))pt: piece '\(piece.text.prefix(30))...' is \(lines) lines and IS breakable per the independent oracle (not a single Latin token, not merged)")
                 }
             }
         }
         XCTAssertTrue(violations.isEmpty, "piece visual-line bound violated:\n" + violations.joined(separator: "\n"))
+    }
+
+    /// Diagnostic listing (not an assertion): every row still >= 4 visual
+    /// lines after Plan A, with its cause, per founder review 2026-09-22.
+    func test_report_stillFourPlusRows_withCause() throws {
+        let fixture = try loadFixture()
+        for width in EvalWidth.all {
+            print("\n=== Rows still >=4 visual lines @ \(Int(width))pt (Plan A) ===")
+            var count = 0
+            for eval in fixture {
+                let pieces = PlanADisplaySegmentation.makeDisplayPieces(from: eval, rowWidth: width)
+                for piece in pieces {
+                    let lines = LyricDisplayLineMeasurement.visualLineCount(for: piece.text, rowWidth: width, isBackground: eval.isBackground)
+                    guard lines >= 4 else { continue }
+                    count += 1
+                    let cause: String
+                    if eval.isBackground {
+                        cause = "background row (never split, point 6)"
+                    } else if piece.hadDurationMerge {
+                        cause = "duration merge (pieces would be < floor)"
+                    } else if isIndependentlyUnbreakable(piece.text) {
+                        cause = "unbreakable single Latin token"
+                    } else if pieces.count == 1 {
+                        cause = "SPLITTER MISS (never attempted a split)"
+                    } else {
+                        cause = "SPLITTER MISS (split but this piece still too long)"
+                    }
+                    let prefix = String(piece.text.prefix(24))
+                    print("  \(eval.id) [\(eval.category)/\(eval.script)] \"\(prefix)...\" lines=\(lines) segCount=\(pieces.count) cause=\(cause)")
+                }
+            }
+            print("  total: \(count)")
+        }
+        XCTAssertTrue(true)
     }
 
     // MARK: (b) 0 breaks inside a word
@@ -556,18 +645,29 @@ final class LongLineEvalTests: XCTestCase {
 
     func test_acceptance_e_noPieceShorterThanMinimumDuration() throws {
         let fixture = try loadFixture()
-        let minimum = LyricRealWrapSplitOptions.default.minimumPieceDuration
+        let options = LyricRealWrapSplitOptions.default
         var violations: [String] = []
         for eval in splittableLines(fixture) {
             let lineDuration = eval.endTime - eval.startTime
             for width in EvalWidth.all {
                 let pieces = PlanADisplaySegmentation.makeDisplayPieces(from: eval, rowWidth: width)
                 guard pieces.count > 1 else { continue }
+                // The floor relaxes to minimumTwoPieceDuration ONLY when the
+                // line settled at exactly two pieces (point 4, founder
+                // 2026-09-22 review: a quick two-piece hand-off beats merging
+                // all the way back into one long wall of text).
+                let floor = pieces.count == 2 ? options.minimumTwoPieceDuration : options.minimumPieceDuration
                 for piece in pieces where !piece.isWordLevel {
                     let duration = piece.endTime - piece.startTime
-                    guard duration < minimum else { continue }
-                    guard lineDuration >= minimum else { continue } // the WHOLE line is shorter than the floor -- exempt
-                    violations.append("\(eval.id) @\(Int(width))pt: piece duration \(fmt(duration))s < \(minimum)s floor, but line duration \(fmt(lineDuration))s is not")
+                    guard duration < floor else { continue }
+                    guard lineDuration >= floor else { continue } // the WHOLE line is shorter than the floor -- exempt
+                    // Exempt: production deliberately left this piece under
+                    // floor because merging it into either neighbour would
+                    // have exceeded the visual-line budget (point 4 as
+                    // refined 2026-09-22: a piece that's a bit quick reads
+                    // better than resurrecting a multi-line wall).
+                    guard !piece.durationBelowFloorToAvoidVisualWall else { continue }
+                    violations.append("\(eval.id) @\(Int(width))pt: piece duration \(fmt(duration))s < \(floor)s floor (segCount=\(pieces.count)), but line duration \(fmt(lineDuration))s is not")
                 }
             }
         }

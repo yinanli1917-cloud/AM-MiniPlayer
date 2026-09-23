@@ -40,17 +40,30 @@ struct LyricRealWrapSplitOptions: Equatable {
     /// single unbreakable token that itself exceeds this is exempt (never
     /// split inside a word).
     let maxVisualLinesPerPiece: Int
-    /// A piece at or below this glyph count (after trimming whitespace) is an
-    /// orphan; the splitter avoids leaving one when a rebalance can prevent it.
+    /// A piece STRICTLY BELOW this glyph count (after trimming whitespace) is
+    /// an orphan; the splitter avoids leaving one when a rebalance can
+    /// prevent it. A piece AT exactly this count is what `bestRealWrapCut`'s
+    /// own orphan-avoidance filter treats as the minimum SAFE size to
+    /// produce, so it must not also be merged away afterward -- the two
+    /// checks must agree on which side of the threshold is "safe".
     let minOrphanGlyphCount: Int
     /// A line-level piece whose proportional duration would fall below this
     /// floor is folded into a neighbour instead of flashing on screen.
     let minimumPieceDuration: TimeInterval
+    /// The floor `proportionalTiming` accepts ONLY at exactly two remaining
+    /// pieces (founder 2026-09-22 review): merging is expensive -- it puts a
+    /// long line back together and re-triggers the very "fills the window"
+    /// symptom this feature exists to fix. Two short pieces (a quick line
+    /// hand-off) reads better than one long wall of text, so at N=2 the bar
+    /// is relaxed to this lower floor instead of the general
+    /// `minimumPieceDuration`; below THIS, the pieces merge all the way to one.
+    let minimumTwoPieceDuration: TimeInterval
 
     static let `default` = LyricRealWrapSplitOptions(
         maxVisualLinesPerPiece: 2,
         minOrphanGlyphCount: 2,
-        minimumPieceDuration: 1.2
+        minimumPieceDuration: 1.2,
+        minimumTwoPieceDuration: 0.6
     )
 }
 
@@ -60,6 +73,20 @@ struct LyricTimedPiece: Equatable {
     let text: String
     let startTime: TimeInterval
     let endTime: TimeInterval
+    /// True when `proportionalTiming` deliberately left this piece below the
+    /// applicable minimum duration because every available merge direction
+    /// would have pushed the result over `maxVisualLinesPerPiece` (a visual
+    /// wall is worse than a piece that is a bit quick -- founder 2026-09-22
+    /// review). False everywhere else, including the ordinary case where a
+    /// too-short piece WAS successfully folded into a neighbour.
+    let durationBelowFloorToAvoidVisualWall: Bool
+
+    init(text: String, startTime: TimeInterval, endTime: TimeInterval, durationBelowFloorToAvoidVisualWall: Bool = false) {
+        self.text = text
+        self.startTime = startTime
+        self.endTime = endTime
+        self.durationBelowFloorToAvoidVisualWall = durationBelowFloorToAvoidVisualWall
+    }
 }
 
 enum LyricDisplaySegmenter {
@@ -735,7 +762,7 @@ enum LyricDisplaySegmenter {
     /// carries no inter-word spacing) character boundary nearest the balanced
     /// midpoint. Never splits inside a Latin word (Latin text with no
     /// delimiter at all falls through every tier and is returned whole). An
-    /// orphan piece (<= `options.minOrphanGlyphCount` glyphs) is folded into
+    /// orphan piece (< `options.minOrphanGlyphCount` glyphs) is folded into
     /// a neighbour as a final pass.
     static func realWrapPieces(
         for text: String,
@@ -816,15 +843,20 @@ enum LyricDisplaySegmenter {
             }
         }
 
-        // 5. Compact-script (CJK/kana/hangul/thai) character boundary --
-        // ONLY when the whole string has no punctuation and no whitespace to
-        // fall back on AND is entirely a compact script (those scripts do
-        // not mark word boundaries with spaces, so cutting between two
-        // characters is not "inside a word" the way it would be for Latin).
+        // 5. Compact-script (CJK/kana/hangul/thai) character boundary -- a
+        // position between two ADJACENT compact-script characters is always
+        // breakable (those scripts carry no inter-word spacing, so cutting
+        // between two of their characters is never "inside a word" the way
+        // it would be for Latin), independent of what else is in the string
+        // (emoji, digits, symbols elsewhere -- e.g. "生日快乐🥳🎂🍰愿你永远
+        // 开心" must still be cuttable between 乐 and 🥳's surrounding CJK
+        // runs even though the emoji themselves are not compact-script; a
+        // stricter "whole string must be compact" rule left that kind of
+        // mixed content with no candidate at all -- founder 2026-09-22
+        // review). Lowest priority: only used when tiers 1-4 found nothing.
         var compactScriptOffsets: [Int] = []
-        if strongOffsets.isEmpty, weakOffsets.isEmpty, whitespaceOffsets.isEmpty,
-           chars.allSatisfy({ scriptClass($0) == .compact }) {
-            compactScriptOffsets = Array(1..<chars.count)
+        for i in 1..<chars.count where scriptClass(chars[i - 1]) == .compact && scriptClass(chars[i]) == .compact {
+            compactScriptOffsets.append(i)
         }
 
         if let offset = pick(strongOffsets) { return text.index(text.startIndex, offsetBy: offset) }
@@ -870,7 +902,15 @@ enum LyricDisplaySegmenter {
         var index = 0
         while index < result.count {
             let glyphCount = result[index].trimmingCharacters(in: .whitespacesAndNewlines).count
-            guard glyphCount > 0, glyphCount <= minGlyphs, result.count > 1 else { index += 1; continue }
+            // STRICTLY below the minimum -- a piece AT the minimum (e.g.
+            // exactly 2 glyphs when minGlyphs=2) is what `bestRealWrapCut`'s
+            // own orphan-avoidance filter (`pick()`) considers safe to
+            // produce in the first place; merging it away here too would
+            // silently undo a legitimate cut (found via a real 2026-09-22
+            // review repro: "想爱\u{A0}就不能害怕会有伤痕" split into "想爱"
+            // + "就不能害怕会有伤痕", then this merge glued them straight
+            // back into one 3-line piece).
+            guard glyphCount > 0, glyphCount < minGlyphs, result.count > 1 else { index += 1; continue }
             if index > 0 {
                 result[index - 1] += textJoinSeparator(result[index - 1], result[index]) + result[index]
                 result.remove(at: index)
@@ -898,10 +938,24 @@ enum LyricDisplaySegmenter {
     /// equally, then folds any piece whose resulting duration would fall
     /// below `options.minimumPieceDuration` into a neighbour (merging text
     /// too) so it never flashes on screen for a fraction of a second.
+    ///
+    /// `rowWidth`/`isBackground` let the merge step measure BOTH candidate
+    /// directions (previous vs. next neighbour) with the renderer's own real
+    /// wrap and prefer whichever keeps the merged piece within
+    /// `options.maxVisualLinesPerPiece` (founder 2026-09-22 review: a merge
+    /// that blindly picked the lighter-weighted side could glue two
+    /// already-fine ~2-line pieces into a new 4-line piece -- e.g. "I keep
+    /// running" + "through the" -> "I keep running through the", 4 lines --
+    /// even though merging with the OTHER neighbour would have stayed at 2).
+    /// `rowWidth == nil` (used only by call sites that cannot know the
+    /// column width, e.g. pure duration/text unit tests) falls back to the
+    /// original weight-only tie-break.
     static func proportionalTiming(
         for pieces: [String],
         lineStart: TimeInterval,
         lineEnd: TimeInterval,
+        rowWidth: CGFloat? = nil,
+        isBackground: Bool = false,
         options: LyricRealWrapSplitOptions = .default
     ) -> [LyricTimedPiece] {
         guard pieces.count > 1 else {
@@ -913,26 +967,52 @@ enum LyricDisplaySegmenter {
         }
 
         var texts = pieces
-        while texts.count > 1 {
+        outer: while texts.count > 1 {
             let weights = texts.map { max(1, $0.trimmingCharacters(in: .whitespacesAndNewlines).count) }
             let totalWeight = weights.reduce(0, +)
             let pieceDurations = weights.map { duration * Double($0) / Double(totalWeight) }
-            guard let shortIndex = pieceDurations.firstIndex(where: { $0 < options.minimumPieceDuration }) else { break }
-            let mergeWithPrevious: Bool
-            if shortIndex == 0 {
-                mergeWithPrevious = false
-            } else if shortIndex == texts.count - 1 {
-                mergeWithPrevious = true
-            } else {
-                mergeWithPrevious = weights[shortIndex - 1] <= weights[shortIndex + 1]
+            // At exactly two pieces the bar relaxes to `minimumTwoPieceDuration`
+            // (founder 2026-09-22): merging all the way to one re-creates the
+            // "fills the window" symptom this feature exists to fix, so a
+            // quick two-piece hand-off is preferred over a single long wall
+            // of text as long as BOTH pieces clear the lower floor.
+            let floor = texts.count == 2 ? options.minimumTwoPieceDuration : options.minimumPieceDuration
+
+            // Try every under-floor piece (not just the first): a piece that
+            // merely misses the SOFT floor (>= minimumTwoPieceDuration, the
+            // "quick handoff" threshold) is left alone if EVERY merge
+            // direction would push the result over the visual-line budget --
+            // a slightly-short piece reads far better than resurrecting a
+            // multi-line wall by gluing two already-fine pieces together
+            // (founder 2026-09-22 review repro: "I keep running" + "through
+            // the" -> 4 lines either direction). A piece under the HARD floor
+            // (< minimumTwoPieceDuration) always merges regardless -- that
+            // piece is short enough to be a genuine flash, worse than a wall.
+            for shortIndex in pieceDurations.indices where pieceDurations[shortIndex] < floor {
+                let shortDuration = pieceDurations[shortIndex]
+                let mergeWithPrevious = mergeDirection(
+                    texts: texts, shortIndex: shortIndex, weights: weights,
+                    rowWidth: rowWidth, isBackground: isBackground, options: options
+                )
+                if let rowWidth, shortDuration >= options.minimumTwoPieceDuration {
+                    let mergedText = mergeWithPrevious
+                        ? texts[shortIndex - 1] + textJoinSeparator(texts[shortIndex - 1], texts[shortIndex]) + texts[shortIndex]
+                        : texts[shortIndex] + textJoinSeparator(texts[shortIndex], texts[shortIndex + 1]) + texts[shortIndex + 1]
+                    let mergedLines = LyricDisplayLineMeasurement.visualLineCount(for: mergedText, rowWidth: rowWidth, isBackground: isBackground)
+                    if mergedLines > options.maxVisualLinesPerPiece {
+                        continue // this piece's merge would create a wall; leave it slightly short instead, check the next candidate
+                    }
+                }
+                if mergeWithPrevious {
+                    texts[shortIndex - 1] += textJoinSeparator(texts[shortIndex - 1], texts[shortIndex]) + texts[shortIndex]
+                    texts.remove(at: shortIndex)
+                } else {
+                    texts[shortIndex + 1] = texts[shortIndex] + textJoinSeparator(texts[shortIndex], texts[shortIndex + 1]) + texts[shortIndex + 1]
+                    texts.remove(at: shortIndex)
+                }
+                continue outer // texts mutated -- restart with fresh weights/durations
             }
-            if mergeWithPrevious {
-                texts[shortIndex - 1] += textJoinSeparator(texts[shortIndex - 1], texts[shortIndex]) + texts[shortIndex]
-                texts.remove(at: shortIndex)
-            } else {
-                texts[shortIndex + 1] = texts[shortIndex] + textJoinSeparator(texts[shortIndex], texts[shortIndex + 1]) + texts[shortIndex + 1]
-                texts.remove(at: shortIndex)
-            }
+            break // no under-floor piece could be productively merged
         }
 
         guard texts.count > 1 else {
@@ -941,16 +1021,57 @@ enum LyricDisplaySegmenter {
 
         let weights = texts.map { max(1, $0.trimmingCharacters(in: .whitespacesAndNewlines).count) }
         let totalWeight = weights.reduce(0, +)
+        // Any piece STILL below the applicable floor at this point got here
+        // only because merging it would have exceeded the visual-line budget
+        // (the loop above merges every other under-floor case unconditionally
+        // -- see the hard-floor branch) -- so this is exactly the flag's
+        // definition, no separate bookkeeping needed through the loop.
+        let finalFloor = texts.count == 2 ? options.minimumTwoPieceDuration : options.minimumPieceDuration
         var cursor = lineStart
         var result: [LyricTimedPiece] = []
         for (index, text) in texts.enumerated() {
             let share = Double(weights[index]) / Double(totalWeight)
             let start = cursor
             let end = index == texts.count - 1 ? lineEnd : start + duration * share
-            result.append(LyricTimedPiece(text: text, startTime: start, endTime: end))
+            let belowFloor = (end - start) < finalFloor
+            result.append(LyricTimedPiece(text: text, startTime: start, endTime: end, durationBelowFloorToAvoidVisualWall: belowFloor))
             cursor = end
         }
         return result
+    }
+
+    /// True = merge `texts[shortIndex]` into `texts[shortIndex - 1]`; false =
+    /// into `texts[shortIndex + 1]`. Prefers whichever direction keeps the
+    /// merged piece within `options.maxVisualLinesPerPiece` (measured with
+    /// the real renderer recipe via `rowWidth`, when known); if both or
+    /// neither direction stays within budget, prefers the direction that
+    /// produces FEWER visual lines; only when line counts also tie does it
+    /// fall back to the original lighter-weighted-neighbour heuristic.
+    private static func mergeDirection(
+        texts: [String],
+        shortIndex: Int,
+        weights: [Int],
+        rowWidth: CGFloat?,
+        isBackground: Bool,
+        options: LyricRealWrapSplitOptions
+    ) -> Bool {
+        if shortIndex == 0 { return false }
+        if shortIndex == texts.count - 1 { return true }
+
+        guard let rowWidth else {
+            return weights[shortIndex - 1] <= weights[shortIndex + 1]
+        }
+
+        let prevMerged = texts[shortIndex - 1] + textJoinSeparator(texts[shortIndex - 1], texts[shortIndex]) + texts[shortIndex]
+        let nextMerged = texts[shortIndex] + textJoinSeparator(texts[shortIndex], texts[shortIndex + 1]) + texts[shortIndex + 1]
+        let prevLines = LyricDisplayLineMeasurement.visualLineCount(for: prevMerged, rowWidth: rowWidth, isBackground: isBackground)
+        let nextLines = LyricDisplayLineMeasurement.visualLineCount(for: nextMerged, rowWidth: rowWidth, isBackground: isBackground)
+        let prevWithinBudget = prevLines <= options.maxVisualLinesPerPiece
+        let nextWithinBudget = nextLines <= options.maxVisualLinesPerPiece
+
+        if prevWithinBudget != nextWithinBudget { return prevWithinBudget }
+        if prevLines != nextLines { return prevLines < nextLines }
+        return weights[shortIndex - 1] <= weights[shortIndex + 1]
     }
 
     // MARK: - Plan A: word-level splitting (exact timing; breath-gap break points)

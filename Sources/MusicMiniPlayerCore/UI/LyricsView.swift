@@ -2104,7 +2104,7 @@ public struct LyricsView: View {
             }
 
             let textPieces = LyricDisplaySegmenter.realWrapPieces(for: line.text, rowWidth: rowWidth)
-            let timedPieces = displayTiming(for: line, textPieces: textPieces)
+            let timedPieces = displayTiming(for: line, textPieces: textPieces, rowWidth: rowWidth)
             guard !shouldKeepDisplayLineUnsplit(pieceCount: timedPieces.count) else {
                 result.append(DisplayLyricLine(
                     id: "\(sourceIndex)-0",
@@ -2151,8 +2151,8 @@ public struct LyricsView: View {
     /// see `LyricDisplaySegmenter.proportionalTiming`. Word-level pieces
     /// never go through this path; their timing comes directly from real
     /// word timestamps in `makeDisplayLyricLines` above.
-    private func displayTiming(for line: LyricLine, textPieces: [String]) -> [LyricTimedPiece] {
-        LyricDisplaySegmenter.proportionalTiming(for: textPieces, lineStart: line.startTime, lineEnd: line.endTime)
+    private func displayTiming(for line: LyricLine, textPieces: [String], rowWidth: CGFloat) -> [LyricTimedPiece] {
+        LyricDisplaySegmenter.proportionalTiming(for: textPieces, lineStart: line.startTime, lineEnd: line.endTime, rowWidth: rowWidth)
     }
 
     private func displayFirstRealLyricIndex(in displayLines: [DisplayLyricLine]) -> Int {
