@@ -67,17 +67,23 @@ final class LiquidContinuityTests: XCTestCase {
         XCTAssertLessThan(k, 0.15, "kicked again at \(Int(at * 1000))ms")
     }
 
-    /// Tucked: pure black, joined to the screen edge — the corners on the
-    /// edge side are square (the shape runs past the edge), only the inner
-    /// corners are round (founder 2026-09-22).
-    func test_tucked_isFlushWithTheEdge_andPureBlack() {
+    /// Tucked is only the light on the screen edge: no black body, no
+    /// outline at all (founder 2026-09-22: a black tab reads as a patch).
+    func test_tucked_isOnlyTheEdgeLight() {
         let p = EdgeCollapsePoses.pose(.tucked, page: .album, style: .handle)
-        XCTAssertEqual(p.glass, 0, "no glass: a plain black fill")
-        let r = EdgeCollapsePoses.tuckedRect(.handle)
+        XCTAssertEqual(p.glow, 1)
+        XCTAssertEqual(p.glowLength, Double(EdgeCollapseTokens.glowLength))
+        let outline = LiquidOutline.path(parts: EdgeCollapsePoses.liquidParts(p), neck: EdgeCollapseTokens.liquidNeck)
+        XCTAssertTrue(outline.isEmpty, "no black shape at rest")
+    }
+
+    /// While a black body sits at the edge it is joined to the bezel: the
+    /// corners on the edge side are square (the drop stage's bulge).
+    func test_bulgeAtTheEdge_isFlush() {
+        let p = EdgeCollapsePoses.pose(.drop, page: .album, style: .handle)
         let path = LiquidOutline.path(parts: EdgeCollapsePoses.liquidParts(p), neck: EdgeCollapseTokens.liquidNeck).cgPath
         let edge = EdgeCollapseTokens.containerSize.width
-        XCTAssertTrue(path.contains(CGPoint(x: edge - 0.2, y: r.minY + 0.2)), "top corner at the edge is square")
-        XCTAssertTrue(path.contains(CGPoint(x: edge - 0.2, y: r.maxY - 0.2)), "bottom corner at the edge is square")
-        XCTAssertFalse(path.contains(CGPoint(x: r.minX + 0.2, y: r.minY + 0.2)), "inner corners stay round")
+        XCTAssertTrue(path.contains(CGPoint(x: edge - 0.2, y: p.body.minY + 0.3)))
+        XCTAssertTrue(path.contains(CGPoint(x: edge - 0.2, y: p.body.maxY - 0.3)))
     }
 }

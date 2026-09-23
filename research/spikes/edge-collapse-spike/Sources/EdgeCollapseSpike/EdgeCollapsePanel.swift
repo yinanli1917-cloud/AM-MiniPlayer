@@ -83,7 +83,6 @@ func makeEdgeCollapsePanel() -> EdgeCollapsePanel {
 ///    on the window's otherwise-transparent 320×360 canvas pass through to
 ///    whatever's behind the panel.
 final class EdgeGestureHostingView<Content: View>: NSHostingView<Content> {
-    var onHorizontalSwipeToEdge: (() -> Void)?
     var onHoverChange: ((Bool) -> Void)?
     /// Supplies the CURRENT active hit-region in this view's own local
     /// coordinate space (top-left origin — `NSHostingView.isFlipped` is
@@ -132,32 +131,21 @@ final class EdgeGestureHostingView<Content: View>: NSHostingView<Content> {
         onHoverChange?(false)
     }
 
-    /// Only the `.ended` phase with a dominant, RIGHTWARD horizontal delta
-    /// counts (top-level task instruction #6: "check direction this time:
-    /// rightward" — v1 only checked magnitude via `abs`, which would also
-    /// fire on a leftward swipe; this panel docks at the RIGHT edge, so only
-    /// a swipe toward that edge should collapse). Convention: positive
-    /// `scrollingDeltaX` is treated as "toward the right edge" — documented
-    /// here since AppKit's natural-scrolling sign convention is otherwise
-    /// easy to get backwards.
-    private var swipeAccumulatedX: CGFloat = 0
-    private var swipeFired = false
+    /// Two-finger scroll phases, forwarded so the collapse follows the
+    /// fingers (v12). Positive dx = toward the right screen edge. Momentum
+    /// events after the fingers lift are ignored: the release velocity is
+    /// already handed to the spring.
+    enum SwipePhase { case began, changed(dx: CGFloat, dy: CGFloat), ended }
+    var onSwipe: ((SwipePhase) -> Void)?
 
-    /// Fire DURING the gesture (accumulated rightward delta > 40pt), not on
-    /// `.ended` — the ended event carries ~0 delta, so v6 only collapsed when
-    /// a momentum event happened to qualify (that was the felt latency).
     override func scrollWheel(with event: NSEvent) {
-        switch event.phase {
-        case .began:
-            swipeAccumulatedX = 0; swipeFired = false
-        case .changed:
-            swipeAccumulatedX += event.scrollingDeltaX
-            if !swipeFired, swipeAccumulatedX > 40, abs(event.scrollingDeltaX) >= abs(event.scrollingDeltaY) {
-                swipeFired = true
-                onHorizontalSwipeToEdge?()
+        if event.momentumPhase == [] {
+            switch event.phase {
+            case .began: onSwipe?(.began)
+            case .changed: onSwipe?(.changed(dx: event.scrollingDeltaX, dy: event.scrollingDeltaY))
+            case .ended, .cancelled: onSwipe?(.ended)
+            default: break
             }
-        default:
-            break
         }
         super.scrollWheel(with: event)
     }

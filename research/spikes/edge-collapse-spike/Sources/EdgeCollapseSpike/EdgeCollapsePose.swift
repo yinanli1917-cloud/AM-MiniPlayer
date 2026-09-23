@@ -39,8 +39,13 @@ public struct EdgeCollapsePose: Equatable {
     /// gradient. System glass can never be pure black and always has a rim,
     /// so the black states are not glass (founder 2026-09-22).
     public var glass: Double = 0
+    /// The edge light (tucked): brightness 0...1 and lit length in points.
+    /// Tucked is ONLY this light on the screen edge; no black body at all
+    /// (founder 2026-09-22: a black tab reads as a cheap patch).
+    public var glow: Double = 0
+    public var glowLength: Double = 0
 
-    public static let channelCount = 24
+    public static let channelCount = 26
 
     public func vector() -> [Double] {
         [body.maxX, body.minY, body.width, body.height, bodyCornerInner, bodyCornerEdge,
@@ -50,7 +55,7 @@ public struct EdgeCollapsePose: Equatable {
          panelOpacity,
          capsuleContentOpacity, capsuleContentBlur,
          stripContentOpacity,
-         dim, glass].map { Double($0) }
+         dim, glass, glow, glowLength].map { Double($0) }
     }
 
     public init(vector v: [Double]) {
@@ -67,30 +72,33 @@ public struct EdgeCollapsePose: Equatable {
         stripContentOpacity = v[21]
         dim = v[22]
         glass = v[23]
+        glow = v[24]; glowLength = v[25]
     }
 
     public init(body: CGRect, bodyCornerInner: CGFloat, bodyCornerEdge: CGFloat,
                 capsule: CGRect, capsuleCorner: CGFloat,
                 hero: CGRect, heroCorner: CGFloat, heroOpacity: Double, heroBlur: CGFloat,
                 panelOpacity: Double, capsuleContentOpacity: Double, capsuleContentBlur: CGFloat,
-                stripContentOpacity: Double, dim: Double, glass: Double = 0) {
+                stripContentOpacity: Double, dim: Double, glass: Double = 0,
+                glow: Double = 0, glowLength: Double = 0) {
         self.body = body; self.bodyCornerInner = bodyCornerInner; self.bodyCornerEdge = bodyCornerEdge
         self.capsule = capsule; self.capsuleCorner = capsuleCorner
         self.hero = hero; self.heroCorner = heroCorner; self.heroOpacity = heroOpacity; self.heroBlur = heroBlur
         self.panelOpacity = panelOpacity
         self.capsuleContentOpacity = capsuleContentOpacity; self.capsuleContentBlur = capsuleContentBlur
         self.stripContentOpacity = stripContentOpacity; self.dim = dim; self.glass = glass
+        self.glow = glow; self.glowLength = glowLength
     }
 }
 
 /// Which spring/delay a channel follows.
 public enum EdgeCollapseChannelGroup: Int, CaseIterable, Sendable {
-    case body, capsule, hero, heroFade, panel, capsuleContent, stripContent, dim, material
+    case body, capsule, hero, heroFade, panel, capsuleContent, stripContent, dim, material, glow
 
     public static let map: [EdgeCollapseChannelGroup] = {
         let counts: [(EdgeCollapseChannelGroup, Int)] = [
             (.body, 6), (.capsule, 5), (.hero, 5), (.heroFade, 2), (.panel, 1),
-            (.capsuleContent, 2), (.stripContent, 1), (.dim, 1), (.material, 1),
+            (.capsuleContent, 2), (.stripContent, 1), (.dim, 1), (.material, 1), (.glow, 2),
         ]
         var m: [EdgeCollapseChannelGroup] = []
         for (g, n) in counts { m.append(contentsOf: Array(repeating: g, count: n)) }
@@ -264,12 +272,14 @@ public enum EdgeCollapsePoses {
                 stripContentOpacity: 0, dim: 1)
         case .tucked:
             let th = tuckedHero(style)
+            // No black body: it has gone into the bezel; only the light stays.
+            let intoEdge = CGRect(x: edge, y: tucked.minY, width: 0, height: tucked.height)
             return EdgeCollapsePose(
-                body: tucked, bodyCornerInner: tucked.width / 2, bodyCornerEdge: 0,
-                capsule: parked(tucked), capsuleCorner: 1,
+                body: intoEdge, bodyCornerInner: tucked.width / 2, bodyCornerEdge: 0,
+                capsule: CGRect(x: edge, y: midY, width: 0, height: 0), capsuleCorner: 1,
                 hero: th.rect, heroCorner: 3, heroOpacity: th.opacity, heroBlur: 0,
                 panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
-                stripContentOpacity: 1, dim: 1)
+                stripContentOpacity: 1, dim: 1, glow: 1, glowLength: Double(t.glowLength))
         case .drop:
             let b = bulgedRect(style)
             let d = dropRect(style)
@@ -280,7 +290,7 @@ public enum EdgeCollapsePoses {
                 hero: coverIn(d, inset: 6),
                 heroCorner: 8, heroOpacity: 0, heroBlur: 2,
                 panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
-                stripContentOpacity: 0, dim: 1)
+                stripContentOpacity: 0, dim: 1, glow: 1, glowLength: Double(t.glowGatheredLength))
         case .blob:
             let r = blobRect
             // The edge shape has gone back into the screen edge.

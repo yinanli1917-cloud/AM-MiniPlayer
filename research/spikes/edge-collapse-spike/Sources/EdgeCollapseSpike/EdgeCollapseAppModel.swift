@@ -25,6 +25,11 @@ import MusicMiniPlayerCore
 @MainActor
 public final class EdgeCollapsePoseStore: ObservableObject {
     @Published public var pose: EdgeCollapsePose
+    /// Immediate response when the cursor touches the edge light (before
+    /// the dwell commits): 0...1, animated by SwiftUI (a tiny, local change).
+    @Published public var hoverBoost: Double = 0
+    /// Edge light colour, taken from the artwork.
+    @Published public var glowColor: Color = .white
     init(_ pose: EdgeCollapsePose) { self.pose = pose }
 }
 
@@ -53,6 +58,21 @@ public final class EdgeCollapseAppModel: ObservableObject {
     private var page: PlayerPage { MusicController.shared.currentPage }
     private var dwellWork: DispatchWorkItem?
 
+    /// Show the capsule for a moment on a track change (founder 2026-09-22),
+    /// unless the player already posts its own song-change notification.
+    /// No public API tells us whether Music/Spotify notifications are on, so
+    /// the product needs a setting; the second switch simulates the answer.
+    @Published public var autoPeekEnabled = true
+    @Published public var playerAlreadyNotifies = false
+    private var hovering = false
+    private var peeking = false
+    private var peekWork: DispatchWorkItem?
+    private var cancellables = Set<AnyCancellable>()
+
+    // Two-finger swipe tracking (collapse follows the fingers).
+    private var swipe: EdgeCollapseSwipe?
+    private var trackMotion: EdgeCollapseMotion?
+
     weak var hostingView: EdgeGestureHostingView<RootContentView>?
 
     private var motion: EdgeCollapseMotion?
@@ -68,7 +88,23 @@ public final class EdgeCollapseAppModel: ObservableObject {
         reduceMotionOverride ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
 
-    public init() {}
+    public init() {
+        let music = MusicController.shared
+        music.$currentTrackTitle
+            .removeDuplicates()
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.trackChanged() }
+            .store(in: &cancellables)
+        music.$currentArtwork
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] image in
+                guard let self else { return }
+                let c = image.flatMap(edgeGlowColor) ?? NSColor.white
+                withAnimation(.easeInOut(duration: 0.5)) { self.poseStore.glowColor = Color(nsColor: c) }
+            }
+            .store(in: &cancellables)
+    }
 
     // MARK: - Entry points
 
@@ -80,7 +116,13 @@ public final class EdgeCollapseAppModel: ObservableObject {
     /// The cursor has to rest on the tucked shape for `hoverDwell` before the
     /// capsule comes out; passing by the edge does nothing.
     public func requestHoverEnter(dwell: Bool = true) {
+        hovering = true
+        peeking = false          // the user takes over a peek
+        peekWork?.cancel()
         guard presentation == .tucked else { return }
+        // Respond on contact (Apple: feedback on pointer-down, not after a
+        // wait): the light brightens now; the drop comes after the dwell.
+        withAnimation(.easeOut(duration: 0.12)) { poseStore.hoverBoost = 1 }
         dwellWork?.cancel()
         guard dwell else { transition(event: .hoverEntered, settle: nil, kind: .floatOut); return }
         let work = DispatchWorkItem { [weak self] in
@@ -92,7 +134,9 @@ public final class EdgeCollapseAppModel: ObservableObject {
     }
 
     public func requestHoverExit() {
+        hovering = false
         dwellWork?.cancel(); dwellWork = nil
+        withAnimation(.easeOut(duration: 0.2)) { poseStore.hoverBoost = 0 }
         guard presentation == .floating else { return }
         transition(event: .hoverExited, settle: nil, kind: .retract)
     }
@@ -103,6 +147,92 @@ public final class EdgeCollapseAppModel: ObservableObject {
     }
 
     public func nextTrack() { MusicController.shared.nextTrack() }
+
+    // MARK: - Track change peek
+
+    private func trackChanged() {
+        guard EdgeCollapseAutoPeek.shouldPeek(presentation: presentation, enabled: autoPeekEnabled,
+                                              playerAlreadyNotifies: playerAlreadyNotifies, hovering: hovering) else { return }
+        peeking = true
+        transition(event: .hoverEntered, settle: nil, kind: .floatOut)
+        peekWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.peeking, !self.hovering, self.presentation == .floating else { return }
+            self.peeking = false
+            self.transition(event: .hoverExited, settle: nil, kind: .retract)
+        }
+        peekWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + EdgeCollapseAutoPeek.holdSeconds, execute: work)
+    }
+
+    /// For the control window: behave as if the track just changed.
+    public func simulateTrackChange() { trackChanged() }
+
+    // MARK: - Two-finger swipe: the collapse follows the fingers
+
+    private func restCardPose() -> EdgeCollapsePose {
+        var rest = EdgeCollapsePoses.pose(.card, page: page, style: tuckStyle)
+        let h = EdgeCollapsePoses.cardHero(page)
+        rest.hero = h.rect; rest.heroCorner = h.corner; rest.heroBlur = h.blur
+        return rest
+    }
+
+    public func swipeBegan() {
+        guard presentation == .card, motion == nil, !reduceMotion else { swipe = nil; return }
+        swipe = EdgeCollapseSwipe()
+        trackMotion = EdgeCollapseMotion(
+            from: restCardPose().vector(), velocity: Array(repeating: 0, count: EdgeCollapsePose.channelCount),
+            stages: EdgeCollapseChoreography.stages(kind: .collapse, fromTucked: false, page: page, style: tuckStyle,
+                                                    bounce: .settle, tempo: tempo))
+    }
+
+    public func swipeChanged(dx: Double, dy: Double) {
+        if swipe == nil { swipeBegan() }
+        guard var s = swipe, let tm = trackMotion else { return }
+        let horizontal = s.add(dx: dx, dy: dy, at: CACurrentMediaTime())
+        swipe = s
+        guard horizontal else {
+            // A vertical scroll (lyrics, playlist): let it be.
+            swipe = nil; trackMotion = nil; pose = restCardPose(); return
+        }
+        pose = EdgeCollapsePose(vector: tm.sample(at: s.trackedMotionTime).value)
+    }
+
+    public func swipeEnded() {
+        guard let s = swipe, let tm = trackMotion else { return }
+        swipe = nil; trackMotion = nil
+        let now = CACurrentMediaTime()
+        let tau = s.trackedMotionTime
+        if s.commits {
+            // Carry on from where the fingers left it. The landing stage has
+            // not started yet (tau <= 0.08s < 0.09s), so it can be rebuilt
+            // with a bounce only when the release carried momentum.
+            let stages = EdgeCollapseChoreography.stages(kind: .collapse, fromTucked: false, page: page, style: tuckStyle,
+                                                         bounce: s.landingIsBouncy ? .bouncy : .settle, tempo: tempo)
+            EdgeCollapseLog.event(t0: now, from: presentation, to: .collapsing, anim: "collapse-swipe", event: "start")
+            flushRecorder()
+            motion = EdgeCollapseMotion(from: tm.from, velocity: tm.velocity, stages: stages)
+            motionKind = .collapse
+            motionStart = now - tau
+            pendingSettle = .settled
+            recorder.begin(kind: "collapse-swipe", start: now)
+            send(.collapseRequested(.right))
+            hostingView?.refreshHitRegion()
+            startLink()
+            tick()
+        } else if tau > 0 {
+            // Not far or fast enough: spring back to the card, no bounce.
+            flushRecorder()
+            motion = EdgeCollapseMotion(from: pose.vector(), velocity: Array(repeating: 0, count: EdgeCollapsePose.channelCount),
+                                        stages: EdgeCollapseChoreography.direct(to: restCardPose().vector(), tempo: tempo))
+            motionKind = .expand
+            motionStart = now
+            pendingSettle = nil
+            recorder.begin(kind: "swipe-cancel", start: now)
+            startLink()
+            tick()
+        }
+    }
 
     func activeHitRegion() -> CGRect {
         EdgeCollapseLayout.hitRegion(for: presentation, style: tuckStyle)

@@ -60,9 +60,16 @@ public enum EdgeCollapseTokens {
     public static let tabArtwork: CGFloat = 18
     public static let tuckedHoverExpand: CGFloat = 10
 
+    // Edge light (tucked): lit segment on the screen edge, artwork colour.
+    public static let glowLength: CGFloat = 64
+    /// The light gathers to this length where the drop comes out.
+    public static let glowGatheredLength: CGFloat = 22
+    public static let glowCore: CGFloat = 2.5
+    public static let glowHalo: CGFloat = 9
+
     // Droplet on hover
     public static let dropDiameter: CGFloat = 22
-    public static let dropNeckGap: CGFloat = 2     // < containerSpacing → neck
+    public static let dropNeckGap: CGFloat = 0     // < containerSpacing → neck
     public static let blobDiameter: CGFloat = 84
 
     // Hover capsule
@@ -91,7 +98,7 @@ public enum EdgeCollapseTokens {
     public static let edgeDimInnerOpacity: Double = 0.12
     /// Width of the smooth union between the edge body and the capsule:
     /// parts closer than this grow a liquid neck (LiquidOutline).
-    public static let liquidNeck: CGFloat = 18
+    public static let liquidNeck: CGFloat = 24
 
     public static let reduceMotionCrossfadeDuration: TimeInterval = 0.18
 

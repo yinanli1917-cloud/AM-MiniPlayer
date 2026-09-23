@@ -43,6 +43,7 @@ private struct GlassRootView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             Color.clear
+            edgeLight
             liquidView
             panelView
             heroView
@@ -82,8 +83,10 @@ private struct GlassRootView: View {
         let x1 = box.isNull ? 1 : min(box.maxX, container.width) / container.width
         return ZStack {
             if g > 0.01 {
+                // Materialize: the glass arrives out of a blur, not just a fade.
                 Color.clear
                     .glassEffect(.clear, in: s)
+                    .blur(radius: g < 0.98 ? (1 - g) * 8 : 0)
                     .opacity(g)
             }
             s.fill(LinearGradient(stops: fillStops(g),
@@ -108,6 +111,42 @@ private struct GlassRootView: View {
         return [.init(color: .black.opacity(inner), location: 0),
                 .init(color: .black.opacity(mid), location: 0.5),
                 .init(color: .black.opacity(edge), location: 1)]
+    }
+
+    // MARK: - Edge light (tucked)
+
+    /// A soft light along the screen edge in the artwork's colour. The lit
+    /// length from the bottom is the playback progress; the rest is a faint
+    /// track. Paused = dimmer. Touching it brightens it at once.
+    private var edgeLight: some View {
+        let t = EdgeCollapseTokens.self
+        let len = max(pose.glowLength, 0)
+        let boost = store.hoverBoost
+        let level = clamp01(pose.glow) * (music.isPlaying ? 1 : 0.55)
+        let halo = t.glowHalo * (1 + 0.5 * boost)
+        let color = store.glowColor
+        return ZStack(alignment: .trailing) {
+            // Halo: soft light fading inward from the edge and toward both
+            // ends — gradients, not a blur filter (its first render cost a
+            // 28ms frame when the light came up).
+            Rectangle()
+                .fill(LinearGradient(colors: [color.opacity(0), color.opacity(0.55 + 0.35 * boost)],
+                                     startPoint: .leading, endPoint: .trailing))
+                .frame(width: halo, height: len + halo)
+                .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.3),
+                                             .init(color: .black, location: 0.7), .init(color: .clear, location: 1)],
+                                     startPoint: .top, endPoint: .bottom))
+            // Track and lit progress (from the bottom), on the edge itself.
+            ZStack(alignment: .bottom) {
+                Capsule().fill(color.opacity(0.28))
+                Capsule().fill(color).frame(height: len * progress)
+            }
+            .frame(width: t.glowCore, height: len)
+        }
+        .frame(width: halo, height: len + halo, alignment: .trailing)
+        .opacity(level)
+        .position(x: container.width - halo / 2, y: container.height / 2)
+        .allowsHitTesting(false)
     }
 
     // MARK: - Capsule content (title, artist, two buttons)

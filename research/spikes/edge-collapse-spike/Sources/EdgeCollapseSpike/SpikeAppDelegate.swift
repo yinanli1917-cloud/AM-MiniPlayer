@@ -31,6 +31,7 @@ enum EdgeCollapseProbeNotification {
     static let expand = Notification.Name("com.nanopod.edgeCollapseSpike.expand")
     static let hover = Notification.Name("com.nanopod.edgeCollapseSpike.hover")
     static let unhover = Notification.Name("com.nanopod.edgeCollapseSpike.unhover")
+    static let peek = Notification.Name("com.nanopod.edgeCollapseSpike.peek")
 }
 
 @MainActor
@@ -56,8 +57,13 @@ final class SpikeAppDelegate: NSObject, NSApplicationDelegate {
         // re-lays-out the whole real panel with open proposals (sampled:
         // about half of main-thread time during a transition).
         hostingView.sizingOptions = []
-        hostingView.onHorizontalSwipeToEdge = { [weak model] in
-            model?.requestCollapse(edge: .right)
+        hostingView.onSwipe = { [weak model] phase in
+            guard let model else { return }
+            switch phase {
+            case .began: model.swipeBegan()
+            case .changed(let dx, let dy): model.swipeChanged(dx: dx, dy: dy)
+            case .ended: model.swipeEnded()
+            }
         }
         hostingView.onHoverChange = { [weak model] hovering in
             guard let model else { return }
@@ -103,6 +109,11 @@ final class SpikeAppDelegate: NSObject, NSApplicationDelegate {
             forName: EdgeCollapseProbeNotification.unhover, object: nil, queue: .main
         ) { [weak model] _ in
             Task { @MainActor in model?.requestHoverExit() }
+        }
+        DistributedNotificationCenter.default().addObserver(
+            forName: EdgeCollapseProbeNotification.peek, object: nil, queue: .main
+        ) { [weak model] _ in
+            Task { @MainActor in model?.simulateTrackChange() }
         }
     }
 

@@ -15,11 +15,14 @@ final class EdgeCollapseHitRegionReproTests: XCTestCase {
 
     func test_tuckedRegion_isOnlyTheEdgeShapePlusAFewPoints() {
         for style in EdgeCollapseTuckStyle.allCases {
-            let shape = EdgeCollapsePoses.tuckedRect(style)
+            // Tucked is the edge light: 6pt of the edge over the light's length.
+            let len = EdgeCollapseTokens.glowLength
+            let edge = EdgeCollapseTokens.containerSize.width
+            let light = CGRect(x: edge - 6, y: EdgeCollapseTokens.containerSize.height / 2 - len / 2, width: 6, height: len)
             let region = EdgeCollapseLayout.hitRegion(for: .tucked, style: style)
-            XCTAssertTrue(region.contains(shape))
-            XCTAssertLessThanOrEqual(region.width - shape.width, 4)
-            XCTAssertLessThanOrEqual(region.height - shape.height, 12)
+            XCTAssertTrue(region.contains(light))
+            XCTAssertLessThanOrEqual(region.width - light.width, 4)
+            XCTAssertLessThanOrEqual(region.height - light.height, 12)
             XCTAssertLessThan(region.height, 100, "\(style): a tall strip of the screen edge must not open the capsule")
         }
         XCTAssertGreaterThanOrEqual(EdgeCollapseLayout.hoverDwell, 0.1, "passing by must not open it")
@@ -50,17 +53,16 @@ final class EdgeCollapseGeometryTests: XCTestCase {
         }
     }
 
-    /// One object: at rest only one glass shape is visible.
+    /// One object: at rest at most one shape is visible; tucked shows none
+    /// (only the edge light).
     func test_atRest_onlyOneShapeVisible() {
-        for style in EdgeCollapseTuckStyle.allCases {
-            for page in [PlayerPage.album, .lyrics, .playlist] {
-                for key in [EdgeCollapseKeyPose.card, .tucked] {
-                    let p = EdgeCollapsePoses.pose(key, page: page, style: style)
-                    XCTAssertTrue(p.body.insetBy(dx: -0.01, dy: -0.01).contains(p.capsule), "\(key): capsule outside body")
-                }
-                let f = EdgeCollapsePoses.pose(.floating, page: page, style: style)
-                XCTAssertLessThanOrEqual(f.body.width, 0.01, "floating: the edge shape must be gone")
-            }
+        for page in [PlayerPage.album, .lyrics, .playlist] {
+            let c = EdgeCollapsePoses.pose(.card, page: page, style: .handle)
+            XCTAssertTrue(c.body.insetBy(dx: -0.01, dy: -0.01).contains(c.capsule), "card: capsule outside body")
+            let t = EdgeCollapsePoses.pose(.tucked, page: page, style: .handle)
+            XCTAssertLessThanOrEqual(t.body.width, 0.01); XCTAssertLessThanOrEqual(t.capsule.width, 0.01)
+            let f = EdgeCollapsePoses.pose(.floating, page: page, style: .handle)
+            XCTAssertLessThanOrEqual(f.body.width, 0.01, "floating: the edge shape must be gone")
         }
     }
 

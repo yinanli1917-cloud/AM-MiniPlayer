@@ -48,20 +48,22 @@ public enum EdgeCollapseChoreography {
                 stage(0.04, pose(.stalk), [.body: s(0.30, 0), .capsule: s(0.30, 0),
                                            .hero: s(0.30, 0), .heroFade: s(0.18, 0), .material: s(0.16, 0)]),
                 // Absorbed into the edge; Bouncy overshoots into the edge and settles.
-                stage(0.09, pose(.tucked), [.body: s(0.40, landBounce), .capsule: s(0.36, 0),
-                                            .hero: s(0.34, 0), .heroFade: s(0.16, 0),
-                                            .stripContent: s(0.16, 0, 0.18)]),
+                // The black goes into the bezel; the edge light comes up after.
+                stage(0.09, pose(.tucked), [.body: s(0.34, landBounce), .capsule: s(0.32, 0),
+                                            .hero: s(0.30, 0), .heroFade: s(0.16, 0),
+                                            .stripContent: s(0.16, 0, 0.18), .glow: s(0.30, 0, 0.22)]),
             ]
         case .floatOut:
             return [
                 // The handle bulges; a small drop necks out of it (ref4).
+                // The light gathers to where the drop comes out of the bezel.
                 stage(0, pose(.drop), [.body: s(0.28, 0), .capsule: s(0.28, 0), .hero: s(0.28, 0),
-                                       .heroFade: s(0.12, 0), .stripContent: s(0.08, 0)]),
+                                       .heroFade: s(0.12, 0), .stripContent: s(0.08, 0), .glow: s(0.22, 0)]),
                 // It pinches off and swells into a round blob; the handle goes back into the edge.
                 stage(0.04, pose(.blob), [.capsule: s(0.30, 0), .body: s(0.28, 0), .hero: s(0.30, 0),
-                                          .heroFade: s(0.12, 0)]),
+                                          .heroFade: s(0.12, 0), .glow: s(0.16, 0)]),
                 // The blob stretches into the capsule; glass comes in; text resolves from blur last.
-                stage(0.12, pose(.floating), [.capsule: s(0.42, 0.20), .hero: s(0.42, 0.18),
+                stage(0.12, pose(.floating), [.capsule: s(0.42, 0), .hero: s(0.42, 0),
                                               .capsuleContent: s(0.18, 0, 0.18), .material: s(0.26, 0, 0.10)]),
             ]
         case .retract:
@@ -70,23 +72,23 @@ public enum EdgeCollapseChoreography {
                                        .material: s(0.12, 0)]),
                 // The edge shape comes back out, bulged, and the drop necks onto it.
                 stage(0.04, pose(.drop), [.capsule: s(0.28, 0), .body: s(0.28, 0),
-                                          .hero: s(0.26, 0), .heroFade: s(0.12, 0)]),
+                                          .hero: s(0.26, 0), .heroFade: s(0.12, 0), .glow: s(0.20, 0)]),
                 // The drop is absorbed; the handle settles.
-                stage(0.09, pose(.tucked), [.capsule: s(0.32, 0), .body: s(0.34, 0.10), .hero: s(0.28, 0),
-                                            .heroFade: s(0.14, 0), .stripContent: s(0.16, 0, 0.12)]),
+                stage(0.09, pose(.tucked), [.capsule: s(0.32, 0), .body: s(0.34, 0), .hero: s(0.28, 0),
+                                            .heroFade: s(0.14, 0), .stripContent: s(0.16, 0, 0.12), .glow: s(0.30, 0)]),
             ]
         case .expand:
             var list: [Stage] = []
             var t0 = 0.0
             if fromTucked {
                 list.append(stage(0, pose(.drop), [.body: s(0.22, 0), .capsule: s(0.22, 0), .hero: s(0.22, 0),
-                                                   .heroFade: s(0.1, 0), .stripContent: s(0.06, 0)]))
+                                                   .heroFade: s(0.1, 0), .stripContent: s(0.06, 0), .glow: s(0.18, 0)]))
                 t0 = 0.035
             }
             // Bulge round first (ref1), bigger than the capsule, rounder than the card.
             list.append(stage(t0, pose(.expandBlob), [.capsuleContent: s(0.08, 0), .capsule: s(0.30, 0),
                                                       .body: s(0.20, 0), .hero: s(0.30, 0),
-                                                      .heroFade: s(0.12, 0), .material: s(0.14, 0)]))
+                                                      .heroFade: s(0.12, 0), .material: s(0.14, 0), .glow: s(0.14, 0)]))
             // Stretch into the card. Only the capsule grows (one outline); the
             // real panel fades in only after the cover has landed.
             list.append(stage(t0 + 0.05, cardEnd, [.capsule: s(0.44, 0.14), .hero: s(0.44, 0.10),

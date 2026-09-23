@@ -27,7 +27,16 @@ struct ControlPanelView: View {
                     Button("Expand") { model.requestExpand() }
                     Button("Next track") { model.nextTrack() }
                 }
-                Text("Two-finger swipe right on the panel = tuck into the edge. Rest the cursor on the black edge handle = a drop comes out and becomes the capsule. Click the capsule or the handle = back to the panel.")
+                Text("Two-finger swipe right: the panel follows your fingers; release to tuck or let go early to spring back. Rest the cursor on the edge light = a drop comes out and becomes the capsule. Click the capsule or the handle = back to the panel.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Track change") {
+                Toggle("Show the capsule on a track change", isOn: $model.autoPeekEnabled)
+                Toggle("Player already notifies on song change (simulated)", isOn: $model.playerAlreadyNotifies)
+                Button("Simulate a track change") { model.simulateTrackChange() }
+                Text("There is no public API to read whether Music or Spotify posts song-change notifications, so the real app needs a setting; the second switch stands in for it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

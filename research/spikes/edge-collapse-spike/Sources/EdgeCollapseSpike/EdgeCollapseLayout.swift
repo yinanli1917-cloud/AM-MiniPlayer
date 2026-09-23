@@ -31,7 +31,11 @@ public enum EdgeCollapseLayout {
     static let tuckedPadVertical: CGFloat = 6
 
     public static func tuckedRegion(style: EdgeCollapseTuckStyle) -> CGRect {
-        let r = EdgeCollapsePoses.tuckedRect(style)
+        // The edge light: the last few points of the screen, over its length.
+        let edge = EdgeCollapseTokens.containerSize.width
+        let len = EdgeCollapseTokens.glowLength
+        let r = CGRect(x: edge - EdgeCollapseTokens.handleSize.width, y: EdgeCollapseTokens.containerSize.height / 2 - len / 2,
+                       width: EdgeCollapseTokens.handleSize.width, height: len)
         return CGRect(x: r.minX - tuckedPadInward, y: r.minY - tuckedPadVertical,
                       width: r.width + tuckedPadInward, height: r.height + tuckedPadVertical * 2)
     }
