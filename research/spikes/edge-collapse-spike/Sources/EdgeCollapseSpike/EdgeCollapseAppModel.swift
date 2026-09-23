@@ -67,9 +67,6 @@ public final class EdgeCollapseAppModel: ObservableObject {
     /// unless the player already posts its own song-change notification.
     /// No public API tells us whether Music/Spotify notifications are on, so
     /// the product needs a setting; the second switch simulates the answer.
-    @Published public var progressStyle: EdgeCollapseProgressStyle = .glass {
-        didSet { stage?.setProgressStyle(progressStyle) }
-    }
     @Published public var autoPeekEnabled = true
     @Published public var playerAlreadyNotifies = false
     private var hovering = false

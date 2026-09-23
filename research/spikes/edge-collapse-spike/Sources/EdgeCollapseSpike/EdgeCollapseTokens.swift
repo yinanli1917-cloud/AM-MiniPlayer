@@ -39,16 +39,6 @@ public enum EdgeCollapseTuckStyle: String, CaseIterable, Identifiable, Sendable 
     public var id: String { rawValue }
 }
 
-/// Two progress-light versions to compare (founder 2026-09-22).
-public enum EdgeCollapseProgressStyle: String, CaseIterable, Identifiable, Sendable {
-    /// Multi-layer rendered glow: soft layered halo and a rendered bead
-    /// with a specular highlight.
-    case rendered = "Rendered glow"
-    /// Simple: thin line and a native Liquid Glass lens on the head.
-    case glass = "Liquid Glass"
-    public var id: String { rawValue }
-}
-
 public enum EdgeCollapseTokens {
 
     /// The fixed window; it never resizes. Right edge = screen edge.

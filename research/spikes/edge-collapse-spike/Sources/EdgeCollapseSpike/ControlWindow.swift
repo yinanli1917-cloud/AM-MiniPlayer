@@ -32,13 +32,6 @@ struct ControlPanelView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Progress light") {
-                Picker("Style", selection: $model.progressStyle) {
-                    ForEach(EdgeCollapseProgressStyle.allCases) { s in Text(s.rawValue).tag(s) }
-                }
-                .pickerStyle(.segmented)
-            }
-
             Section("Track change") {
                 Toggle("Show the capsule on a track change", isOn: $model.autoPeekEnabled)
                 Toggle("Player already notifies on song change (simulated)", isOn: $model.playerAlreadyNotifies)

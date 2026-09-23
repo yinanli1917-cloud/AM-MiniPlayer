@@ -157,7 +157,6 @@ final class EdgeStageView: NSView {
     private let heroLayer = CALayer()
     private let capsuleClip = PassThroughView()
     private let capsuleHost: NSHostingView<CapsuleContentView>
-    private var progressStyle: EdgeCollapseProgressStyle = .glass
     private let rimTrack = CAShapeLayer()
     private let rimHalo2 = CAShapeLayer()
     /// Rendered bead (style A): glow rings, gradient body, specular highlight.
@@ -167,16 +166,6 @@ final class EdgeStageView: NSView {
     private let beadShine = CALayer()
     private let rimHalo = CAShapeLayer()
     private let rimLit = CAShapeLayer()
-    /// A clear Liquid Glass lens riding on the progress head (founder's
-    /// reference: a glass knob magnifying the bar under it).
-    private let rimKnob: NSView = {
-        if #available(macOS 26.0, *) {
-            let g = NSGlassEffectView()
-            g.style = .clear
-            return g
-        }
-        return NSView()
-    }()
 
     private var lastPose: EdgeCollapsePose?
     private var glowColor = NSColor.controlAccentColor
@@ -263,7 +252,6 @@ final class EdgeStageView: NSView {
         rimView.layer?.addSublayer(bead)
         if env["ECS_AB_NO_RIM"] == nil {
             addSubview(rimView)
-            addSubview(rimKnob)
         }
 
         let music = MusicController.shared
@@ -291,10 +279,10 @@ final class EdgeStageView: NSView {
         // Liquid outline + fill (black, thinning into the edge gradient).
         liquidMask.path = LiquidOutline.path(parts: parts, neck: t.liquidNeck).cgPath
         let g = CGFloat(min(max(p.glass, 0), 1))
-        let box = parts.filter { $0.rect.width >= 1 && $0.rect.height >= 1 }.map(\.rect).reduce(CGRect.null) { $0.union($1) }
-        if !box.isNull {
-            liquidFill.startPoint = CGPoint(x: box.minX / bounds.width, y: 0.5)
-            liquidFill.endPoint = CGPoint(x: min(box.maxX, bounds.width) / bounds.width, y: 0.5)
+        let span = EdgeCollapsePoses.fillSpan(p)
+        if span.maxX - span.minX > 0.5 {
+            liquidFill.startPoint = CGPoint(x: span.minX / bounds.width, y: 0.5)
+            liquidFill.endPoint = CGPoint(x: span.maxX / bounds.width, y: 0.5)
         }
         func lerp(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * g }
         liquidFill.colors = [NSColor.black.withAlphaComponent(lerp(1, t.edgeDimInnerOpacity)).cgColor,
@@ -371,7 +359,6 @@ final class EdgeStageView: NSView {
     // MARK: Progress light around the sliver
 
     func setGlowColor(_ c: NSColor) { glowColor = c; refreshLight() }
-    func setProgressStyle(_ s: EdgeCollapseProgressStyle) { progressStyle = s; refreshLight() }
 
     func setHoverBoost(_ on: Bool) {
         hoverBoost = on ? 1 : 0
@@ -400,7 +387,7 @@ final class EdgeStageView: NSView {
         let level = Float(min(max(p.glow, 0), 1)) * (music.isPlaying ? 1 : 0.75)
         let len = CGFloat(max(p.glowLength, 0))
         let path = EdgeRimGeometry.path(sliverWidth: t.handleSize.width, height: len, edge: bounds.width, midY: bounds.height / 2)
-        let rendered = progressStyle == .rendered
+        let rendered = true   // founder 2026-09-22: the layered glow version
         for l in [rimTrack, rimHalo, rimHalo2, rimLit] { l.path = path; l.opacity = level }
         rimHalo.strokeEnd = progress
         rimHalo2.strokeEnd = progress
@@ -414,12 +401,8 @@ final class EdgeStageView: NSView {
         // top/bottom runs), sitting entirely outside the black so the lens
         // has the line (not black) under it.
         let onSide = abs(head.x - (bounds.width - t.handleSize.width - EdgeRimGeometry.gap)) < 0.75
-        let knob = onSide ? CGSize(width: 8, height: 12) : CGSize(width: 12, height: 8)
+        let knob = onSide ? CGSize(width: 5, height: 8) : CGSize(width: 8, height: 5)
         let knobRect = CGRect(x: head.x - knob.width / 2, y: head.y - knob.height / 2, width: knob.width, height: knob.height)
-        rimKnob.frame = knobRect
-        if #available(macOS 26.0, *) { (rimKnob as? NSGlassEffectView)?.cornerRadius = min(knob.width, knob.height) / 2 }
-        rimKnob.alphaValue = CGFloat(level)
-        rimKnob.isHidden = rendered || level < 0.05 || len < 20
         // Rendered bead (same size and place).
         bead.frame = knobRect
         let r = min(knob.width, knob.height) / 2
@@ -428,7 +411,7 @@ final class EdgeStageView: NSView {
         beadGlow.shadowPath = CGPath(roundedRect: bead.bounds, cornerWidth: r, cornerHeight: r, transform: nil)
         beadBody.frame = bead.bounds
         beadBody.cornerRadius = r
-        beadShine.frame = CGRect(x: knob.width * 0.25, y: 1.2, width: knob.width * 0.5, height: max(knob.height * 0.28, 1.5))
+        beadShine.frame = CGRect(x: knob.width * 0.25, y: 0.8, width: knob.width * 0.5, height: max(knob.height * 0.26, 1))
         beadShine.cornerRadius = beadShine.frame.height / 2
         bead.opacity = level
         bead.isHidden = !rendered || level < 0.05 || len < 20
@@ -437,7 +420,7 @@ final class EdgeStageView: NSView {
 
     private func applyLightStyle() {
         let c = glowColor
-        let rendered = progressStyle == .rendered
+        let rendered = true
         rimTrack.strokeColor = NSColor(white: 0.9, alpha: rendered ? 0.28 : 0.32).cgColor
         rimLit.strokeColor = c.cgColor
         // Style A halo: two soft layers on the lit part only.
@@ -501,49 +484,61 @@ final class EdgeStageView: NSView {
 /// bezel, along the bottom, round the inner side, along the top, back to the
 /// bezel — 2pt outside the black.
 enum EdgeRimGeometry {
-    /// Line runs this far outside the black, so the 8pt-wide head sits
-    /// fully outside it (a lens over black shows nothing).
-    static let gap: CGFloat = 4.5
+    /// The progress line is the sliver's own outline pushed out by `gap`:
+    /// its corners are concentric with the sliver's (radius = the sliver's
+    /// corner + gap), so it hugs the curvature exactly (founder 2026-09-22).
+    static let gap: CGFloat = 1.5
 
+    private static func frame(_ w: CGFloat, _ height: CGFloat, _ edge: CGFloat, _ midY: CGFloat)
+        -> (inner: CGFloat, top: CGFloat, bottom: CGFloat, rc: CGFloat, r: CGFloat) {
+        let rc = min(w / 2, height / 2)            // the sliver's inner corner radius
+        let inner = edge - w
+        return (inner, midY - height / 2, midY + height / 2, rc, rc + gap)
+    }
+
+    /// From where the sliver's bottom meets the bezel, along the bottom,
+    /// round the lower corner, up the inner side, round the upper corner,
+    /// along the top back to the bezel.
     static func path(sliverWidth w: CGFloat, height: CGFloat, edge: CGFloat, midY: CGFloat) -> CGPath {
         let p = CGMutablePath()
         guard height > 0.5 else { return p }
-        let outer = w + gap
-        let h = height + gap * 2
-        let r = min(outer, h / 2)
-        let top = midY - h / 2, bottom = midY + h / 2, inner = edge - outer
-        p.move(to: CGPoint(x: edge, y: bottom))
-        p.addLine(to: CGPoint(x: inner + r, y: bottom))
-        p.addArc(center: CGPoint(x: inner + r, y: bottom - r), radius: r, startAngle: .pi / 2, endAngle: .pi, clockwise: false)
-        p.addLine(to: CGPoint(x: inner, y: top + r))
-        p.addArc(center: CGPoint(x: inner + r, y: top + r), radius: r, startAngle: .pi, endAngle: 3 * .pi / 2, clockwise: false)
-        p.addLine(to: CGPoint(x: edge, y: top))
+        let f = frame(w, height, edge, midY)
+        let cx = f.inner + f.rc
+        p.move(to: CGPoint(x: edge, y: f.bottom + gap))
+        p.addLine(to: CGPoint(x: cx, y: f.bottom + gap))
+        p.addArc(center: CGPoint(x: cx, y: f.bottom - f.rc), radius: f.r, startAngle: .pi / 2, endAngle: .pi, clockwise: false)
+        p.addLine(to: CGPoint(x: f.inner - gap, y: f.top + f.rc))
+        p.addArc(center: CGPoint(x: cx, y: f.top + f.rc), radius: f.r, startAngle: .pi, endAngle: 3 * .pi / 2, clockwise: false)
+        p.addLine(to: CGPoint(x: edge, y: f.top - gap))
         return p
     }
 
-    /// Point at a fraction of the path's length (for the glowing head).
-    static func point(atFraction f: CGFloat, sliverWidth w: CGFloat, height: CGFloat, edge: CGFloat, midY: CGFloat) -> CGPoint {
-        let outer = w + gap
-        let h = height + gap * 2
-        let r = min(outer, h / 2)
-        let top = midY - h / 2, bottom = midY + h / 2, inner = edge - outer
-        let straightBottom = max(outer - r, 0), arc = .pi / 2 * r, side = max(h - 2 * r, 0)
-        let total = 2 * straightBottom + 2 * arc + side
-        var d = min(max(f, 0), 1) * total
-        if d <= straightBottom { return CGPoint(x: edge - d, y: bottom) }
-        d -= straightBottom
+    static func length(sliverWidth w: CGFloat, height: CGFloat, edge: CGFloat, midY: CGFloat) -> CGFloat {
+        let f = frame(w, height, edge, midY)
+        let run = max(edge - (f.inner + f.rc), 0), arc = .pi / 2 * f.r, side = max(height - 2 * f.rc, 0)
+        return 2 * run + 2 * arc + side
+    }
+
+    /// Point at a fraction of the path's length (for the head).
+    static func point(atFraction frac: CGFloat, sliverWidth w: CGFloat, height: CGFloat, edge: CGFloat, midY: CGFloat) -> CGPoint {
+        let f = frame(w, height, edge, midY)
+        let cx = f.inner + f.rc
+        let run = max(edge - cx, 0), arc = .pi / 2 * f.r, side = max(height - 2 * f.rc, 0)
+        var d = min(max(frac, 0), 1) * (2 * run + 2 * arc + side)
+        if d <= run { return CGPoint(x: edge - d, y: f.bottom + gap) }
+        d -= run
         if d <= arc {
-            let a = CGFloat.pi / 2 + d / r
-            return CGPoint(x: inner + r + r * cos(a), y: bottom - r + r * sin(a))
+            let a = CGFloat.pi / 2 + d / f.r
+            return CGPoint(x: cx + f.r * cos(a), y: f.bottom - f.rc + f.r * sin(a))
         }
         d -= arc
-        if d <= side { return CGPoint(x: inner, y: bottom - r - d) }
+        if d <= side { return CGPoint(x: f.inner - gap, y: f.bottom - f.rc - d) }
         d -= side
         if d <= arc {
-            let a = CGFloat.pi + d / r
-            return CGPoint(x: inner + r + r * cos(a), y: top + r + r * sin(a))
+            let a = CGFloat.pi + d / f.r
+            return CGPoint(x: cx + f.r * cos(a), y: f.top + f.rc + f.r * sin(a))
         }
         d -= arc
-        return CGPoint(x: inner + r + d, y: top)
+        return CGPoint(x: cx + d, y: f.top - gap)
     }
 }

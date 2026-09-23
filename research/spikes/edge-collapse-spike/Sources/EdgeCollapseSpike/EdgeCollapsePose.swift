@@ -233,6 +233,21 @@ public enum EdgeCollapsePoses {
                 LiquidPart(rect: p.capsule, radius: p.capsuleCorner)]
     }
 
+    /// Horizontal span of the black-to-gradient fill. Always the union of
+    /// the body's own rect (even at zero width, where it sits on the screen
+    /// edge) and the capsule — never "only the parts that are visible now":
+    /// dropping the drained sliver from the span made the dark end jump from
+    /// the screen edge onto the capsule in one frame (founder: "darker, then
+    /// darker again after a delay").
+    public static func fillSpan(_ p: EdgeCollapsePose) -> (minX: CGFloat, maxX: CGFloat) {
+        let b = p.body
+        var lo = b.maxX - max(b.width, 0), hi = b.maxX
+        if p.capsule.width > 0 {
+            lo = min(lo, p.capsule.minX); hi = max(hi, p.capsule.maxX)
+        }
+        return (lo, min(hi, edge))
+    }
+
     /// A cover square centred in `r`, inset.
     static func coverIn(_ r: CGRect, inset: CGFloat) -> CGRect {
         let s = max(min(r.width, r.height) - inset * 2, 0)

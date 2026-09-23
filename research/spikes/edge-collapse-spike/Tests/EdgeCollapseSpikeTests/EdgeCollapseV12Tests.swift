@@ -101,3 +101,43 @@ final class EdgeCollapseV12Tests: XCTestCase {
         }
     }
 }
+
+/// Founder 2026-09-22: coming out to the capsule it went "darker, then darker
+/// again after a delay"; and the progress line must hug the sliver's curve.
+final class EdgeCollapseV14Tests: XCTestCase {
+    private let dt = 1.0 / 120
+
+    func test_fillSpan_isContinuous_inEveryTransition() {
+        let cases: [(EdgeCollapseTransitionKind, EdgeCollapseKeyPose)] = [(.floatOut, .tucked), (.retract, .floating), (.collapse, .card), (.expand, .floating)]
+        for (kind, from) in cases {
+            let m = EdgeCollapseMotion(from: EdgeCollapsePoses.pose(from, page: .album, style: .handle).vector(),
+                                       velocity: Array(repeating: 0, count: EdgeCollapsePose.channelCount),
+                                       stages: EdgeCollapseChoreography.stages(kind: kind, fromTucked: false, page: .album, style: .handle, bounce: .bouncy, tempo: .normal))
+            var prev = EdgeCollapsePoses.fillSpan(EdgeCollapsePose(vector: m.from))
+            var t = dt
+            while t < m.settledDuration {
+                let s = EdgeCollapsePoses.fillSpan(EdgeCollapsePose(vector: m.sample(at: t).value))
+                XCTAssertLessThan(abs(s.maxX - prev.maxX), 8, "\(kind): dark end jumped at t=\(Int(t * 1000))ms")
+                prev = s
+                t += dt
+            }
+        }
+    }
+
+    /// Every point of the progress line is exactly `gap` outside the sliver
+    /// (its rounded corners included): it hugs the curvature.
+    func test_progressLine_hugsTheSliverCurve() {
+        let w = EdgeCollapseTokens.handleSize.width, h = EdgeCollapseTokens.handleSize.height
+        let edge = EdgeCollapseTokens.containerSize.width, midY = EdgeCollapseTokens.containerSize.height / 2
+        let rc = w / 2
+        for i in 0...200 {
+            let p = EdgeRimGeometry.point(atFraction: CGFloat(i) / 200, sliverWidth: w, height: h, edge: edge, midY: midY)
+            // Distance to the sliver: a rounded rect (inner corners rc) that runs past the edge.
+            let d = LiquidOutline.sdf(Double(p.x), Double(p.y), cx: Double(edge - w / 2 + 10), cy: Double(midY),
+                                      hx: Double(w / 2 + 10), hy: Double(h / 2), r: Double(rc))
+            if p.x < edge - 0.5 {
+                XCTAssertEqual(d, Double(EdgeRimGeometry.gap), accuracy: 0.05, "point \(i) at \(p)")
+            }
+        }
+    }
+}

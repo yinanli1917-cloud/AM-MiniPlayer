@@ -55,7 +55,10 @@ public enum LiquidOutline {
         guard !visible.isEmpty else { return Path() }
         if visible.count == 1 {
             let p = visible[0]
-            return Path(roundedRect: p.rect, cornerRadius: min(p.radius, min(p.rect.width, p.rect.height) / 2), style: .continuous)
+            // Circular corners, the same as the distance-field contour, so
+            // switching between the two never changes a corner's shape and
+            // the progress line (an offset of this outline) stays concentric.
+            return Path(roundedRect: p.rect, cornerRadius: min(p.radius, min(p.rect.width, p.rect.height) / 2), style: .circular)
         }
         // Far apart: two exact rounded rects, no field needed.
         let a = visible[0], b = visible[1]
@@ -63,7 +66,7 @@ public enum LiquidOutline {
             var path = Path()
             for p in [a, b] {
                 let r = min(p.radius, min(p.rect.width, p.rect.height) / 2)
-                path.addRoundedRect(in: p.rect, cornerSize: CGSize(width: r, height: r), style: .continuous)
+                path.addRoundedRect(in: p.rect, cornerSize: CGSize(width: r, height: r), style: .circular)
             }
             return path
         }
