@@ -421,6 +421,13 @@ extension MusicController {
                     DispatchQueue.main.async {
                         self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title, artist: artist, album: album, generation: generation, source: .sb)
                     }
+                } else {
+                    // 🔑 Structurally expected for streamed/radio tracks: `artworks.count == 0`
+                    // for a URL track, so extractArtwork returns nil with no exception. This
+                    // branch used to be silent (research/diagnosis-2026-09-22-radio-artwork.md
+                    // Mode A2) — log it so a real SB timeout/crash is distinguishable from the
+                    // normal "no embedded artwork" case in day-to-day captures.
+                    self.logToFile("🎨 [SB] no image (0 artworks or timeout)")
                 }
             }
         }
@@ -511,8 +518,14 @@ extension MusicController {
                 }
             }
             group.addTask {
-                if let img = await self.withArtworkTimeout(seconds: 1.4, operation: {
-                    await self.fetchArtworkViaITunesAPI(title: title, artist: artist, album: album)
+                // 4 storefronts race in parallel per round (1.6s each,
+                // artworkITunesStorefrontTimeout) and round 2 (bracket-
+                // stripped title) only runs when round 1 is unreliable
+                // everywhere — worst case ~3.2s of sequential rounds, so
+                // this outer ceiling leaves slack instead of double-timeout
+                // racing the inner one.
+                if let img = await self.withArtworkTimeout(seconds: 3.6, operation: {
+                    await Self.fetchArtworkViaITunesAPI(title: title, artist: artist, album: album)
                 }) { return .image(img, .iTunes) }
                 return nil
             }
@@ -646,6 +659,249 @@ extension MusicController {
         return 0
     }
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - iTunes multi-storefront artwork (2026-09-22 radio content-gap fix)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // research/diagnosis-2026-09-22-radio-artwork.md found 10 "content gap"
+    // radio tracks (up to 330s each with no real cover) whose iTunes search
+    // never once passed a `country` param — which silently defaults to the
+    // US storefront. `itunes.apple.com/search?country=CN` returns ZERO
+    // results by design (Apple does not serve a CN storefront through this
+    // API), and real curl testing (research/spec-2026-09-22-radio-artwork-
+    // storefronts.md) showed every one of these tracks IS indexed under the
+    // exact same English title+artist in the JP/TW/HK storefronts. Fix:
+    // query a small fixed set of storefronts in parallel and keep the best
+    // reliable match across all of them.
+
+    /// One iTunes Search API storefront to query. `lang` asks non-US stores
+    /// to answer in English so scoring still lines up against the (usually
+    /// English) radio-reported title/artist — US already answers in English.
+    struct ArtworkStorefront: Equatable {
+        let country: String
+        let lang: String?
+    }
+
+    /// Deliberately small and fixed — NOT a full storefront sweep. iTunes
+    /// rate-limits after ~20-30 rapid requests (observed: non-JSON replies),
+    /// and every radio-metadata example that failed under a bare US query
+    /// (Gatsby Woman/Kingo Hamada, Who Are You?/Fujimaru Yoshino, Starlight
+    /// Ballet/Piper, SHYNESS BOY/Anri, Misty/Johnny Mathis) resolved under
+    /// JP, TW, or HK.
+    static let artworkITunesStorefronts: [ArtworkStorefront] = [
+        ArtworkStorefront(country: "US", lang: nil),
+        ArtworkStorefront(country: "JP", lang: "en_us"),
+        ArtworkStorefront(country: "TW", lang: "en_us"),
+        ArtworkStorefront(country: "HK", lang: "en_us"),
+    ]
+
+    /// Per-storefront request timeout. Storefronts race in PARALLEL, so this
+    /// is one round's wall-clock cost, not a sum — raised from the old 1.0s
+    /// single-storefront timeout because round trips to itunes.apple.com
+    /// from mainland China routinely exceed 1s.
+    static let artworkITunesStorefrontTimeout: TimeInterval = 1.6
+
+    /// Puts whatever storefronts `LanguageUtils.inferRegions` guesses for
+    /// this title/artist first (in ITS order), keeping the rest of
+    /// `artworkITunesStorefronts` in their declared order. Every storefront
+    /// is still queried either way — this only decides which one wins a
+    /// same-score tie in `selectBestITunesArtwork`. Pure and unit-testable
+    /// without touching `MetadataResolver` (which just forwards to the same
+    /// `LanguageUtils` call).
+    static func orderedArtworkStorefronts(title: String, artist: String) -> [ArtworkStorefront] {
+        let inferred = LanguageUtils.inferRegions(title: title, artist: artist)
+        guard !inferred.isEmpty else { return artworkITunesStorefronts }
+        let byCountry = Dictionary(uniqueKeysWithValues: artworkITunesStorefronts.map { ($0.country, $0) })
+        var ordered: [ArtworkStorefront] = []
+        for code in inferred {
+            if let storefront = byCountry[code], !ordered.contains(storefront) {
+                ordered.append(storefront)
+            }
+        }
+        for storefront in artworkITunesStorefronts where !ordered.contains(storefront) {
+            ordered.append(storefront)
+        }
+        return ordered
+    }
+
+    /// Removes every `(...)`/`[...]` segment from a title:
+    /// "Gatsby Woman (2020 Remastered)" → "Gatsby Woman",
+    /// "Who Are You? (DJ Version) [2022 Remaster]" → "Who Are You?".
+    /// Generic — no keyword allowlist. A radio version/remaster/DJ-edit tag
+    /// in the title is exactly what the plain catalog entry omits, and
+    /// hand-enumerating every such tag string is the banned whitelist
+    /// pattern (`.claude/rules/banned-patterns.md`).
+    static func stripBracketedTitleSegments(_ title: String) -> String {
+        var result = ""
+        var depth = 0
+        for ch in title {
+            switch ch {
+            case "(", "[": depth += 1
+            case ")", "]": if depth > 0 { depth -= 1 }
+            default: if depth == 0 { result.append(ch) }
+            }
+        }
+        return result.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Cross-storefront candidate selection: scores every candidate from
+    /// every storefront with the SAME `scoreArtworkCandidate` logic already
+    /// used for every other source, then keeps the single highest-scoring
+    /// RELIABLE one. Ties (equal `total`) keep whichever candidate was seen
+    /// FIRST — callers pass storefronts in `orderedArtworkStorefronts`'s
+    /// order, so a same-score tie prefers the region-inferred storefront.
+    /// Pure — no network, no image decoding — so it is the direct unit-test
+    /// surface for the whole multi-storefront fix.
+    static func selectBestITunesArtwork(
+        title: String, artist: String, album: String,
+        storefrontResults: [(country: String, results: [[String: Any]])]
+    ) -> (country: String, artworkUrlString: String)? {
+        var best: (country: String, url: String, score: Int)?
+        for (country, results) in storefrontResults {
+            for r in results {
+                guard let artworkUrlString = r["artworkUrl100"] as? String else { continue }
+                let rArtist = r["artistName"] as? String ?? ""
+                let rAlbum = r["collectionName"] as? String ?? ""
+                let rTrack = r["trackName"] as? String ?? ""
+                let score = scoreArtworkCandidate(
+                    title: title, artist: artist, album: album,
+                    candidateTitle: rTrack, candidateArtist: rArtist, candidateAlbum: rAlbum
+                )
+                guard score.isReliable else { continue }
+                if best == nil || score.total > best!.score {
+                    let highRes = artworkUrlString.replacingOccurrences(of: "100x100", with: "300x300")
+                    best = (country, highRes, score.total)
+                }
+            }
+        }
+        guard let best else { return nil }
+        return (best.country, best.url)
+    }
+
+    /// Injectable transport for the iTunes multi-storefront search — the
+    /// seam that makes `fetchArtworkViaITunesAPI` reproducible without a
+    /// real network call, following the closure-injection idiom already
+    /// used by `RowArtworkStore`. `search` returns `.success([])` for a
+    /// genuine empty result and `.failure` for anything that means "we
+    /// don't actually know" (transport error, non-JSON rate-limit reply,
+    /// decode failure) so the per-storefront log line can tell the two
+    /// apart (research Mode F: today's code cannot).
+    struct ITunesArtworkTransport: Sendable {
+        var search: @Sendable (_ term: String, _ storefront: ArtworkStorefront) async -> Result<[[String: Any]], Error>
+        var fetchImageData: @Sendable (_ url: URL) async -> Data?
+
+        static let live = ITunesArtworkTransport(
+            search: { term, storefront in
+                guard let encodedTerm = term.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+                    return .success([])
+                }
+                var urlString = "https://itunes.apple.com/search?term=\(encodedTerm)&media=music&entity=song&limit=15&country=\(storefront.country)"
+                if let lang = storefront.lang {
+                    urlString += "&lang=\(lang)"
+                }
+                guard let url = URL(string: urlString) else { return .success([]) }
+                do {
+                    let (data, _) = try await HTTPClient.getData(
+                        url: url, headers: [:], timeout: MusicController.artworkITunesStorefrontTimeout, retry: false
+                    )
+                    guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let results = json["results"] as? [[String: Any]] else {
+                        return .failure(HTTPClient.HTTPError.decodingFailed)
+                    }
+                    return .success(results)
+                } catch {
+                    return .failure(error)
+                }
+            },
+            fetchImageData: { url in
+                try? await HTTPClient.getData(url: url, timeout: 1.0, retry: false).0
+            }
+        )
+    }
+
+    /// iTunes Search API — multi-storefront race, generic bracket-strip
+    /// fallback. Round 1 queries every storefront in parallel with
+    /// "title artist"; only if EVERY storefront comes back unreliable does
+    /// round 2 retry with version/remaster tags stripped from the title
+    /// (still multi-storefront). The old "artist title" word-swap and
+    /// "title only" strategies are dropped: they were the large-fanout,
+    /// low-yield strategies research flagged as wasted requests, and their
+    /// job (matching despite a title/artist variant) is already covered by
+    /// `scoreArtworkCandidate`'s partial-match scoring across 4 storefronts
+    /// worth of real candidates instead of 1 storefront worth of reordered
+    /// query strings.
+    static func fetchArtworkViaITunesAPI(
+        title: String, artist: String, album: String,
+        transport: ITunesArtworkTransport = .live
+    ) async -> NSImage? {
+        let primaryTerm = "\(title) \(artist)".trimmingCharacters(in: .whitespaces)
+        if let image = await fetchArtworkViaITunesAPIRound(
+            term: primaryTerm, title: title, artist: artist, album: album,
+            transport: transport, roundLabel: "round1"
+        ) {
+            return image
+        }
+
+        let strippedTitle = stripBracketedTitleSegments(title)
+        let secondaryTerm = "\(strippedTitle) \(artist)".trimmingCharacters(in: .whitespaces)
+        guard !strippedTitle.isEmpty,
+              strippedTitle.caseInsensitiveCompare(title) != .orderedSame,
+              secondaryTerm != primaryTerm else {
+            DebugLogger.log("Artwork", "🎨 [iTunes API] 全部店面失败: '\(title)' by '\(artist)'")
+            return nil
+        }
+        if let image = await fetchArtworkViaITunesAPIRound(
+            term: secondaryTerm, title: strippedTitle, artist: artist, album: album,
+            transport: transport, roundLabel: "round2(stripped)"
+        ) {
+            return image
+        }
+        DebugLogger.log("Artwork", "🎨 [iTunes API] 全部店面失败: '\(title)' by '\(artist)'")
+        return nil
+    }
+
+    private static func fetchArtworkViaITunesAPIRound(
+        term: String, title: String, artist: String, album: String,
+        transport: ITunesArtworkTransport, roundLabel: String
+    ) async -> NSImage? {
+        guard !term.isEmpty else { return nil }
+        let storefronts = orderedArtworkStorefronts(title: title, artist: artist)
+
+        let storefrontResults: [(country: String, results: [[String: Any]])] = await withTaskGroup(
+            of: (country: String, outcome: Result<[[String: Any]], Error>).self
+        ) { group in
+            for storefront in storefronts {
+                group.addTask {
+                    (storefront.country, await transport.search(term, storefront))
+                }
+            }
+            var collected: [(country: String, results: [[String: Any]])] = []
+            for await (country, outcome) in group {
+                switch outcome {
+                case .success(let results):
+                    DebugLogger.log("Artwork", results.isEmpty
+                        ? "🎨 [iTunes API][\(country)][\(roundLabel)] empty '\(term)'"
+                        : "🎨 [iTunes API][\(country)][\(roundLabel)] \(results.count) result(s) '\(term)'")
+                    collected.append((country, results))
+                case .failure(let error):
+                    DebugLogger.log("Artwork", "🎨 [iTunes API][\(country)][\(roundLabel)] error (\(type(of: error))): \(error.localizedDescription)")
+                }
+            }
+            return collected
+        }
+
+        guard let winner = selectBestITunesArtwork(
+            title: title, artist: artist, album: album, storefrontResults: storefrontResults
+        ) else {
+            return nil
+        }
+        guard let url = URL(string: winner.artworkUrlString),
+              let imageData = await transport.fetchImageData(url) else {
+            return nil
+        }
+        DebugLogger.log("Artwork", "🎨 [iTunes API] 命中: storefront=\(winner.country) via '\(term)' (\(roundLabel))")
+        return NSImage(data: imageData)
+    }
+
     /// NetEase Cloud Music — single-call cloudsearch returns album picUrl. Best
     /// CJK-track coverage available; also returns hits for many Western tracks.
     /// Match priority: title+artist+album > title+artist > first result.
@@ -776,63 +1032,9 @@ extension MusicController {
         return nil
     }
 
-    /// iTunes Search API 方式获取封面（公开 API，无需授权）
-    /// 🔑 优先匹配同专辑版本，避免返回不同版本的封面
-    private func fetchArtworkViaITunesAPI(title: String, artist: String, album: String) async -> NSImage? {
-        // 多级搜索策略
-        let searchStrategies = [
-            "\(title) \(artist)",           // 1. title + artist（最精确）
-            "\(artist) \(title)",           // 2. artist + title（顺序调换）
-            title                           // 3. 只用 title
-        ]
-
-        for searchTerm in searchStrategies {
-            let trimmed = searchTerm.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty,
-                  let encodedTerm = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-                  let url = URL(string: "https://itunes.apple.com/search?term=\(encodedTerm)&media=music&entity=song&limit=15") else {
-                continue
-            }
-
-            do {
-                let (data, _) = try await HTTPClient.getData(url: url, headers: [:], timeout: 1.0, retry: false)
-
-                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let results = json["results"] as? [[String: Any]],
-                   !results.isEmpty {
-
-                    let bestMatch: [String: Any]? = results
-                        .map { r -> (result: [String: Any], score: ArtworkMatchScore) in
-                            let rArtist = r["artistName"] as? String ?? ""
-                            let rAlbum = r["collectionName"] as? String ?? ""
-                            let rTrack = r["trackName"] as? String ?? ""
-                            return (r, Self.scoreArtworkCandidate(
-                                title: title, artist: artist, album: album,
-                                candidateTitle: rTrack, candidateArtist: rArtist, candidateAlbum: rAlbum
-                            ))
-                        }
-                        .filter { $0.score.isReliable }
-                        .max(by: { $0.score.total < $1.score.total })?.result
-
-                    if let match = bestMatch,
-                       let artworkUrlString = match["artworkUrl100"] as? String {
-                        let highResUrl = artworkUrlString.replacingOccurrences(of: "100x100", with: "300x300")
-                        if let artworkUrl = URL(string: highResUrl),
-                           let (imageData, _) = try? await HTTPClient.getData(url: artworkUrl, timeout: 1.0, retry: false) {
-                            let matchAlbum = (match["collectionName"] as? String) ?? "nil"
-                            DebugLogger.log("Artwork", "🎨 [iTunes API] 命中: album='\(matchAlbum)' (目标='\(album)') via '\(searchTerm)'")
-                            return NSImage(data: imageData)
-                        }
-                    }
-                }
-            } catch {
-                // 继续尝试下一个策略
-            }
-        }
-
-        DebugLogger.log("Artwork", "🎨 [iTunes API] 全部策略失败: '\(title)' by '\(artist)'")
-        return nil
-    }
+    // iTunes Search API artwork fetching moved to the static, transport-
+    // injectable `fetchArtworkViaITunesAPI` above (multi-storefront fix,
+    // 2026-09-22).
 
     // 🔑 同步获取缓存中的封面（供 UI 层直接使用）
     // 如果缓存命中立即返回，避免 async 开销
