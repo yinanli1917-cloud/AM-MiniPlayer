@@ -38,6 +38,9 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
     let edgePresentationModel = MainActor.assumeIsolated { EdgePresentationModel() }
     let settingsWindowState = SettingsWindowState()
     private var windowDelegate: FloatingWindowDelegate?
+    /// Liquid edge: tucks the panel into a screen edge as one liquid object
+    /// (research/spikes/edge-collapse-spike, founder-approved 2026-09-22).
+    private var liquidEdge: LiquidEdgeController?
     private var globalShortcutRegistrar: GlobalShortcutRegistrar?
     private var settingsWindowDelegate: SettingsWindowDelegate?
     /// Bumped on every present/dismiss transition of `floatingWindow` so a
@@ -343,6 +346,7 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         if isFloatingMode {
             showFloatingWindow()
         } else {
+            resetLiquidEdge()
             floatingWindow?.orderOut(nil)
             musicController.setPanelOccluded(true)
             showMenuBarMenu()
@@ -465,11 +469,21 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         hostingView.layer?.masksToBounds = true
         snappableWindow.contentView = hostingView
 
+        MainActor.assumeIsolated {
+            let liquidEdge = LiquidEdgeController(card: snappableWindow)
+            liquidEdge.onPanelOccluded = { [weak self] in self?.musicController.setPanelOccluded($0) }
+            snappableWindow.liquidEdgeHandler = { [weak liquidEdge] edge in
+                MainActor.assumeIsolated { liquidEdge?.collapse(to: edge) ?? false }
+            }
+            self.liquidEdge = liquidEdge
+        }
+
         debugPrint("[AppMain] Floating window created\n")
     }
 
     func showFloatingWindow(revealNearbySnapPosition: Bool = false) {
         guard let window = floatingWindow else { return }
+        resetLiquidEdge()
         isFloatingMode = true
         NSApp.activate(ignoringOtherApps: true)
         presentFloatingWindow(window, makeKey: true)
@@ -482,6 +496,11 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
 
     func toggleFloatingWindow() {
         guard let window = floatingWindow else { return }
+        // Tucked into an edge: bring the panel back out of it.
+        if MainActor.assumeIsolated({ liquidEdge?.isActive == true }) {
+            MainActor.assumeIsolated { liquidEdge?.expand() }
+            return
+        }
 
         if window.isVisible {
             dismissFloatingWindow(window)
@@ -500,11 +519,21 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
 
     /// PanelCommands conformance for GlobalShortcutRegistrar (nanoPod.hideToEdge).
     public func hideToEdge() {
+        if MainActor.assumeIsolated({ liquidEdge?.isActive == true }) {
+            MainActor.assumeIsolated { liquidEdge?.expand() }
+            return
+        }
         (floatingWindow as? SnappablePanel)?.hideToNearestEdge()
+    }
+
+    /// Any other hide/show path puts the panel back to normal first.
+    private func resetLiquidEdge() {
+        MainActor.assumeIsolated { liquidEdge?.reset() }
     }
 
     /// Collapses the floating window back to the menu bar.
     func collapseToMenuBar() {
+        resetLiquidEdge()
         isFloatingMode = false
         if let window = floatingWindow {
             dismissFloatingWindow(window)

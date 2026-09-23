@@ -259,6 +259,15 @@ struct SettingsWindowView: View {
 
     // MARK: - Appearance Tab
 
+    /// Default on (no public API tells whether the player already notifies).
+    private var edgeShowSongBinding: Binding<Bool> {
+        let key = LiquidEdgeController.autoPeekDefaultsKey
+        return Binding(
+            get: { UserDefaults.standard.object(forKey: key) as? Bool ?? true },
+            set: { UserDefaults.standard.set($0, forKey: key) }
+        )
+    }
+
     private var appearanceTab: some View {
         Form {
             Section {
@@ -270,6 +279,18 @@ struct SettingsWindowView: View {
                             .foregroundStyle(.secondary)
                     }
                     .settingsFeedbackPulse(value: UserDefaultsBinding.bool(forKey: "fullscreenAlbumCover").wrappedValue)
+                }
+            }
+
+            Section {
+                Toggle(isOn: edgeShowSongBinding) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.localized("edgeShowSongOnTrackChange"))
+                        Text(L10n.localized("edgeShowSongOnTrackChangeDesc"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .settingsFeedbackPulse(value: edgeShowSongBinding.wrappedValue)
                 }
             }
 

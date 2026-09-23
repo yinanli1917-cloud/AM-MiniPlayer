@@ -903,37 +903,54 @@ struct HoverableControlButton: View {
     }
 }
 
-private struct PlayPauseControlButton: View {
+public struct PlayPauseControlButton: View {
     let isPlaying: Bool
     let inkColor: Color
     let hoverFill: Color
     let action: () -> Void
 
+    public init(isPlaying: Bool, inkColor: Color, hoverFill: Color, action: @escaping () -> Void) {
+        self.isPlaying = isPlaying
+        self.inkColor = inkColor
+        self.hoverFill = hoverFill
+        self.action = action
+    }
+
     @State private var isHovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    var body: some View {
+    static let swapScale: CGFloat = 0.4
+    static let swapBlur: CGFloat = 4
+    static let swapAnimation: Animation = .spring(duration: 0.34, bounce: 0.22)
+
+    public var body: some View {
         Button(action: action) {
             ZStack {
                 Circle()
                     .fill(isHovering ? hoverFill : Color.clear)
 
+                // Icon swap (founder 2026-09-22: longer, bigger): the outgoing
+                // glyph shrinks to 0.4 and blurs away while the incoming one
+                // grows out of a blur, on one spring with a slight pop.
+                // Was a 0.82 <-> 1.0 crossfade over 0.18s.
                 ZStack {
                     Image(systemName: "play.fill")
                         .font(.system(size: 21, weight: .regular))
                         .foregroundStyle(inkColor)
                         .offset(x: 1.0)
-                        .scaleEffect(isPlaying ? 0.82 : 1.0)
+                        .scaleEffect(isPlaying ? Self.swapScale : 1.0)
+                        .blur(radius: isPlaying ? Self.swapBlur : 0)
                         .opacity(isPlaying ? 0.0 : 1.0)
 
                     Image(systemName: "pause.fill")
                         .font(.system(size: 21, weight: .regular))
                         .foregroundStyle(inkColor)
-                        .scaleEffect(isPlaying ? 1.0 : 0.82)
+                        .scaleEffect(isPlaying ? 1.0 : Self.swapScale)
+                        .blur(radius: isPlaying ? 0 : Self.swapBlur)
                         .opacity(isPlaying ? 1.0 : 0.0)
                 }
                 .frame(width: 32, height: 32)
-                .animation(reduceMotion ? nil : .smooth(duration: 0.18), value: isPlaying)
+                .animation(reduceMotion ? nil : Self.swapAnimation, value: isPlaying)
             }
             .frame(width: 32, height: 32)
             .contentShape(Circle())
@@ -968,13 +985,30 @@ private struct PlayPausePressStyle: ButtonStyle {
 
 // MARK: - Skip Control Button (Replacement Flow Micro-Interaction)
 
-struct SkipControlButton: View {
+public struct SkipControlButton: View {
     let action: () -> Void
     let direction: CGFloat
     let inkColor: Color
     let hoverFill: Color
     var beginDiagnostics: (() -> UUID?)? = nil
     var finishDiagnostics: ((UUID?, DiagnosticInteractionStatus, String?) -> Void)? = nil
+
+    public init(action: @escaping () -> Void, direction: CGFloat, inkColor: Color, hoverFill: Color) {
+        self.action = action
+        self.direction = direction
+        self.inkColor = inkColor
+        self.hoverFill = hoverFill
+    }
+
+    init(action: @escaping () -> Void, direction: CGFloat, inkColor: Color, hoverFill: Color,
+         beginDiagnostics: (() -> UUID?)?, finishDiagnostics: ((UUID?, DiagnosticInteractionStatus, String?) -> Void)?) {
+        self.action = action
+        self.direction = direction
+        self.inkColor = inkColor
+        self.hoverFill = hoverFill
+        self.beginDiagnostics = beginDiagnostics
+        self.finishDiagnostics = finishDiagnostics
+    }
 
     @State private var isHovering = false
     @State private var replacementStart: Date?
@@ -984,7 +1018,7 @@ struct SkipControlButton: View {
 
     private let replacementDuration: TimeInterval = 0.60
 
-    var body: some View {
+    public var body: some View {
         Button {
             playReplacementAnimation(perform: action)
         } label: {
