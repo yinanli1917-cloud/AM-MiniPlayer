@@ -40,13 +40,39 @@ since — but **nothing currently calls `.progressiveBlur()`, `ProgressiveBlurVi
 ConditionalProgressiveBlur"` outside their own definition file returns nothing). It is
 dead code, correctly wired, currently orphaned.
 
-**Confirmed it still compiles today**: `Package.swift` still lists
-`.process("Shaders")` for `MusicMiniPlayerCore`, and a clean `swift build` (baseline, no
-changes) compiles `ProgressiveBlur.metal` and links successfully — the "toolchain
-dependency" problem `d9b6b09` hit (Nov 2025) does not reproduce on the current toolchain.
-This means the founder's memory is right on both counts: the project *did* build this
-with Metal, and the SwiftUI-only fallback was a real (now stale) compatibility workaround,
-not a permanent rejection of Metal.
+**`swift build` succeeds — but that does NOT mean the shader actually works.**
+`Package.swift` still lists `.process("Shaders")` for `MusicMiniPlayerCore`, and a clean
+`swift build` (baseline, no changes) compiles and links successfully with no error. Round
+1 of this change read that as "the toolchain dependency problem is gone" and shipped a
+commit using the Metal path. **That was wrong, and coordinator review (round 2, see
+below) caught it**: `.process("Shaders")` for a `.metal` file is SwiftPM's RESOURCE
+processing rule, not shader compilation — it copies `ProgressiveBlur.metal` as a raw
+source file into `MusicMiniPlayer_MusicMiniPlayerCore.bundle` and never invokes the Metal
+compiler at all (confirmed: the built bundle contains `ProgressiveBlur.metal`, no
+`.metallib`). Compiling a `[[stitchable]]` Metal function into a `.metallib` needs
+`xcrun metal`, which requires Apple's separate **Metal Toolchain** component — and on
+this machine, `xcrun metal --version` fails outright: `error: cannot execute tool
+'metal' due to missing Metal Toolchain; use: xcodebuild -downloadComponent
+MetalToolchain`. So `ShaderLibrary.bundle(Bundle.module).progressiveBlurFromBottom` has
+no compiled function to find at runtime — the `layerEffect` would fail silently or
+render nothing useful — and `swift build`'s success proves only that the *Swift* call
+site type-checks, not that the shader is usable. This is almost certainly the real
+reason `d9b6b09` reverted the Metal path in Nov 2025, not a toolchain-VERSION issue that
+has since resolved itself.
+
+Separately, even if the shader DID compile: `build_app.sh` has zero references to
+`MusicMiniPlayerCore.bundle` or any `.bundle` copy step, so the resource bundle
+`ShaderLibrary.bundle(Bundle.module)` looks up is never placed inside `nanoPod.app`.
+`Bundle.module`'s SPM-generated accessor only resolves on THIS machine via a fallback to
+the absolute `.build/` path (a dev-machine-only accident, not something a distributed
+`.app` can rely on) — and the codebase already has `fatalError`s elsewhere guarding
+against exactly this class of missing-resource situation. Reviving the Metal path for
+real would need: (1) `xcodebuild -downloadComponent MetalToolchain` on every build
+machine (a founder-level toolchain decision, not something to silently require), (2) a
+`.metallib` compile step added to `build_app.sh`, and (3) copying
+`MusicMiniPlayer_MusicMiniPlayerCore.bundle` into `nanoPod.app`'s Resources and wiring
+`Bundle.module` (or an explicit bundle URL) to find it there. None of that is done in
+this change — see "Round 2" below for what shipped instead.
 
 **Where blur is used in production today**:
 - `floatingArtwork`'s **fullscreen** branch: Layer 1 is a full-window copy of the artwork
@@ -91,7 +117,14 @@ explicitly the shape this task asks nanoPod to match: blur kills texture/detail 
 text, a long soft artwork-derived tint gradient supplies the actual luminance drop needed
 for contrast, and neither has a visible hard edge.
 
-## 4. Chosen approach
+## 4. Chosen approach — ROUND 1 (superseded, kept for the record)
+
+**This section describes what commit `968a05d` actually shipped, and coordinator review
+then found broken — see "Round 2" (section 4b) for what replaced it and actually shipped
+in the final commit.** Keeping this section rather than deleting it because the mistake
+and why it was wrong is itself the useful record: `swift build` succeeding is NOT
+evidence a Metal shader is usable at runtime — see the corrected paragraph in section 1
+above.
 
 **Progressive blur**: revive the existing (dead, already-compiling) Metal
 `.layerEffect` shader — apply `.modifier(ConditionalProgressiveBlur(isEnabled:...,
@@ -148,6 +181,61 @@ alternative (always-on blur regardless of whether the cover needs any correction
 add a resident compositing filter to covers that are already fine, which is exactly the
 project's own "never a resident filter with no purpose" lesson (below).
 
+## 4b. Round 2 (coordinator review of `968a05d`) — corrected approach, NO Metal
+
+Coordinator review verified two things directly on this machine, both confirmed real:
+
+1. **`xcrun metal --version` fails**: `error: cannot execute tool 'metal' due to missing
+   Metal Toolchain; use: xcodebuild -downloadComponent MetalToolchain`. `.process
+   ("Shaders")` in `Package.swift` only copies `ProgressiveBlur.metal` into
+   `MusicMiniPlayer_MusicMiniPlayerCore.bundle` as a raw source file — listing that
+   bundle's contents shows the `.metal` file and NO `.metallib`. So
+   `ShaderLibrary.bundle(Bundle.module).progressiveBlurFromBottom` has nothing compiled to
+   find at runtime.
+2. **`build_app.sh` never copies `MusicMiniPlayer_MusicMiniPlayerCore.bundle`** into
+   `nanoPod.app` — `Bundle.module`'s generated accessor only resolves on a dev machine via
+   a fallback to the absolute `.build/` path, which does not exist in a distributed `.app`.
+
+Both are exactly why `d9b6b09` reverted the Metal path in Nov 2025 ("due to toolchain
+dependency") — that description was right the first time; round 1 of this change
+mis-read a *build*-time success as a *runtime* guarantee. Round 2 replaces the Metal
+`.layerEffect` call with a **pure-SwiftUI stacked-blur** construction — the well-known
+"poor man's variable blur" technique: several copies of the same image, increasing
+`.blur(radius:)` per copy, each one masked to a different region so the effective blur
+step-approximates a continuous ramp. No new resource loading, no `Bundle.module`, no
+`ShaderLibrary`.
+
+**`BackdropLegibilityBand.heroBottomBandBlurLayers(layerCount:maxRadius:bandHeight:)`**
+(pure function, tested) builds `layerCount` (Token, default **5**) layers: radius `k *
+maxRadius / layerCount` for k = 1...5 (weakest to `maxRadius`, default 28). Layer k's
+mask reveals it fully opaque from the bottom edge up to `bandHeight * (layerCount-k+1) /
+layerCount` — layer 1 (weakest) spans the WHOLE band (top of band to bottom edge), layer
+5 (strongest) spans only the closest `bandHeight/5` strip to the bottom edge. Composited
+weakest-to-strongest, back-to-front (`MiniPlayerView.floatingArtwork`'s new "Layer 2b",
+drawn on top of the sharp Layer 2 cover): the strongest, narrowest layer is frontmost, so
+it wins nearest the bottom; each successively weaker layer shows through only where the
+one above it hasn't yet become opaque. Each layer's OWN mask reuses
+`bottomBandScrimGradientStops`/`bottomBandScrimOpacity` — the SAME smoothstep-eased
+envelope math the tint gradient uses (see the unchanged section 4 tint-gradient
+description above, still accurate) — so neighbouring layers cross-fade smoothly rather
+than stepping abruptly, keeping "ramps smoothly, heavier toward the bottom, no hard edge"
+for the blur half too, just via 5 discrete steps instead of the shader's continuous
+per-pixel ramp.
+
+**5 resident blur layers** (`.blur(radius:)`, a `CIGaussianBlur`-class filter each) are
+added to the view tree when `bottomBandLegibilityCorrection.blendOpacity > 0` — see
+section 5 below for why this does not cost anything while idle. Gated on the SAME
+condition as the tint scrim, exactly as round 1 intended: an in-band cover gets neither,
+byte-identical appearance to before this whole change.
+
+**Reviving Metal for real** (not done in this change — a founder decision) would need:
+(1) `xcodebuild -downloadComponent MetalToolchain` on every machine that builds the app,
+(2) a `.metallib` compile step added to `build_app.sh` (invoking `xcrun metal`/`metallib`
+on `ProgressiveBlur.metal` and embedding the result), and (3) copying
+`MusicMiniPlayer_MusicMiniPlayerCore.bundle` into `nanoPod.app/Contents/Resources` and
+confirming `Bundle.module` (or an explicit `Bundle(url:)`) resolves it there at runtime.
+None of that shipped here.
+
 ## 5. Performance argument
 
 This surface is idle-static: `floatingArtwork`/`albumOverlayContent` only re-render on
@@ -155,36 +243,47 @@ This surface is idle-static: `floatingArtwork`/`albumOverlayContent` only re-ren
 continuous frame loop driving them (unlike the native lyrics renderer's explicit 120Hz
 `CVDisplayLink` presentation loop, which is why *that* surface's blur economy work
 (`NativeLyricsRowView` rasterization) had to fight per-frame resident-filter cost). A
-`layerEffect`/`CIGaussianBlur`-class filter costs WindowServer time when the compositor
+`.blur()`/`CIGaussianBlur`-class filter costs WindowServer time when the compositor
 **re-evaluates it on a recomposite** — for a static SwiftUI subtree that only means: once
 when the page/hover state actually changes (a few times a session), and once per animation
 tick during the ~0.4–0.5s hover-in/out spring while `isHovering` interpolates. It does not
 cost anything while idle, because nothing is recompositing this subtree while idle — there
 is no timer, no animation, no publisher driving a redraw. This is the same reasoning this
 project already applied to Layer 1's existing (larger, radius-50) full-window blur, which
-has shipped in this exact page for months with no reported cost, and to the
-non-fullscreen `progressiveBlurLayer` 3-stack, which is a strictly *more* expensive
-pattern (3 filter passes) than the single shader pass this change adds.
+has shipped in this exact page for months with no reported cost.
 
-Gating blur+tint on `blendOpacity > 0` additionally means covers that are already legible
-(the common case — most album art is not paper-white) pay nothing extra at all: no new
-filter is attached to the view tree for them, not even at zero strength.
+The new "Layer 2b" adds **5** resident blur filters, on top of Layer 1's 1 (radius 50)
+and — for the NON-fullscreen artwork mode only, a separate code path this change does not
+touch — `progressiveBlurLayer`'s existing 3. That is more filters than the non-fullscreen
+halo, but the same *class* of cost (idle-static, only re-evaluated on the same rare
+events) and roughly the same *scale* (5 layers at up to radius 28 on a `displaySize`-tall
+image vs 3 layers at up to radius 8 on a smaller `artSize`-tall image) — this is an
+incremental extension of an already-shipped, already-accepted pattern in this exact file,
+not a new class of cost. Gating on `blendOpacity > 0` means the common case (most album
+art is not paper-white) pays nothing extra at all: none of these 5 layers are even
+mounted in the view tree for an already-legible cover.
 
 ## 6. App Store safety
 
-`.layerEffect`/`ShaderLibrary`/`[[stitchable]]` Metal functions are Apple's public,
-documented SwiftUI Shader API (`SwiftUI.Shader`, macOS 14+/iOS 17+) — the same mechanism
-Apple's own sample code and WWDC23 "Fun with SwiftUI Shaders" use. No private symbols, no
-`CAFilter`/`variableBlur` private names, no private frameworks. `NSColor`/`Color` RGB math
-is pure Foundation/SwiftUI. Nothing in this change touches ScriptingBridge, entitlements,
-or sandboxed resources.
+Round 2 uses only `Image`/`.blur(radius:)`/`.mask()`/`LinearGradient` — plain, long-
+standing public SwiftUI API, the same building blocks `progressiveBlurLayer` (this exact
+file) already ships with today. `NSColor`/`Color` RGB math is pure Foundation/SwiftUI.
+Nothing in this change touches ScriptingBridge, entitlements, or sandboxed resources, and
+(per section 4b) nothing loads a resource bundle or a Metal shader. (Round 1's
+`.layerEffect`/`ShaderLibrary`/`[[stitchable]]` Metal path — Apple's public, documented
+SwiftUI Shader API, macOS 14+/iOS 17+, no private symbols — would ALSO have been App-Store
+safe in principle; it was reverted for the runtime/build-pipeline reason above, not a
+compliance reason.)
 
 ## 7. Verification constraints honored
 
 No network. No `~/Library/Application Support/nanoPod/` I/O (this is a pure-model +
 SwiftUI-view change; the added/changed tests are in
 `Tests/MusicMiniPlayerTests/BackdropLegibilityBandTests.swift`, which is pure-function-only
-per its own file header, no disk cache touched). Only the relevant test class run,
-serially, with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`. No `git
-stash`. No computer use / screenshots / app launch — visual acceptance is the founder's,
-per CLAUDE.md's permanent "手感类验证" rule; this file says so again at the end.
+per its own file header, no disk cache touched, EXCEPT the round-2 source-scan guard
+(`test_pointBPath_doesNotReferenceMetalShaderOrBundleModule`), which does one read-only
+`String(contentsOf:)` of `MiniPlayerView.swift` inside the repo itself — not the nanoPod
+cache, no network). Only the relevant test class run, serially, with
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`. No `git stash`. No computer
+use / screenshots / app launch — visual acceptance is the founder's, per CLAUDE.md's
+permanent "手感类验证" rule; this file says so again at the end.

@@ -650,26 +650,11 @@ extension MiniPlayerView {
                         .accessibilityHidden(true)
 
                     // Layer 2: clear hero cover participating in matchedGeometryEffect.
-                    // Progressive blur (research/progressive-blur-2026-09-23.md): ramps 0
-                    // at the top of the bottom control band to max AT the bottom edge —
-                    // kills the cover's own texture/detail behind the title/shuffle-repeat
-                    // row/controls, which today sit on the pixel-sharp cover (the existing
-                    // 100pt fade-to-Layer1 mask below is too short to reach them). Gated
-                    // with `ConditionalProgressiveBlur` (isEnabled toggles maxRadius to 0
-                    // rather than adding/removing the modifier) to keep this Image's
-                    // identity stable, and gated on the SAME `blendOpacity > 0` condition
-                    // as the tint scrim below — an in-band cover gets neither, unchanged.
                     Image(nsImage: artwork)
                         .resizable()
                         .scaledToFill()
                         .frame(width: displaySize, height: displaySize)
                         .clipped()
-                        .modifier(ConditionalProgressiveBlur(
-                            isEnabled: isAlbumPage && bottomBandLegibilityCorrection.blendOpacity > 0,
-                            maxRadius: MicroInteractionFeel.Tokens.backdropLegibilityBottomBandBlurRadius,
-                            blurHeight: MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFlatHeight
-                                + MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFadeHeight
-                        ))
                         .mask(
                             VStack(spacing: 0) {
                                 Rectangle().fill(Color.black)
@@ -699,6 +684,39 @@ extension MiniPlayerView {
                         .position(x: displayX, y: displayY)
                         .allowsHitTesting(false)
                         .accessibilityLabel("专辑封面")
+
+                    // Layer 2b: bottom-band progressive blur (research/progressive-blur-2026-09-23.md,
+                    // round 2 — pure SwiftUI, NOT the Metal `.layerEffect` shader: this machine's
+                    // Xcode has no Metal Toolchain, so `.metal` files never compile to a usable
+                    // .metallib, and build_app.sh does not copy MusicMiniPlayerCore's resource
+                    // bundle into nanoPod.app, so the Metal shader's runtime lookup would fail
+                    // at runtime in the shipped app even though `swift build` looks clean — see
+                    // BackdropLegibilityBand.swift's own note for the exact APIs this avoids). A small
+                    // stack of `effectArtwork` copies (the same cheap pre-downsampled render Layer 1
+                    // uses) with increasing blur radii, each one revealed only within its OWN
+                    // smoothstep-shaped band (`BackdropLegibilityBand.heroBottomBandBlurLayers` —
+                    // reuses the exact same `bottomBandScrimOpacity` envelope math as the tint scrim
+                    // below, just reused per-layer) — drawn back-to-front from weakest (widest reveal)
+                    // to strongest (narrowest, right at the bottom edge), so the effective on-screen
+                    // blur step-approximates a continuous 0-at-top-of-band -> max-at-bottom-edge ramp.
+                    // Drawn ON TOP of Layer 2, gated on the SAME `blendOpacity > 0` condition as the
+                    // tint scrim in `albumOverlayContent` — an in-band cover gets neither, unchanged
+                    // appearance. Static: this whole subtree only re-evaluates on hover/page/artwork
+                    // change (no continuous frame loop drives this page), so the resident `.blur()`
+                    // filters on these layers cost WindowServer time only at those few moments, not
+                    // while idle — see the research doc for the full argument.
+                    if isAlbumPage && bottomBandLegibilityCorrection.blendOpacity > 0 {
+                        ZStack {
+                            ForEach(Array(BackdropLegibilityBand.heroBottomBandBlurLayers().enumerated()), id: \.offset) { _, layer in
+                                heroBottomBandBlurLayer(effectArtwork: effectArtwork, displaySize: displaySize, layer: layer)
+                            }
+                        }
+                        .frame(width: displaySize, height: displaySize)
+                        .cornerRadius(displayCornerRadius)
+                        .position(x: displayX, y: displayY)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                    }
                 } else {
                     ZStack {
                         Image(nsImage: artwork)
@@ -759,6 +777,34 @@ extension MiniPlayerView {
                     startPoint: .top,
                     endPoint: .bottom
                 )
+            )
+    }
+
+    // MARK: - Point B bottom-band progressive blur layer (research/progressive-blur-2026-09-23.md)
+    // One layer of `heroBottomBandBlurLayers`'s pure-SwiftUI recipe — see the call site's
+    // comment in `floatingArtwork` for why this is not the Metal shader path.
+    @ViewBuilder
+    private func heroBottomBandBlurLayer(effectArtwork: NSImage, displaySize: CGFloat, layer: BackdropLegibilityBand.HeroBlurLayer) -> some View {
+        Image(nsImage: effectArtwork)
+            .resizable()
+            .scaledToFill()
+            .frame(width: displaySize, height: displaySize)
+            .clipped()
+            .blur(radius: layer.radius)
+            .mask(
+                VStack(spacing: 0) {
+                    Spacer()
+                    LinearGradient(
+                        stops: BackdropLegibilityBand.bottomBandScrimGradientStops(
+                            flatHeight: layer.flatHeight, fadeHeight: layer.fadeHeight
+                        ).map { sample in
+                            Gradient.Stop(color: .black.opacity(sample.opacityFraction), location: sample.location)
+                        },
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: layer.flatHeight + layer.fadeHeight)
+                }
             )
     }
 

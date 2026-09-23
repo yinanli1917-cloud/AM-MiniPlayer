@@ -516,9 +516,15 @@ public enum MicroInteractionFeel {
         /// never a flat neutral black. Visual-feel tunable, like the heights above.
         public static let backdropLegibilityBottomBandTintShadeFactor: Double = 0.16
         /// research/progressive-blur-2026-09-23.md — max radius of the progressive blur
-        /// applied to the hero cover's bottom band (ramped 0→max toward the bottom by the
-        /// existing `progressiveBlurFromBottom` Metal shader). Visual-feel tunable.
+        /// applied to the hero cover's bottom band (ramped 0→max toward the bottom by
+        /// `BackdropLegibilityBand.heroBottomBandBlurLayers`' stacked `.blur()` layers — a
+        /// pure-SwiftUI construction, NOT the (dead, non-functional on this toolchain) Metal
+        /// shader path). Visual-feel tunable.
         public static let backdropLegibilityBottomBandBlurRadius: CGFloat = 28
+        /// research/progressive-blur-2026-09-23.md — number of stacked blur layers
+        /// approximating the continuous ramp. Visual-feel tunable (more layers = smoother
+        /// ramp, more resident `.blur()` filters).
+        public static let backdropLegibilityBottomBandBlurLayerCount: Int = 5
     }
 }
 

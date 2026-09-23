@@ -406,6 +406,90 @@ final class BackdropLegibilityBandTests: XCTestCase {
         }
     }
 
+    // MARK: - Point B pure-SwiftUI progressive blur recipe (round 2 — no Metal). See
+    // `test_pointBPath_doesNotReferenceMetalShaderOrBundleModule` below for the guard that
+    // production actually stays on this path.
+
+    func test_heroBottomBandBlurLayers_radiiIncreaseMonotonically() {
+        let layers = BackdropLegibilityBand.heroBottomBandBlurLayers()
+        XCTAssertEqual(layers.count, MicroInteractionFeel.Tokens.backdropLegibilityBottomBandBlurLayerCount)
+        for i in 1..<layers.count {
+            XCTAssertGreaterThan(layers[i].radius, layers[i - 1].radius, "layer \(i) must blur MORE than layer \(i - 1)")
+        }
+        XCTAssertEqual(layers.last?.radius ?? -1, MicroInteractionFeel.Tokens.backdropLegibilityBottomBandBlurRadius, accuracy: 0.001,
+                        "the strongest (last/frontmost) layer reaches the configured max radius")
+    }
+
+    func test_heroBottomBandBlurLayers_revealSpanShrinksAsRadiusGrows() {
+        // Layer 1 (weakest) must reach across the WHOLE band; the strongest layer must be
+        // confined to a narrow strip right at the bottom edge — this is what makes the
+        // z-ordered composite (weakest drawn first/back, strongest last/front) read as
+        // increasing blur toward the bottom rather than a uniform wash.
+        let bandHeight = Double(MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFlatHeight)
+            + Double(MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFadeHeight)
+        let layers = BackdropLegibilityBand.heroBottomBandBlurLayers()
+
+        let weakestSpan = layers[0].flatHeight + layers[0].fadeHeight
+        XCTAssertEqual(weakestSpan, bandHeight, accuracy: 0.01, "the weakest layer must span the entire band")
+
+        for i in 1..<layers.count {
+            let spanPrev = layers[i - 1].flatHeight + layers[i - 1].fadeHeight
+            let span = layers[i].flatHeight + layers[i].fadeHeight
+            XCTAssertLessThan(span, spanPrev, "layer \(i)'s reveal span must be smaller than layer \(i - 1)'s (stronger blur = narrower, closer to the bottom edge)")
+        }
+    }
+
+    func test_heroBottomBandBlurLayers_emptyForNonPositiveInputs() {
+        XCTAssertTrue(BackdropLegibilityBand.heroBottomBandBlurLayers(layerCount: 0).isEmpty)
+        XCTAssertTrue(BackdropLegibilityBand.heroBottomBandBlurLayers(maxRadius: 0).isEmpty)
+        XCTAssertTrue(BackdropLegibilityBand.heroBottomBandBlurLayers(bandHeight: 0).isEmpty)
+    }
+
+    // MARK: - Guard: the Point-B production path must not use the Metal shader / resource
+    // bundle machinery. Coordinator review of commit 968a05d found `xcrun metal` fails with
+    // "missing Metal Toolchain" on this machine, so `.metal` sources never compile to a
+    // usable .metallib, and `build_app.sh` never copies `MusicMiniPlayerCore`'s resource
+    // bundle into nanoPod.app — `ShaderLibrary.bundle(Bundle.module)` would fail at runtime
+    // in the shipped app even though `swift build` looks clean. A pure-function test can't
+    // catch a SwiftUI view calling the wrong API, so this reads MiniPlayerView.swift's own
+    // source text (read-only, no I/O outside the repo) and asserts neither name appears.
+
+    private func repoRootURL(from fileURL: URL) -> URL {
+        var dir = fileURL.deletingLastPathComponent()
+        while !FileManager.default.fileExists(atPath: dir.appendingPathComponent("Package.swift").path) {
+            let parent = dir.deletingLastPathComponent()
+            if parent == dir { return dir } // reached filesystem root without finding it
+            dir = parent
+        }
+        return dir
+    }
+
+    func test_pointBPath_doesNotReferenceMetalShaderOrBundleModule() throws {
+        let root = repoRootURL(from: URL(fileURLWithPath: #filePath))
+        let miniPlayerViewURL = root.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/MiniPlayerView.swift")
+        let source = try String(contentsOf: miniPlayerViewURL, encoding: .utf8)
+
+        // Scoped to the Point-B region only (albumOverlayContent ... heroBottomBandBlurLayer,
+        // bounded by these two stable `// MARK:` anchors) — NOT the whole file. The file's
+        // `#if DEBUG` PreviewProvider legitimately uses `Bundle.module` to load sample
+        // wallpaper/artwork images for Xcode previews; that is unrelated to Point B's runtime
+        // path and would make a whole-file scan permanently fail for an unrelated reason.
+        let startMarker = "// MARK: - Album Overlay Content"
+        let endMarker = "// MARK: - Album Page Content"
+        guard let startRange = source.range(of: startMarker), let endRange = source.range(of: endMarker) else {
+            XCTFail("could not locate the Point-B region anchors — MiniPlayerView.swift's structure changed; update this test's markers")
+            return
+        }
+        let pointBRegion = String(source[startRange.lowerBound..<endRange.lowerBound])
+
+        XCTAssertFalse(pointBRegion.contains("ShaderLibrary"),
+                        "MiniPlayerView's Point-B path must not call the Metal ShaderLibrary path — it has no compiled .metallib on this toolchain and no resource bundle in the shipped app")
+        XCTAssertFalse(pointBRegion.contains("Bundle.module"),
+                        "MiniPlayerView's Point-B path must not trigger new Bundle.module resource loading — build_app.sh does not copy MusicMiniPlayerCore's resource bundle into nanoPod.app")
+        XCTAssertFalse(pointBRegion.contains("ConditionalProgressiveBlur"),
+                        "Point B must not reference the Metal-shader-backed ProgressiveBlurView.swift modifier")
+    }
+
     func test_bottomBandScrimOpacity_fadesToClearAboveTheFlatZone() {
         let flatHeight = Double(MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFlatHeight)
         let fadeHeight = Double(MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFadeHeight)
