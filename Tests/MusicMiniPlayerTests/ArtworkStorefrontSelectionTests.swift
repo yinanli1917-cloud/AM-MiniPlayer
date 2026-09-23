@@ -72,12 +72,14 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
         XCTAssertEqual(winner?.artworkUrlString, "https://is1-ssl.mzstatic.com/image/thumb/gatsby300x300bb.jpg")
     }
 
-    func test_fix_multiStorefront_misty_findsHKMatch_viaFeaturedArtistTitle() {
+    func test_fix_multiStorefront_misty_findsTWMatch_viaFeaturedArtistTitle() {
         // research: "Misty (feat. Glenn Osser and His Orchestra)" — real
         // catalog entry omits the featured-artist clause entirely, so this
         // is also a partial-match (contains) exercise, not just an empty-US
-        // exercise.
-        let hkCandidate: [String: Any] = [
+        // exercise. TW, not HK — 2026-09-22 coordinator review dropped HK
+        // from the storefront set (TW and HK returned identical rows for
+        // every probed track, Misty included).
+        let twCandidate: [String: Any] = [
             "trackName": "Misty",
             "artistName": "Johnny Mathis",
             "collectionName": "Heavenly",
@@ -87,9 +89,9 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
             title: "Misty (feat. Glenn Osser and His Orchestra)",
             artist: "Johnny Mathis",
             album: "",
-            storefrontResults: [("US", []), ("JP", []), ("HK", [hkCandidate])]
+            storefrontResults: [("US", []), ("JP", []), ("TW", [twCandidate])]
         )
-        XCTAssertEqual(winner?.country, "HK")
+        XCTAssertEqual(winner?.country, "TW")
         XCTAssertEqual(winner?.artworkUrlString, "https://example.com/misty300x300bb.jpg")
     }
 
@@ -153,14 +155,16 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
     // MARK: - Storefront ordering: region inference reorders, never drops
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    func test_orderedStorefronts_pureASCIITitleArtist_putsJPHKTWBeforeUS() {
+    func test_orderedStorefronts_pureASCIITitleArtist_putsJPTWBeforeUS() {
         // Matches LanguageUtils.inferRegions' own pure-ASCII fallback order
-        // (JP, KR, HK, TW) — KR has no iTunes storefront in our set, so it's
-        // dropped, and the untouched US entry is pushed to the end.
+        // (JP, KR, HK, TW) — KR has no iTunes storefront in our set (never
+        // did) and HK was dropped 2026-09-22 (identical rows to TW in every
+        // probe), so both are skipped, and the untouched US entry is pushed
+        // to the end.
         let ordered = MusicController.orderedArtworkStorefronts(
             title: "Gatsby Woman (2020 Remastered)", artist: "Kingo Hamada"
         )
-        XCTAssertEqual(ordered.map(\.country), ["JP", "HK", "TW", "US"])
+        XCTAssertEqual(ordered.map(\.country), ["JP", "TW", "US"])
     }
 
     func test_orderedStorefronts_everyDeclaredStorefrontStillPresent() {
@@ -267,11 +271,12 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
 
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Gatsby Woman (2020 Remastered)", artist: "Kingo Hamada", album: "",
-            priority: .nowPlaying, transport: harness.makeTransport(), breaker: MusicController.ArtworkITunesCircuitBreaker()
+            priority: .nowPlaying, transport: harness.makeTransport(),
+            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: MusicController.ArtworkITunesTokenBucket()
         )
 
         XCTAssertNotNil(image)
-        // 4 storefronts, round 1 only — round 2 must not fire once round 1 wins.
+        // 3 storefronts (US/JP/TW), round 1 only — round 2 must not fire once round 1 wins.
         let callCount = await harness.searchCallCount
         XCTAssertEqual(callCount, MusicController.artworkITunesStorefronts.count)
     }
@@ -281,21 +286,23 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
         let strippedTerm = "Misty Johnny Mathis"
         // Round 1 (full title with the "(feat. ...)" clause) returns empty
         // everywhere — matches the real curl finding ("US 用完整标题 0 条").
+        // TW, not HK (dropped 2026-09-22 — identical rows to TW in every probe).
         await harness.setResponse(.success([[
             "trackName": "Misty",
             "artistName": "Johnny Mathis",
             "collectionName": "",
             "artworkUrl100": "https://example.com/100x100bb.jpg",
-        ]]), country: "HK", term: strippedTerm)
+        ]]), country: "TW", term: strippedTerm)
         await harness.setImageData(onePixelImageData())
 
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Misty (feat. Glenn Osser and His Orchestra)", artist: "Johnny Mathis", album: "",
-            priority: .nowPlaying, transport: harness.makeTransport(), breaker: MusicController.ArtworkITunesCircuitBreaker()
+            priority: .nowPlaying, transport: harness.makeTransport(),
+            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: MusicController.ArtworkITunesTokenBucket()
         )
 
         XCTAssertNotNil(image)
-        // Round 1 (4 storefronts, full title) + round 2 (4 storefronts, stripped title).
+        // Round 1 (3 storefronts, full title) + round 2 (3 storefronts, stripped title).
         let callCount = await harness.searchCallCount
         XCTAssertEqual(callCount, MusicController.artworkITunesStorefronts.count * 2)
     }
@@ -306,7 +313,8 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
         // to round 1's, so it must never fire a second wave of requests.
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Ripples", artist: "Danny Chan", album: "",
-            priority: .nowPlaying, transport: harness.makeTransport(), breaker: MusicController.ArtworkITunesCircuitBreaker()
+            priority: .nowPlaying, transport: harness.makeTransport(),
+            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: MusicController.ArtworkITunesTokenBucket()
         )
 
         XCTAssertNil(image)
@@ -319,7 +327,8 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
         // Genuine content gap: nothing anywhere, in either round.
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Gatsby Woman (2020 Remastered)", artist: "Kingo Hamada", album: "",
-            priority: .nowPlaying, transport: harness.makeTransport(), breaker: MusicController.ArtworkITunesCircuitBreaker()
+            priority: .nowPlaying, transport: harness.makeTransport(),
+            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: MusicController.ArtworkITunesTokenBucket()
         )
 
         XCTAssertNil(image)
@@ -338,7 +347,8 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
 
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Ripples", artist: "Danny Chan", album: "",
-            priority: .nowPlaying, transport: harness.makeTransport(), breaker: MusicController.ArtworkITunesCircuitBreaker()
+            priority: .nowPlaying, transport: harness.makeTransport(),
+            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: MusicController.ArtworkITunesTokenBucket()
         )
 
         XCTAssertNil(image)
@@ -348,13 +358,14 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
         let harness = TransportHarness()
         struct FakeTransportError: Error {}
         let term = "Ripples Danny Chan"
-        for country in ["US", "JP", "TW", "HK"] {
+        for country in ["US", "JP", "TW"] {
             await harness.setResponse(.failure(FakeTransportError()), country: country, term: term)
         }
 
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Ripples", artist: "Danny Chan", album: "",
-            priority: .nowPlaying, transport: harness.makeTransport(), breaker: MusicController.ArtworkITunesCircuitBreaker()
+            priority: .nowPlaying, transport: harness.makeTransport(),
+            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: MusicController.ArtworkITunesTokenBucket()
         )
 
         XCTAssertNil(image)

@@ -228,3 +228,63 @@ NANOPOD_LIVE_ARTWORK_EVAL=1 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Devel
 - `ArtworkLiveStorefrontEvalTests`：未设 `NANOPOD_LIVE_ARTWORK_EVAL` 时确认 `XCTSkip`（本轮**没有**打真网络，遵照"不许自己跑 live eval"的要求）。
 - `swift build`：通过。
 - `ArtworkStorefrontSelectionTests` 17/17、`ArtworkPriorityAndCircuitBreakerTests` 16/16、`RowArtworkFetchPolicyTests` 12/12、`RowArtworkStoreTests` 7/7、`TrackIdentityDisciplineTests` 19/19——均无回归（本轮未改生产代码，符合预期）。
+
+---
+
+## 结果补充（2026-09-22 四轮：主动限流——丢 HK + 共享令牌桶）
+
+创始人现场用真网络跑通了上一轮的 live eval（间隔改到 15 秒）：26 首里 5 命中、0 错配，但跑完后 itunes.apple.com 很快又 403，且不少"未命中"耗时 130–400ms——和被拒绝的耗时区间重叠。同时指出：干净情况下（还没被真限流）5 首歌 30 秒内跳曲，最好情况都要约 25 次 iTunes 请求（旧代码约 10 次），对着约 20 次/分钟、一封就是 20+ 分钟、还会连累歌词 MetadataResolver 的限流线太吃紧。这轮要求把限流从"事后反应"（熔断器）补上"事前主动"（配额）。**本轮只改生产代码 + 写单元测试，不跑真网络。**
+
+### 1）丢 HK
+
+`artworkITunesStorefronts` 从 US/JP/TW/HK 减到 **US/JP/TW**。依据：创始人今天核对的探针里，TW 和 HK 对每一首都返回了完全相同的结果行——Gatsby Woman、Who Are You?、Misty、Ripples、Starlight Ballet、Jellyfish 逐一核对过，HK 没有一次比 TW 多给出任何东西。证据和裁定写进了 `artworkITunesStorefronts` 常量自己的注释里。直接效果：每轮最坏店面数 4→3。
+
+### 2）共享令牌桶（proactive token bucket）
+
+新增 `MusicController.ArtworkITunesTokenBucket`：NSLock + 可注入 `now:`（和 `ArtworkITunesCircuitBreaker`/`RowArtworkNegativeCache` 同款写法，测试全程假时钟不真睡）。参数按创始人原话：
+- **容量 8**，**每分钟回填 12**（=每 5 秒回一个），刻意压在实测限流线（约 20–30 次/2 分钟）以下，给还没接进来的 MetadataResolver 留余量。
+- **正在播扇出宽度** = `min(店面数, 可用 token 数)`——`reserve(upTo:)` 一个原子操作直接实现这个公式（`upTo` 恒 ≥1，所以只有真的 0 token 时才返回 0，天然满足"有 token 就至少给 1 个"）。
+- **后台（播放列表行/预取）** 每次尝试前检查"扣完这 1 个之后是否还剩 ≥3 个给正在播"（`reserveForNowPlaying = 3`），不够就整轮直接跳过（不睡眠、不轮询——跳过的行本来就有 `RowArtworkNegativeCache` 的退避机制会在稍后重试，不需要在这里再造一套等待逻辑）。
+- **图片下载和搜索请求共用同一个池**——命中之后下载封面图也要先 `tryReserve(1, …)`，token 不够就放弃这次下载（宁可这次没有封面，也不多打一个请求）。
+- **round2（去括号重试）和"未命中后的 retry"都受 token 门控**：round2 天然由同一个 round 函数的 token 逻辑决定要不要跑（0 token 直接返回 nil，不用在上层再判一次）；"未命中后的 retry"是 `fetchArtwork` 里单独的一段（调 `retryArtworkFetch`），在这轮新加了一道闸门——`breaker.isOpen() || bucket.available() < 1` 就跳过整次 retry（含它自己的 NetEase/Deezer/MusicKit 并发请求，不只是 iTunes 那一路）。
+- **熔断器打开时，正在播只做 round1、只查 1 个店面，之后什么都不做**——不管这时候 token 桶里还有多少余额，round2 和 retry 一律不跑（`fetchArtworkViaITunesAPIDetailed` 在 round1 失败后先判断"正在播 + 熔断器开着"就直接短路返回，不看 token）。这是硬覆盖，token 配额只在熔断器关闭时才决定 round2/retry 跑不跑。
+
+### 3）重新算的请求数表（fake clock 单元测试实测，非手算估计）
+
+`Tests/MusicMiniPlayerTests/ArtworkTokenBucketBudgetTests.swift` 直接驱动 `fetchArtworkViaITunesAPIDetailed`（真实生产入口，只是注入 transport/breaker/bucket/`now:`），下表每个数字都是测试跑出来的，不是口算：
+
+| 场景 | 总请求数 | 60 秒窗口峰值 | ≤12 达标？ |
+|---|---:|---:|:-:|
+| 单曲换歌，最好情况（round1 秒中） | 4 | 4 | ✅ |
+| 单曲换歌，最坏情况（内容缺口，两轮+retry 全灭） | 8 | 8 | ✅（桶容量本身就是硬顶） |
+| 5 首歌 30 秒内跳曲，最坏情况（全是内容缺口） | 12 | 12 | ✅ 刚好卡线 |
+| 5 首歌 30 秒内跳曲，最好情况（round1 都能找到候选） | 12（10 次搜索 + 仅 2/5 次下载真正拿到 token） | 12 | ✅（但 3/5 首因为搜索用光了 token 连封面图都没下成，見下方"发现"） |
+| 冷启动 20 行播放列表，瞬间全部挂载（真实"冷启动"场景） | 5 | 5 | ✅ |
+| **10 首歌 60 秒内跳曲，最坏情况** | **18** | **18** | ❌ |
+| **冷启动 20 行播放列表，铺开在 60 秒内逐行挂载（持续需求）** | **16** | **16** | ❌ |
+
+创始人点名要求"钉死 5-skip 和冷播放列表两个场景"——`test_fiveSkipsIn30Seconds_worstCase_totalRequestsAndRollingWindowPeak` 和 `test_cold20RowPlaylist_worstCase_totalRequestsNeverExceedsReserveFloor`（瞬时挂载，真实对应"冷启动"这个词本身的含义）两个测试都断言 `≤12` 并且通过。
+
+**如实说明两个不达标的发现**（没有为了凑数字改动其他任何东西）：
+1. **10 首歌/60 秒**：数学上无法在给定的容量 8 + 回填 12/分钟下保证 ≤12——"有 token 就至少给 1 个"这条规则保证每首歌至少 1 次请求（10 首=10 次底线），叠加第一首赶上满桶时最多能吃满 8 个容量，8+10 已经逼近 18；这不是实现漏洞，是这组参数本身在持续需求下的数学结果。
+2. **冷播放列表铺开在 60 秒内逐行挂载**（而不是瞬间全部挂载）：由于"给正在播留 3 个"是一条下限（floor）不是独立配额，后台会不断把桶从回填补上的水位再吃回到 3，60 秒内理论上限是 (容量−留存)+回填 = (8−3)+12 = 17，实测 16 逼近这个理论顶。瞬时挂载版本（真正对应"冷启动"）只要 5 次，稳稳达标；这个"持续铺开"版本是额外记录的数据点，不是本次要求钉死的场景，如实写在这里交给创始人裁定要不要进一步收紧（例如给后台单独设更小的独立配额，而不是共享同一个下限）。
+
+**熔断器打开时的正在播预算**（复核，未改这部分行为）：round1 限 1 店面，且这 1 个请求本身也要过 token 检查；round2/retry 一律不跑。极端情况下单曲换歌只需 1–3 次请求（1 次搜索 + 可能 1 次图片，加上被跳过的 retry 不计）。
+
+### 4）改动/新增文件（本轮）
+- `Sources/MusicMiniPlayerCore/Services/MusicController+Artwork.swift`：`artworkITunesStorefronts` 去 HK；新增 `ArtworkITunesTokenBucket`（含测试用 `capacity:` 覆盖构造器）；`fetchArtworkViaITunesAPI`/`fetchArtworkViaITunesAPIDetailed`/`fetchArtworkViaITunesAPIRound`/`searchStorefrontsInParallel`/`searchStorefrontsSequentially` 全部加 `bucket:`/`now:` 参数并接入 token 门控；`fetchArtworkViaITunesAPIDetailed` 加熔断器打开时正在播"只做 round1、其余不跑"的硬覆盖；`fetchArtwork` 的 Path1 加 retry-after-miss 的 breaker/token 前置检查。
+- `Tests/MusicMiniPlayerTests/ArtworkStorefrontSelectionTests.swift` / `ArtworkPriorityAndCircuitBreakerTests.swift`：HK→TW 修正涉及的 fixture 与期望值；所有 `fetchArtworkViaITunesAPI(...)` 调用点补 `bucket:`（各自独立实例，`ArtworkPriorityAndCircuitBreakerTests` 用 `capacity: 1000` 的"近似无限"桶，因为这份文件测的是优先级/熔断器行为，不该被新加的预算机制干扰）。
+- `Tests/MusicMiniPlayerTests/ArtworkTokenBucketBudgetTests.swift`（新增，13 个测试）：桶本身的纯算术（起始满桶/回填速率封顶/reserve 原子性/tryReserve 下限）+ 上表全部场景的 fake-clock 端到端钉死。
+
+### 5）测试结果（本轮）
+- `ArtworkTokenBucketBudgetTests`：13/13 通过。
+- `ArtworkStorefrontSelectionTests`：17/17 通过（HK 修正后）。
+- `ArtworkPriorityAndCircuitBreakerTests`：16/16 通过（补 `bucket:` 后）。
+- `ArtworkLiveStorefrontEvalTests`：确认 `XCTSkip`，本轮零真网络。
+- `RowArtworkFetchPolicyTests` 12/12、`RowArtworkStoreTests` 7/7、`TrackIdentityDisciplineTests` 19/19——均无回归。
+- `swift build`：通过，无新增警告/错误。
+
+### 6）后续项（本次不做，按要求写在这里）
+- **MetadataResolver（歌词元数据）应该迟早接入同一个令牌桶**——它自己也打 iTunes 多区域查询，目前完全不受这个桶影响，是"熔断器/配额看不见的流量"。这轮明确排除（创始人原话"do not touch lyrics code"），只在此记录为后续项。
+- 10 首歌/60 秒、冷播放列表铺开 60 秒两个场景数学上仍可能超过 ≤12（见上）——是否需要给后台单独配额（而非共享下限）留给创始人裁定。
+- 之前几轮记录的后续项（电台换歌通知抖动、Deezer/MusicKit 死链、`Ripples`→`漣漪` 本地化标题）均未处理，依旧有效。

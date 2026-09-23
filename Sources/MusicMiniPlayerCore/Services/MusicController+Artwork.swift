@@ -362,8 +362,23 @@ extension MusicController {
                     : 250_000_000
                 try? await Task.sleep(nanoseconds: retryDelay)
                 guard !Task.isCancelled else { return }
-                await self.retryArtworkFetch(persistentID: persistentID, title: title, artist: artist, album: album, generation: generation)
-                // After retry returns, if still nothing, fall back to placeholder.
+                // 🔑 2026-09-22 proactive budget: the retry-after-miss only
+                // runs if the shared iTunes budget allows it — while the
+                // circuit breaker is open, now-playing already got its one
+                // storefront in the initial attempt above and gets nothing
+                // else; with the breaker closed but the token bucket empty,
+                // retrying would just make a request that's certain to be
+                // token-gated to zero storefronts anyway, so skip the whole
+                // attempt (including its NetEase/Deezer/MusicKit race) rather
+                // than spend the time on a call that can't reach iTunes.
+                let breakerOpen = Self.ArtworkITunesCircuitBreaker.shared.isOpen()
+                let tokensAvailable = Self.ArtworkITunesTokenBucket.shared.available() >= 1
+                if breakerOpen || !tokensAvailable {
+                    self.logToFile("🎨 [API] retry skipped (iTunes budget: breaker open=\(breakerOpen), tokens available=\(tokensAvailable))")
+                } else {
+                    await self.retryArtworkFetch(persistentID: persistentID, title: title, artist: artist, album: album, generation: generation)
+                }
+                // After retry returns (or was skipped), if still nothing, fall back to placeholder.
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard self.artworkFetchGeneration == generation else { return }
@@ -694,12 +709,22 @@ extension MusicController {
     /// and every radio-metadata example that failed under a bare US query
     /// (Gatsby Woman/Kingo Hamada, Who Are You?/Fujimaru Yoshino, Starlight
     /// Ballet/Piper, SHYNESS BOY/Anri, Misty/Johnny Mathis) resolved under
-    /// JP, TW, or HK.
+    /// JP or TW.
+    ///
+    /// HK dropped 2026-09-22 (coordinator review of that day's probes):
+    /// TW and HK returned IDENTICAL rows for every track that was checked
+    /// against both — Gatsby Woman, Who Are You?, Misty, Ripples, Starlight
+    /// Ballet, Jellyfish. HK never contributed a match TW didn't already
+    /// have, so it was pure extra request volume against a host with a
+    /// tight, real rate limit (observed ~20-30 requests/~2 minutes, with a
+    /// block lasting 20+ minutes and also taking down MetadataResolver's
+    /// iTunes-backed lyrics metadata calls) — cutting it directly reduces
+    /// worst-case fan-out from 4 to 3 storefronts per round with no loss of
+    /// coverage seen so far.
     static let artworkITunesStorefronts: [ArtworkStorefront] = [
         ArtworkStorefront(country: "US", lang: nil),
         ArtworkStorefront(country: "JP", lang: "en_us"),
         ArtworkStorefront(country: "TW", lang: "en_us"),
-        ArtworkStorefront(country: "HK", lang: "en_us"),
     ]
 
     /// Per-storefront request timeout. Storefronts race in PARALLEL, so this
@@ -796,6 +821,109 @@ extension MusicController {
         /// Test seam.
         func openUntilForTesting() -> Date? {
             lock.withLock { openUntil }
+        }
+    }
+
+    /// Shared token bucket for EVERY artwork-path itunes.apple.com request —
+    /// storefront searches AND artwork image downloads alike — across BOTH
+    /// priorities. The circuit breaker (above) is reactive: it only engages
+    /// after iTunes has already rejected something. This is the proactive
+    /// half: 2026-09-22 coordinator review found that even a clean run with
+    /// no rejections yet — 5 radio-track skips in 30s, everything hitting on
+    /// round 1 — already cost ~25 iTunes requests, against an observed
+    /// ~20-30-requests-per-~2-minutes limit whose block lasts 20+ minutes
+    /// and also takes down MetadataResolver's iTunes-backed lyrics metadata
+    /// calls. Capacity/refill are deliberately conservative (well under the
+    /// observed limit) to leave headroom for MetadataResolver, which is not
+    /// yet wired to this bucket (follow-up, see spec).
+    ///
+    /// Same NSLock + injectable-`now:` shape as `ArtworkITunesCircuitBreaker`
+    /// and `RowArtworkNegativeCache` — no real sleeps in tests.
+    final class ArtworkITunesTokenBucket: @unchecked Sendable {
+        /// Max instantaneous burst. Also the ceiling on a single now-playing
+        /// round's fan-out width (3 storefronts) plus its image download,
+        /// several times over — see the derivation in
+        /// research/spec-2026-09-22-radio-artwork-storefronts.md.
+        static let capacity: Double = 8
+        /// Refill rate. 12/min = 1 token per 5s — comfortably under the
+        /// observed ~20-30/~2min (~10-15/min) limit even accounting for
+        /// MetadataResolver traffic this bucket doesn't see yet.
+        static let refillPerMinute: Double = 12
+        /// Tokens `.background` (playlist rows/preload) must always leave
+        /// behind for `.nowPlaying` — a row storm must never starve the
+        /// visible track's own cover.
+        static let reserveForNowPlaying: Int = 3
+
+        static let shared = ArtworkITunesTokenBucket()
+
+        private let lock = NSLock()
+        private var tokens: Double
+        private var lastRefill: Date
+        private let effectiveCapacity: Double
+
+        /// `capacity` overrides the production default — ONLY for tests that
+        /// are exercising something other than the budget itself (priority/
+        /// breaker behavior predating this bucket) and want an effectively
+        /// unlimited supply so token exhaustion never interferes. Budget
+        /// tests (ArtworkTokenBucketBudgetTests) always use the default.
+        init(now: Date = Date(), capacity: Double? = nil) {
+            self.effectiveCapacity = capacity ?? Self.capacity
+            self.tokens = self.effectiveCapacity
+            self.lastRefill = now
+        }
+
+        private func refillLocked(now: Date) {
+            let elapsed = now.timeIntervalSince(lastRefill)
+            guard elapsed > 0 else { return }
+            let perSecond = Self.refillPerMinute / 60.0
+            tokens = min(effectiveCapacity, tokens + elapsed * perSecond)
+            lastRefill = now
+        }
+
+        /// Whole tokens available right now, after refilling to `now`.
+        /// Read-only — does not consume anything.
+        func available(now: Date = Date()) -> Int {
+            lock.withLock {
+                refillLocked(now: now)
+                return Int(tokens.rounded(.down))
+            }
+        }
+
+        /// Atomically takes up to `maxCount` whole tokens — never more than
+        /// are actually available — and returns how many it took. One
+        /// locked read-and-consume operation, so concurrent callers sharing
+        /// this bucket (now-playing + every playlist row) can't race a
+        /// separate "check" against a separate "consume". Used for
+        /// now-playing's fan-out width: `width = reserve(upTo:
+        /// storefronts.count)` IS "min(storefront count, available tokens,
+        /// at least 1 if any token)" — `upTo` is always ≥1 (storefront
+        /// count), so the result is 0 only when there truly are 0 tokens.
+        func reserve(upTo maxCount: Int, now: Date = Date()) -> Int {
+            guard maxCount > 0 else { return 0 }
+            return lock.withLock {
+                refillLocked(now: now)
+                let whole = Int(tokens.rounded(.down))
+                let taken = min(maxCount, whole)
+                tokens -= Double(taken)
+                return taken
+            }
+        }
+
+        /// Atomically consumes exactly `count` tokens ONLY IF at least
+        /// `keepAtLeast` would remain afterward. Used for (a) background's
+        /// per-request reserve-for-now-playing check (`keepAtLeast:
+        /// reserveForNowPlaying`) and (b) a single-token spend with no
+        /// reserve (`keepAtLeast: 0`) — e.g. an image download, or
+        /// now-playing's one storefront while the breaker is open.
+        @discardableResult
+        func tryReserve(_ count: Int, keepAtLeast: Int = 0, now: Date = Date()) -> Bool {
+            guard count > 0 else { return true }
+            return lock.withLock {
+                refillLocked(now: now)
+                guard tokens - Double(count) >= Double(keepAtLeast) else { return false }
+                tokens -= Double(count)
+                return true
+            }
         }
     }
 
@@ -954,11 +1082,13 @@ extension MusicController {
         title: String, artist: String, album: String,
         priority: ArtworkFetchPriority,
         transport: ITunesArtworkTransport = .live,
-        breaker: ArtworkITunesCircuitBreaker = .shared
+        breaker: ArtworkITunesCircuitBreaker = .shared,
+        bucket: ArtworkITunesTokenBucket = .shared,
+        now: Date = Date()
     ) async -> NSImage? {
         await fetchArtworkViaITunesAPIDetailed(
             title: title, artist: artist, album: album,
-            priority: priority, transport: transport, breaker: breaker
+            priority: priority, transport: transport, breaker: breaker, bucket: bucket, now: now
         )?.image
     }
 
@@ -978,18 +1108,37 @@ extension MusicController {
         let round: String
     }
 
+    /// `now` is a single snapshot reused for every token/breaker check made
+    /// by this ONE call (round 1, round 2, the image download) — real
+    /// elapsed network time within a single track's fetch is a couple of
+    /// seconds at most (well under one refill tick at 12/min), so treating
+    /// it as instantaneous is the conservative (worst-case-leaning) choice,
+    /// and it's what makes the fake-clock budget tests in
+    /// ArtworkTokenBucketBudgetTests exact rather than approximate.
     static func fetchArtworkViaITunesAPIDetailed(
         title: String, artist: String, album: String,
         priority: ArtworkFetchPriority,
         transport: ITunesArtworkTransport = .live,
-        breaker: ArtworkITunesCircuitBreaker = .shared
+        breaker: ArtworkITunesCircuitBreaker = .shared,
+        bucket: ArtworkITunesTokenBucket = .shared,
+        now: Date = Date()
     ) async -> ITunesArtworkMatch? {
         let primaryTerm = "\(title) \(artist)".trimmingCharacters(in: .whitespaces)
         if let match = await fetchArtworkViaITunesAPIRound(
             term: primaryTerm, title: title, artist: artist, album: album,
-            transport: transport, roundLabel: "round1", priority: priority, breaker: breaker
+            transport: transport, roundLabel: "round1", priority: priority,
+            breaker: breaker, bucket: bucket, now: now
         ) {
             return match
+        }
+
+        // Hard override: while the breaker is open, now-playing gets round 1
+        // (one storefront, above) and NOTHING else — never spend more of a
+        // scarce, actively-rejecting host's budget on a second round or the
+        // caller's retry-after-miss, no matter how many tokens remain.
+        if priority == .nowPlaying, breaker.isOpen(now: now) {
+            DebugLogger.log("Artwork", "🎨 [iTunes API] 全部店面失败: '\(title)' by '\(artist)' (\(priority), breaker open — round1 only)")
+            return nil
         }
 
         let strippedTitle = stripBracketedTitleSegments(title)
@@ -1000,9 +1149,14 @@ extension MusicController {
             DebugLogger.log("Artwork", "🎨 [iTunes API] 全部店面失败: '\(title)' by '\(artist)' (\(priority))")
             return nil
         }
+        // Round 2 is naturally token-gated: fetchArtworkViaITunesAPIRound's
+        // own reserve/tryReserve calls below return 0/false and it returns
+        // nil immediately (no requests) when the bucket can't afford it —
+        // no separate pre-check needed here.
         if let match = await fetchArtworkViaITunesAPIRound(
             term: secondaryTerm, title: strippedTitle, artist: artist, album: album,
-            transport: transport, roundLabel: "round2(stripped)", priority: priority, breaker: breaker
+            transport: transport, roundLabel: "round2(stripped)", priority: priority,
+            breaker: breaker, bucket: bucket, now: now
         ) {
             return match
         }
@@ -1013,12 +1167,13 @@ extension MusicController {
     private static func fetchArtworkViaITunesAPIRound(
         term: String, title: String, artist: String, album: String,
         transport: ITunesArtworkTransport, roundLabel: String,
-        priority: ArtworkFetchPriority, breaker: ArtworkITunesCircuitBreaker
+        priority: ArtworkFetchPriority, breaker: ArtworkITunesCircuitBreaker,
+        bucket: ArtworkITunesTokenBucket, now: Date
     ) async -> ITunesArtworkMatch? {
         guard !term.isEmpty else { return nil }
         var storefronts = orderedArtworkStorefronts(title: title, artist: artist)
 
-        if breaker.isOpen() {
+        if breaker.isOpen(now: now) {
             switch priority {
             case .background:
                 DebugLogger.log("Artwork", "🎨 [iTunes API][\(roundLabel)] circuit breaker open — skipping background fetch for '\(term)'")
@@ -1033,15 +1188,25 @@ extension MusicController {
         let storefrontResults: [(country: String, results: [[String: Any]])]
         switch priority {
         case .nowPlaying:
+            // Fan-out width = min(storefront count, available tokens, at
+            // least 1 if any token) — `reserve(upTo:)` IS this formula:
+            // `upTo` is always ≥1, so it returns 0 only when there are
+            // truly 0 tokens, and otherwise never exceeds either bound.
+            let width = bucket.reserve(upTo: storefronts.count, now: now)
+            guard width > 0 else {
+                DebugLogger.log("Artwork", "🎨 [iTunes API][\(roundLabel)] token bucket empty — skipping now-playing fetch for '\(term)'")
+                return nil
+            }
+            let selected = Array(storefronts.prefix(width))
             storefrontResults = await searchStorefrontsInParallel(
-                term: term, storefronts: storefronts, transport: transport,
-                roundLabel: roundLabel, breaker: breaker
+                term: term, storefronts: selected, transport: transport,
+                roundLabel: roundLabel, breaker: breaker, now: now
             )
         case .background:
             storefrontResults = await searchStorefrontsSequentially(
                 term: term, title: title, artist: artist, album: album,
                 storefronts: storefronts, transport: transport,
-                roundLabel: roundLabel, breaker: breaker
+                roundLabel: roundLabel, breaker: breaker, bucket: bucket, now: now
             )
         }
 
@@ -1050,8 +1215,16 @@ extension MusicController {
         ) else {
             return nil
         }
-        guard let url = URL(string: winner.artworkUrlString),
-              let imageData = await transport.fetchImageData(url),
+        guard let url = URL(string: winner.artworkUrlString) else { return nil }
+
+        // Image downloads spend from the SAME shared budget as searches.
+        // Background still respects the now-playing reserve here too.
+        let imageReserve = priority == .background ? ArtworkITunesTokenBucket.reserveForNowPlaying : 0
+        guard bucket.tryReserve(1, keepAtLeast: imageReserve, now: now) else {
+            DebugLogger.log("Artwork", "🎨 [iTunes API][\(roundLabel)] token bucket empty — skipping image download for '\(term)' (storefront=\(winner.country))")
+            return nil
+        }
+        guard let imageData = await transport.fetchImageData(url),
               let image = NSImage(data: imageData) else {
             return nil
         }
@@ -1063,11 +1236,12 @@ extension MusicController {
         )
     }
 
-    /// NOW-PLAYING: every storefront races in parallel — one track at a
-    /// time, worth the request volume for the visible cover.
+    /// NOW-PLAYING: every storefront (already sized to the reserved token
+    /// width by the caller) races in parallel — one track at a time, worth
+    /// the request volume for the visible cover.
     private static func searchStorefrontsInParallel(
         term: String, storefronts: [ArtworkStorefront], transport: ITunesArtworkTransport,
-        roundLabel: String, breaker: ArtworkITunesCircuitBreaker
+        roundLabel: String, breaker: ArtworkITunesCircuitBreaker, now: Date
     ) async -> [(country: String, results: [[String: Any]])] {
         await withTaskGroup(
             of: (country: String, outcome: Result<[[String: Any]], Error>).self
@@ -1087,7 +1261,7 @@ extension MusicController {
                     collected.append((country, results))
                 case .failure(let error):
                     DebugLogger.log("Artwork", "🎨 [iTunes API][\(country)][\(roundLabel)] error (\(type(of: error))): \(error.localizedDescription)")
-                    if isITunesRateLimitSignal(error), breaker.trip(now: Date()) {
+                    if isITunesRateLimitSignal(error), breaker.trip(now: now) {
                         DebugLogger.log("Artwork", "🎨 [iTunes API] rate-limit signal from \(country) — circuit breaker OPEN \(Int(ArtworkITunesCircuitBreaker.openDuration))s (background fetches will skip iTunes)")
                     }
                 }
@@ -1098,19 +1272,25 @@ extension MusicController {
 
     /// BACKGROUND (playlist rows, preload): storefronts are queried ONE AT
     /// A TIME, stopping the moment any storefront yields a reliable
-    /// candidate. A cold playlist full of rows now costs at most 1
-    /// in-flight iTunes request per row instead of 4 simultaneous ones —
-    /// matching the pre-multi-storefront request profile on the common
-    /// "the first storefront tried has it" path. Also aborts the remaining
-    /// storefronts in THIS call the instant a rate-limit signal appears,
-    /// rather than exhausting the list into a host that's already rejecting.
+    /// candidate. Each request also spends a token ONLY IF doing so leaves
+    /// at least `reserveForNowPlaying` behind — the moment that reserve
+    /// would be breached, background stops trying more storefronts in THIS
+    /// call (a row that stops early is picked up again later by
+    /// `RowArtworkNegativeCache`'s existing backoff, not retried here).
+    /// Also aborts immediately on a rate-limit signal, rather than
+    /// exhausting the list into a host that's already rejecting.
     private static func searchStorefrontsSequentially(
         term: String, title: String, artist: String, album: String,
         storefronts: [ArtworkStorefront], transport: ITunesArtworkTransport,
-        roundLabel: String, breaker: ArtworkITunesCircuitBreaker
+        roundLabel: String, breaker: ArtworkITunesCircuitBreaker,
+        bucket: ArtworkITunesTokenBucket, now: Date
     ) async -> [(country: String, results: [[String: Any]])] {
         var collected: [(country: String, results: [[String: Any]])] = []
         for storefront in storefronts {
+            guard bucket.tryReserve(1, keepAtLeast: ArtworkITunesTokenBucket.reserveForNowPlaying, now: now) else {
+                DebugLogger.log("Artwork", "🎨 [iTunes API][\(storefront.country)][\(roundLabel)][seq] token bucket at now-playing reserve — skipping remaining background storefronts for '\(term)'")
+                break
+            }
             let outcome = await transport.search(term, storefront)
             switch outcome {
             case .success(let results):
@@ -1124,7 +1304,7 @@ extension MusicController {
             case .failure(let error):
                 DebugLogger.log("Artwork", "🎨 [iTunes API][\(storefront.country)][\(roundLabel)][seq] error (\(type(of: error))): \(error.localizedDescription)")
                 if isITunesRateLimitSignal(error) {
-                    if breaker.trip(now: Date()) {
+                    if breaker.trip(now: now) {
                         DebugLogger.log("Artwork", "🎨 [iTunes API] rate-limit signal from \(storefront.country) — circuit breaker OPEN \(Int(ArtworkITunesCircuitBreaker.openDuration))s (background fetches will skip iTunes)")
                     }
                     return collected
