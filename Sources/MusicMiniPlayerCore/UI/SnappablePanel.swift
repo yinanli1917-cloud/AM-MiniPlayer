@@ -35,6 +35,10 @@ public class SnappablePanel: NSPanel {
     public var isManualScrollingProvider: (() -> Bool)?
     /// 触发进入手动滚动状态（歌词页面）
     public var onTriggerManualScroll: (() -> Void)?
+    /// Liquid edge (research/spikes/edge-collapse-spike, approved 2026-09-22):
+    /// when set, tucking into a screen edge is handed to it instead of sliding
+    /// the window off-screen. Returns true if it took the request.
+    public var liquidEdgeHandler: ((Edge) -> Bool)?
 
     // MARK: - Drag State
 
@@ -97,6 +101,7 @@ public class SnappablePanel: NSPanel {
         case .mouseMoved:
             handleMouseMoved(event)
         case .scrollWheel:
+            if handleLiquidEdgeSwipe(event) { return }
             if let provider = currentPageProvider {
                 let currentPage = provider()
 
@@ -164,6 +169,53 @@ public class SnappablePanel: NSPanel {
         default:
             super.sendEvent(event)
         }
+    }
+
+    // MARK: - Liquid edge swipe
+
+    /// Two-finger swipe toward a screen edge the panel sits next to: taken over
+    /// from the first decided delta (so the window never starts dragging) and
+    /// tucks at once past 10pt — founder 2026-09-22: a swipe must just do it.
+    private var liquidSwipeAccum: CGFloat = 0
+    private var liquidSwipeDecided = false
+    private var liquidSwipeOwned = false
+    private var liquidSwipeFired = false
+
+    private func nearEdge(towardRight: Bool) -> Edge? {
+        guard let screen = screen ?? NSScreen.main else { return nil }
+        let visible = screen.visibleFrame
+        let reach = LiquidEdgeTokens.edgeProximity
+        if towardRight, frame.maxX >= visible.maxX - reach { return .right }
+        if !towardRight, frame.minX <= visible.minX + reach, !isStageManagerEnabled() { return .left }
+        return nil
+    }
+
+    private func handleLiquidEdgeSwipe(_ event: NSEvent) -> Bool {
+        guard liquidEdgeHandler != nil else { return false }
+        if event.phase == .began || event.phase == .mayBegin {
+            liquidSwipeAccum = 0; liquidSwipeDecided = false; liquidSwipeOwned = false; liquidSwipeFired = false
+            return false
+        }
+        // Swallow the rest of a gesture we own, momentum included.
+        if event.momentumPhase != [] { return liquidSwipeOwned }
+        guard event.phase == .changed else {
+            let owned = liquidSwipeOwned
+            if event.phase == .ended || event.phase == .cancelled { liquidSwipeDecided = false }
+            return owned
+        }
+        let dx = event.scrollingDeltaX, dy = event.scrollingDeltaY
+        if !liquidSwipeDecided, abs(dx) + abs(dy) > 2 {
+            liquidSwipeDecided = true
+            liquidSwipeOwned = abs(dx) > abs(dy) * 1.2 && nearEdge(towardRight: dx > 0) != nil
+        }
+        guard liquidSwipeOwned else { return false }
+        liquidSwipeAccum += dx
+        if !liquidSwipeFired, abs(liquidSwipeAccum) > LiquidEdgeSwipe.triggerDistance,
+           let edge = nearEdge(towardRight: liquidSwipeAccum > 0) {
+            liquidSwipeFired = true
+            _ = liquidEdgeHandler?(edge)
+        }
+        return true
     }
 
     // MARK: - Mouse Drag
@@ -352,11 +404,13 @@ public class SnappablePanel: NSPanel {
         let horizontalDominant = abs(velocity.x) > abs(velocity.y) * 0.8
 
         if !stageManagerOn && nearLeftEdge && velocity.x < -50 && horizontalDominant {
+            if liquidEdgeHandler?(.left) == true { return true }
             hideToEdge(.left)
             return true
         }
 
         if nearRightEdge && velocity.x > 50 && horizontalDominant {
+            if liquidEdgeHandler?(.right) == true { return true }
             hideToEdge(.right)
             return true
         }
@@ -371,7 +425,32 @@ public class SnappablePanel: NSPanel {
         let visible = screen.visibleFrame
         let windowCenterX = frame.origin.x + frame.width / 2
         let edge: Edge = windowCenterX < visible.midX ? .left : .right
+        if let handler = liquidEdgeHandler {
+            // Not next to that edge yet: spring to its corner first, then tuck.
+            if nearEdge(towardRight: edge == .right) != nil {
+                if handler(edge) { return }
+            } else {
+                moveToEdgeCorner(edge) { [weak self] in _ = self?.liquidEdgeHandler?(edge) }
+                return
+            }
+        }
         hideToEdge(edge)
+    }
+
+    private var pendingSettle: (() -> Void)?
+
+    /// Springs the window to the snapped corner on `edge` (keeping top or
+    /// bottom), then runs `completion` once it has settled.
+    public func moveToEdgeCorner(_ edge: Edge, completion: @escaping () -> Void) {
+        guard let screen = screen ?? NSScreen.main else { completion(); return }
+        let visible = screen.visibleFrame
+        let isTop = frame.origin.y + frame.height / 2 > visible.midY
+        let x = edge == .left ? visible.minX + cornerMargin : visible.maxX - frame.width - cornerMargin
+        let y = isTop ? visible.maxY - frame.height - cornerMargin : visible.minY + cornerMargin
+        animationTarget = NSPoint(x: x, y: y)
+        springVelocityX = 0; springVelocityY = 0
+        pendingSettle = completion
+        if reduceMotionProvider() { snapImmediatelyToAnimationTarget() } else { startSpringAnimation() }
     }
 
     private func hideToEdge(_ edge: Edge) {
@@ -583,6 +662,7 @@ public class SnappablePanel: NSPanel {
             setFrameOrigin(animationTarget)
             stopAllAnimations()
             onGeometryMorphDidSettle?(CACurrentMediaTime())
+            let done = pendingSettle; pendingSettle = nil; done?()
         }
     }
 
@@ -594,6 +674,7 @@ public class SnappablePanel: NSPanel {
         stopAllAnimations()
         setFrameOrigin(animationTarget)
         onGeometryMorphDidSettle?(CACurrentMediaTime())
+        let done = pendingSettle; pendingSettle = nil; done?()
     }
 
     private func stopAllAnimations() {

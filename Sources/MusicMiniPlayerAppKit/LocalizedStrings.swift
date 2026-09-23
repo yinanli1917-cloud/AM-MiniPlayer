@@ -64,6 +64,8 @@ enum L10n {
         "followSystem":         ("Follow System", "跟随系统"),
         "fullscreenCover":      ("Fullscreen Cover Mode", "全屏封面模式"),
         "fullscreenCoverDesc":  ("Enable immersive album cover display", "启用沉浸式专辑封面显示"),
+        "edgeShowSongOnTrackChange":     ("Show Song on Track Change", "换歌时显示歌曲"),
+        "edgeShowSongOnTrackChangeDesc": ("When tucked into the screen edge, briefly show the new song. Turn off if your music app already notifies you.", "贴边收起时，换歌会短暂显示新歌曲。音乐 app 已经会弹换歌通知的话可以关掉。"),
         "translationLang":      ("Lyrics Translation", "歌词翻译"),
         "translationLangDesc":  ("Target language for lyrics translation", "歌词翻译的目标语言"),
         "showInDockDesc":       ("Show app icon in the Dock", "在 Dock 中显示应用图标"),
