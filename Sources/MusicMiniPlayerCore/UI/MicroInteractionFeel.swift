@@ -486,6 +486,17 @@ public enum MicroInteractionFeel {
         /// text over any artwork (accessibility floor, not tunable).
         public static let artworkContrastReduceTransparencyDarken: Double = 0.35
         public static let artworkContrastDarkenAnimationDuration: TimeInterval = 0.31
+
+        // Backdrop legibility band (research/spec-2026-09-22-backdrop-legibility.md):
+        // WCAG contrast bounds for a white foreground over any artwork-derived
+        // background. Below the ceiling contrast the background is darkened up
+        // to it; above the floor contrast it is lifted down to it. Tunable so
+        // the founder can dial the band after the fact without touching code.
+        public static let backdropLegibilityCeilingContrast: Double = 4.5
+        public static let backdropLegibilityFloorContrast: Double = 12.0
+        /// Height of the bottom scrim gradient behind the fullscreen album
+        /// page's title/artist/shuffle-repeat/controls band (point B).
+        public static let backdropLegibilityBottomBandHeight: CGFloat = 160
     }
 }
 

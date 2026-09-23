@@ -31,6 +31,11 @@ public struct MiniPlayerView: View {
     @State private var topLeftLuminance: CGFloat = 0.5
     @State private var topRightLuminance: CGFloat = 0.5
     @State private var artworkTone: ArtworkBackgroundToneMap = .neutral
+    // Backdrop legibility band (research/spec-2026-09-22-backdrop-legibility.md, point B):
+    // the fullscreen album page's bottom control band background prediction inputs,
+    // refreshed alongside `artworkTone` from the same `artworkVisualMetrics()` call.
+    @State private var artworkAverageLuminance: Double = 0.5
+    @State private var artworkBottomRowLuminance: Double = 0.5
     @State private var effectArtwork: NSImage?
     @State private var effectArtworkSignature: String = ""
 
@@ -210,13 +215,18 @@ public struct MiniPlayerView: View {
             if newArtwork != nil {
                 syncArtworkLuminance()
                 if let artwork = newArtwork {
-                    artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
+                    let metrics = artwork.artworkVisualMetrics()
+                    artworkTone = ArtworkBackgroundToneMap.forMetrics(metrics)
+                    artworkAverageLuminance = metrics.averageLuminance
+                    artworkBottomRowLuminance = Double(artwork.controlAreaMaxLuminance())
                 }
             } else {
                 artworkBrightness = 0.5
                 topLeftLuminance = 0.5
                 topRightLuminance = 0.5
                 artworkTone = .neutral
+                artworkAverageLuminance = 0.5
+                artworkBottomRowLuminance = 0.5
             }
         }
         .onChange(of: musicController.artworkLuminance) { _, _ in
@@ -251,7 +261,10 @@ public struct MiniPlayerView: View {
             refreshEffectArtwork()
             syncArtworkLuminance()
             if let artwork = musicController.currentArtwork {
-                artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
+                let metrics = artwork.artworkVisualMetrics()
+                artworkTone = ArtworkBackgroundToneMap.forMetrics(metrics)
+                artworkAverageLuminance = metrics.averageLuminance
+                artworkBottomRowLuminance = Double(artwork.controlAreaMaxLuminance())
             }
         }
         // Keep hover state coherent when returning to the album page.
@@ -308,6 +321,21 @@ public struct MiniPlayerView: View {
         topRightLuminance = musicController.topRightArtworkLuminance
     }
 
+    // Backdrop legibility band, point B (research/spec-2026-09-22-backdrop-legibility.md):
+    // the fullscreen album page's bottom control band (title/artist/shuffle-repeat/
+    // SharedBottomControls) sits over the hero cover fading into the Layer-1 blurred
+    // backing image — conservatively the worse (brighter) of the two, per
+    // `fullscreenBottomBandToneLuminance`. Only produces a darken (never a lift): the
+    // sharp/near cover, not a shade-darkened backdrop, is what dominates this band.
+    private var bottomBandLegibilityCorrection: BackdropLegibilityBand.Correction {
+        let preCorrection = BackdropLegibilityBand.fullscreenBottomBandToneLuminance(
+            coverBottomRowLuminance: artworkBottomRowLuminance,
+            artworkAverageLuminance: artworkAverageLuminance,
+            tone: artworkTone
+        )
+        return BackdropLegibilityBand.resolve(backgroundLuminance: preCorrection)
+    }
+
     private func refreshEffectArtwork() {
         let signature = ArtworkDisplayImageFactory.signature(
             for: musicController.currentArtwork,
@@ -345,6 +373,26 @@ extension MiniPlayerView {
             let artLeftX = (geo.size.width - artSize) / 2
 
             ZStack {
+                // Backdrop legibility band, point B (research/spec-2026-09-22-backdrop-legibility.md):
+                // fullscreen album cover only — a bottom scrim gradient (transparent ->
+                // darkenOpacity) behind the title/artist/shuffle-repeat/controls band,
+                // appearing only when the sharp cover behind it is too bright for the
+                // white foreground to read at >= 4.5:1. Never a hard edge.
+                if fullscreenAlbumCover && bottomBandLegibilityCorrection.darkenOpacity > 0 {
+                    let bandDarken = bottomBandLegibilityCorrection.darkenOpacity
+                    VStack(spacing: 0) {
+                        Spacer()
+                        LinearGradient(
+                            colors: [Color.black.opacity(0), Color.black.opacity(bandDarken)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: MicroInteractionFeel.Tokens.backdropLegibilityBottomBandHeight)
+                    }
+                    .allowsHitTesting(false)
+                    .animation(.smooth(duration: MicroInteractionFeel.Tokens.artworkContrastDarkenAnimationDuration), value: bandDarken)
+                }
+
                 // ═══════════════════════════════════════════
                 // 🎨 歌曲信息：使用 matchedGeometryEffect 实现丝滑过渡
                 // ═══════════════════════════════════════════

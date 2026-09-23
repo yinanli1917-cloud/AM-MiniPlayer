@@ -23,6 +23,12 @@ public struct FluidGradientBackground: View {
     @State private var contrastResolution = ArtworkContrastPolicy.resolve(
         brightness: 0.5, params: .default, reduceTransparency: false
     )
+    // Backdrop legibility band (research/spec-2026-09-22-backdrop-legibility.md):
+    // resolved ONCE per artwork change in updateTone(), same cadence as `tone`/
+    // `contrastResolution` above — not a per-frame filter. Computed from the FULL
+    // existing pipeline's predicted output (tone map + C5 if active), so it only ever
+    // makes up the residual gap rather than double-darkening on top of C5.
+    @State private var legibilityCorrection = BackdropLegibilityBand.Correction.zero
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     private static let crossfade = Animation.easeInOut(duration: 0.6)
@@ -77,7 +83,22 @@ public struct FluidGradientBackground: View {
                                 .opacity(contrastResolution.darkenOpacity)
                                 .animation(.smooth(duration: MicroInteractionFeel.Tokens.artworkContrastDarkenAnimationDuration), value: contrastResolution.darkenOpacity)
                         }
+
+                        // Backdrop legibility band: tops up whatever the pipeline above
+                        // already produced so a white foreground always reads within
+                        // [4.5:1, 12:1] — only appears above the ceiling, in-band artwork
+                        // renders byte-identical.
+                        if legibilityCorrection.darkenOpacity > 0 {
+                            Color.black
+                                .opacity(legibilityCorrection.darkenOpacity)
+                                .animation(.smooth(duration: MicroInteractionFeel.Tokens.artworkContrastDarkenAnimationDuration), value: legibilityCorrection.darkenOpacity)
+                        }
                     }
+                    // Hue-preserving lift for a too-dark background (band floor): an
+                    // additive `.brightness` bump on the whole composited layer above,
+                    // not a screen-white wash (keeps texture color, avoids washing it
+                    // toward gray).
+                    .brightness(legibilityCorrection.liftAmount)
                     // Distinct identity per artwork: a REPLACEMENT crossfades old → new
                     // (insertion transition). REMOVAL (artwork → nil) deliberately does NOT
                     // use a removal transition: removal transitions silently skip the fade on
@@ -145,6 +166,14 @@ public struct FluidGradientBackground: View {
             contrastResolution = ArtworkContrastPolicy.resolve(
                 brightness: 0.5, params: .default, reduceTransparency: reduceTransparency
             )
+            legibilityCorrection = BackdropLegibilityBand.resolve(
+                backgroundLuminance: BackdropLegibilityBand.fluidBackdropToneLuminance(
+                    artworkAverageLuminance: 0.5,
+                    tone: tone,
+                    contrastResolution: contrastResolution,
+                    applyContrastDarken: !legacyArtworkContrast
+                )
+            )
             return
         }
         let metrics = artwork.artworkVisualMetrics()
@@ -153,6 +182,14 @@ public struct FluidGradientBackground: View {
             brightness: metrics.averageLuminance,
             params: MicroInteractionFeel.artworkContrastParams,
             reduceTransparency: reduceTransparency
+        )
+        legibilityCorrection = BackdropLegibilityBand.resolve(
+            backgroundLuminance: BackdropLegibilityBand.fluidBackdropToneLuminance(
+                artworkAverageLuminance: metrics.averageLuminance,
+                tone: tone,
+                contrastResolution: contrastResolution,
+                applyContrastDarken: !legacyArtworkContrast
+            )
         )
     }
 }
