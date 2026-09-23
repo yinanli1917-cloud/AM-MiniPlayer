@@ -89,10 +89,9 @@ public enum EdgeCollapseTokens {
     public static let edgeDimOpacity: Double = 0.92
     public static let edgeDimMidOpacity: Double = 0.40
     public static let edgeDimInnerOpacity: Double = 0.12
-    public static let tintOpacity: Double = 0.45
-    /// Glass black tint of the resting capsule; the edge-side gradient on top
-    /// of it arrives with the capsule's content.
-    public static let capsuleTint: Double = 0.72
+    /// Width of the smooth union between the edge body and the capsule:
+    /// parts closer than this grow a liquid neck (LiquidOutline).
+    public static let liquidNeck: CGFloat = 14
 
     public static let reduceMotionCrossfadeDuration: TimeInterval = 0.18
 

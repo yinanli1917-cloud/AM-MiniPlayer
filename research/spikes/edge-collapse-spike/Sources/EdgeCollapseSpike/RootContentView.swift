@@ -1,6 +1,8 @@
 /**
  * [INPUT]: EdgeCollapsePoseStore.pose (sampled once per frame) + MusicController.shared.
- * [OUTPUT]: RootContentView v9.
+ * [OUTPUT]: RootContentView v11 — ONE liquid outline (LiquidShape): pure black
+ *   at the edge (plain fill, no glass), glass fades in only as it becomes the
+ *   capsule or the card. v9/v10 below kept for history:
  *   - Card: the real nanoPod MiniPlayerView, real size, 16pt off the edge.
  *   - Tucked: a short edge handle (progress fill) or a cover tab.
  *   - Hover: a drop necks out of the handle, swells round, stretches into
@@ -34,35 +36,17 @@ private struct GlassRootView: View {
     @ObservedObject var store: EdgeCollapsePoseStore
     @ObservedObject var music = MusicController.shared
     @StateObject private var edgePresentation = EdgePresentationModel()
-    @Namespace private var ns
 
     private var pose: EdgeCollapsePose { store.pose }
     private var container: CGSize { EdgeCollapseTokens.containerSize }
 
-    /// One Glass value for both bodies (same material). The black is the
-    /// glass tint itself, per frame, so every neck, drop and blend between
-    /// the two bodies is the same black (v9 drew black as a layer on top of
-    /// clear glass: the bridges and the drop showed clear glass).
-    private var glass: Glass {
-        switch model.tint {
-        case .none: return .clear.interactive()
-        case .black, .gradient: return .clear.tint(Color.black.opacity(clamp01(pose.tint))).interactive()
-        }
-    }
-
     var body: some View {
         ZStack(alignment: .topLeading) {
             Color.clear
-
-            GlassEffectContainer(spacing: EdgeCollapseTokens.containerSpacing) {
-                ZStack(alignment: .topLeading) {
-                    bodyView.glassEffectID("body", in: ns)
-                    capsuleView.glassEffectID("capsule", in: ns)
-                }
-            }
-
+            liquidView
             panelView
             heroView
+            capsuleContentView
         }
         .frame(width: container.width, height: container.height)
         .overlay(Color.black.opacity(model.reduceMotionFlashOpacity * 0.6).allowsHitTesting(false))
@@ -79,92 +63,91 @@ private struct GlassRootView: View {
             .position(x: r.midX, y: r.midY)
     }
 
-    // MARK: - Edge body: card → 6pt strip
+    // MARK: - The one liquid object
 
-    private var bodyView: some View {
-        // The collapse spring tucks the strip past the edge and back; keep
-        // the right side on the edge and never draw a negative width.
-        let r = bodyRect
-        let shape = UnevenRoundedRectangle(
-            topLeadingRadius: pose.bodyCornerInner, bottomLeadingRadius: pose.bodyCornerInner,
-            bottomTrailingRadius: pose.bodyCornerEdge, topTrailingRadius: pose.bodyCornerEdge,
-            style: .continuous)
-        return ZStack(alignment: .bottom) {
-            // Tucked: pure black (founder 2026-09-22). Only at rest; while the
-            // handle bulges and the drop necks out, the tinted glass carries it.
-            if pose.stripContentOpacity > 0.01 {
-                Color.black.opacity(clamp01(pose.stripContentOpacity))
-            }
+    /// Edge body + capsule as one outline. A body flush with the screen edge
+    /// is extended past it, so it has no right-hand corners or rim: at the
+    /// edge it is continuous with the black bezel.
+    private var parts: [LiquidPart] {
+        var b = pose.body
+        if b.width > 0.5, b.maxX >= container.width - 0.5 {
+            b.size.width += pose.bodyCornerInner + 4
         }
-        .allowsHitTesting(false)
-        .frame(width: r.width, height: r.height)
-        .clipShape(shape)
-        .glassEffect(glass, in: shape)
-        .contentShape(shape)
-        .onTapGesture { if model.presentation == .tucked { model.requestExpand() } }
-        .position(x: r.midX, y: r.midY)
+        return [LiquidPart(rect: b, radius: pose.bodyCornerInner),
+                LiquidPart(rect: pose.capsule, radius: pose.capsuleCorner)]
     }
 
-    /// Body rect as drawn. Width never negative; anything past the right
-    /// edge is clipped by the window, which is the screen edge.
-    private var bodyRect: CGRect {
-        let raw = pose.body
-        let w = max(raw.width, 0)
-        return CGRect(x: raw.maxX - w, y: raw.minY, width: w, height: raw.height)
+    private var shape: LiquidShape { LiquidShape(parts: parts, neck: EdgeCollapseTokens.liquidNeck) }
+
+    /// Black while it is at the edge (a plain fill: no glass, no rim, no
+    /// highlight); glass fades in underneath only as it becomes the capsule
+    /// or the card, and the black thins into the edge-side gradient
+    /// (Siri panel look). One outline carries both, so they never separate.
+    private var liquidView: some View {
+        let g = clamp01(pose.glass)
+        let s = shape
+        let box = parts.filter { $0.rect.width >= 1 && $0.rect.height >= 1 }.map(\.rect).reduce(CGRect.null) { $0.union($1) }
+        let x0 = box.isNull ? 0 : box.minX / container.width
+        let x1 = box.isNull ? 1 : min(box.maxX, container.width) / container.width
+        return ZStack {
+            if g > 0.01 {
+                Color.clear
+                    .glassEffect(.clear, in: s)
+                    .opacity(g)
+            }
+            s.fill(LinearGradient(stops: fillStops(g),
+                                  startPoint: UnitPoint(x: x0, y: 0.5), endPoint: UnitPoint(x: x1, y: 0.5)))
+        }
+        .frame(width: container.width, height: container.height)
+        .contentShape(s)
+        .onTapGesture {
+            if model.presentation == .tucked || model.presentation == .floating { model.requestExpand() }
+        }
     }
 
-    // MARK: - Hover capsule
+    private func fillStops(_ g: Double) -> [Gradient.Stop] {
+        func lerp(_ a: Double, _ b: Double) -> Double { a + (b - a) * g }
+        let t = EdgeCollapseTokens.self
+        let (inner, mid, edge): (Double, Double, Double)
+        switch model.tint {
+        case .gradient: (inner, mid, edge) = (lerp(1, t.edgeDimInnerOpacity), lerp(1, t.edgeDimMidOpacity), lerp(1, t.edgeDimOpacity))
+        case .black: (inner, mid, edge) = (lerp(1, 0.55), lerp(1, 0.55), lerp(1, 0.55))
+        case .none: (inner, mid, edge) = (lerp(1, 0), lerp(1, 0), lerp(1, 0))
+        }
+        return [.init(color: .black.opacity(inner), location: 0),
+                .init(color: .black.opacity(mid), location: 0.5),
+                .init(color: .black.opacity(edge), location: 1)]
+    }
 
-    private var capsuleView: some View {
+    // MARK: - Capsule content (title, artist, two buttons)
+
+    private var capsuleContentView: some View {
         let r = pose.capsule
         let t = EdgeCollapseTokens.self
-        let shape = RoundedRectangle(cornerRadius: pose.capsuleCorner, style: .continuous)
         return ZStack(alignment: .top) {
-            // Edge-side gradient black: part of the capsule's content, it
-            // arrives with the text once the shape has settled.
-            dimming.opacity(clamp01(pose.dim) * clamp01(pose.capsuleContentOpacity))
             if pose.capsuleContentOpacity > 0.01 {
-            VStack(spacing: 0) {
-                Color.clear.frame(height: t.capsulePadding + t.capsuleArtwork + 8)
-                VStack(spacing: 2) {
-                    Text(model.trackTitle).font(.system(size: 12, weight: .semibold)).lineLimit(1)
-                    Text(music.currentArtist).font(.system(size: 10)).opacity(0.72).lineLimit(1)
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: t.capsulePadding + t.capsuleArtwork + 8)
+                    VStack(spacing: 2) {
+                        Text(model.trackTitle).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                        Text(music.currentArtist).font(.system(size: 10)).opacity(0.72).lineLimit(1)
+                    }
+                    .frame(height: t.capsuleTextHeight)
+                    .padding(.horizontal, 10)
+                    Color.clear.frame(height: 4)
+                    HStack(spacing: 16) { controlButtons(ink: .white) }
+                        .frame(height: t.capsuleControlsHeight)
                 }
-                .frame(height: t.capsuleTextHeight)
-                .padding(.horizontal, 10)
-                Color.clear.frame(height: 4)
-                HStack(spacing: 16) { controlButtons(ink: .white) }
-                    .frame(height: t.capsuleControlsHeight)
-            }
-            .foregroundStyle(.white)
-            .frame(width: t.capsuleSize.width)
-            .blur(radius: pose.capsuleContentBlur > 0.1 ? pose.capsuleContentBlur : 0)
-            .opacity(clamp01(pose.capsuleContentOpacity))
+                .foregroundStyle(.white)
+                .frame(width: t.capsuleSize.width)
+                .blur(radius: pose.capsuleContentBlur > 0.1 ? pose.capsuleContentBlur : 0)
+                .opacity(clamp01(pose.capsuleContentOpacity))
             }
         }
         .frame(width: max(r.width, 0), height: max(r.height, 0), alignment: .top)
-        .clipShape(shape)
-        .glassEffect(glass, in: shape)
-        .contentShape(shape)
-        .onTapGesture { model.requestExpand() }
+        .clipShape(RoundedRectangle(cornerRadius: max(pose.capsuleCorner, 0), style: .continuous))
         .allowsHitTesting(pose.capsuleContentOpacity > 0.5)
         .position(x: r.midX, y: r.midY)
-    }
-
-    /// Black at the screen edge, lighter inward (Siri panel look).
-    @ViewBuilder
-    private var dimming: some View {
-        if model.tint == .gradient {
-            LinearGradient(
-                stops: [
-                    .init(color: Color.black.opacity(EdgeCollapseTokens.edgeDimInnerOpacity), location: 0),
-                    .init(color: Color.black.opacity(EdgeCollapseTokens.edgeDimMidOpacity), location: 0.5),
-                    .init(color: Color.black.opacity(EdgeCollapseTokens.edgeDimOpacity), location: 1),
-                ],
-                startPoint: .leading, endPoint: .trailing)
-        } else {
-            Color.clear
-        }
     }
 
     /// Two buttons of the same visual size (founder 2026-09-22): each sits in
@@ -203,7 +186,8 @@ private struct GlassRootView: View {
     private var heroView: some View {
         let r = pose.hero
         let visible = clamp01(pose.heroOpacity) * (1 - clamp01(pose.panelOpacity))
-        let b = bodyRect, c = pose.capsule
+        let b = CGRect(x: pose.body.maxX - max(pose.body.width, 0), y: pose.body.minY, width: max(pose.body.width, 0), height: pose.body.height)
+        let c = pose.capsule
         let bodyArea = b.width * b.height, capArea = max(c.width, 0) * max(c.height, 0)
         let box = bodyArea < 1 ? c : capArea < 1 ? b : b.union(c)
         let corner = capArea > bodyArea ? pose.capsuleCorner : pose.bodyCornerInner

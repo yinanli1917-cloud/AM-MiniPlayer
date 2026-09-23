@@ -140,17 +140,27 @@ final class EdgeCollapseMotionTests: XCTestCase {
         XCTAssertGreaterThan(end.heroBlur, 15)
     }
 
-    /// The black is in the glass material: while the drop necks out and
-    /// swells, the tint stays black, so the drop and the neck are black too
-    /// (founder 2026-09-22 recording: the drop was clear glass).
-    func test_floatOut_dropAndNeckAreBlackGlass() {
+    /// At the edge the object is pure black, not glass (system glass always
+    /// has a rim and never reaches black): through the drop, the neck and
+    /// the round blob the glass amount is zero; it is glass only as the
+    /// capsule (founder 2026-09-22).
+    func test_floatOut_blackUntilItBecomesTheCapsule() {
         let m = motion(.floatOut)
         var t = 0.0
         while t < 0.19 {
-            XCTAssertGreaterThan(pose(m, t).tint, 0.95, "t=\(Int(t * 1000))ms")
+            XCTAssertLessThan(pose(m, t).glass, 0.02, "t=\(Int(t * 1000))ms")
             t += dt
         }
-        XCTAssertEqual(EdgeCollapsePose(vector: m.to).tint, EdgeCollapseTokens.capsuleTint, accuracy: 0.01)
+        XCTAssertEqual(EdgeCollapsePose(vector: m.to).glass, 1, accuracy: 0.01)
+        XCTAssertEqual(EdgeCollapsePoses.pose(.tucked, page: .album, style: .handle).glass, 0)
+    }
+
+    /// ref1: on collapse the material turns black mid-way, by the stalk.
+    func test_collapse_turnsBlackByTheStalk() {
+        let m = motion(.collapse)
+        let stalkStart = m.stages[1].start
+        XCTAssertGreaterThan(pose(m, 0.02).glass, 0.7)
+        XCTAssertLessThan(pose(m, stalkStart + 0.2).glass, 0.1)
     }
 
     /// Expand draws one outline: the edge body does not grow alongside the

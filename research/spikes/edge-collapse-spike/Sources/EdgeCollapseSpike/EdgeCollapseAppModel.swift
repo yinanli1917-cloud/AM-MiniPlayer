@@ -114,6 +114,12 @@ public final class EdgeCollapseAppModel: ObservableObject {
         let next = EdgeCollapseReducer.reduce(state: presentation, event: event)
         guard next != presentation else { return }
         presentation = next
+        // The window shadow outlines whatever is drawn: around the black edge
+        // handle it reads as a rim. Only the resting card keeps it.
+        if let window = hostingView?.window {
+            window.hasShadow = next == .card
+            window.invalidateShadow()
+        }
     }
 
     private func transition(event: EdgeCollapseEvent, settle: EdgeCollapseEvent?, kind: EdgeCollapseTransitionKind) {

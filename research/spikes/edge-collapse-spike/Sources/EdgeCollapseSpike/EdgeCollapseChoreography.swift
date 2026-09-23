@@ -36,10 +36,12 @@ public enum EdgeCollapseChoreography {
             return [
                 // Panel content goes first; the card loses height while width stays wide.
                 stage(0, pose(.squash), [.panel: s(0.08, 0), .dim: s(0.10, 0), .body: s(0.20, 0.05),
-                                         .capsule: s(0.20, 0), .hero: s(0.22, 0.05), .heroFade: s(0.2, 0)]),
+                                         .capsule: s(0.20, 0), .hero: s(0.22, 0.05), .heroFade: s(0.2, 0),
+                                         .material: s(0.12, 0)]),
                 // Width pinches into a stalk narrower than both ends, at the edge.
+                // ref1: the material turns black mid-way, as the stalk forms.
                 stage(0.09, pose(.stalk), [.body: s(0.22, 0.10), .capsule: s(0.22, 0),
-                                           .hero: s(0.24, 0), .heroFade: s(0.18, 0)]),
+                                           .hero: s(0.24, 0), .heroFade: s(0.18, 0), .material: s(0.14, 0)]),
                 // Absorbed into the edge; with Bouncy it overshoots into the edge and settles.
                 stage(0.18, pose(.tucked), [.body: s(0.34, landBounce), .capsule: s(0.3, 0),
                                             .hero: s(0.30, 0.1), .heroFade: s(0.16, 0),

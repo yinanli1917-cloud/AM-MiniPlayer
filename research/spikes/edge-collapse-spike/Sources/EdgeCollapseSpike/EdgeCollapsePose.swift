@@ -35,10 +35,10 @@ public struct EdgeCollapsePose: Equatable {
     public var capsuleContentBlur: CGFloat
     public var stripContentOpacity: Double
     public var dim: Double
-    /// Black tint of the glass material itself (1 = black). Lives in the
-    /// material, so necks, drops and blends are the same black as the
-    /// bodies (v9 painted black as a layer on top: bridges showed clear glass).
-    public var tint: Double = 1
+    /// 0 = pure black fill (no glass at all), 1 = glass with the edge-side
+    /// gradient. System glass can never be pure black and always has a rim,
+    /// so the black states are not glass (founder 2026-09-22).
+    public var glass: Double = 0
 
     public static let channelCount = 24
 
@@ -50,7 +50,7 @@ public struct EdgeCollapsePose: Equatable {
          panelOpacity,
          capsuleContentOpacity, capsuleContentBlur,
          stripContentOpacity,
-         dim, tint].map { Double($0) }
+         dim, glass].map { Double($0) }
     }
 
     public init(vector v: [Double]) {
@@ -66,20 +66,20 @@ public struct EdgeCollapsePose: Equatable {
         capsuleContentOpacity = v[19]; capsuleContentBlur = v[20]
         stripContentOpacity = v[21]
         dim = v[22]
-        tint = v[23]
+        glass = v[23]
     }
 
     public init(body: CGRect, bodyCornerInner: CGFloat, bodyCornerEdge: CGFloat,
                 capsule: CGRect, capsuleCorner: CGFloat,
                 hero: CGRect, heroCorner: CGFloat, heroOpacity: Double, heroBlur: CGFloat,
                 panelOpacity: Double, capsuleContentOpacity: Double, capsuleContentBlur: CGFloat,
-                stripContentOpacity: Double, dim: Double, tint: Double = 1) {
+                stripContentOpacity: Double, dim: Double, glass: Double = 0) {
         self.body = body; self.bodyCornerInner = bodyCornerInner; self.bodyCornerEdge = bodyCornerEdge
         self.capsule = capsule; self.capsuleCorner = capsuleCorner
         self.hero = hero; self.heroCorner = heroCorner; self.heroOpacity = heroOpacity; self.heroBlur = heroBlur
         self.panelOpacity = panelOpacity
         self.capsuleContentOpacity = capsuleContentOpacity; self.capsuleContentBlur = capsuleContentBlur
-        self.stripContentOpacity = stripContentOpacity; self.dim = dim; self.tint = tint
+        self.stripContentOpacity = stripContentOpacity; self.dim = dim; self.glass = glass
     }
 }
 
@@ -226,7 +226,7 @@ public enum EdgeCollapsePoses {
                 capsule: parked(card), capsuleCorner: 1,
                 hero: ch.rect, heroCorner: ch.corner, heroOpacity: 1, heroBlur: ch.blur,
                 panelOpacity: 1, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
-                stripContentOpacity: 0, dim: 0)
+                stripContentOpacity: 0, dim: 0, glass: 1)
         case .squash:
             let r = squashRect
             let hero = isLyrics ? coverFill(r) : coverIn(r, inset: 10)
@@ -235,7 +235,7 @@ public enum EdgeCollapsePoses {
                 capsule: parked(r), capsuleCorner: 1,
                 hero: hero, heroCorner: isLyrics ? 0 : 20, heroOpacity: 1, heroBlur: isLyrics ? 18 : 0,
                 panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
-                stripContentOpacity: 0, dim: 1)
+                stripContentOpacity: 0, dim: 1, glass: 0.4)
         case .stalk:
             let r = stalkRect(style)
             let th = tuckedHero(style)
@@ -282,7 +282,7 @@ public enum EdgeCollapsePoses {
                 capsule: capsuleRect, capsuleCorner: t.capsuleCornerRadius,
                 hero: capsuleCoverRect, heroCorner: t.capsuleArtworkCorner, heroOpacity: 1, heroBlur: 0,
                 panelOpacity: 0, capsuleContentOpacity: 1, capsuleContentBlur: 0,
-                stripContentOpacity: 0, dim: 1, tint: t.capsuleTint)
+                stripContentOpacity: 0, dim: 1, glass: 1)
         case .expandBlob:
             let r = expandBlobRect
             let gone = CGRect(x: edge, y: tucked.minY, width: 0, height: tucked.height * 0.6)
@@ -292,7 +292,7 @@ public enum EdgeCollapsePoses {
                 hero: isLyrics ? coverFill(r) : coverIn(r, inset: 16), heroCorner: isLyrics ? 0 : 24,
                 heroOpacity: 1, heroBlur: isLyrics ? 14 : 0,
                 panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
-                stripContentOpacity: 0, dim: 1)
+                stripContentOpacity: 0, dim: 1, glass: 1)
         }
     }
 
