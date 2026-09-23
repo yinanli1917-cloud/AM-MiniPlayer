@@ -2080,6 +2080,19 @@ public struct LyricsView: View {
             return PieceTranslationCache.shared.translation(for: text, source: pieceSourceCode, target: pieceTargetCode)
         }
         var pendingPieceTranslationTexts: [String] = []
+        // Per-song tier summary (2026-09-23, founder-requested diagnostic):
+        // one DebugLogger line per `makeDisplayLyricLines` pass (bounded by
+        // `refreshDisplayLineCache`'s dedup + resize debounce -- never per
+        // frame), so daily use surfaces which of LyricPieceTranslation's
+        // three tiers actually served each split line without needing a
+        // debugger. `splitLineTierCounts` is keyed by tier; `splitLineCount`
+        // counts ORIGINAL lines that were split (not pieces).
+        var splitLineCount = 0
+        var splitLineTierCounts: [LyricPieceTranslationTier: Int] = [:]
+        func tallySplitLine(_ tiers: [LyricPieceTranslationTier]) {
+            splitLineCount += 1
+            for tier in tiers { splitLineTierCounts[tier, default: 0] += 1 }
+        }
 
         for (sourceIndex, line) in lyrics.enumerated() {
             if isPreludeEllipsis(line.text) || isInstrumentalNotice(line.text) || line.isBackground {
@@ -2112,6 +2125,7 @@ public struct LyricsView: View {
                     fullTranslation: line.translation,
                     cache: pieceCacheLookup
                 )
+                tallySplitLine(pieceTiers)
                 for (segmentIndex, group) in wordGroups.enumerated() {
                     // Timing error vs. the source data is exactly zero by
                     // construction: start/end come straight from the group's
@@ -2158,6 +2172,7 @@ public struct LyricsView: View {
                 fullTranslation: line.translation,
                 cache: pieceCacheLookup
             )
+            tallySplitLine(pieceTiers)
             for (segmentIndex, piece) in timedPieces.enumerated() {
                 if pieceTiers[segmentIndex] == .none {
                     pendingPieceTranslationTexts.append(piece.text)
@@ -2180,8 +2195,41 @@ public struct LyricsView: View {
             }
         }
 
-        if pieceSourceCode != nil, lyricsService.isSystemTranslationSource, !pendingPieceTranslationTexts.isEmpty {
+        // 2026-09-23 fix (founder repro: Raveena "Mystery"): registering a
+        // split piece for tier-2 translation used to also require
+        // `lyricsService.isSystemTranslationSource` -- but that flag reports
+        // where the WHOLE-LINE translation came from, not whether the split
+        // PIECE'S original text has a resolvable source language. A line
+        // whose whole-line translation came from the lyrics source
+        // (NetEase/QQ) still needs its pieces registered once
+        // `pieceSourceCode` resolves (LyricsService now resolves it in that
+        // case too -- see `silentSystemTranslationConfiguration`). The only
+        // real precondition is that a source language resolved at all.
+        if pieceSourceCode != nil, !pendingPieceTranslationTexts.isEmpty {
             lyricsService.registerPendingPieceTranslations(pendingPieceTranslationTexts)
+        }
+
+        if splitLineCount > 0 {
+            let tier3Reason: String
+            if pieceSourceCode == nil {
+                tier3Reason = "no session (\(lyricsService.lastTranslationSessionGapReason ?? "source not resolved yet"))"
+            } else if !pendingPieceTranslationTexts.isEmpty {
+                tier3Reason = "pending (registered, awaiting async translation)"
+            } else if (splitLineTierCounts[.none] ?? 0) > 0 {
+                tier3Reason = "gated (showTranslation off or pieces still queued)"
+            } else {
+                tier3Reason = "n/a"
+            }
+            DebugLogger.log(
+                "Translation",
+                "🧩 piece-translation tiers for '\(musicController.currentTrackTitle)': " +
+                "lines_split=\(splitLineCount) " +
+                "tier1_clauseAligned=\(splitLineTierCounts[.clauseAligned] ?? 0) " +
+                "tier2_perPieceCache=\(splitLineTierCounts[.perPieceCache] ?? 0) " +
+                "tier3_fallbackFirstPiece=\(splitLineTierCounts[.fallbackFirstPiece] ?? 0) " +
+                "pendingNone=\(splitLineTierCounts[.none] ?? 0) " +
+                "tier3Reason=\(tier3Reason)"
+            )
         }
 
         return result

@@ -340,6 +340,14 @@ public class LyricsService: ObservableObject {
     /// misclassify a piece-only update via `isTranslationOnlyWriteback`,
     /// which only knows about whole `LyricLine`s).
     @Published public var pieceTranslationVersion: Int = 0
+    /// The human-readable reason string from the most recent
+    /// `recordDiagnosticsSystemTranslationGap` call (e.g. "language pair
+    /// supported but not installed", "source language not identifiable") --
+    /// `nil` once a session resolves successfully. Read-only diagnostic
+    /// surface for LyricsView's per-song piece-translation-tier summary log
+    /// (2026-09-23), so a tier-3-stuck song's log line names the actual
+    /// reason instead of a generic placeholder.
+    @Published public private(set) var lastTranslationSessionGapReason: String?
 
     private var currentFetchTask: Task<Void, Never>?
     private var currentBackfillTask: Task<Void, Never>?
@@ -872,6 +880,7 @@ public class LyricsService: ObservableObject {
             // per-piece translation requests for the old song's text are
             // meaningless for the new one.
             resolvedSongTranslationSourceLanguage = nil
+            lastTranslationSessionGapReason = nil
             pendingPieceTranslationTexts.removeAll()
 
             // The visible request is for a different song or a forced retry. Drop
@@ -2184,6 +2193,7 @@ public class LyricsService: ObservableObject {
         reason: String,
         translationLanguage: String
     ) {
+        lastTranslationSessionGapReason = reason
         guard let track = currentDiagnosticsTrack() else { return }
         let stats = Self.translationCoverageStats(in: lyrics)
         DiagnosticsService.shared.recordLyricsSystemTranslationGap(
@@ -2307,9 +2317,30 @@ public class LyricsService: ObservableObject {
         let isFillingPartialSourceTranslations = translationsAreFromLyricsSource && isTargetChinese
         if isTargetChinese && lyricsArePredominantlyChinese() { return nil }
         if !isFillingPartialSourceTranslations && lyricsAreInTargetLanguage() { return nil }
-        if isFillingPartialSourceTranslations && !Self.hasMissingEligibleTranslations(lyrics) {
+
+        // 2026-09-23 fix (founder repro: Raveena "Mystery" — a Plan-A split
+        // piece past the first never got a translation). When the lyrics
+        // source already supplies a COMPLETE translation for every eligible
+        // line, `performSystemTranslation` genuinely has nothing left to do
+        // — but a session must still be resolved and bound here, because
+        // `performPendingPieceTranslations` (tier 2 of the per-piece split
+        // translation, LyricPieceTranslation.swift) needs BOTH a resolved
+        // source language (`resolvedSongTranslationSourceLanguage`, only set
+        // below) AND a live TranslationSession to translate a split PIECE's
+        // text — independent of whether the WHOLE line's translation came
+        // from the source or the system. The old code returned nil right
+        // here, before source resolution ever ran, so
+        // `resolvedSongTranslationSourceLanguage` stayed nil for the entire
+        // song and every split piece of a source-translated line fell
+        // through to the tier-3 fallback (full translation under piece 0,
+        // nothing on the rest — the exact symptom reported). Below, sample/
+        // eligible-line text collection falls back to ALL eligible lines
+        // (not just "missing" ones — there are none) whenever this is the
+        // reason we are still here.
+        let sourceAlreadyComplete = isFillingPartialSourceTranslations && !Self.hasMissingEligibleTranslations(lyrics)
+        let sourceDetectionOnlyMissing = isFillingPartialSourceTranslations && !sourceAlreadyComplete
+        if sourceAlreadyComplete {
             translationFailed = false
-            return nil
         }
 
         let targetLanguageID = Self.normalizedSystemTranslationLanguage(translationLanguage)
@@ -2324,10 +2355,10 @@ public class LyricsService: ObservableObject {
 
         guard Self.systemTranslationSampleText(
             in: lyrics,
-            onlyMissingTranslations: isFillingPartialSourceTranslations
+            onlyMissingTranslations: sourceDetectionOnlyMissing
         ) != nil else {
             currentSongTranslationID = translationID
-            translationFailed = true
+            if !sourceAlreadyComplete { translationFailed = true }
             recordDiagnosticsSystemTranslationGap(
                 reason: "no stable language sample",
                 translationLanguage: targetLanguageID
@@ -2353,7 +2384,7 @@ public class LyricsService: ObservableObject {
         let lyricsCountBeforeSourceAwait = lyrics.count
         let eligibleLineTexts = Self.translationEligibleLineIndices(
             in: lyrics,
-            onlyMissingTranslations: isFillingPartialSourceTranslations
+            onlyMissingTranslations: sourceDetectionOnlyMissing
         ).map { lyrics[$0].text }
         let supportedLanguageCodes = await SupportedTranslationLanguagesMemo.shared.languageCodes()
         guard currentSongID == songIDBeforeSourceAwait,
@@ -2366,7 +2397,7 @@ public class LyricsService: ObservableObject {
             supportedLanguageCodes: supportedLanguageCodes
         ) else {
             currentSongTranslationID = translationID
-            translationFailed = true
+            if !sourceAlreadyComplete { translationFailed = true }
             recordDiagnosticsSystemTranslationGap(
                 reason: "source language not identifiable",
                 translationLanguage: targetLanguageID
@@ -2394,11 +2425,19 @@ public class LyricsService: ObservableObject {
         switch status {
         case .installed:
             translationFailed = false
+            lastTranslationSessionGapReason = nil
             resolvedSongTranslationSourceLanguage = sourceLanguage
+            // When there was no whole-line work to do (source already
+            // complete), record this resolution so repeated calls for the
+            // same song+target short-circuit at the `currentSongTranslationID`
+            // check above instead of re-running detection every time
+            // (`performSystemTranslation` never runs to set this itself in
+            // that case — its own eligible set is empty).
+            if sourceAlreadyComplete { currentSongTranslationID = translationID }
             return TranslationSession.Configuration(source: sourceLanguage, target: targetLanguage)
         case .supported:
             currentSongTranslationID = translationID
-            translationFailed = true
+            if !sourceAlreadyComplete { translationFailed = true }
             recordDiagnosticsSystemTranslationGap(
                 reason: "language pair supported but not installed",
                 translationLanguage: targetLanguageID
@@ -2407,7 +2446,7 @@ public class LyricsService: ObservableObject {
             return nil
         case .unsupported:
             currentSongTranslationID = translationID
-            translationFailed = true
+            if !sourceAlreadyComplete { translationFailed = true }
             recordDiagnosticsSystemTranslationGap(
                 reason: "unsupported language pair",
                 translationLanguage: targetLanguageID
@@ -2416,7 +2455,7 @@ public class LyricsService: ObservableObject {
             return nil
         @unknown default:
             currentSongTranslationID = translationID
-            translationFailed = true
+            if !sourceAlreadyComplete { translationFailed = true }
             recordDiagnosticsSystemTranslationGap(
                 reason: "unknown language availability status",
                 translationLanguage: targetLanguageID
@@ -2442,19 +2481,26 @@ public class LyricsService: ObservableObject {
 
     /// The song-level source language `silentSystemTranslationConfiguration`
     /// resolved for the CURRENT song (2026-09-22 fix), as a BCP-47 language
-    /// code (e.g. "ja", "ko", "en"). `nil` when translation comes from the
-    /// lyrics source itself (`isSystemTranslationSource == false`) or hasn't
-    /// resolved yet. Read by LyricsView to key `PieceTranslationCache`
-    /// lookups the same way `performPendingPieceTranslations` writes them.
+    /// code (e.g. "ja", "ko", "en"). `nil` only when resolution hasn't run
+    /// yet or genuinely failed (undetermined source / pair not installed) —
+    /// 2026-09-23 fix: this now resolves EVEN WHEN every eligible line
+    /// already carries a lyrics-source translation (`translationsAreFromLyricsSource
+    /// == true`), because tier 2 of split-piece translation
+    /// (`LyricPieceTranslation`) needs a source language for the original
+    /// line's OWN text regardless of where the WHOLE-line translation came
+    /// from. Read by LyricsView to key `PieceTranslationCache` lookups the
+    /// same way `performPendingPieceTranslations` writes them.
     public var resolvedTranslationSourceLanguageCode: String? {
         resolvedSongTranslationSourceLanguage?.languageCode?.identifier
     }
 
-    /// True when the current translation (if any) comes from on-device
-    /// system translation rather than the lyrics provider's own translation
-    /// (NetEase/QQ). Per-piece tier-2 translation only makes sense for the
-    /// system-translation path — a lyrics-source translation has no
-    /// resolved source language and nothing to re-translate piece-by-piece.
+    /// True when the current WHOLE-LINE translation (if any) comes from
+    /// on-device system translation rather than the lyrics provider's own
+    /// translation (NetEase/QQ). Diagnostic only — 2026-09-23 fix: no longer
+    /// gates per-piece tier-2 translation (see `resolvedTranslationSourceLanguageCode`
+    /// and `performPendingPieceTranslations`); a lyrics-source-translated
+    /// line's ORIGINAL text still has a detectable source language and still
+    /// benefits from per-piece translation when Plan A splits it.
     public var isSystemTranslationSource: Bool { !translationsAreFromLyricsSource }
 
     /// Registers `texts` (already known to need a per-piece translation —
@@ -2482,7 +2528,14 @@ public class LyricsService: ObservableObject {
     @MainActor
     public func performPendingPieceTranslations<Executor: LyricsTranslationExecuting>(session: Executor) async {
         guard !pendingPieceTranslationTexts.isEmpty else { return }
-        guard isSystemTranslationSource, showTranslation else {
+        // 2026-09-23 fix: no longer gated on `isSystemTranslationSource` —
+        // a lyrics-source-translated line's ORIGINAL text still has its own
+        // detectable source language (`resolvedSongTranslationSourceLanguage`,
+        // now resolved regardless of where the whole-line translation came
+        // from) and still needs per-piece translation when Plan A splits it.
+        // The gate that actually matters is whether a source resolved at
+        // all, checked right below.
+        guard showTranslation else {
             pendingPieceTranslationTexts.removeAll()
             return
         }
