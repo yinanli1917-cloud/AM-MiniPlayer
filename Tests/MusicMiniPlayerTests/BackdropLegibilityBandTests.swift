@@ -239,88 +239,171 @@ final class BackdropLegibilityBandTests: XCTestCase {
         XCTAssertEqual(delta, 0)
     }
 
-    // MARK: - Point B: fullscreen album page bottom control band
+    // MARK: - Point B: fullscreen album page bottom control band (TINTED model,
+    // research/progressive-blur-2026-09-23.md — blends toward `pointBTint`, an
+    // artwork-derived dark colour, never Color.black).
+
+    private func tintedPointBFixture(_ image: NSImage) -> (preCorrection: BackdropLegibilityBand.RGBColor, tint: BackdropLegibilityBand.RGBColor, correction: BackdropLegibilityBand.TintedCorrection) {
+        let metrics = image.artworkVisualMetrics()
+        let tone = ArtworkBackgroundToneMap.forMetrics(metrics)
+        let coverColorRaw = image.controlAreaMaxColor()
+        let coverColor = BackdropLegibilityBand.RGBColor(r: coverColorRaw.r, g: coverColorRaw.g, b: coverColorRaw.b)
+        let averageColor = BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue)
+        let preCorrection = BackdropLegibilityBand.fullscreenBottomBandToneColor(coverBottomRowColor: coverColor, artworkAverageColor: averageColor, tone: tone)
+        let tint = BackdropLegibilityBand.pointBTint(from: averageColor)
+        let correction = BackdropLegibilityBand.resolveTinted(preCorrection: preCorrection, tint: tint)
+        return (preCorrection, tint, correction)
+    }
 
     func test_pointB_whiteArtwork_finalContrastMeetsCeiling() {
-        let metrics = whiteImage.artworkVisualMetrics()
-        let tone = ArtworkBackgroundToneMap.forMetrics(metrics)
-        let coverBottomRowLuminance = Double(whiteImage.controlAreaMaxLuminance())
+        let (preCorrection, _, correction) = tintedPointBFixture(whiteImage)
+        let final = BackdropLegibilityBand.applyTinted(preCorrection, correction)
 
-        let preCorrection = BackdropLegibilityBand.fullscreenBottomBandToneLuminance(
-            coverBottomRowLuminance: coverBottomRowLuminance,
-            artworkAverageLuminance: metrics.averageLuminance,
-            tone: tone
-        )
-        let correction = BackdropLegibilityBand.resolve(backgroundLuminance: preCorrection)
-        let final = BackdropLegibilityBand.apply(preCorrection, correction)
-
+        // `resolveTinted` solves via bisection (unlike Point A's exact closed-form solve
+        // for a pure-black target), so the boundary is reached to within floating-point
+        // noise (~1e-15), not bit-exactly — same reasoning as the brute-force sweep's
+        // `boundaryTolerance` below.
         XCTAssertGreaterThanOrEqual(
-            BackdropLegibilityBand.whiteContrastRatio(gammaLuminance: final),
-            MicroInteractionFeel.Tokens.backdropLegibilityCeilingContrast,
+            BackdropLegibilityBand.whiteContrastRatio(relativeLuminance: BackdropLegibilityBand.relativeLuminance(final)),
+            MicroInteractionFeel.Tokens.backdropLegibilityCeilingContrast - 1e-9,
             "white fullscreen cover's bottom control band must stay >= 4.5:1 for white shuffle/repeat icons"
         )
     }
 
-    // MARK: - Point B: the scrim must deliver FULL darkenOpacity where the real
-    // foreground elements actually are — coordinator review fix #1. Positions per
-    // MiniPlayerView.albumOverlayContent's own layout formulas:
+    // MARK: - Point B: the scrim must deliver FULL blendOpacity where the real
+    // foreground elements actually are — coordinator review fix #1, still true under the
+    // tinted model. Positions per MiniPlayerView.albumOverlayContent's own layout formulas:
     //   - hover-mode title: centre at controlsHeight(80)+4+16 = 100pt above bottom,
     //     top edge ~107pt (half of a 12pt bold line's rendered height above centre).
     //   - shuffle/repeat row: bottom at controlsHeight(80)+4 = 84pt, top at +24pt = 108pt.
     // Both must fall inside the flat (full-opacity) zone.
 
     func test_pointB_scrimAtHoverTitleTop_isFullOpacity() {
-        let whiteImageMetrics = whiteImage.artworkVisualMetrics()
-        let tone = ArtworkBackgroundToneMap.forMetrics(whiteImageMetrics)
-        let coverBottomRowLuminance = Double(whiteImage.controlAreaMaxLuminance())
-        let preCorrection = BackdropLegibilityBand.fullscreenBottomBandToneLuminance(
-            coverBottomRowLuminance: coverBottomRowLuminance,
-            artworkAverageLuminance: whiteImageMetrics.averageLuminance,
-            tone: tone
-        )
-        let correction = BackdropLegibilityBand.resolve(backgroundLuminance: preCorrection)
-        XCTAssertGreaterThan(correction.darkenOpacity, 0, "white cover must need a darken scrim")
+        let (preCorrection, _, correction) = tintedPointBFixture(whiteImage)
+        XCTAssertGreaterThan(correction.blendOpacity, 0, "white cover must need a tinted scrim")
+        XCTAssertNotEqual(correction.tint, BackdropLegibilityBand.RGBColor(r: 0, g: 0, b: 0),
+                           "white artwork's tint must not be pure black")
 
         let titleTopDistanceAboveBottom = 107.0
         let scrimOpacityAtTitle = BackdropLegibilityBand.bottomBandScrimOpacity(
             distanceAboveBottom: titleTopDistanceAboveBottom,
-            darkenOpacity: correction.darkenOpacity
+            darkenOpacity: correction.blendOpacity
         )
-        XCTAssertEqual(scrimOpacityAtTitle, correction.darkenOpacity, accuracy: 0.0001,
+        XCTAssertEqual(scrimOpacityAtTitle, correction.blendOpacity, accuracy: 0.0001,
                         "the title's top must sit in the FULL-opacity flat zone, not a partial ramp value")
 
-        let finalAtTitle = BackdropLegibilityBand.apply(preCorrection, BackdropLegibilityBand.Correction(darkenOpacity: scrimOpacityAtTitle, liftAmount: 0))
+        let finalAtTitle = BackdropLegibilityBand.applyTinted(
+            preCorrection, BackdropLegibilityBand.TintedCorrection(blendOpacity: scrimOpacityAtTitle, liftAmount: 0, tint: correction.tint)
+        )
+        // Bisection-precision epsilon — see the comment in
+        // test_pointB_whiteArtwork_finalContrastMeetsCeiling.
         XCTAssertGreaterThanOrEqual(
-            BackdropLegibilityBand.whiteContrastRatio(gammaLuminance: finalAtTitle),
-            MicroInteractionFeel.Tokens.backdropLegibilityCeilingContrast,
+            BackdropLegibilityBand.whiteContrastRatio(relativeLuminance: BackdropLegibilityBand.relativeLuminance(finalAtTitle)),
+            MicroInteractionFeel.Tokens.backdropLegibilityCeilingContrast - 1e-9,
             "contrast actually delivered at the title's own position must meet the ceiling, not just the modelled bottom-row value"
         )
     }
 
     func test_pointB_scrimAtShuffleRepeatRowTop_isFullOpacity() {
-        let whiteImageMetrics = whiteImage.artworkVisualMetrics()
-        let tone = ArtworkBackgroundToneMap.forMetrics(whiteImageMetrics)
-        let coverBottomRowLuminance = Double(whiteImage.controlAreaMaxLuminance())
-        let preCorrection = BackdropLegibilityBand.fullscreenBottomBandToneLuminance(
-            coverBottomRowLuminance: coverBottomRowLuminance,
-            artworkAverageLuminance: whiteImageMetrics.averageLuminance,
-            tone: tone
-        )
-        let correction = BackdropLegibilityBand.resolve(backgroundLuminance: preCorrection)
+        let (preCorrection, _, correction) = tintedPointBFixture(whiteImage)
 
         // controlsHeight (80) + row bottom padding (4) + row height (24) = 108pt.
         let shuffleRowTopDistanceAboveBottom = 80.0 + 4.0 + 24.0
         let scrimOpacity = BackdropLegibilityBand.bottomBandScrimOpacity(
             distanceAboveBottom: shuffleRowTopDistanceAboveBottom,
-            darkenOpacity: correction.darkenOpacity
+            darkenOpacity: correction.blendOpacity
         )
-        XCTAssertEqual(scrimOpacity, correction.darkenOpacity, accuracy: 0.0001)
+        XCTAssertEqual(scrimOpacity, correction.blendOpacity, accuracy: 0.0001)
 
-        let finalAtRow = BackdropLegibilityBand.apply(preCorrection, BackdropLegibilityBand.Correction(darkenOpacity: scrimOpacity, liftAmount: 0))
-        XCTAssertGreaterThanOrEqual(
-            BackdropLegibilityBand.whiteContrastRatio(gammaLuminance: finalAtRow),
-            MicroInteractionFeel.Tokens.backdropLegibilityCeilingContrast
+        let finalAtRow = BackdropLegibilityBand.applyTinted(
+            preCorrection, BackdropLegibilityBand.TintedCorrection(blendOpacity: scrimOpacity, liftAmount: 0, tint: correction.tint)
         )
+        // Bisection-precision epsilon — see the comment in
+        // test_pointB_whiteArtwork_finalContrastMeetsCeiling.
+        XCTAssertGreaterThanOrEqual(
+            BackdropLegibilityBand.whiteContrastRatio(relativeLuminance: BackdropLegibilityBand.relativeLuminance(finalAtRow)),
+            MicroInteractionFeel.Tokens.backdropLegibilityCeilingContrast - 1e-9
+        )
+    }
+
+    // MARK: - Point B tint: never Color.black, and proportional to the artwork.
+
+    func test_pointBTint_neverPureBlack_forNonBlackArtwork() {
+        let samples: [BackdropLegibilityBand.RGBColor] = [
+            .init(r: 1, g: 1, b: 1),       // white cover (the founder's reported case)
+            .init(r: 0.9, g: 0.2, b: 0.2), // saturated red cover
+            .init(r: 0.5, g: 0.5, b: 0.5), // mid gray
+            .init(r: 0.02, g: 0.02, b: 0.02), // near-black but not literal black
+        ]
+        for color in samples {
+            let tint = BackdropLegibilityBand.pointBTint(from: color)
+            XCTAssertNotEqual(tint, BackdropLegibilityBand.RGBColor(r: 0, g: 0, b: 0),
+                               "tint for \(color) must not collapse to pure black")
+            // Hue-preserving: the tint is a fixed positive scalar multiple of the input.
+            let shadeFactor = MicroInteractionFeel.Tokens.backdropLegibilityBottomBandTintShadeFactor
+            XCTAssertEqual(tint.r, color.r * shadeFactor, accuracy: 0.0001)
+            XCTAssertEqual(tint.g, color.g * shadeFactor, accuracy: 0.0001)
+            XCTAssertEqual(tint.b, color.b * shadeFactor, accuracy: 0.0001)
+        }
+    }
+
+    func test_pointBTint_literalBlackArtworkStaysBlack() {
+        // The only input for which the tint is (0,0,0) is a literally-black artwork —
+        // "darkened toward the artwork's own colour" degenerately has nothing to derive
+        // from, not a hardcoded Color.black default.
+        let tint = BackdropLegibilityBand.pointBTint(from: .init(r: 0, g: 0, b: 0))
+        XCTAssertEqual(tint, BackdropLegibilityBand.RGBColor(r: 0, g: 0, b: 0))
+    }
+
+    // MARK: - Tint gradient: C1-smooth (no discontinuity in value OR slope) at both zone
+    // boundaries — this is what actually fixes the founder's "visible top edge" complaint;
+    // the OLD linear ramp was already continuous in VALUE (see
+    // `test_bottomBandScrimOpacity_fadesToClearAboveTheFlatZone` below) but had a slope
+    // discontinuity the eye reads as an edge.
+
+    func test_bottomBandScrimOpacity_isC1SmoothAcrossZoneBoundaries() {
+        let darkenOpacity = 0.6
+        let flatHeight = Double(MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFlatHeight)
+        let fadeHeight = Double(MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFadeHeight)
+
+        func opacity(_ d: Double) -> Double {
+            BackdropLegibilityBand.bottomBandScrimOpacity(distanceAboveBottom: d, darkenOpacity: darkenOpacity)
+        }
+        func derivative(at d: Double, step: Double = 0.001) -> Double {
+            (opacity(d + step) - opacity(d - step)) / (2 * step)
+        }
+
+        // Value continuity at both boundaries.
+        XCTAssertEqual(opacity(flatHeight - 0.01), opacity(flatHeight + 0.01), accuracy: 0.01)
+        XCTAssertEqual(opacity(flatHeight + fadeHeight - 0.01), opacity(flatHeight + fadeHeight + 0.01), accuracy: 0.01)
+
+        // Slope continuity. A LINEAR fade has slope 0 in the flat zone but
+        // -darkenOpacity/fadeHeight (~ -0.0136 here) just inside the fade zone — a jump of
+        // that whole magnitude, which the 0.003 tolerance below would catch. Smoothstep's
+        // derivative is 0 at both ends of the fade zone by construction, so the measured
+        // jump for the shipped curve is orders of magnitude smaller than that tolerance.
+        let slopeBelowFlatBoundary = derivative(at: flatHeight - 0.05)
+        let slopeAboveFlatBoundary = derivative(at: flatHeight + 0.05)
+        XCTAssertEqual(slopeBelowFlatBoundary, slopeAboveFlatBoundary, accuracy: 0.003,
+                        "no kink where the flat zone meets the fade zone")
+
+        let slopeBelowFadeTop = derivative(at: flatHeight + fadeHeight - 0.05)
+        let slopeAboveFadeTop = derivative(at: flatHeight + fadeHeight + 0.05)
+        XCTAssertEqual(slopeBelowFadeTop, slopeAboveFadeTop, accuracy: 0.003,
+                        "no kink where the fade zone meets clear")
+    }
+
+    func test_bottomBandScrimGradientStops_matchesPureFunctionShape() {
+        let stops = BackdropLegibilityBand.bottomBandScrimGradientStops()
+        XCTAssertEqual(stops.first?.location, 0)
+        XCTAssertEqual(stops.first?.opacityFraction ?? -1, 0, accuracy: 0.0001, "top of the band is clear")
+        XCTAssertEqual(stops.last?.location, 1)
+        XCTAssertEqual(stops.last?.opacityFraction ?? -1, 1, accuracy: 0.0001, "bottom edge is full opacity")
+
+        // Monotonically non-decreasing top -> bottom (the curve never dips back down).
+        for i in 1..<stops.count {
+            XCTAssertGreaterThanOrEqual(stops[i].opacityFraction, stops[i - 1].opacityFraction - 0.0001)
+        }
     }
 
     func test_bottomBandScrimOpacity_fadesToClearAboveTheFlatZone() {
@@ -438,12 +521,12 @@ final class BackdropLegibilityBandTests: XCTestCase {
     }
 
     /// Contrast actually delivered at the title/shuffle-row positions — production only
-    /// ever renders the DARKEN portion of the point-B correction (never a lift), so this
-    /// mirrors that: the scrim opacity at `distance`, applied on top of the pre-correction
-    /// colour, ignoring any lift `resolveChannelCorrect` may have also computed.
-    private func pointBContrastAtDistance(_ distance: Double, preColor: BackdropLegibilityBand.RGBColor, darkenOpacity: Double) -> Double {
-        let scrimOpacity = BackdropLegibilityBand.bottomBandScrimOpacity(distanceAboveBottom: distance, darkenOpacity: darkenOpacity)
-        let final = BackdropLegibilityBand.apply(preColor, BackdropLegibilityBand.Correction(darkenOpacity: scrimOpacity, liftAmount: 0))
+    /// ever renders the BLEND (tint) portion of the point-B correction (never a lift), so
+    /// this mirrors that: the scrim opacity at `distance`, blended toward `tint` on top of
+    /// the pre-correction colour, ignoring any lift `resolveTinted` may have also computed.
+    private func pointBContrastAtDistance(_ distance: Double, preColor: BackdropLegibilityBand.RGBColor, tint: BackdropLegibilityBand.RGBColor, blendOpacity: Double) -> Double {
+        let scrimOpacity = BackdropLegibilityBand.bottomBandScrimOpacity(distanceAboveBottom: distance, darkenOpacity: blendOpacity)
+        let final = BackdropLegibilityBand.applyTinted(preColor, BackdropLegibilityBand.TintedCorrection(blendOpacity: scrimOpacity, liftAmount: 0, tint: tint))
         return BackdropLegibilityBand.whiteContrastRatio(relativeLuminance: BackdropLegibilityBand.relativeLuminance(final))
     }
 
@@ -469,9 +552,10 @@ final class BackdropLegibilityBandTests: XCTestCase {
             let coverColor = BackdropLegibilityBand.RGBColor(r: coverColorRaw.r, g: coverColorRaw.g, b: coverColorRaw.b)
             let averageColor = BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue)
             let preColorB = BackdropLegibilityBand.fullscreenBottomBandToneColor(coverBottomRowColor: coverColor, artworkAverageColor: averageColor, tone: tone)
-            let correctionB = BackdropLegibilityBand.resolveChannelCorrect(preCorrection: preColorB)
-            let titleContrast = pointBContrastAtDistance(Self.hoverTitleTopDistance, preColor: preColorB, darkenOpacity: correctionB.darkenOpacity)
-            let rowContrast = pointBContrastAtDistance(Self.shuffleRowTopDistance, preColor: preColorB, darkenOpacity: correctionB.darkenOpacity)
+            let tintB = BackdropLegibilityBand.pointBTint(from: averageColor)
+            let correctionB = BackdropLegibilityBand.resolveTinted(preCorrection: preColorB, tint: tintB)
+            let titleContrast = pointBContrastAtDistance(Self.hoverTitleTopDistance, preColor: preColorB, tint: tintB, blendOpacity: correctionB.blendOpacity)
+            let rowContrast = pointBContrastAtDistance(Self.shuffleRowTopDistance, preColor: preColorB, tint: tintB, blendOpacity: correctionB.blendOpacity)
 
             XCTAssertGreaterThanOrEqual(titleContrast, Self.ceiling - Self.boundaryTolerance, "gray \(clampedGray) pointB@title below ceiling: \(titleContrast)")
             XCTAssertGreaterThanOrEqual(rowContrast, Self.ceiling - Self.boundaryTolerance, "gray \(clampedGray) pointB@row below ceiling: \(rowContrast)")
@@ -516,9 +600,10 @@ final class BackdropLegibilityBandTests: XCTestCase {
             let coverColor = BackdropLegibilityBand.RGBColor(r: coverColorRaw.r, g: coverColorRaw.g, b: coverColorRaw.b)
             let averageColor = BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue)
             let preColorB = BackdropLegibilityBand.fullscreenBottomBandToneColor(coverBottomRowColor: coverColor, artworkAverageColor: averageColor, tone: tone)
-            let correctionB = BackdropLegibilityBand.resolveChannelCorrect(preCorrection: preColorB)
-            let titleContrast = pointBContrastAtDistance(Self.hoverTitleTopDistance, preColor: preColorB, darkenOpacity: correctionB.darkenOpacity)
-            let rowContrast = pointBContrastAtDistance(Self.shuffleRowTopDistance, preColor: preColorB, darkenOpacity: correctionB.darkenOpacity)
+            let tintB = BackdropLegibilityBand.pointBTint(from: averageColor)
+            let correctionB = BackdropLegibilityBand.resolveTinted(preCorrection: preColorB, tint: tintB)
+            let titleContrast = pointBContrastAtDistance(Self.hoverTitleTopDistance, preColor: preColorB, tint: tintB, blendOpacity: correctionB.blendOpacity)
+            let rowContrast = pointBContrastAtDistance(Self.shuffleRowTopDistance, preColor: preColorB, tint: tintB, blendOpacity: correctionB.blendOpacity)
 
             XCTAssertGreaterThanOrEqual(titleContrast, Self.ceiling - Self.boundaryTolerance, "\(name) pointB@title below ceiling: \(titleContrast)")
             XCTAssertGreaterThanOrEqual(rowContrast, Self.ceiling - Self.boundaryTolerance, "\(name) pointB@row below ceiling: \(rowContrast)")
@@ -557,18 +642,18 @@ final class BackdropLegibilityBandTests: XCTestCase {
             let p90Final = BackdropLegibilityBand.apply(p90Pre, BackdropLegibilityBand.resolve(backgroundLuminance: p90Pre))
             let p90Contrast = BackdropLegibilityBand.whiteContrastRatio(gammaLuminance: p90Final)
 
-            // Point B: scalar `controlAreaMaxLuminance`, asserted >= ceiling.
+            // Point B (tinted model): scalar `controlAreaMaxLuminance`, replicated across
+            // R/G/B (these fixtures are pure black/white, where the scalar and
+            // channel-correct models agree exactly, per the note above), tint from the
+            // artwork's own average colour, asserted >= ceiling.
             let coverLuminance = Double(image.controlAreaMaxLuminance())
-            let preColorB = BackdropLegibilityBand.fullscreenBottomBandToneLuminance(
-                coverBottomRowLuminance: coverLuminance, artworkAverageLuminance: metrics.averageLuminance, tone: tone
-            )
-            let correctionB = BackdropLegibilityBand.resolve(backgroundLuminance: preColorB)
-            let scrimAtTitle = BackdropLegibilityBand.bottomBandScrimOpacity(distanceAboveBottom: Self.hoverTitleTopDistance, darkenOpacity: correctionB.darkenOpacity)
-            let scrimAtRow = BackdropLegibilityBand.bottomBandScrimOpacity(distanceAboveBottom: Self.shuffleRowTopDistance, darkenOpacity: correctionB.darkenOpacity)
-            let titleFinal = BackdropLegibilityBand.apply(preColorB, BackdropLegibilityBand.Correction(darkenOpacity: scrimAtTitle, liftAmount: 0))
-            let rowFinal = BackdropLegibilityBand.apply(preColorB, BackdropLegibilityBand.Correction(darkenOpacity: scrimAtRow, liftAmount: 0))
-            let titleContrast = BackdropLegibilityBand.whiteContrastRatio(gammaLuminance: titleFinal)
-            let rowContrast = BackdropLegibilityBand.whiteContrastRatio(gammaLuminance: rowFinal)
+            let coverColorB = BackdropLegibilityBand.RGBColor(r: coverLuminance, g: coverLuminance, b: coverLuminance)
+            let averageColorB = BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue)
+            let preColorB = BackdropLegibilityBand.fullscreenBottomBandToneColor(coverBottomRowColor: coverColorB, artworkAverageColor: averageColorB, tone: tone)
+            let tintB = BackdropLegibilityBand.pointBTint(from: averageColorB)
+            let correctionB = BackdropLegibilityBand.resolveTinted(preCorrection: preColorB, tint: tintB)
+            let titleContrast = pointBContrastAtDistance(Self.hoverTitleTopDistance, preColor: preColorB, tint: tintB, blendOpacity: correctionB.blendOpacity)
+            let rowContrast = pointBContrastAtDistance(Self.shuffleRowTopDistance, preColor: preColorB, tint: tintB, blendOpacity: correctionB.blendOpacity)
 
             XCTAssertGreaterThanOrEqual(titleContrast, Self.ceiling - Self.boundaryTolerance, "\(name) pointB@title below ceiling: \(titleContrast)")
             XCTAssertGreaterThanOrEqual(rowContrast, Self.ceiling - Self.boundaryTolerance, "\(name) pointB@row below ceiling: \(rowContrast)")

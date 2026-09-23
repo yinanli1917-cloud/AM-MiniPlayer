@@ -508,7 +508,17 @@ public enum MicroInteractionFeel {
         public static let backdropLegibilityBottomBandFlatHeight: CGFloat = 80 + 4 + 24 + 8
         /// Height of the fade-to-clear zone ABOVE the flat zone (point B) — the scrim
         /// ramps from full `darkenOpacity` down to 0 across this band, never a hard edge.
+        /// The ramp itself is smoothstep-eased (zero slope at both the flat-zone and the
+        /// clear-zone boundary), not linear — see `BackdropLegibilityBand.bottomBandScrimOpacity`.
         public static let backdropLegibilityBottomBandFadeHeight: CGFloat = 44
+        /// research/progressive-blur-2026-09-23.md — point B's scrim tint is the cover's
+        /// own average colour darkened by this factor (hue-preserving "shadow" colour),
+        /// never a flat neutral black. Visual-feel tunable, like the heights above.
+        public static let backdropLegibilityBottomBandTintShadeFactor: Double = 0.16
+        /// research/progressive-blur-2026-09-23.md — max radius of the progressive blur
+        /// applied to the hero cover's bottom band (ramped 0→max toward the bottom by the
+        /// existing `progressiveBlurFromBottom` Metal shader). Visual-feel tunable.
+        public static let backdropLegibilityBottomBandBlurRadius: CGFloat = 28
     }
 }
 

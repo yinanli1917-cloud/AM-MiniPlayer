@@ -333,13 +333,20 @@ public struct MiniPlayerView: View {
     // `fullscreenBottomBandToneColor`. Channel-correct (colour-sweep review): a saturated
     // cover's gamma-mixed luminance can look "safely dark" while its true WCAG relative
     // luminance is not, so this resolves against the real per-channel colour, not a scalar.
-    private var bottomBandLegibilityCorrection: BackdropLegibilityBand.Correction {
+    // Point B's tint: the cover's own average colour darkened by a fixed shade factor
+    // (research/progressive-blur-2026-09-23.md) — "this cover's own shadow", never a flat
+    // neutral Color.black.
+    private var bottomBandTint: BackdropLegibilityBand.RGBColor {
+        BackdropLegibilityBand.pointBTint(from: artworkAverageColor)
+    }
+
+    private var bottomBandLegibilityCorrection: BackdropLegibilityBand.TintedCorrection {
         let preCorrection = BackdropLegibilityBand.fullscreenBottomBandToneColor(
             coverBottomRowColor: artworkBottomRowColor,
             artworkAverageColor: artworkAverageColor,
             tone: artworkTone
         )
-        return BackdropLegibilityBand.resolveChannelCorrect(preCorrection: preCorrection)
+        return BackdropLegibilityBand.resolveTinted(preCorrection: preCorrection, tint: bottomBandTint)
     }
 
     private func refreshEffectArtwork() {
@@ -379,35 +386,39 @@ extension MiniPlayerView {
             let artLeftX = (geo.size.width - artSize) / 2
 
             ZStack {
-                // Backdrop legibility band, point B (research/spec-2026-09-22-backdrop-legibility.md):
+                // Backdrop legibility band, point B (research/progressive-blur-2026-09-23.md):
                 // fullscreen album cover only — a bottom scrim behind the
                 // title/artist/shuffle-repeat/controls band, appearing only when the
                 // sharp cover behind it is too bright for the white foreground to read at
-                // >= 4.5:1. FULL darkenOpacity across the flat zone nearest the bottom
-                // (every real foreground element sits inside it, not at the very bottom
-                // pixel — see BackdropLegibilityBand.bottomBandScrimOpacity), fading
-                // linearly to clear across the fade zone above it. Never a hard edge.
-                if fullscreenAlbumCover && bottomBandLegibilityCorrection.darkenOpacity > 0 {
-                    let bandDarken = bottomBandLegibilityCorrection.darkenOpacity
+                // >= 4.5:1. The scrim tints toward the cover's OWN darkened average colour
+                // (never Color.black — bottomBandTint) at FULL blendOpacity across the flat
+                // zone nearest the bottom (every real foreground element sits inside it, not
+                // at the very bottom pixel), smoothstep-easing to clear across the fade zone
+                // above it (BackdropLegibilityBand.bottomBandScrimGradientStops) — a curve
+                // with zero slope at both zone boundaries, so there is no visible edge. The
+                // hero cover itself is progressively blurred over the same band in
+                // `floatingArtwork` — blur alone cannot lower luminance, so this tint still
+                // carries the whole WCAG contrast requirement; blur only kills texture/detail.
+                if fullscreenAlbumCover && bottomBandLegibilityCorrection.blendOpacity > 0 {
+                    let correction = bottomBandLegibilityCorrection
+                    let bandColor = Color(
+                        red: correction.tint.r, green: correction.tint.g, blue: correction.tint.b
+                    )
                     let flatHeight = MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFlatHeight
                     let fadeHeight = MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFadeHeight
                     let totalHeight = flatHeight + fadeHeight
-                    let fadeFraction = Double(fadeHeight / totalHeight)
+                    let stops = BackdropLegibilityBand.bottomBandScrimGradientStops(
+                        flatHeight: Double(flatHeight), fadeHeight: Double(fadeHeight)
+                    ).map { sample in
+                        Gradient.Stop(color: bandColor.opacity(correction.blendOpacity * sample.opacityFraction), location: sample.location)
+                    }
                     VStack(spacing: 0) {
                         Spacer()
-                        LinearGradient(
-                            stops: [
-                                .init(color: Color.black.opacity(0), location: 0),
-                                .init(color: Color.black.opacity(bandDarken), location: fadeFraction),
-                                .init(color: Color.black.opacity(bandDarken), location: 1.0)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .frame(height: totalHeight)
+                        LinearGradient(stops: stops, startPoint: .top, endPoint: .bottom)
+                            .frame(height: totalHeight)
                     }
                     .allowsHitTesting(false)
-                    .animation(.smooth(duration: MicroInteractionFeel.Tokens.artworkContrastDarkenAnimationDuration), value: bandDarken)
+                    .animation(.smooth(duration: MicroInteractionFeel.Tokens.artworkContrastDarkenAnimationDuration), value: correction.blendOpacity)
                 }
 
                 // ═══════════════════════════════════════════
@@ -639,11 +650,26 @@ extension MiniPlayerView {
                         .accessibilityHidden(true)
 
                     // Layer 2: clear hero cover participating in matchedGeometryEffect.
+                    // Progressive blur (research/progressive-blur-2026-09-23.md): ramps 0
+                    // at the top of the bottom control band to max AT the bottom edge —
+                    // kills the cover's own texture/detail behind the title/shuffle-repeat
+                    // row/controls, which today sit on the pixel-sharp cover (the existing
+                    // 100pt fade-to-Layer1 mask below is too short to reach them). Gated
+                    // with `ConditionalProgressiveBlur` (isEnabled toggles maxRadius to 0
+                    // rather than adding/removing the modifier) to keep this Image's
+                    // identity stable, and gated on the SAME `blendOpacity > 0` condition
+                    // as the tint scrim below — an in-band cover gets neither, unchanged.
                     Image(nsImage: artwork)
                         .resizable()
                         .scaledToFill()
                         .frame(width: displaySize, height: displaySize)
                         .clipped()
+                        .modifier(ConditionalProgressiveBlur(
+                            isEnabled: isAlbumPage && bottomBandLegibilityCorrection.blendOpacity > 0,
+                            maxRadius: MicroInteractionFeel.Tokens.backdropLegibilityBottomBandBlurRadius,
+                            blurHeight: MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFlatHeight
+                                + MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFadeHeight
+                        ))
                         .mask(
                             VStack(spacing: 0) {
                                 Rectangle().fill(Color.black)

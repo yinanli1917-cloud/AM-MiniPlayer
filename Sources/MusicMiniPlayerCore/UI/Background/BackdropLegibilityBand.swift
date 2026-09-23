@@ -7,10 +7,14 @@ import Foundation
  * [OUTPUT]: Exports BackdropLegibilityBand — a pure luminance-band correction (darken/lift) plus
  *           the analytic pipeline replicas (`fluidBackdropToneLuminance`,
  *           `fullscreenBottomBandToneLuminance`) that predict the on-screen background luminance
- *           at the two call sites, reused by both production code and tests.
+ *           at the two call sites, reused by both production code and tests. Also exports the
+ *           point-B-only TINTED variant (`TintedCorrection`, `pointBTint`, `resolveTinted`,
+ *           `applyTinted`, `bottomBandScrimGradientStops`) — research/progressive-blur-2026-09-23.md
+ *           — which blends toward an artwork-derived dark tint instead of pure black.
  * [POS]: Shared legibility-band utility living alongside FluidGradientBackground.swift; consumed by
- *        FluidGradientBackground (point A) and MiniPlayerView's fullscreen album bottom band
- *        (point B) to keep white foregrounds legible against any artwork-derived background.
+ *        FluidGradientBackground (point A, black-scrim model, unchanged) and MiniPlayerView's
+ *        fullscreen album bottom band (point B, tinted-blend + progressive-blur model) to keep
+ *        white foregrounds legible against any artwork-derived background.
  */
 
 // research/spec-2026-09-22-backdrop-legibility.md — 背景明度带（Backdrop luminance band）.
@@ -355,8 +359,17 @@ public enum BackdropLegibilityBand {
     /// the bottom edge (must cover every real foreground element — title in hover mode,
     /// shuffle/repeat row, SharedBottomControls — none of which sit at the very bottom
     /// pixel, so a plain 0->darken ramp across the whole band under-darkens exactly where
-    /// the controls are), fading LINEARLY to 0 across the fade zone above the flat zone,
-    /// clear beyond both. `distanceAboveBottom` and the two heights are in device points.
+    /// the controls are), fading to 0 across the fade zone above the flat zone via a
+    /// SMOOTHSTEP ease (not linear — research/progressive-blur-2026-09-23.md), clear
+    /// beyond both. Smoothstep's derivative is exactly 0 at both ends of the fade zone,
+    /// matching the flat zone's own slope (0, it's constant) below and the clear zone's
+    /// slope (0, it's constant zero) above — so the whole curve is C1-continuous with no
+    /// kink at either zone boundary. A plain linear ramp is only C0 (continuous VALUE, but
+    /// its slope jumps from 0 to -darkenOpacity/fadeHeight right at the flat boundary and
+    /// back to 0 at the top) — a slope discontinuity reads as a visible edge to the eye
+    /// even though no value ever jumps, which is what the founder's "visible top edge"
+    /// complaint was actually seeing. `distanceAboveBottom` and the two heights are in
+    /// device points.
     static func bottomBandScrimOpacity(
         distanceAboveBottom: Double,
         darkenOpacity: Double,
@@ -365,9 +378,143 @@ public enum BackdropLegibilityBand {
     ) -> Double {
         guard darkenOpacity > 0 else { return 0 }
         if distanceAboveBottom <= flatHeight { return darkenOpacity }
-        let fadeProgress = (distanceAboveBottom - flatHeight) / max(fadeHeight, 0.0001)
-        if fadeProgress >= 1 { return 0 }
-        return darkenOpacity * (1 - fadeProgress)
+        let t = min(max((distanceAboveBottom - flatHeight) / max(fadeHeight, 0.0001), 0), 1)
+        if t >= 1 { return 0 }
+        let eased = t * t * (3 - 2 * t) // smoothstep: eased(0)=0, eased(1)=1, zero slope at both ends
+        return darkenOpacity * (1 - eased)
+    }
+
+    /// Densely samples `bottomBandScrimOpacity`'s eased curve (at `darkenOpacity` == 1, i.e.
+    /// the normalized 0...1 shape) into `LinearGradient`-ready stops, top (location 0) to
+    /// bottom (location 1). SwiftUI's `LinearGradient` only interpolates LINEARLY between
+    /// its own stops, so a handful of hand-picked stops would silently reintroduce the same
+    /// kind of slope kink the pure function was just fixed to not have — enough samples
+    /// (`sampleCount`) make the piecewise-linear render visually indistinguishable from the
+    /// smooth analytic curve, and keeps the rendered gradient and the tested pure function
+    /// the same shape by construction rather than two independently-hand-tuned curves that
+    /// can drift apart. Callers scale `opacityFraction` by the real `darkenOpacity`/
+    /// `blendOpacity` and use `location` directly as the `Gradient.Stop` location.
+    public static func bottomBandScrimGradientStops(
+        sampleCount: Int = 24,
+        flatHeight: Double = Double(MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFlatHeight),
+        fadeHeight: Double = Double(MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFadeHeight)
+    ) -> [(location: Double, opacityFraction: Double)] {
+        let totalHeight = flatHeight + fadeHeight
+        guard totalHeight > 0, sampleCount > 1 else { return [(0, 0), (1, 1)] }
+        return (0...sampleCount).map { i in
+            let location = Double(i) / Double(sampleCount) // 0 = top of band, 1 = bottom edge
+            let distanceAboveBottom = totalHeight * (1 - location)
+            let opacityFraction = bottomBandScrimOpacity(
+                distanceAboveBottom: distanceAboveBottom, darkenOpacity: 1.0,
+                flatHeight: flatHeight, fadeHeight: fadeHeight
+            )
+            return (location, opacityFraction)
+        }
+    }
+
+    // MARK: - Point B: artwork-tinted variant (research/progressive-blur-2026-09-23.md)
+    //
+    // Replaces the flat `Color.black` scrim with a blend toward a DARK, ARTWORK-DERIVED
+    // tint (never literal black) plus (production-side, MiniPlayerView) a progressive blur
+    // of the hero cover itself. Blur alone cannot lower luminance (a blurred white pixel is
+    // still white), so the WCAG contrast requirement still has to come entirely from this
+    // blend — blending toward a black tint is exactly the tint=(0,0,0) special case of
+    // blending toward any RGB tint, so the ceiling-darken math generalizes to a single
+    // bisection-on-alpha solve parameterized by the tint colour, reusing the same channel-
+    // correct machinery as `resolveChannelCorrect` above. Point A is UNCHANGED — it still
+    // uses `Correction`/`resolveChannelCorrect`/pure black.
+
+    /// Point B's correction result when blending toward an artwork tint instead of black.
+    public struct TintedCorrection: Equatable {
+        /// Blend-toward-`tint` alpha (0...1), needed when the background is too bright.
+        public let blendOpacity: Double
+        /// Additive `.brightness`-style lift, needed when the background is too dark — a
+        /// dark tint cannot fix a too-dark background, so this falls back to the same
+        /// hue-preserving lift the untinted model uses (unrendered at point B today, same
+        /// as before this change — see research doc).
+        public let liftAmount: Double
+        public let tint: RGBColor
+
+        public static func zero(tint: RGBColor) -> TintedCorrection {
+            TintedCorrection(blendOpacity: 0, liftAmount: 0, tint: tint)
+        }
+
+        public init(blendOpacity: Double, liftAmount: Double, tint: RGBColor) {
+            self.blendOpacity = blendOpacity
+            self.liftAmount = liftAmount
+            self.tint = tint
+        }
+    }
+
+    /// Derives point B's scrim tint from the artwork's own average colour: a fixed shade
+    /// factor darkens it while preserving hue, so the scrim always reads as "this cover's
+    /// own shadow" rather than a flat neutral slab. Never returns literal (0,0,0) unless
+    /// the artwork itself averages to literal black (`shadeFactor * 0 == 0` either way).
+    public static func pointBTint(
+        from artworkAverageColor: RGBColor,
+        shadeFactor: Double = MicroInteractionFeel.Tokens.backdropLegibilityBottomBandTintShadeFactor
+    ) -> RGBColor {
+        RGBColor(
+            r: artworkAverageColor.r * shadeFactor,
+            g: artworkAverageColor.g * shadeFactor,
+            b: artworkAverageColor.b * shadeFactor
+        )
+    }
+
+    /// Uniform per-channel blend toward `tint` by `alpha` — the same shape as the real
+    /// compositor's colour-over-colour blend (SwiftUI applies this per channel).
+    public static func blend(_ from: RGBColor, toward tint: RGBColor, alpha: Double) -> RGBColor {
+        let a = min(max(alpha, 0), 1)
+        return RGBColor(
+            r: from.r * (1 - a) + tint.r * a,
+            g: from.g * (1 - a) + tint.g * a,
+            b: from.b * (1 - a) + tint.b * a
+        )
+    }
+
+    /// Channel-correct tinted band correction: solves for the blend alpha (bright case) or
+    /// additive lift (dark case) that brings `preCorrection`'s TRUE relative luminance to
+    /// exactly the ceiling/floor boundary — identical bisection strategy to
+    /// `resolveChannelCorrect`, generalized from "blend toward black" to "blend toward any
+    /// tint". Generic for any hue of `preCorrection` OR `tint`.
+    public static func resolveTinted(
+        preCorrection: RGBColor,
+        tint: RGBColor,
+        ceilingContrast: Double = MicroInteractionFeel.Tokens.backdropLegibilityCeilingContrast,
+        floorContrast: Double = MicroInteractionFeel.Tokens.backdropLegibilityFloorContrast
+    ) -> TintedCorrection {
+        let contrast = whiteContrastRatio(relativeLuminance: relativeLuminance(preCorrection))
+
+        if contrast < ceilingContrast {
+            // Blending toward a strictly-darker tint monotonically RAISES contrast.
+            let alpha = bisectRoot(low: 0, high: 1) { alpha in
+                let blended = blend(preCorrection, toward: tint, alpha: alpha)
+                return whiteContrastRatio(relativeLuminance: relativeLuminance(blended)) - ceilingContrast
+            }
+            return TintedCorrection(blendOpacity: alpha, liftAmount: 0, tint: tint)
+        }
+
+        if contrast > floorContrast {
+            // Lifting (delta up) monotonically LOWERS contrast, independent of the tint.
+            let delta = bisectRoot(low: 0, high: 1) { delta in
+                let lifted = RGBColor(r: preCorrection.r + delta, g: preCorrection.g + delta, b: preCorrection.b + delta)
+                return floorContrast - whiteContrastRatio(relativeLuminance: relativeLuminance(lifted))
+            }
+            return TintedCorrection(blendOpacity: 0, liftAmount: delta, tint: tint)
+        }
+
+        return .zero(tint: tint)
+    }
+
+    /// Applies a `TintedCorrection` to an RGB background the way the compositor does:
+    /// blend toward the tint, then additive lift, both uniform across channels.
+    public static func applyTinted(_ color: RGBColor, _ correction: TintedCorrection) -> RGBColor {
+        let blended = blend(color, toward: correction.tint, alpha: correction.blendOpacity)
+        return RGBColor(
+            r: blended.r + correction.liftAmount,
+            g: blended.g + correction.liftAmount,
+            b: blended.b + correction.liftAmount
+        )
     }
 
     // MARK: - SwiftUI modifier formulas (see spec's 解析模型)
