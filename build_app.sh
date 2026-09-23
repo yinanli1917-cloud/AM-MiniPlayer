@@ -257,6 +257,34 @@ cat > nanoPod.app/Contents/Info.plist << PLIST
 </plist>
 PLIST
 
+# Worktree cache isolation: a build made inside a LINKED git worktree (this
+# checkout's .git is a file pointing elsewhere, not the repo's own .git dir)
+# must not share ~/Library/Application Support/nanoPod/ with the main
+# checkout's installed app — two builds writing the founder's real caches at
+# different schema versions clobber each other (2026-09-22 incident, see
+# NanoPodCacheLocation). NANOPOD_CACHE_NAMESPACE forces a namespace in any
+# checkout; NANOPOD_SHARED_CACHE=1 opts a worktree build back into the shared
+# production directory. The main checkout never gets the key.
+NANOPOD_CACHE_NAMESPACE_VALUE="${NANOPOD_CACHE_NAMESPACE:-}"
+if [ -z "$NANOPOD_CACHE_NAMESPACE_VALUE" ] && [ "${NANOPOD_SHARED_CACHE:-}" != "1" ] && command -v git &> /dev/null; then
+    GIT_DIR_ABS="$(git rev-parse --absolute-git-dir 2>/dev/null || true)"
+    GIT_COMMON_DIR_RAW="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+    GIT_COMMON_DIR_ABS=""
+    if [ -n "$GIT_COMMON_DIR_RAW" ]; then
+        GIT_COMMON_DIR_ABS="$(cd "$GIT_COMMON_DIR_RAW" 2>/dev/null && pwd || true)"
+    fi
+    if [ -n "$GIT_DIR_ABS" ] && [ -n "$GIT_COMMON_DIR_ABS" ] && [ "$GIT_DIR_ABS" != "$GIT_COMMON_DIR_ABS" ]; then
+        WORKTREE_TOP="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+        if [ -n "$WORKTREE_TOP" ]; then
+            NANOPOD_CACHE_NAMESPACE_VALUE="worktree-$(basename "$WORKTREE_TOP")"
+        fi
+    fi
+fi
+if [ -n "$NANOPOD_CACHE_NAMESPACE_VALUE" ]; then
+    /usr/libexec/PlistBuddy -c "Add :NPCacheNamespace string $NANOPOD_CACHE_NAMESPACE_VALUE" nanoPod.app/Contents/Info.plist
+    echo "🗂️  Cache isolated under ~/Library/Application Support/nanoPod-dev/$NANOPOD_CACHE_NAMESPACE_VALUE (namespace: $NANOPOD_CACHE_NAMESPACE_VALUE)"
+fi
+
 write_build_marker
 
 # Create entitlements file for code signing
