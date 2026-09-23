@@ -83,7 +83,15 @@ public final class MetadataResolver {
     /// Persists resolved metadata (localized + CN tiers, disjoint stores)
     /// so warm cold starts (second play of a known song) skip iTunes
     /// entirely — each tier replays only rows it produced.
+    #if DEBUG
+    /// Test seam: tests that drive the real lyrics pipeline point
+    /// `shared.diskCache` at a temp file instead of the user's real
+    /// metadata_cache.json (same pattern as `LyricsFetcher.lyricsDiskCache`).
+    /// Production is immutable.
+    public internal(set) var diskCache: MetadataDiskCache
+    #else
     public let diskCache: MetadataDiskCache
+    #endif
 
     /// Internal seam: tests construct an isolated resolver against a temp
     /// cache file. Production always goes through `shared` (defaultURL).

@@ -171,6 +171,24 @@ public enum HTTPClient {
         return URLSession(configuration: config)
     }()
 
+    #if DEBUG
+    /// Test seam: when set, every outgoing request (GET, POST, warmup HEAD)
+    /// is offered to this closure first; a non-nil error is thrown in place
+    /// of the network call and recorded by the ledger like a transport
+    /// failure. Lets tests that drive the real lyrics pipeline deny and log
+    /// network access. Nil in production and reset by each test that arms it.
+    static var requestGateForTesting: (@Sendable (URLRequest) -> Error?)?
+
+    private static func performSessionRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        if let gate = requestGateForTesting, let denied = gate(request) { throw denied }
+        return try await sharedSession.data(for: request)
+    }
+    #else
+    private static func performSessionRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        try await sharedSession.data(for: request)
+    }
+    #endif
+
     // ── 错误类型 ──
 
     public enum HTTPError: Error, LocalizedError {
@@ -259,7 +277,7 @@ public enum HTTPClient {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await sharedSession.data(for: request)
+            (data, response) = try await performSessionRequest(request)
         } catch {
             NetworkOutcomeLedger.current?.record(failure: error)
             throw error
@@ -339,7 +357,7 @@ public enum HTTPClient {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await sharedSession.data(for: request)
+            (data, response) = try await performSessionRequest(request)
         } catch {
             NetworkOutcomeLedger.current?.record(failure: error)
             throw error
@@ -374,7 +392,7 @@ public enum HTTPClient {
                 var request = URLRequest(url: url)
                 request.httpMethod = "HEAD"
                 request.timeoutInterval = 3.0
-                _ = try? await sharedSession.data(for: request)
+                _ = try? await performSessionRequest(request)
             }
         }
     }

@@ -14,14 +14,21 @@ final class LyricsLateTranslationInsertTests: XCTestCase {
 
     private var hostWindow: NSWindow?
     private var hostedSurfaces: [NativeLyricsSurfaceView] = []
-    private var savedDiskCache: LyricsDiskCache?
+    private var isolation: LyricsPipelineTestIsolation!
     private var savedShowTranslation: Bool?
 
     @MainActor
     override func setUp() {
         super.setUp()
         savedShowTranslation = LyricsService.shared.showTranslation
-        savedDiskCache = LyricsFetcher.shared.lyricsDiskCache
+        isolation = LyricsPipelineTestIsolation()
+    }
+
+    // XCTest runs this before the synchronous tearDown below.
+    override func tearDown() async throws {
+        await isolation.tearDown()
+        isolation = nil
+        try await super.tearDown()
     }
 
     @MainActor
@@ -30,9 +37,6 @@ final class LyricsLateTranslationInsertTests: XCTestCase {
         hostedSurfaces.removeAll()
         hostWindow?.orderOut(nil)
         hostWindow = nil
-        if let savedDiskCache {
-            LyricsFetcher.shared.lyricsDiskCache = savedDiskCache
-        }
         if let savedShowTranslation {
             LyricsService.shared.showTranslation = savedShowTranslation
         }
@@ -88,11 +92,7 @@ final class LyricsLateTranslationInsertTests: XCTestCase {
 
     @MainActor
     func test_applyLateTranslationWriteback_keepsContentAndWordAxis() {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("late-tr-\(UUID().uuidString).json")
-        let temp = LyricsDiskCache(fileURL: url)
-        LyricsFetcher.shared.lyricsDiskCache = temp
-        defer { try? FileManager.default.removeItem(at: url) }
+        let temp = isolation.lyricsCache
 
         let title = "Late Insert \(UUID().uuidString.prefix(8))"
         let artist = "Sidecar Artist"
@@ -132,11 +132,7 @@ final class LyricsLateTranslationInsertTests: XCTestCase {
 
     @MainActor
     func test_applyLateTranslationWriteback_rejectsSongChange() {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("late-tr-rej-\(UUID().uuidString).json")
-        let temp = LyricsDiskCache(fileURL: url)
-        LyricsFetcher.shared.lyricsDiskCache = temp
-        defer { try? FileManager.default.removeItem(at: url) }
+        let temp = isolation.lyricsCache
 
         let title = "Reject \(UUID().uuidString.prefix(8))"
         let lines = [wordLine("keep this axis intact", start: 0)]
