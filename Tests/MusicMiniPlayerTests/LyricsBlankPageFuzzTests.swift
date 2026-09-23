@@ -332,21 +332,31 @@ final class LyricsBlankPageFuzzTests: XCTestCase {
 
         applyClean(songA, on: service)
         applyClean(songB, on: service)
-        applyRawTornComposite(nameSong: songA, fieldSong: songB, pid: songA.pid, on: service)
+        // pid: nil — the "PID not yet backfilled" window (this codebase's own
+        // documented case: "Empty persistentID = title-based dedup; cache
+        // backfill happens when SB returns ID", MusicController.swift:1438).
+        // Using A's own pid here instead would make PID authority (a matching
+        // persistentID proves the same physical song regardless of tuple
+        // drift — isLikelySameSongMetadataCorrection:1377-1380, BY DESIGN)
+        // correctly call this "still song A" despite the torn album/duration,
+        // which would be a different, narrower scenario than the one under
+        // test here — a fetch resolving with NO persistentID at all.
+        applyRawTornComposite(nameSong: songA, fieldSong: songB, pid: nil, on: service)
         XCTAssertTrue(service.lyrics.isEmpty,
             "sanity: LyricsService's own contract for a torn composite is unchanged by the MusicController fix — it still blanks")
 
         // The self-heal's precise identity check (full title+artist+duration+
-        // album, not just title+artist) must recognize the mismatch...
-        let identitiesMatch = service.matchesCurrentFetchIdentity(
-            title: songA.title, artist: songA.artist, duration: songA.duration, album: songA.album
+        // album+PID, tolerant of ordinary duration-rounding disagreement —
+        // see LyricsService.isCurrentFetchIdentity) must recognize the
+        // mismatch...
+        let identitiesMatch = service.isCurrentFetchIdentity(
+            title: songA.title, artist: songA.artist, duration: songA.duration, album: songA.album, persistentID: songA.pid
         )
         XCTAssertFalse(identitiesMatch, "the service's tracked identity must not match A's real identity after the torn call")
         XCTAssertTrue(MusicController.shouldReissueLyricsFetchForStaleIdentity(
             lyricsRowsAreEmpty: service.lyrics.isEmpty,
             lyricsMatchesControllerIdentity: identitiesMatch,
-            lastReissueStableSongID: nil,
-            controllerStableSongID: LyricsService.stableSongIdentity(title: songA.title, artist: songA.artist),
+            reissueCountForCurrentTrack: 0,
             lastReissueAt: nil,
             now: Date()
         ), "the self-heal decision must say 'reissue' for this exact torn-composite state")

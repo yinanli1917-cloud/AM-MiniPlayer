@@ -193,7 +193,35 @@ drwxr-xr-x@   2 yinanli  staff      64 Sep 19 18:08:12 2026 updates
 ```
 **完全一致，无任何变化。** （`lyrics-backfill-census.jsonl`/`playback-history.json` 两个文件的 mtime 早于本次修复工作开始，属于创始人机器上真实 app 会话自己的活动，与本次测试运行无关，两次快照里也确认没有变化。）
 
-### 7.5 未覆盖 / 后续
+### 7.5 二次加固（协调者复审 a82aa98 后指出的漏洞，2026-09-22 同日）
+
+协调者复审 `a82aa98` 指出一个真实漏洞：自愈的"每个目标身份 5 秒冷却"**没有总上限**——如果重发出去的那次 `fetchLyrics` 本身又被拒绝或被别的路径重新按不同方式归一化（比如被自己的 stability guard 拦下，或者 controller 的 `duration` 与 service 内部取整分桶因四舍五入边界不一致），不匹配状态会一直存在，心跳每 5 秒就会重发一次——一直到歌放完，且每次重发都可能真的打到网络。改法：
+
+1. **加总上限**：新增 `lyricsIdentityReissueCountForCurrentTrack`（+`maxLyricsIdentityReissuesPerTrack = 2`），只在**真正的换歌**（`handleTrackChange` 与 `applySnapshot` 的 `trackChanged` 分支）里清零——不再按"距上次重发是否过了 cooldown"这种会无限重置的条件来判断，纯计数到上限就永久沉默，直到下一次真实换歌。`shouldReissueLyricsFetchForStaleIdentity` 签名相应改为 `reissueCountForCurrentTrack:`/`maxReissuesPerTrack:`（去掉了原来"按 stable ID 分桶冷却"的参数，因为总上限已经比它更强）。
+2. **身份比对换成同一套函数，而不是平行实现**：`LyricsService.matchesCurrentFetchIdentity`（严格比对完整 `songID` 字符串）被替换为 `isCurrentFetchIdentity(title:artist:duration:album:persistentID:)`——内部先试严格 `songID` 相等，不等则退回 `fetchLyrics` 自己稳定性护栏用的同一个 `isLikelySameSongMetadataCorrection`（PID 优先、专辑兼容、时长容差 2.0s）。这样自愈的"是否算同一首歌"和 `fetchLyrics` 自己认定"是否算同一首歌"是**同一套判定**，不会出现"controller 的 duration 和 service 内部取整分桶因四舍五入边界不一致"就被误判成不同歌曲的情况。
+
+**新增测试**（均在 `TrackIdentityDisciplineTests.swift`「Door 5b」）：
+- `test_selfHeal_hardCapsAtMaxReissuesPerTrack_evenPastCooldownAndTime`：已重发 2 次、冷却早已过期、不匹配仍未解决——总上限必须仍然说"不重发"（纯冷却做不到这点）。
+- `test_selfHeal_respectsACustomCap`：自定义上限参数生效。
+- **协调者要求的测试 (a)** `test_selfHeal_exactlyCappedReissuesOver60sOfFakeHeartbeats_thenSilence_whenMismatchNeverResolves`：模拟 MusicController 心跳真实节奏——每 2 秒一次假心跳，跑满 60 秒（30 拍），不匹配状态全程不解决（对应"重发出去的那次也被拒绝/归一化不同"这一失败模式）。断言：全程恰好触发 2 次重发（等于 `maxLyricsIdentityReissuesPerTrack`），之后 28 拍全部沉默——不是"跑到测试超时才发现没停"，而是逐拍记录每一次判定结果直接断言总数。
+- **协调者要求的测试 (b)** `test_selfHeal_identityCheck_toleratesSubSecondDurationRoundingFlip`：真实播放时长 137.6（取整桶 138）与 137.4（取整桶 137）——只差 0.2 秒，却因为正好卡在四舍五入的 .5 分界线上落进两个不同的整数桶。用 `debugSeedDisplayedLyricsForTesting` 把 service 的当前身份钉在 137.6，再查 137.4，`isCurrentFetchIdentity` 必须判定"仍是同一首歌"（因为 `isLikelySameSongMetadataCorrection` 的 2.0 秒容差远大于这 0.2 秒的真实差异）——绿。
+- `LyricsBlankPageFuzzTests.swift` 的 `test_selfHeal_aloneRecoversATornCompositeState_regardlessOfCause` 同步改造：撕裂调用改用 `pid: nil`（"PID 尚未回填"这一本项目自己文档化过的真实窗口），而不是像第一版那样直接传 A 自己的 pid——传 A 自己的 pid 会让 PID 权威规则（按设计，PID 一致即判定"physical song 相同"，无视专辑/时长漂移）正确地判定"仍是 A"，这是一个**更窄、且已经被设计覆盖**的场景，不是本测试要盯的"某个未知路径把 PID 也一起撕裂/未回填"的场景。
+
+**再次跑测试 + mtime 核对**：`LyricsBlankPageFuzzTests|TrackIdentityDisciplineTests|RadioTrackChangeDebounceTests|LyricsMissMemoTests` 共 55 个测试，0 失败，0.06 秒。
+
+**Before**（本次二次加固修复后、`swift test` 之前）：
+```
+drwxr-xr-x@  98 yinanli  staff    3136 Sep 22 18:54:15 2026 ArtworkCache
+-rw-r--r--@   1 yinanli  staff   68760 Sep 22 18:59:52 2026 lyrics-backfill-census.jsonl
+-rw-r--r--@   1 yinanli  staff  173071 Sep 22 18:54:17 2026 lyrics_cache.json
+-rw-r--r--@   1 yinanli  staff   24086 Sep 22 18:54:16 2026 metadata_cache.json
+-rw-r--r--@   1 yinanli  staff   10080 Sep 22 18:59:51 2026 playback-history.json
+-rw-r--r--@   1 yinanli  staff   43572 Sep 22 18:51:01 2026 translation_cache.json
+drwxr-xr-x@   2 yinanli  staff      64 Sep 19 18:08:12 2026 updates
+```
+**After**（跑完 55 个测试之后）：完全一致（逐字节 diff 无输出），未再触发任何真实网络/磁盘写入。
+
+### 7.6 未覆盖 / 后续
 
 - 本次只修了 `handleTrackChange`/`retryDurationFetch` 这两处已确认的"撕裂"点，加上一个通用自愈兜底。`MusicController.swift` 里还有 `LyricsView.swift` 三处 UI 触发的 `fetchLyrics` 调用（关闭中/重试按钮等）——已核实它们的字段都在"同一处、同一时刻"从 `musicController`/`title` 等来源一次性取出，不存在"捕获值+实时值混用"的结构，不需要同款修复，但未新增测试专门盯死这一点（超出本任务范围）。
 - 通用自愈（`shouldReissueLyricsFetchForStaleIdentity`）目前挂在 `applySnapshot` 尾部，即两秒一次的轮询心跳；没有验证过它在"电台在 5 秒内反复横跳好几次"这类极端场景下的行为细节（冷却桶按 title+artist 分，横跳到第三首歌会开新桶重发一次）——这是设计上刻意的行为（新目标不该被旧目标的冷却拖累），但没有专门写一条端到端测试去跑这个多首歌交替的场景。

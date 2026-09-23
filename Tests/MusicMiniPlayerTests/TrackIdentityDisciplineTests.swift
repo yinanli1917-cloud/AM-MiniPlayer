@@ -230,15 +230,25 @@ final class TrackIdentityDisciplineTests: XCTestCase {
     // Backstop for the whole bug class, not just the two races fixed above:
     // reissue a clean fetch when LyricsService's own tracked full identity
     // (title+artist+duration+album) disagrees with the controller's current
-    // track while the page is blank — bounded so it can never storm.
+    // track while the page is blank.
+    //
+    // 2026-09-22 hardening (coordinator review of a82aa98): a per-identity
+    // cooldown ALONE has no total cap — if the reissued fetch is itself
+    // rejected or normalized differently (its own stability guard blocks it,
+    // or the mismatch is simply permanent), the heartbeat would reissue
+    // forever, every `cooldown` seconds, for the whole song — a silent
+    // network-hitting loop. `reissueCountForCurrentTrack` + `maxReissuesPerTrack`
+    // is a HARD total cap, reset only by the caller on a real track change
+    // (never by these pure-function tests, which is exactly why the "over 60s
+    // of fake heartbeats" test below drives the counter itself rather than
+    // asserting a single call).
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     func test_selfHeal_reissuesWhenBlankAndIdentityMismatched() {
         XCTAssertTrue(MusicController.shouldReissueLyricsFetchForStaleIdentity(
             lyricsRowsAreEmpty: true,
             lyricsMatchesControllerIdentity: false,
-            lastReissueStableSongID: nil,
-            controllerStableSongID: "real song|real artist",
+            reissueCountForCurrentTrack: 0,
             lastReissueAt: nil,
             now: Date()
         ))
@@ -248,8 +258,7 @@ final class TrackIdentityDisciplineTests: XCTestCase {
         XCTAssertFalse(MusicController.shouldReissueLyricsFetchForStaleIdentity(
             lyricsRowsAreEmpty: false,
             lyricsMatchesControllerIdentity: false,
-            lastReissueStableSongID: nil,
-            controllerStableSongID: "real song|real artist",
+            reissueCountForCurrentTrack: 0,
             lastReissueAt: nil,
             now: Date()
         ), "content on screen must never be interrupted by the self-heal, even if identity bookkeeping looks off")
@@ -259,8 +268,7 @@ final class TrackIdentityDisciplineTests: XCTestCase {
         XCTAssertFalse(MusicController.shouldReissueLyricsFetchForStaleIdentity(
             lyricsRowsAreEmpty: true,
             lyricsMatchesControllerIdentity: true,
-            lastReissueStableSongID: nil,
-            controllerStableSongID: "real song|real artist",
+            reissueCountForCurrentTrack: 0,
             lastReissueAt: nil,
             now: Date()
         ), "a genuine, still-in-flight search for the right song must not be reissued")
@@ -271,37 +279,120 @@ final class TrackIdentityDisciplineTests: XCTestCase {
         XCTAssertFalse(MusicController.shouldReissueLyricsFetchForStaleIdentity(
             lyricsRowsAreEmpty: true,
             lyricsMatchesControllerIdentity: false,
-            lastReissueStableSongID: "real song|real artist",
-            controllerStableSongID: "real song|real artist",
+            reissueCountForCurrentTrack: 0,
             lastReissueAt: now.addingTimeInterval(-1.0),
             now: now,
             cooldown: 5.0
         ), "a just-reissued identity must not be reissued again inside the cooldown — no storm")
     }
 
-    func test_selfHeal_reissuesAgainAfterCooldownElapses() {
+    func test_selfHeal_reissuesAgainAfterCooldownElapses_ifUnderTheCap() {
         let now = Date()
         XCTAssertTrue(MusicController.shouldReissueLyricsFetchForStaleIdentity(
             lyricsRowsAreEmpty: true,
             lyricsMatchesControllerIdentity: false,
-            lastReissueStableSongID: "real song|real artist",
-            controllerStableSongID: "real song|real artist",
+            reissueCountForCurrentTrack: 1,
             lastReissueAt: now.addingTimeInterval(-6.0),
             now: now,
             cooldown: 5.0
         ))
     }
 
-    func test_selfHeal_differentTargetIdentity_isNotBlockedByAnotherIdentitysCooldown() {
+    // MARK: Door 5b — total cap (2026-09-22 hardening)
+
+    func test_selfHeal_hardCapsAtMaxReissuesPerTrack_evenPastCooldownAndTime() {
         let now = Date()
+        // Two attempts already made for this track, cooldown long expired,
+        // mismatch still unresolved — a per-identity cooldown alone would say
+        // "yes, reissue again". The hard cap (default 2) must say no.
+        XCTAssertFalse(MusicController.shouldReissueLyricsFetchForStaleIdentity(
+            lyricsRowsAreEmpty: true,
+            lyricsMatchesControllerIdentity: false,
+            reissueCountForCurrentTrack: 2,
+            lastReissueAt: now.addingTimeInterval(-3600),
+            now: now,
+            cooldown: 5.0
+        ), "the total cap must hold even long after the cooldown has expired — otherwise a permanent mismatch loops forever")
+    }
+
+    func test_selfHeal_respectsACustomCap() {
+        XCTAssertFalse(MusicController.shouldReissueLyricsFetchForStaleIdentity(
+            lyricsRowsAreEmpty: true,
+            lyricsMatchesControllerIdentity: false,
+            reissueCountForCurrentTrack: 1,
+            maxReissuesPerTrack: 1,
+            lastReissueAt: nil,
+            now: Date()
+        ))
         XCTAssertTrue(MusicController.shouldReissueLyricsFetchForStaleIdentity(
             lyricsRowsAreEmpty: true,
             lyricsMatchesControllerIdentity: false,
-            lastReissueStableSongID: "some other song|some other artist",
-            controllerStableSongID: "real song|real artist",
-            lastReissueAt: now.addingTimeInterval(-1.0),
-            now: now,
-            cooldown: 5.0
+            reissueCountForCurrentTrack: 0,
+            maxReissuesPerTrack: 1,
+            lastReissueAt: nil,
+            now: Date()
         ))
+    }
+
+    /// Coordinator's requested test (a): drives the SAME loop MusicController's
+    /// heartbeat would run — one simulated tick every 2s for 60s (30 ticks) —
+    /// against a mismatch that NEVER resolves (the reissued fetch is imagined
+    /// to be rejected/normalized differently every time, exactly the failure
+    /// mode under review). Exactly `maxLyricsIdentityReissuesPerTrack` (2)
+    /// reissues must fire over the whole 60s, then silence for the rest.
+    func test_selfHeal_exactlyCappedReissuesOver60sOfFakeHeartbeats_thenSilence_whenMismatchNeverResolves() {
+        var reissueCount = 0
+        var lastReissueAt: Date?
+        var firedTicks: [Int] = []
+        let start = Date()
+        let tickInterval: TimeInterval = 2.0
+        let totalTicks = Int(60.0 / tickInterval)  // 30 ticks over 60s
+
+        for tick in 0..<totalTicks {
+            let now = start.addingTimeInterval(Double(tick) * tickInterval)
+            let shouldReissue = MusicController.shouldReissueLyricsFetchForStaleIdentity(
+                lyricsRowsAreEmpty: true,
+                lyricsMatchesControllerIdentity: false,  // never resolves — the failure mode under review
+                reissueCountForCurrentTrack: reissueCount,
+                lastReissueAt: lastReissueAt,
+                now: now
+            )
+            if shouldReissue {
+                firedTicks.append(tick)
+                reissueCount += 1
+                lastReissueAt = now
+            }
+        }
+
+        XCTAssertEqual(reissueCount, MusicController.maxLyricsIdentityReissuesPerTrackForTesting,
+            "must fire EXACTLY the capped number of reissues over 60s when the mismatch never resolves, then go silent — never a per-heartbeat storm")
+        XCTAssertEqual(firedTicks.count, MusicController.maxLyricsIdentityReissuesPerTrackForTesting)
+    }
+
+    /// Coordinator's requested test (b): a sub-second real duration difference
+    /// that straddles an integer ROUNDING boundary (137.6 vs 137.4 — only 0.2s
+    /// apart, but `Int(_.rounded())` puts them in buckets 138 and 137) must NOT
+    /// register as an identity mismatch, because `isLikelySameSongMetadataCorrection`
+    /// (which `isCurrentFetchIdentity` defers to) tolerates drift up to 2.0s —
+    /// the service itself would treat this as the same song.
+    @MainActor
+    func test_selfHeal_identityCheck_toleratesSubSecondDurationRoundingFlip() {
+        let service = LyricsService.shared
+        let uid = UUID().uuidString.prefix(8)
+        let title = "Rounding Flip \(uid)"
+        let artist = "Artist \(uid)"
+        let album = "Album \(uid)"
+        service.debugSeedDisplayedLyricsForTesting(
+            [LyricLine(text: "line", startTime: 0, endTime: 3)],
+            title: title, artist: artist, duration: 137.6, album: album, isUnsynced: false
+        )
+
+        // 137.6 rounds to 138; 137.4 rounds to 137 — different integer
+        // buckets from only a 0.2s real difference, straddling the .5 cutoff.
+        XCTAssertEqual(Int((137.6 as Double).rounded()), 138)
+        XCTAssertEqual(Int((137.4 as Double).rounded()), 137)
+
+        XCTAssertTrue(service.isCurrentFetchIdentity(title: title, artist: artist, duration: 137.4, album: album),
+            "a sub-second duration difference that only flips the ROUNDING bucket must not count as a mismatch")
     }
 }

@@ -265,16 +265,36 @@ public class LyricsService: ObservableObject {
     /// `matchesCurrentFetchIdentity` for the precise check.
     var currentFetchStableSongID: String? { currentStableSongID }
 
-    /// Whether (title, artist, duration, album) — normalized exactly as
-    /// `fetchLyrics` does — matches the FULL identity this service is
-    /// currently fetching/showing lyrics for. Exposed for MusicController's
-    /// generic identity self-heal: unlike `currentFetchStableSongID`, this
+    /// Whether (title, artist, duration, album[, persistentID]) would be
+    /// treated as the SAME song this service is currently fetching/showing —
+    /// the exact same test `fetchLyrics`'s own stability guard uses (exact
+    /// songID match OR `isLikelySameSongMetadataCorrection`'s tolerant
+    /// metadata-correction check, :674/:685). This is deliberately NOT a
+    /// stricter, parallel reimplementation: exact `songID` string equality
+    /// alone would flag an ordinary independent-rounding disagreement (two
+    /// callers computing `Int(duration.rounded())` from slightly different
+    /// raw doubles that straddle a .5 boundary) as a "mismatch" even though
+    /// this service would treat it as the same song — which is exactly the
+    /// false-positive a self-heal built on top of this must not have (2026-09-22,
+    /// see research/diagnosis-2026-09-22-blank-lyrics-page.md §8). Still
     /// catches a torn album/duration even when title/artist still agree (the
-    /// MusicController.swift:1533/:1580 bug class) — a mismatch means this
-    /// service is tracking a DIFFERENT identity than what is actually playing
-    /// right now, regardless of how the mismatch was produced.
-    func matchesCurrentFetchIdentity(title: String, artist: String, duration: TimeInterval, album: String) -> Bool {
-        Self.songIdentity(title: title, artist: artist, duration: duration, album: album) == currentSongID
+    /// MusicController.swift:1533/:1580 bug class), because that case fails
+    /// BOTH the exact match and the metadata-correction tolerance (album
+    /// incompatible and/or duration drift beyond 2.0s).
+    func isCurrentFetchIdentity(title: String, artist: String, duration: TimeInterval, album: String, persistentID: String? = nil) -> Bool {
+        let songID = Self.songIdentity(title: title, artist: artist, duration: duration, album: album)
+        if songID == currentSongID { return true }
+        let stableSongID = Self.stableSongIdentity(title: title, artist: artist)
+        return Self.isLikelySameSongMetadataCorrection(
+            currentStableSongID: currentStableSongID,
+            requestStableSongID: stableSongID,
+            currentDuration: currentSongDuration,
+            requestDuration: duration,
+            currentAlbum: currentSongAlbum,
+            requestAlbum: album,
+            requestPersistentID: persistentID,
+            currentPersistentID: currentSongPersistentID
+        )
     }
     private var currentSongTitle: String = ""
     private var currentSongArtist: String = ""

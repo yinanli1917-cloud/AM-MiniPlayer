@@ -386,7 +386,20 @@ public class MusicController: ObservableObject {
     // the page shows zero rows, re-issue ONE clean fetch for the current
     // identity. Driven off the existing per-poll heartbeat (applySnapshot),
     // never a new per-frame timer. See research/diagnosis-2026-09-22-blank-lyrics-page.md.
-    private var lastLyricsIdentityReissueSongID: String?
+    //
+    // 2026-09-22 hardening: a per-identity 5s cooldown alone has no TOTAL cap —
+    // if the reissued fetch is itself rejected/normalized differently (e.g. a
+    // stability-guard block, or a genuine but permanent mismatch), the
+    // heartbeat would reissue forever, every 5s, for the whole song — a silent
+    // network-hitting loop. `lyricsIdentityReissueCountForCurrentTrack` bounds
+    // this to `maxLyricsIdentityReissuesPerTrack` total attempts, reset ONLY on
+    // a real track change (handleTrackChange / applySnapshot's trackChanged
+    // branch) — never merely by time passing or by the mismatch persisting.
+    private var lyricsIdentityReissueCountForCurrentTrack: Int = 0
+    static let maxLyricsIdentityReissuesPerTrack = 2
+    #if DEBUG
+    static var maxLyricsIdentityReissuesPerTrackForTesting: Int { maxLyricsIdentityReissuesPerTrack }
+    #endif
     private var lastLyricsIdentityReissueAt: Date?
     private var lyricsBlankSince: Date?
     private var lyricsBlankEvidenceLogged = false
@@ -1444,6 +1457,9 @@ public class MusicController: ObservableObject {
         currentPersistentID = nil
         currentTrackClass = ""
         currentTrackIsURLTrack = false
+        // A real track change: the lyrics identity self-heal's total-reissue
+        // cap is per TRACK, not per time window — reset it here, nowhere else.
+        lyricsIdentityReissueCountForCurrentTrack = 0
         let generation = incrementGeneration()
 
         // ━━━ IMMEDIATE: artwork + lyrics — zero queue dependency ━━━
@@ -2424,6 +2440,9 @@ public class MusicController: ObservableObject {
             lastPolledPosition = 0  // Reset position-jump detection
             lastTrackChangeClockResetAt = Date()
             postTrackChangePollDeferrals = 0
+            // A real track change: the lyrics identity self-heal's total-
+            // reissue cap is per TRACK, not per time window — reset it here.
+            lyricsIdentityReissueCountForCurrentTrack = 0
             let generation = incrementGeneration()
             currentPersistentID = s.persistentID
 
@@ -2489,25 +2508,29 @@ public class MusicController: ObservableObject {
             DebugLogger.log("LyricsService", "⚠️ Blank >3s: serviceID='\(lyricsService.currentFetchStableSongID ?? "nil")' controllerID='\(controllerStableSongID)' displayState=\(lyricsService.displayState) rows=\(lyricsService.lyrics.count)")
         }
 
-        // Full-identity check (title+artist+duration+album), NOT just the
+        // Full-identity check (title+artist+duration+album+PID), NOT just the
         // stable (title+artist) unit: a torn album/duration — the exact class
         // fixed above — still agrees on title/artist, so stable-ID alone
-        // would miss it entirely. `matchesCurrentFetchIdentity` catches it.
-        let identitiesMatch = lyricsService.matchesCurrentFetchIdentity(
-            title: currentTrackTitle, artist: currentArtist, duration: duration, album: currentAlbum
+        // would miss it entirely. `isCurrentFetchIdentity` catches that while
+        // ALSO tolerating an ordinary duration-rounding disagreement between
+        // two independent callers — it defers to the SAME
+        // isLikelySameSongMetadataCorrection tolerance `fetchLyrics` itself
+        // uses, not a stricter parallel reimplementation (2026-09-22).
+        let identitiesMatch = lyricsService.isCurrentFetchIdentity(
+            title: currentTrackTitle, artist: currentArtist, duration: duration, album: currentAlbum,
+            persistentID: currentPersistentID
         )
         let shouldReissue = Self.shouldReissueLyricsFetchForStaleIdentity(
             lyricsRowsAreEmpty: rowsAreEmpty,
             lyricsMatchesControllerIdentity: identitiesMatch,
-            lastReissueStableSongID: lastLyricsIdentityReissueSongID,
-            controllerStableSongID: controllerStableSongID,
+            reissueCountForCurrentTrack: lyricsIdentityReissueCountForCurrentTrack,
             lastReissueAt: lastLyricsIdentityReissueAt,
             now: Date()
         )
         guard shouldReissue else { return }
-        lastLyricsIdentityReissueSongID = controllerStableSongID
+        lyricsIdentityReissueCountForCurrentTrack += 1
         lastLyricsIdentityReissueAt = Date()
-        DebugLogger.log("LyricsService", "🩹 Identity self-heal: reissuing clean fetch for '\(controllerStableSongID)' (lyrics service was tracking '\(lyricsService.currentFetchStableSongID ?? "nil")')")
+        DebugLogger.log("LyricsService", "🩹 Identity self-heal: reissuing clean fetch for '\(controllerStableSongID)' (attempt \(lyricsIdentityReissueCountForCurrentTrack)/\(Self.maxLyricsIdentityReissuesPerTrack) this track; lyrics service was tracking '\(lyricsService.currentFetchStableSongID ?? "nil")')")
         let title = currentTrackTitle
         let artist = currentArtist
         let album = currentAlbum
@@ -2520,34 +2543,42 @@ public class MusicController: ObservableObject {
 
     /// Whether the lyrics service should be re-fetched from scratch because its
     /// own tracked FULL identity (title+artist+duration+album — see
-    /// `LyricsService.matchesCurrentFetchIdentity`, which catches a torn
-    /// album/duration even when title/artist still agree) no longer matches
-    /// the controller's current track while the page has zero rows to show.
-    /// Generic backstop for the whole "torn/stale identity" bug class —
-    /// catches causes beyond the two specific races fixed in
-    /// handleTrackChange/retryDurationFetch, including any not yet
-    /// reproduced. Bounded to at most one reissue per target (title+artist)
-    /// identity per `cooldown` seconds: a genuinely confirmed "no lyrics for
-    /// this song" verdict, or a burst of transient mismatches during radio
-    /// churn, must never turn into a refetch storm — one reissue either
-    /// recovers real content (clearing the mismatch) or lands on the same
-    /// terminal again (and the cooldown then holds off the next attempt).
-    /// `controllerStableSongID` (title+artist only) is used purely to bucket
-    /// the cooldown by target song, independent of the precise mismatch
-    /// signal above.
+    /// `LyricsService.isCurrentFetchIdentity`, which tolerates ordinary
+    /// duration-rounding disagreement but still catches a torn album/duration
+    /// even when title/artist agree) no longer matches the controller's
+    /// current track while the page has zero rows to show. Generic backstop
+    /// for the whole "torn/stale identity" bug class — catches causes beyond
+    /// the two specific races fixed in handleTrackChange/retryDurationFetch,
+    /// including any not yet reproduced.
+    ///
+    /// Bounded TWO ways so this can never become a silent refetch loop
+    /// (2026-09-22 hardening — a per-identity cooldown alone is not enough: if
+    /// the reissued fetch is itself rejected or normalized differently, e.g. a
+    /// stability-guard block, the mismatch can persist indefinitely):
+    ///   1. `reissueCountForCurrentTrack` — a HARD total cap
+    ///      (`maxReissuesPerTrack`) on how many times this can fire for the
+    ///      SAME controller track. The caller resets this counter to 0 ONLY on
+    ///      a real track change, never on a timer — so once the cap is hit,
+    ///      this returns false for the rest of that track's playback,
+    ///      regardless of how long the mismatch persists. One reissue either
+    ///      recovers real content (the next check sees identities match) or
+    ///      it doesn't — after `maxReissuesPerTrack` failed attempts, further
+    ///      attempts are assumed futile and stop.
+    ///   2. `cooldown` — a short debounce so two heartbeat ticks inside the
+    ///      same in-flight fetch's response window don't both count against
+    ///      the cap before the first attempt had a chance to resolve.
     static func shouldReissueLyricsFetchForStaleIdentity(
         lyricsRowsAreEmpty: Bool,
         lyricsMatchesControllerIdentity: Bool,
-        lastReissueStableSongID: String?,
-        controllerStableSongID: String,
+        reissueCountForCurrentTrack: Int,
+        maxReissuesPerTrack: Int = maxLyricsIdentityReissuesPerTrack,
         lastReissueAt: Date?,
         now: Date,
         cooldown: TimeInterval = 5.0
     ) -> Bool {
         guard lyricsRowsAreEmpty, !lyricsMatchesControllerIdentity else { return false }
-        if lastReissueStableSongID == controllerStableSongID,
-           let lastReissueAt,
-           now.timeIntervalSince(lastReissueAt) < cooldown {
+        guard reissueCountForCurrentTrack < maxReissuesPerTrack else { return false }
+        if let lastReissueAt, now.timeIntervalSince(lastReissueAt) < cooldown {
             return false
         }
         return true
