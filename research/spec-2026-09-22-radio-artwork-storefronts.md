@@ -86,3 +86,97 @@
 - Deezer 全程 0 命中且错误被吞、MusicKit 因 developer token 失败从不运行——不在本次范围，本次只加了 iTunes 侧的错误类型日志，没有动 Deezer/MusicKit。
 - `Ripples`→`漣漪` 这类标题艺人都本地化（非拉丁转写关系）的情况——spec 明确排除，本次的 `scoreArtworkCandidate`/`stripBracketedTitleSegments` 都不处理跨文字系统的完全本地化标题。
 - `fetchArtwork` 里 SB 分支新增的 `else` 日志是纯日志改动，未写对应单元测试——SB 路径依赖真实 `SBApplication`/Music.app，项目现有测试里也没有对 SB 分支做单元测试的先例（全部是纯函数级测试），这里保持一致，留给日常使用 + 下次真机验证自动积累证据。
+
+---
+
+## 结果补充（2026-09-22 二轮：code review 发现的限流回归 + 上线复核）
+
+### 1. 限流回归——问题
+
+Code review 指出：`fetchArtworkResult`（本次改动的多店面查询入口）不只服务正在播的歌，还同时服务播放列表**行封面**（`makeRowArtworkStore` 的 fetch 闭包、`PlaylistView.swift:973` 经 `fetchMusicKitArtwork` 调用）和 `preloadArtwork`（预取接下来 4 首）。改动前每行大约 1 次 iTunes 请求；改动后每行并行发 4 次店面请求。冷播放列表约 20 行同时挂载时可能瞬间打出 80+ 并发请求，而 iTunes Search 有限流（今天创始人主会话实测：约 25 次/分钟后开始返回非 JSON）——行级请求风暴可能连带饿死正在播歌曲的封面请求和 `MetadataResolver`（歌词元数据）自己的 iTunes 调用。
+
+### 2. 修复设计
+
+**(a) 显式优先级，按调用方意图区分，不猜调用栈**
+
+新增 `MusicController.ArtworkFetchPriority`（`.nowPlaying` / `.background`），作为**必填参数**（无默认值）贯穿 `fetchArtworkResult` → `fetchArtworkViaITunesAPI` → `fetchArtworkViaITunesAPIRound`：
+- `.nowPlaying`：`fetchArtwork`（Path 1）、`retryArtworkFetch` —— 保留原有并行店面扇出（一次只处理一首正在播的歌，值得多花请求）。
+- `.background`：`preloadArtwork`、`makeRowArtworkStore` 的 fetch 闭包、`fetchMusicKitArtwork`（无 metadataKey 分支）—— 改为**顺序**逐店面查询，命中第一个可靠结果就停，不再等其余店面。冷播放列表下每行同一时刻只有 1 个 iTunes 请求在飞，而不是 4 个——`test_backgroundPriority_neverOverlapsRequests` 用一个记并发峰值的 harness 钉死这一点（maxConcurrentInFlight 必须 ==1）。
+
+**(b) 主机级熔断器（circuit breaker）**
+
+新增 `MusicController.ArtworkITunesCircuitBreaker`：纯 NSLock + 可注入 `now:` 时钟（照抄 `RowArtworkNegativeCache` 的写法，`RowArtworkFetchPolicyTests` 同款风格，测试里全程假时钟不真睡）。`isITunesRateLimitSignal(_:)` 识别 HTTP 403/429，以及"非 JSON 响应体"（`ITunesArtworkTransport.live` 在这种情况下唯一会产生的错误就是 `.decodingFailed`，这正是报告里"连续请求后 iTunes 返回非 JSON"的落地信号）。命中限流信号：
+  - 顺序（background）搜索立即中止本次调用剩余店面，不再往一个已经在拒绝的主机上继续打。
+  - 熔断器进入 open 状态 45 秒（`openDuration`），open 期间 **background 优先级直接跳过 iTunes**（0 次请求）；**nowPlaying 优先级仍尝试 1 个店面**（正在播的歌仍有机会拿到真封面），不做全店面扇出。
+  - 熔断触发只在"关→开"这次跳变记一行日志（`trip(now:)` 返回值判断），不会每条被拒请求都刷一行。
+  - 熔断器是进程级共享单例（`.shared`），任何调用方（nowPlaying 或 background）触发的熔断都保护其余共享同一实例的调用——测试 `test_breakerTrip_isSharedAcrossCalls_backgroundSeesEarlierNowPlayingTrip` 钉死这点。
+
+**(c) 请求数**
+
+| 场景 | 熔断关闭（正常） | 熔断打开（限流中） |
+|---|---:|---:|
+| 换歌（nowPlaying，单次 `fetchArtwork` 调用，含其自带一次 retry） | 命中 round1：5 次；两轮全灭：16 次；round2 命中：18 次（最坏） | 命中：2 次；全灭：2 次；round2 命中：3 次（每轮限 1 店面，×2 次尝试） |
+| 冷 20 行播放列表（background，逐行顺序店面查询，`rowArtworkFetchGate` 限并发 3 行） | 每行最好 2 次（首店面命中）、最坏 8 次（两轮全灭）；20 行理论最坏 160 次，但并发峰值仍是 3（与修复前单店面时代同一并发量级） | 每行 0 次（直接跳过 iTunes），直到 45s 熔断窗口过期 |
+
+现实意义：熔断器把"理论最坏 160 次"这类数字压到"第一次限流信号出现后立即清零"——一旦 iTunes 真的开始拒绝（今天观测约 25 次/分钟），后续 45 秒内所有 background 请求直接短路，不会继续拿一个已经在拒绝的主机练手。
+
+### 3. 改动/新增文件（本轮）
+- `Sources/MusicMiniPlayerCore/Services/MusicController+Artwork.swift`：新增 `ArtworkFetchPriority`、`ArtworkITunesCircuitBreaker`、`isITunesRateLimitSignal`、`searchStorefrontsInParallel`/`searchStorefrontsSequentially`、`ITunesArtworkMatch` + `fetchArtworkViaITunesAPIDetailed`（供上线复核读取命中店面/匹配字段）；`selectBestITunesArtwork` 返回值追加 `trackName`/`artistName`/`collectionName`；`fetchArtworkResult` 新增必填 `priority` 参数，5 个调用点（`preloadArtwork` / `fetchArtwork` Path1 / `fetchMusicKitArtwork` / `makeRowArtworkStore` / `retryArtworkFetch`）分别打上 `.background`/`.background`/`.background`/`.background`/`.nowPlaying` 标签。
+- `Tests/MusicMiniPlayerTests/ArtworkStorefrontSelectionTests.swift`：既有 6 个 `fetchArtworkViaITunesAPI` 调用点补 `priority: .nowPlaying` + 独立 breaker 实例（避免共享单例污染其他测试）。
+- `Tests/MusicMiniPlayerTests/ArtworkPriorityAndCircuitBreakerTests.swift`（新增，16 个测试）：熔断器纯逻辑（假时钟开/关/跳变/续期）、限流信号分类、background 顺序停在首个可靠命中 + 从不并发、nowPlaying 仍并行、限流触发熔断并中止当次剩余店面、熔断开启时 background 零请求/nowPlaying 限 1 店面、熔断跨调用共享。
+- `Tests/MusicMiniPlayerTests/ArtworkLiveStorefrontEvalTests.swift`（新增，见下）。
+
+### 4. 测试结果（本轮）
+- `ArtworkPriorityAndCircuitBreakerTests`：16/16 通过。
+- `ArtworkStorefrontSelectionTests`：17/17 通过（无回归，补了 priority 参数）。
+- `RowArtworkFetchPolicyTests`：12/12 通过。
+- `RowArtworkStoreTests`：7/7 通过。
+- `TrackIdentityDisciplineTests`：19/19 通过。
+- `swift build`：通过，无新增警告/错误。
+- 除下面第 5 节说明的现场复核外，全程零真网络。
+
+### 5. 上线复核（NANOPOD_LIVE_ARTWORK_EVAL=1）——**本环境无法给出真实数据，如实说明**
+
+测试已按要求写好：`Tests/MusicMiniPlayerTests/ArtworkLiveStorefrontEvalTests.swift`，`NANOPOD_LIVE_ARTWORK_EVAL=1` 门控，调用真实 `fetchArtworkViaITunesAPIDetailed`（`.nowPlaying` 优先级、真实 `.live` transport、独立 breaker 实例），18 首今天失败曲目 + 8 首对照曲目，曲目间 sleep 4 秒，逐条记录命中/未命中、命中店面、匹配的 trackName/artistName/collectionName、耗时，并用 `scoreArtworkCandidate` 的 reliable 判定标出"匹配到的是不是同一首歌"。不设 `NANOPOD_LIVE_ARTWORK_EVAL=1` 时确认会 `XCTSkip`（已验证，不占用日常测试）。
+
+**但本 worktree 所在的沙盒环境，出站访问 itunes.apple.com 被无条件拒绝**——直接 curl 验证（非本次改动引入，与限流无关）：
+```
+curl -m5 "https://itunes.apple.com/search?term=test&media=music&entity=song&limit=1"
+→ HTTP/2 403，body 为空，来自 Apple 自己的 daiquiri/Akamai 边缘（apple-timing-app: 2ms，说明请求确实到达 Apple 服务端并被拒绝，不是本地网络故障）；example.com 同时返回 200，证明沙盒本身能上网，只是这一个 host 被挡。
+```
+按要求实际跑了一次（`NANOPOD_LIVE_ARTWORK_EVAL=1`，105.7 秒，26 首×4s 间隔）——结果是 **0/26 命中，包括 8 首"今天确认成功"的对照曲目**，证实这不是修复本身的效果，而是沙盒出口 IP 对 itunes.apple.com 的无差别拒绝（连对照组都全灭，若是真限流不会连一直成功的曲目也 100% 落空）。逐条延迟均在 47–412ms，与"连接建立即被拒"一致，不是超时。完整表格（诊断用，非真实验收数据）：
+
+| Track (was failing?) | Artist | Result | Storefront | Matched | Latency (ms) |
+|---|---|---|---|---|---:|
+| Tell Me Oh Mama (failed) | Naoko Gushima | miss | — | — | 320 |
+| some (feat. LiI Boi) (failed) | SoYou & Junggigo | miss | — | — | 405 |
+| Let's Stay In Tonight (failed) | Brian Culbertson | miss | — | — | 60 |
+| Jellyfish (feat. Michael Seyer) (failed) | Sunset Rollercoaster | miss | — | — | 303 |
+| 春天 (failed) | Xun Zhou | miss | — | — | 148 |
+| Time After Time (failed) | Sarah Menescal | miss | — | — | 56 |
+| Roland Reve (From "Lola") (failed) | Jacqueline Danno | miss | — | — | 312 |
+| SHYNESS BOY (failed) | Anri | miss | — | — | 110 |
+| Starlight Ballet (failed) | Piper | miss | — | — | 56 |
+| Gatsby Woman (2020 Remastered) (failed) | Kingo Hamada | miss | — | — | 358 |
+| Who Are You? (DJ Version) [2022 Remaster] (failed) | Fujimaru Yoshino | miss | — | — | 243 |
+| Gatsby Woman (failed) | Hamada Kingo | miss | — | — | 125 |
+| 葉子 (電視劇《薔薇之戀》原聲帶版) (failed) | A-Sun | miss | — | — | 308 |
+| Ripples (failed) | Danny Chan | miss | — | — | 124 |
+| Misty (feat. Glenn Osser and His Orchestra) (failed) | Johnny Mathis | miss | — | — | 251 |
+| Second Love (failed) | Akina Nakamori | miss | — | — | 118 |
+| A House Is Not a Home (French & English) (failed) | Dionne Warwick | miss | — | — | 229 |
+| Oceanside Café (failed) | CinCin Lee | miss | — | — | 66 |
+| Supernatural (control) | NewJeans | miss | — | — | 412 |
+| 啟程 (control) | Christine Fan | miss | — | — | 50 |
+| Yume No Tsuzuki (2017 Remaster) (control) | Mariya Takeuchi | miss | — | — | 193 |
+| Private Beach (control) | Meiko Nakahara | miss | — | — | 48 |
+| If You Want It (control) | Niteflyte | miss | — | — | 50 |
+| Mc's Road De Aimasho (control) | Kazuhito Murata | miss | — | — | 130 |
+| Soiree (control) | Bill Evans | miss | — | — | 47 |
+| Where Is My Mind (control) | Jacques Astor | miss | — | — | 97 |
+
+**结论**：测试本身已实现且验证可用（skip 门禁、真实调用路径、breaker 隔离、表格产出均已跑通），但真实命中率/店面命中分布/错配核查需要在能访问 itunes.apple.com 的机器（例如创始人自己的 Mac）上跑：
+```
+NANOPOD_LIVE_ARTWORK_EVAL=1 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter ArtworkLiveStorefrontEvalTests
+```
+跑完后终端会打印同样格式的 Markdown 表格（含命中率、店面、匹配到的 trackName/artistName/collectionName、错配标记），可直接贴回本节替换上面这张"诊断表"。本次未能提供真实命中率对比（之前 0/18、之后 ?/18），如实标注为待创始人本机复核项，不编造数字。

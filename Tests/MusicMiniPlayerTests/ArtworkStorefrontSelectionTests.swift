@@ -267,7 +267,7 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
 
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Gatsby Woman (2020 Remastered)", artist: "Kingo Hamada", album: "",
-            transport: harness.makeTransport()
+            priority: .nowPlaying, transport: harness.makeTransport(), breaker: MusicController.ArtworkITunesCircuitBreaker()
         )
 
         XCTAssertNotNil(image)
@@ -291,7 +291,7 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
 
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Misty (feat. Glenn Osser and His Orchestra)", artist: "Johnny Mathis", album: "",
-            transport: harness.makeTransport()
+            priority: .nowPlaying, transport: harness.makeTransport(), breaker: MusicController.ArtworkITunesCircuitBreaker()
         )
 
         XCTAssertNotNil(image)
@@ -306,7 +306,7 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
         // to round 1's, so it must never fire a second wave of requests.
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Ripples", artist: "Danny Chan", album: "",
-            transport: harness.makeTransport()
+            priority: .nowPlaying, transport: harness.makeTransport(), breaker: MusicController.ArtworkITunesCircuitBreaker()
         )
 
         XCTAssertNil(image)
@@ -319,7 +319,7 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
         // Genuine content gap: nothing anywhere, in either round.
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Gatsby Woman (2020 Remastered)", artist: "Kingo Hamada", album: "",
-            transport: harness.makeTransport()
+            priority: .nowPlaying, transport: harness.makeTransport(), breaker: MusicController.ArtworkITunesCircuitBreaker()
         )
 
         XCTAssertNil(image)
@@ -338,7 +338,7 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
 
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Ripples", artist: "Danny Chan", album: "",
-            transport: harness.makeTransport()
+            priority: .nowPlaying, transport: harness.makeTransport(), breaker: MusicController.ArtworkITunesCircuitBreaker()
         )
 
         XCTAssertNil(image)
@@ -354,7 +354,7 @@ final class ArtworkStorefrontSelectionTests: XCTestCase {
 
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Ripples", artist: "Danny Chan", album: "",
-            transport: harness.makeTransport()
+            priority: .nowPlaying, transport: harness.makeTransport(), breaker: MusicController.ArtworkITunesCircuitBreaker()
         )
 
         XCTAssertNil(image)
