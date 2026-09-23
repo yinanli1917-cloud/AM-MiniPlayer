@@ -31,12 +31,11 @@ public enum EdgeCollapseTint: String, CaseIterable, Identifiable, Sendable {
     public var id: String { rawValue }
 }
 
-/// What stays at the screen edge when tucked.
+/// What stays at the screen edge when tucked. Founder 2026-09-22: a pure
+/// black handle; the cover tab was dropped (too thin to read as a cover).
 public enum EdgeCollapseTuckStyle: String, CaseIterable, Identifiable, Sendable {
-    /// 6×56 handle, progress fills from the bottom.
+    /// 6×56 pure black handle.
     case handle = "Handle"
-    /// 26×68 tab with a tiny cover and a progress line.
-    case coverTab = "Cover tab"
     public var id: String { rawValue }
 }
 
@@ -91,6 +90,9 @@ public enum EdgeCollapseTokens {
     public static let edgeDimMidOpacity: Double = 0.40
     public static let edgeDimInnerOpacity: Double = 0.12
     public static let tintOpacity: Double = 0.45
+    /// Glass black tint of the resting capsule; the edge-side gradient on top
+    /// of it arrives with the capsule's content.
+    public static let capsuleTint: Double = 0.72
 
     public static let reduceMotionCrossfadeDuration: TimeInterval = 0.18
 

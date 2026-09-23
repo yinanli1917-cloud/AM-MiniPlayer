@@ -35,8 +35,12 @@ public struct EdgeCollapsePose: Equatable {
     public var capsuleContentBlur: CGFloat
     public var stripContentOpacity: Double
     public var dim: Double
+    /// Black tint of the glass material itself (1 = black). Lives in the
+    /// material, so necks, drops and blends are the same black as the
+    /// bodies (v9 painted black as a layer on top: bridges showed clear glass).
+    public var tint: Double = 1
 
-    public static let channelCount = 23
+    public static let channelCount = 24
 
     public func vector() -> [Double] {
         [body.maxX, body.minY, body.width, body.height, bodyCornerInner, bodyCornerEdge,
@@ -46,7 +50,7 @@ public struct EdgeCollapsePose: Equatable {
          panelOpacity,
          capsuleContentOpacity, capsuleContentBlur,
          stripContentOpacity,
-         dim].map { Double($0) }
+         dim, tint].map { Double($0) }
     }
 
     public init(vector v: [Double]) {
@@ -62,30 +66,31 @@ public struct EdgeCollapsePose: Equatable {
         capsuleContentOpacity = v[19]; capsuleContentBlur = v[20]
         stripContentOpacity = v[21]
         dim = v[22]
+        tint = v[23]
     }
 
     public init(body: CGRect, bodyCornerInner: CGFloat, bodyCornerEdge: CGFloat,
                 capsule: CGRect, capsuleCorner: CGFloat,
                 hero: CGRect, heroCorner: CGFloat, heroOpacity: Double, heroBlur: CGFloat,
                 panelOpacity: Double, capsuleContentOpacity: Double, capsuleContentBlur: CGFloat,
-                stripContentOpacity: Double, dim: Double) {
+                stripContentOpacity: Double, dim: Double, tint: Double = 1) {
         self.body = body; self.bodyCornerInner = bodyCornerInner; self.bodyCornerEdge = bodyCornerEdge
         self.capsule = capsule; self.capsuleCorner = capsuleCorner
         self.hero = hero; self.heroCorner = heroCorner; self.heroOpacity = heroOpacity; self.heroBlur = heroBlur
         self.panelOpacity = panelOpacity
         self.capsuleContentOpacity = capsuleContentOpacity; self.capsuleContentBlur = capsuleContentBlur
-        self.stripContentOpacity = stripContentOpacity; self.dim = dim
+        self.stripContentOpacity = stripContentOpacity; self.dim = dim; self.tint = tint
     }
 }
 
 /// Which spring/delay a channel follows.
 public enum EdgeCollapseChannelGroup: Int, CaseIterable, Sendable {
-    case body, capsule, hero, heroFade, panel, capsuleContent, stripContent, dim
+    case body, capsule, hero, heroFade, panel, capsuleContent, stripContent, dim, material
 
     public static let map: [EdgeCollapseChannelGroup] = {
         let counts: [(EdgeCollapseChannelGroup, Int)] = [
             (.body, 6), (.capsule, 5), (.hero, 5), (.heroFade, 2), (.panel, 1),
-            (.capsuleContent, 2), (.stripContent, 1), (.dim, 1),
+            (.capsuleContent, 2), (.stripContent, 1), (.dim, 1), (.material, 1),
         ]
         var m: [EdgeCollapseChannelGroup] = []
         for (g, n) in counts { m.append(contentsOf: Array(repeating: g, count: n)) }
@@ -121,7 +126,7 @@ public enum EdgeCollapsePoses {
     }
 
     public static func tuckedRect(_ style: EdgeCollapseTuckStyle) -> CGRect {
-        let s = style == .handle ? t.handleSize : t.tabSize
+        let s = t.handleSize
         return CGRect(x: edge - s.width, y: midY - s.height / 2, width: s.width, height: s.height)
     }
 
@@ -166,7 +171,7 @@ public enum EdgeCollapsePoses {
     }
 
     static func stalkRect(_ style: EdgeCollapseTuckStyle) -> CGRect {
-        let w: CGFloat = style == .handle ? 16 : 30
+        let w: CGFloat = 16
         let h = tuckedRect(style).height * 1.6
         return CGRect(x: edge - 6 - w, y: midY - h / 2, width: w, height: h)
     }
@@ -203,13 +208,7 @@ public enum EdgeCollapsePoses {
 
     static func tuckedHero(_ style: EdgeCollapseTuckStyle) -> (rect: CGRect, opacity: Double) {
         let r = tuckedRect(style)
-        switch style {
-        case .handle:
-            return (CGRect(x: r.midX - 3, y: r.midY - 3, width: 6, height: 6), 0)
-        case .coverTab:
-            let a = t.tabArtwork
-            return (CGRect(x: r.midX - a / 2 - 1, y: r.minY + 5, width: a, height: a), 1)
-        }
+        return (CGRect(x: r.midX - 3, y: r.midY - 3, width: 6, height: 6), 0)
     }
 
     // MARK: Poses
@@ -224,7 +223,7 @@ public enum EdgeCollapsePoses {
         case .card:
             return EdgeCollapsePose(
                 body: card, bodyCornerInner: t.cardCornerRadius, bodyCornerEdge: t.cardCornerRadius,
-                capsule: coverIn(card, inset: 40), capsuleCorner: t.cardCornerRadius,
+                capsule: parked(card), capsuleCorner: 1,
                 hero: ch.rect, heroCorner: ch.corner, heroOpacity: 1, heroBlur: ch.blur,
                 panelOpacity: 1, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
                 stripContentOpacity: 0, dim: 0)
@@ -243,8 +242,8 @@ public enum EdgeCollapsePoses {
             return EdgeCollapsePose(
                 body: r, bodyCornerInner: r.width / 2, bodyCornerEdge: r.width / 2,
                 capsule: parked(r), capsuleCorner: 1,
-                hero: style == .coverTab ? th.rect : coverIn(r, inset: 2), heroCorner: 5,
-                heroOpacity: style == .coverTab ? 1 : 0.4, heroBlur: isLyrics ? 8 : 2,
+                hero: coverIn(r, inset: 2), heroCorner: 5,
+                heroOpacity: 0.4, heroBlur: isLyrics ? 8 : 2,
                 panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
                 stripContentOpacity: 0, dim: 1)
         case .tucked:
@@ -252,7 +251,7 @@ public enum EdgeCollapsePoses {
             return EdgeCollapsePose(
                 body: tucked, bodyCornerInner: tucked.width / 2, bodyCornerEdge: 0,
                 capsule: parked(tucked), capsuleCorner: 1,
-                hero: th.rect, heroCorner: style == .coverTab ? 5 : 3, heroOpacity: th.opacity, heroBlur: 0,
+                hero: th.rect, heroCorner: 3, heroOpacity: th.opacity, heroBlur: 0,
                 panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
                 stripContentOpacity: 1, dim: 1)
         case .drop:
@@ -262,8 +261,8 @@ public enum EdgeCollapsePoses {
             return EdgeCollapsePose(
                 body: b, bodyCornerInner: b.width / 2, bodyCornerEdge: 0,
                 capsule: d, capsuleCorner: d.width / 2,
-                hero: style == .coverTab ? coverIn(d, inset: 3) : coverIn(d, inset: 6),
-                heroCorner: 8, heroOpacity: style == .coverTab ? th.opacity : 0, heroBlur: 2,
+                hero: coverIn(d, inset: 6),
+                heroCorner: 8, heroOpacity: 0, heroBlur: 2,
                 panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
                 stripContentOpacity: 0, dim: 1)
         case .blob:
@@ -283,7 +282,7 @@ public enum EdgeCollapsePoses {
                 capsule: capsuleRect, capsuleCorner: t.capsuleCornerRadius,
                 hero: capsuleCoverRect, heroCorner: t.capsuleArtworkCorner, heroOpacity: 1, heroBlur: 0,
                 panelOpacity: 0, capsuleContentOpacity: 1, capsuleContentBlur: 0,
-                stripContentOpacity: 0, dim: 1)
+                stripContentOpacity: 0, dim: 1, tint: t.capsuleTint)
         case .expandBlob:
             let r = expandBlobRect
             let gone = CGRect(x: edge, y: tucked.minY, width: 0, height: tucked.height * 0.6)
@@ -293,14 +292,19 @@ public enum EdgeCollapsePoses {
                 hero: isLyrics ? coverFill(r) : coverIn(r, inset: 16), heroCorner: isLyrics ? 0 : 24,
                 heroOpacity: 1, heroBlur: isLyrics ? 14 : 0,
                 panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
-                stripContentOpacity: 0, dim: 0.6)
+                stripContentOpacity: 0, dim: 1)
         }
     }
 
-    /// Card pose with the capsule grown to the card too (end of an expand
-    /// from the capsule: both glass ids fill the card, one visible shape).
+    /// End of an expand: the capsule IS the card; the edge body stays gone
+    /// (growing it from the edge at the same time drew a second outline).
+    /// Once the opaque panel covers it, the model swaps to the resting card
+    /// pose in one frame (identical silhouette, hidden under the panel).
     static func cardFromCapsule(page: PlayerPage, style: EdgeCollapseTuckStyle) -> EdgeCollapsePose {
         var p = pose(.card, page: page, style: style)
+        let tucked = tuckedRect(style)
+        p.body = CGRect(x: edge, y: tucked.minY, width: 0, height: tucked.height * 0.6)
+        p.bodyCornerInner = 0; p.bodyCornerEdge = 0
         p.capsule = cardRect
         p.capsuleCorner = t.cardCornerRadius
         return p

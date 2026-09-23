@@ -94,7 +94,7 @@ final class EdgeCollapseMotionTests: XCTestCase {
     /// ref1: collapse loses height first, then width pinches into a stalk
     /// narrower than both ends (for the cover tab) before it is absorbed.
     func test_collapse_heightFirst_thenStalk() {
-        let m = motion(.collapse, style: .coverTab)
+        let m = motion(.collapse)
         let from = pose(m, 0)
         func firstTime(_ f: (EdgeCollapsePose) -> Bool) -> Double {
             var t = 0.0
@@ -138,6 +138,46 @@ final class EdgeCollapseMotionTests: XCTestCase {
         let end = EdgeCollapsePose(vector: m.to)
         XCTAssertTrue(end.hero.contains(EdgeCollapsePoses.cardRect), "fills the card")
         XCTAssertGreaterThan(end.heroBlur, 15)
+    }
+
+    /// The black is in the glass material: while the drop necks out and
+    /// swells, the tint stays black, so the drop and the neck are black too
+    /// (founder 2026-09-22 recording: the drop was clear glass).
+    func test_floatOut_dropAndNeckAreBlackGlass() {
+        let m = motion(.floatOut)
+        var t = 0.0
+        while t < 0.19 {
+            XCTAssertGreaterThan(pose(m, t).tint, 0.95, "t=\(Int(t * 1000))ms")
+            t += dt
+        }
+        XCTAssertEqual(EdgeCollapsePose(vector: m.to).tint, EdgeCollapseTokens.capsuleTint, accuracy: 0.01)
+    }
+
+    /// Expand draws one outline: the edge body does not grow alongside the
+    /// capsule (recording: a circle and a rounded rect overlapped).
+    func test_expandFromCapsule_edgeBodyStaysGone() {
+        let m = motion(.expand)
+        var t = 0.0
+        while t < m.settledDuration {
+            XCTAssertLessThanOrEqual(pose(m, t).body.width, 0.5, "t=\(Int(t * 1000))ms")
+            t += dt
+        }
+    }
+
+    /// The capsule's edge-side gradient only shows with its content, so it
+    /// never sits as a separate layer on a morphing shape.
+    func test_capsuleGradient_onlyWithContent() {
+        for kind in [K.floatOut, .retract, .expand] {
+            let m = motion(kind)
+            var t = 0.0
+            while t < m.settledDuration {
+                let p = pose(m, t)
+                if abs(p.capsule.width / max(p.capsule.height, 1) - 1) < 0.12, p.capsule.width > 40 {
+                    XCTAssertLessThan(p.capsuleContentOpacity, 0.2, "\(kind) round blob with gradient at t=\(Int(t * 1000))ms")
+                }
+                t += dt
+            }
+        }
     }
 
     func test_retargetMidFlight_isContinuous() {

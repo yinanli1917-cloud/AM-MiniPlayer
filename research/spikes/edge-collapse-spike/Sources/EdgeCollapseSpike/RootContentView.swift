@@ -39,11 +39,14 @@ private struct GlassRootView: View {
     private var pose: EdgeCollapsePose { store.pose }
     private var container: CGSize { EdgeCollapseTokens.containerSize }
 
-    /// One Glass value for both bodies (same material).
+    /// One Glass value for both bodies (same material). The black is the
+    /// glass tint itself, per frame, so every neck, drop and blend between
+    /// the two bodies is the same black (v9 drew black as a layer on top of
+    /// clear glass: the bridges and the drop showed clear glass).
     private var glass: Glass {
         switch model.tint {
-        case .black: return .clear.tint(Color.black.opacity(EdgeCollapseTokens.tintOpacity)).interactive()
-        case .none, .gradient: return .clear.interactive()
+        case .none: return .clear.interactive()
+        case .black, .gradient: return .clear.tint(Color.black.opacity(clamp01(pose.tint))).interactive()
         }
     }
 
@@ -87,10 +90,10 @@ private struct GlassRootView: View {
             bottomTrailingRadius: pose.bodyCornerEdge, topTrailingRadius: pose.bodyCornerEdge,
             style: .continuous)
         return ZStack(alignment: .bottom) {
-            dimming.opacity(clamp01(pose.dim))
+            // Tucked: pure black (founder 2026-09-22). Only at rest; while the
+            // handle bulges and the drop necks out, the tinted glass carries it.
             if pose.stripContentOpacity > 0.01 {
-                tuckedContent(height: r.height)
-                    .opacity(clamp01(pose.stripContentOpacity))
+                Color.black.opacity(clamp01(pose.stripContentOpacity))
             }
         }
         .allowsHitTesting(false)
@@ -110,29 +113,6 @@ private struct GlassRootView: View {
         return CGRect(x: raw.maxX - w, y: raw.minY, width: w, height: raw.height)
     }
 
-    @ViewBuilder
-    private func tuckedContent(height: CGFloat) -> some View {
-        switch model.tuckStyle {
-        case .handle:
-            // Played part fills the handle from the bottom.
-            Rectangle()
-                .fill(Color.white.opacity(0.9))
-                .frame(height: height * progress)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        case .coverTab:
-            // The cover itself is the hero (drawn above); a progress line below it.
-            let top = EdgeCollapseTokens.tabArtwork + 12
-            let length = max(height - top - 8, 0)
-            ZStack(alignment: .bottom) {
-                Capsule().fill(Color.white.opacity(0.28)).frame(width: 2.5, height: length)
-                Capsule().fill(Color.white.opacity(0.95)).frame(width: 2.5, height: length * progress)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .padding(.bottom, 8)
-            .offset(x: -1)
-        }
-    }
-
     // MARK: - Hover capsule
 
     private var capsuleView: some View {
@@ -140,7 +120,9 @@ private struct GlassRootView: View {
         let t = EdgeCollapseTokens.self
         let shape = RoundedRectangle(cornerRadius: pose.capsuleCorner, style: .continuous)
         return ZStack(alignment: .top) {
-            dimming.opacity(clamp01(pose.dim))
+            // Edge-side gradient black: part of the capsule's content, it
+            // arrives with the text once the shape has settled.
+            dimming.opacity(clamp01(pose.dim) * clamp01(pose.capsuleContentOpacity))
             if pose.capsuleContentOpacity > 0.01 {
             VStack(spacing: 0) {
                 Color.clear.frame(height: t.capsulePadding + t.capsuleArtwork + 8)
@@ -151,7 +133,7 @@ private struct GlassRootView: View {
                 .frame(height: t.capsuleTextHeight)
                 .padding(.horizontal, 10)
                 Color.clear.frame(height: 4)
-                HStack(spacing: 14) { controlButtons(ink: .white) }
+                HStack(spacing: 16) { controlButtons(ink: .white) }
                     .frame(height: t.capsuleControlsHeight)
             }
             .foregroundStyle(.white)
@@ -185,23 +167,30 @@ private struct GlassRootView: View {
         }
     }
 
-    /// Two buttons: pause/play inside a progress ring (Apple Watch Now
-    /// Playing), and next. Both are nanoPod's own buttons.
+    /// Two buttons of the same visual size (founder 2026-09-22): each sits in
+    /// a 36pt ring of the same stroke; pause/play's ring shows progress,
+    /// next's ring is the plain track. Glyphs scaled to a matching height
+    /// (nanoPod's play glyph is 21pt regular, the skip glyph 13.6pt semibold).
     @ViewBuilder
     private func controlButtons(ink: Color) -> some View {
+        let ring: CGFloat = 36, stroke: CGFloat = 2.5
         ZStack {
-            Circle().stroke(ink.opacity(0.25), lineWidth: 2.5)
+            Circle().stroke(ink.opacity(0.25), lineWidth: stroke)
             Circle().trim(from: 0, to: progress)
-                .stroke(ink, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .stroke(ink, style: StrokeStyle(lineWidth: stroke, lineCap: .round))
                 .rotationEffect(.degrees(-90))
             PlayPauseControlButton(isPlaying: music.isPlaying, inkColor: ink, hoverFill: ink.opacity(0.18)) {
                 music.togglePlayPause()
             }
-            .frame(width: 28, height: 28)
+            .scaleEffect(0.72)
         }
-        .frame(width: 36, height: 36)
-        SkipControlButton(action: { music.nextTrack() }, direction: 1, inkColor: ink, hoverFill: ink.opacity(0.18))
-            .frame(width: 28, height: 28)
+        .frame(width: ring, height: ring)
+        ZStack {
+            Circle().stroke(ink.opacity(0.25), lineWidth: stroke)
+            SkipControlButton(action: { music.nextTrack() }, direction: 1, inkColor: ink, hoverFill: ink.opacity(0.18))
+                .scaleEffect(1.08)
+        }
+        .frame(width: ring, height: ring)
     }
 
     // MARK: - Cover that flies between panel, capsule and edge

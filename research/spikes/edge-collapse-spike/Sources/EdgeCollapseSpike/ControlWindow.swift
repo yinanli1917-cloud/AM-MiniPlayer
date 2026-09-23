@@ -40,17 +40,7 @@ struct ControlPanelView: View {
                         .disabled(model.presentation != .tucked && model.presentation != .floating)
                     Button("Next track") { model.nextTrack() }
                 }
-                Text("Two-finger swipe right on the panel = tuck into the edge. Rest the cursor on the edge handle = a drop comes out and becomes the capsule. Click the capsule or the handle = back to the panel.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Edge") {
-                Picker("Tucked", selection: $model.tuckStyle) {
-                    ForEach(EdgeCollapseTuckStyle.allCases) { t in Text(t.rawValue).tag(t) }
-                }
-                .pickerStyle(.segmented)
-                Text("Handle: 6×56, progress fills from the bottom. Cover tab: 26×68, tiny cover and a progress line.")
+                Text("Two-finger swipe right on the panel = tuck into the edge. Rest the cursor on the black edge handle = a drop comes out and becomes the capsule. Click the capsule or the handle = back to the panel.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -55,11 +55,12 @@ public enum EdgeCollapseChoreography {
                                           .heroFade: s(0.12, 0)]),
                 // The blob stretches into the capsule; text and buttons resolve from blur last.
                 stage(0.19, pose(.floating), [.capsule: s(0.32, 0.26), .hero: s(0.34, 0.24),
-                                              .capsuleContent: s(0.18, 0, 0.12)]),
+                                              .capsuleContent: s(0.18, 0, 0.12), .material: s(0.24, 0, 0.10)]),
             ]
         case .retract:
             return [
-                stage(0, pose(.blob), [.capsuleContent: s(0.08, 0), .capsule: s(0.22, 0.12), .hero: s(0.22, 0)]),
+                stage(0, pose(.blob), [.capsuleContent: s(0.08, 0), .capsule: s(0.22, 0.12), .hero: s(0.22, 0),
+                                       .material: s(0.12, 0)]),
                 // The edge shape comes back out, bulged, and the drop necks onto it.
                 stage(0.09, pose(.drop), [.capsule: s(0.20, 0.15), .body: s(0.22, 0.25),
                                           .hero: s(0.20, 0), .heroFade: s(0.12, 0)]),
@@ -77,12 +78,12 @@ public enum EdgeCollapseChoreography {
             }
             // Bulge round first (ref1), bigger than the capsule, rounder than the card.
             list.append(stage(t0, pose(.expandBlob), [.capsuleContent: s(0.08, 0), .capsule: s(0.20, 0.2),
-                                                      .body: s(0.18, 0), .hero: s(0.24, 0.1),
-                                                      .heroFade: s(0.12, 0), .dim: s(0.2, 0)]))
-            // Stretch into the card. The real panel fades in only after the cover has landed.
-            list.append(stage(t0 + 0.09, cardEnd, [.capsule: s(0.36, 0.18), .body: s(0.36, 0.10, 0.06),
-                                                   .hero: s(0.36, 0.12), .panel: s(0.16, 0, 0.26),
-                                                   .dim: s(0.2, 0, 0.1), .heroFade: s(0.12, 0)]))
+                                                      .body: s(0.14, 0), .hero: s(0.24, 0.1),
+                                                      .heroFade: s(0.12, 0), .material: s(0.10, 0)]))
+            // Stretch into the card. Only the capsule grows (one outline); the
+            // real panel fades in only after the cover has landed.
+            list.append(stage(t0 + 0.09, cardEnd, [.capsule: s(0.36, 0.18), .hero: s(0.36, 0.12),
+                                                   .panel: s(0.16, 0, 0.26), .heroFade: s(0.12, 0)]))
             return list
         }
     }

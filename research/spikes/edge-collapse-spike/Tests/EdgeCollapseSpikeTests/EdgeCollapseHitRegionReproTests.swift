@@ -45,8 +45,8 @@ final class EdgeCollapseGeometryTests: XCTestCase {
         for style in EdgeCollapseTuckStyle.allCases {
             let r = EdgeCollapsePoses.tuckedRect(style)
             XCTAssertEqual(r.maxX, container.maxX)
-            XCTAssertLessThanOrEqual(r.height, 72)
-            XCTAssertLessThanOrEqual(r.width, 26)
+            XCTAssertLessThanOrEqual(r.height, 56)
+            XCTAssertLessThanOrEqual(r.width, 6)
         }
     }
 
@@ -67,7 +67,7 @@ final class EdgeCollapseGeometryTests: XCTestCase {
     func test_everyKeyPose_fitsInsideWindow() {
         for key in EdgeCollapseKeyPose.allCases {
             for page in [PlayerPage.album, .playlist] {
-                let p = EdgeCollapsePoses.pose(key, page: page, style: .coverTab)
+                let p = EdgeCollapsePoses.pose(key, page: page, style: .handle)
                 XCTAssertTrue(container.insetBy(dx: -0.01, dy: -0.01).contains(p.capsule), "\(key) capsule \(p.capsule)")
                 XCTAssertLessThanOrEqual(p.body.maxX, container.maxX + 0.01)
             }

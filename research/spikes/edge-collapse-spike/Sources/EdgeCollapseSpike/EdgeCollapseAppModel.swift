@@ -218,6 +218,12 @@ public final class EdgeCollapseAppModel: ObservableObject {
         }
         if t >= motion.settledDuration {
             pose = EdgeCollapsePose(vector: motion.to)
+            // Expand ends with the capsule being the card; under the opaque
+            // panel, swap to the resting card pose (same silhouette) so the
+            // next collapse starts from the edge body.
+            if presentation == .card {
+                pose = EdgeCollapsePoses.pose(.card, page: page, style: tuckStyle)
+            }
             self.motion = nil
             stopLink()
             flushRecorder()
