@@ -254,6 +254,18 @@ public class LyricsService: ObservableObject {
 
     #if DEBUG
     var debugCurrentSongID: String? { currentSongID }
+
+    /// Test seam: cancels the in-flight foreground fetch, authoritative
+    /// backfill and queue preload, and waits for each to finish — so a test
+    /// can restore shared caches and the HTTP gate without a task it started
+    /// outliving it. The backfill is read after the foreground settles
+    /// because the foreground is what launches it.
+    @MainActor
+    func drainFetchTasksForTesting() async {
+        if let task = currentFetchTask { task.cancel(); await task.value }
+        if let task = currentBackfillTask { task.cancel(); await task.value }
+        if let task = currentPreloadTask { task.cancel(); await task.value }
+    }
     #endif
 
     /// The (title, artist) identity this service is CURRENTLY fetching/showing

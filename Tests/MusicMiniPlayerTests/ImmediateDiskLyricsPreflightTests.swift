@@ -18,23 +18,18 @@ import XCTest
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 final class ImmediateDiskLyricsPreflightTests: XCTestCase {
 
-    private var savedDiskCache: LyricsDiskCache!
-    private var tempCache: LyricsDiskCache!
+    private var isolation: LyricsPipelineTestIsolation!
+    private var tempCache: LyricsDiskCache { isolation.lyricsCache }
 
     override func setUp() {
         super.setUp()
-        savedDiskCache = LyricsFetcher.shared.lyricsDiskCache
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("preflight-\(UUID().uuidString).json")
-        tempCache = LyricsDiskCache(fileURL: url)
-        LyricsFetcher.shared.lyricsDiskCache = tempCache
+        isolation = LyricsPipelineTestIsolation()
     }
 
-    override func tearDown() {
-        LyricsFetcher.shared.lyricsDiskCache = savedDiskCache
-        tempCache = nil
-        savedDiskCache = nil
-        super.tearDown()
+    override func tearDown() async throws {
+        await isolation.tearDown()
+        isolation = nil
+        try await super.tearDown()
     }
 
     private func wordLevelLines(_ text: String, count: Int = 10) -> [LyricLine] {

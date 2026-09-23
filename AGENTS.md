@@ -142,6 +142,7 @@ Tests/MusicMiniPlayerTests/         - 999 个单元测试（2026-08-27 `swift te
     └── NativeLyricsFrameStepTests.swift - 弹簧步长按整数刷新周期量化
     └── NativeLyricsOrphanAvoidanceTests.swift - CJK/短拉丁孤字折行：仅当尾巴≤2字且放宽 24pt 能少一行时放宽容器宽度
     └── NativeLyricsWordFloatGateTests.swift - 入场行逐字上浮从本行波浪触发帧起算
+    └── LyricsPipelineTestIsolation.swift - 测试沙箱（非测试）：凡调真 `LyricsService.fetchLyrics` 的测试必须用——两份磁盘缓存改指临时目录、HTTP 全拒（记录 URL）、census 关、tearDown 先排空抓取任务再还原
     └── NativeLyricsHandoffClockTests.swift - 切行确定性时钟门：注入播放钟+墙钟锁步驱动真 surface（debugNowOverride/debugTick/debugPlaybackClockDateProvider），钉死上一行位移/opacity/亮层同帧退场（边界后 +150ms 错峰）；复现旧红测试=0.8s appear 窗内切行被冻结、余晖先暗的 harness 伪影
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix

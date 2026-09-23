@@ -16,12 +16,21 @@ final class LyricsTranslationToggleStressTests: XCTestCase {
 
     private var hostWindow: NSWindow?
     private var hostedSurfaces: [NativeLyricsSurfaceView] = []
+    private var isolation: LyricsPipelineTestIsolation!
     private var savedShowTranslation: Bool?
 
     @MainActor
     override func setUp() {
         super.setUp()
         savedShowTranslation = LyricsService.shared.showTranslation
+        isolation = LyricsPipelineTestIsolation()
+    }
+
+    // XCTest runs this before the synchronous tearDown below.
+    override func tearDown() async throws {
+        await isolation.tearDown()
+        isolation = nil
+        try await super.tearDown()
     }
 
     @MainActor
@@ -149,15 +158,7 @@ final class LyricsTranslationToggleStressTests: XCTestCase {
 
     @MainActor
     func test_p1DisplayLock_survivesTranslationToggleStorm_sameSongRefetchStillBlocked() {
-        let savedCache = LyricsFetcher.shared.lyricsDiskCache
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("tr-toggle-\(UUID().uuidString).json")
-        let temp = LyricsDiskCache(fileURL: url)
-        LyricsFetcher.shared.lyricsDiskCache = temp
-        defer {
-            LyricsFetcher.shared.lyricsDiskCache = savedCache
-            try? FileManager.default.removeItem(at: url)
-        }
+        let temp = isolation.lyricsCache
 
         let service = LyricsService.shared
         let title = "Toggle Lock \(UUID().uuidString.prefix(8))"

@@ -18,34 +18,28 @@
  * SAFETY (2026-09-22, added after an earlier draft of this file was found to have
  * written to the founder's real ~/Library/Application Support/nanoPod/ caches —
  * see the research doc's "Safety incident" section):
- *   - `LyricsFetcher.shared.lyricsDiskCache` IS swappable and is swapped to a temp
- *     file in setUp/tearDown (the established pattern). A "clean" call in this
- *     file is only ever asserted safe when it demonstrably resolves via that temp
- *     cache's synchronous disk pre-flight — it therefore never reaches
- *     `MetadataResolver.shared` or the network.
- *   - `MetadataResolver.shared.diskCache` is NOT swappable (`let`, bound to
- *     `MetadataDiskCache.defaultURL()` — the founder's real file). Any call that
- *     MISSES the disk pre-flight falls through to a real, unstructured
- *     `Task { … fetchAllSources … }` that touches it and the network, and that
- *     task can start running on a background thread before this synchronous test
- *     method even returns (confirmed: an earlier run of the 3000-trial fuzzer
- *     below, before this fix, took 191s of wall time and left the founder's
- *     `lyrics_cache.json`/`metadata_cache.json` mtimes updated).
+ *   - Every test runs inside `LyricsPipelineTestIsolation` (setUp/tearDown):
+ *     both `LyricsFetcher.shared.lyricsDiskCache` and
+ *     `MetadataResolver.shared.diskCache` point at a temp directory, every
+ *     HTTP request is refused as offline, the backfill census is switched off,
+ *     and tearDown drains the fetch tasks a test started before restoring. A
+ *     call that MISSES the disk pre-flight still spawns the real
+ *     `Task { … fetchAllSources … }`, but that task can no longer reach a real
+ *     file or the network. (Before this seam existed, an earlier draft of the
+ *     3000-trial fuzzer below took 191s of wall time and left the founder's
+ *     `lyrics_cache.json`/`metadata_cache.json` mtimes updated.)
  *   - The two tests below that deliberately construct a disk-cache MISS
- *     (`test_staleAlbumDurationRace…`, `test_selfHeals…`) wrap that one call in
- *     `LyricsCachePolicyContext.$current.withValue(.networkOnly())` — an
- *     already-existing, `#if DEBUG`-only production mechanism (the same one
- *     `LyricsVerifier run --network-only` uses, per CLAUDE.md) that makes BOTH
- *     `LyricsDiskCache` and `MetadataDiskCache` refuse every read AND write for
- *     the dynamic extent of the call, including any child `Task` it spawns
- *     (Swift task-locals are captured by an unstructured `Task {}` at creation).
- *     This guarantees zero reads/writes to any real cache file. It does NOT stop
- *     the spawned task's real NetEase/QQ/LRCLIB HTTP calls (those aren't gated by
- *     this policy) — which is why the bulk of the seeded exploration below
- *     (`test_fuzzedStaleFieldRaceBoundary…`) is redesigned to fuzz the
- *     already-extracted PURE decision functions directly instead of driving
- *     thousands of real `fetchLyrics` calls: zero network, zero disk I/O, fully
- *     deterministic, and still exercises the real production logic.
+ *     (`test_staleAlbumDurationRace…`, `test_selfHeals…`) additionally wrap
+ *     that one call in `LyricsCachePolicyContext.$current.withValue(.networkOnly())`
+ *     (the `#if DEBUG` policy `LyricsVerifier run --network-only` uses), which
+ *     makes both disk caches refuse every read and write for that call. It is
+ *     the original per-call guard and is kept, but safety no longer depends on
+ *     it: the policy is a task-local, so it does not reach the detached
+ *     backfill, and it never gated HTTP.
+ *   - The bulk of the seeded exploration (`test_fuzzedStaleFieldRaceBoundary…`)
+ *     fuzzes the already-extracted PURE decision functions directly instead of
+ *     driving thousands of real `fetchLyrics` calls: zero network, zero disk
+ *     I/O, fully deterministic, and still exercises the real production logic.
  */
 
 import XCTest
@@ -123,23 +117,18 @@ private struct SplitMix64: RandomNumberGenerator {
 
 final class LyricsBlankPageFuzzTests: XCTestCase {
 
-    private var savedDiskCache: LyricsDiskCache!
-    private var tempCache: LyricsDiskCache!
+    private var isolation: LyricsPipelineTestIsolation!
+    private var tempCache: LyricsDiskCache { isolation.lyricsCache }
 
     override func setUp() {
         super.setUp()
-        savedDiskCache = LyricsFetcher.shared.lyricsDiskCache
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("blank-lyrics-fuzz-\(UUID().uuidString).json")
-        tempCache = LyricsDiskCache(fileURL: url)
-        LyricsFetcher.shared.lyricsDiskCache = tempCache
+        isolation = LyricsPipelineTestIsolation()
     }
 
-    override func tearDown() {
-        LyricsFetcher.shared.lyricsDiskCache = savedDiskCache
-        tempCache = nil
-        savedDiskCache = nil
-        super.tearDown()
+    override func tearDown() async throws {
+        await isolation.tearDown()
+        isolation = nil
+        try await super.tearDown()
     }
 
     // MARK: - Fixtures
