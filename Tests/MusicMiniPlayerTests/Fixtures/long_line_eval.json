@@ -1,0 +1,2086 @@
+{
+  "metadata": {
+    "purpose": "Eval/edge-case dataset for the founder's 2026-09-22 long-lyric-line complaint (a single line wrapping to 4+ visual lines and filling the player window). Used to measure CURRENT LyricsView.makeDisplayLyricLines / LyricDisplaySegmenter behavior before any redesign.",
+    "generatedAt": "2026-09-22",
+    "counts": {
+      "total": 54,
+      "real": 31,
+      "groundTruthTiming": 11,
+      "synthetic": 12
+    },
+    "measurementRecipe": {
+      "engine": "NSLayoutManager (matches NativeLyricsTextMeasurement.metrics, the renderer's own measurement path)",
+      "mainFontSize": 24,
+      "mainFontWeight": "semibold",
+      "mainLineSpacing": 4,
+      "leadingInset": 32,
+      "trailingInset": 32,
+      "narrowWindowWidth": 180,
+      "narrowWindowContentWidth": 116,
+      "defaultWindowWidth": 250,
+      "defaultWindowContentWidth": 186,
+      "note": "MusicMiniPlayerApp.swift: windowSize=NSSize(250,316) is only the FIRST-LAUNCH size; snappableWindow.minSize=NSSize(180,228) is the real floor the aspect-locked window can be resized to. A histogram of this user's disk cache at width=250 found only 21 lines (all Latin) crossing the >=3-visual-line bar; at width=180 it found 135. The eval harness measures BOTH widths per line."
+    },
+    "sourceNote": "Real lines were harvested from the LIVE on-disk lyrics cache at ~/Library/Application Support/nanoPod/lyrics_cache.json (LyricsDiskCache.defaultURL()). Title/artist are NOT recoverable: LyricsDiskCache.cacheKeys() hashes them with SHA256 before the key ever touches disk, so the cache entry itself carries no title/artist field -- only album/duration/source, which we use as the identity proxy in `song`. The live cache is also NOT a stable snapshot: it shrank from 149 cached songs to 9 during this session (background TTL/max-entry-count pruning while the app was presumably running), so this dataset's 'real' pool reflects whatever the cache held at capture time, not the founder's full listening history. A few additional real lines (Korean, and the word-level ground-truth subset) were pulled from already-repo-checked-in real fixtures (Tests/Fixtures/netease_qicheng_wordlevel.json, netease_newjeans_howsweet_3328905844.json) because the live snapshot had zero word-level and zero Korean lines at capture time."
+  },
+  "lines": [
+    {
+      "id": "real-001",
+      "category": "real",
+      "script": "cjk",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "cache-005",
+        "album": "一生也在等...",
+        "source": "QQ",
+        "durationSec": 286.394
+      },
+      "text": "请把你的爱给我使我也给你",
+      "translation": null,
+      "startTime": 63.34,
+      "endTime": 68.39,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-002",
+      "category": "real",
+      "script": "cjk",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "cache-005",
+        "album": "一生也在等...",
+        "source": "QQ",
+        "durationSec": 286.394
+      },
+      "text": "来吧爱我多一些再多一些",
+      "translation": null,
+      "startTime": 68.39,
+      "endTime": 75.50999999999999,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-003",
+      "category": "real",
+      "script": "cjk",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "cache-005",
+        "album": "一生也在等...",
+        "source": "QQ",
+        "durationSec": 286.394
+      },
+      "text": "假使你不顾不看不听也不理",
+      "translation": null,
+      "startTime": 83.92999999999999,
+      "endTime": 89.05,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-004",
+      "category": "real",
+      "script": "cjk",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "cache-005",
+        "album": "一生也在等...",
+        "source": "QQ",
+        "durationSec": 286.394
+      },
+      "text": "难道要给他多些再多一些",
+      "translation": null,
+      "startTime": 89.05,
+      "endTime": 96.03,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-005",
+      "category": "real",
+      "script": "mixed:cjk+kana",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-001",
+        "album": "TWILIGHT ZONE",
+        "source": "NetEase",
+        "durationSec": 407.39898681640625
+      },
+      "text": "暮れるまえまで　会えたなら",
+      "translation": "如果能在天黑之前见面",
+      "startTime": 24.98,
+      "endTime": 30.38,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-006",
+      "category": "real",
+      "script": "mixed:cjk+kana",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-001",
+        "album": "TWILIGHT ZONE",
+        "source": "NetEase",
+        "durationSec": 407.39898681640625
+      },
+      "text": "願いきっと　いつかかなうわ",
+      "translation": "这愿望总有一天会实现",
+      "startTime": 30.38,
+      "endTime": 36.599999999999994,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-007",
+      "category": "real",
+      "script": "mixed:cjk+kana",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-001",
+        "album": "TWILIGHT ZONE",
+        "source": "NetEase",
+        "durationSec": 407.39898681640625
+      },
+      "text": "あなたへ　愛を　散りばめ",
+      "translation": "让我撒下对你的爱",
+      "startTime": 47.29,
+      "endTime": 68.13,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-008",
+      "category": "real",
+      "script": "mixed:cjk+kana",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-001",
+        "album": "TWILIGHT ZONE",
+        "source": "NetEase",
+        "durationSec": 407.39898681640625
+      },
+      "text": "移り変わる色　鮮やかに",
+      "translation": "变幻着的鲜艳的色彩",
+      "startTime": 78.77,
+      "endTime": 84.3,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-009",
+      "category": "real",
+      "script": "mixed:cjk+kana",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-001",
+        "album": "TWILIGHT ZONE",
+        "source": "NetEase",
+        "durationSec": 407.39898681640625
+      },
+      "text": "縁どられて　ほほに落ちるよ",
+      "translation": "落在脸颊上",
+      "startTime": 84.3,
+      "endTime": 124.91,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-010",
+      "category": "real",
+      "script": "mixed:cjk+kana",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-001",
+        "album": "TWILIGHT ZONE",
+        "source": "NetEase",
+        "durationSec": 407.39898681640625
+      },
+      "text": "いつも好き　この街の通り",
+      "translation": "总是喜欢这条街上的",
+      "startTime": 124.91,
+      "endTime": 131.34,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-011",
+      "category": "real",
+      "script": "mixed:cjk+kana",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-001",
+        "album": "TWILIGHT ZONE",
+        "source": "NetEase",
+        "durationSec": 407.39898681640625
+      },
+      "text": "まるで流星　燃え上がる炎",
+      "translation": "就像流星燃烧的火焰",
+      "startTime": 136.62,
+      "endTime": 142.08,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-012",
+      "category": "real",
+      "script": "mixed:cjk+kana",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-001",
+        "album": "TWILIGHT ZONE",
+        "source": "NetEase",
+        "durationSec": 407.39898681640625
+      },
+      "text": "恋と流れ　夜空　翔けるよ",
+      "translation": "流淌着恋爱  翱翔于夜空",
+      "startTime": 142.08,
+      "endTime": 148.27,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-013",
+      "category": "real",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-003",
+        "album": "Make Way for Dionne Warwick",
+        "source": "NetEase",
+        "durationSec": 188.6929931640625
+      },
+      "text": "Even when there's no-one sitting there",
+      "translation": "即使无人落座时",
+      "startTime": 20.974,
+      "endTime": 28.560000000000002,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-014",
+      "category": "real",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-003",
+        "album": "Make Way for Dionne Warwick",
+        "source": "NetEase",
+        "durationSec": 188.6929931640625
+      },
+      "text": "When there's no-one there to hold you tight",
+      "translation": "当无人将你紧拥入怀",
+      "startTime": 35.583,
+      "endTime": 40.64,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-015",
+      "category": "real",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-003",
+        "album": "Make Way for Dionne Warwick",
+        "source": "NetEase",
+        "durationSec": 188.6929931640625
+      },
+      "text": "Even when there's nothing there but gloom",
+      "translation": "即使只剩阴郁弥漫",
+      "startTime": 52.824,
+      "endTime": 60.766999999999996,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-016",
+      "category": "real",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-003",
+        "album": "Make Way for Dionne Warwick",
+        "source": "NetEase",
+        "durationSec": 188.6929931640625
+      },
+      "text": "And no-one there you can kiss goodnight",
+      "translation": "无人给你晚安吻时",
+      "startTime": 40.64,
+      "endTime": 49.184,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-017",
+      "category": "real",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-003",
+        "album": "Make Way for Dionne Warwick",
+        "source": "NetEase",
+        "durationSec": 188.6929931640625
+      },
+      "text": "Don't let one mistake keep us apart",
+      "translation": "别让过错将我们分离",
+      "startTime": 112.831,
+      "endTime": 121.161,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-018",
+      "category": "real",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-003",
+        "album": "Make Way for Dionne Warwick",
+        "source": "NetEase",
+        "durationSec": 188.6929931640625
+      },
+      "text": "And a house is not a home",
+      "translation": "房屋也非家",
+      "startTime": 32.827,
+      "endTime": 35.583,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-019",
+      "category": "real",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-003",
+        "album": "Make Way for Dionne Warwick",
+        "source": "NetEase",
+        "durationSec": 188.6929931640625
+      },
+      "text": "But a room is not a house",
+      "translation": "但房间不是房屋",
+      "startTime": 60.766999999999996,
+      "endTime": 65.16799999999999,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-020",
+      "category": "real",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-003",
+        "album": "Make Way for Dionne Warwick",
+        "source": "NetEase",
+        "durationSec": 188.6929931640625
+      },
+      "text": "When the two of us are far apart",
+      "translation": "当我们相隔两地",
+      "startTime": 68.00099999999999,
+      "endTime": 73.314,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-021",
+      "category": "real",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-003",
+        "album": "Make Way for Dionne Warwick",
+        "source": "NetEase",
+        "durationSec": 188.6929931640625
+      },
+      "text": "And one of us has a broken heart",
+      "translation": "当有人心碎不已",
+      "startTime": 73.314,
+      "endTime": 81.66499999999999,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-022",
+      "category": "real",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-003",
+        "album": "Make Way for Dionne Warwick",
+        "source": "NetEase",
+        "durationSec": 188.6929931640625
+      },
+      "text": "And suddenly your face appears",
+      "translation": "你面容忽现眼前",
+      "startTime": 87.65599999999999,
+      "endTime": 93.346,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-023",
+      "category": "real",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-003",
+        "album": "Make Way for Dionne Warwick",
+        "source": "NetEase",
+        "durationSec": 188.6929931640625
+      },
+      "text": "But it's just a crazy game",
+      "translation": "但这疯狂的游戏",
+      "startTime": 93.346,
+      "endTime": 99.21,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-024",
+      "category": "real",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-003",
+        "album": "Make Way for Dionne Warwick",
+        "source": "NetEase",
+        "durationSec": 188.6929931640625
+      },
+      "text": "When it ends, it ends in tears",
+      "translation": "终以泪水作结",
+      "startTime": 99.21,
+      "endTime": 109.145,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-025",
+      "category": "real",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-003",
+        "album": "Make Way for Dionne Warwick",
+        "source": "NetEase",
+        "durationSec": 188.6929931640625
+      },
+      "text": "But a chair is not a house",
+      "translation": "但椅子不是房屋",
+      "startTime": 28.560000000000002,
+      "endTime": 32.827,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-026",
+      "category": "real",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "cache-003",
+        "album": "Make Way for Dionne Warwick",
+        "source": "NetEase",
+        "durationSec": 188.6929931640625
+      },
+      "text": "A room is still a room",
+      "translation": "房间依然是房间",
+      "startTime": 49.184,
+      "endTime": 52.824,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": null
+    },
+    {
+      "id": "real-kr-001",
+      "category": "real",
+      "script": "hangul",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "fixture-newjeans-howsweet",
+        "album": "How Sweet (repo test fixture; real NetEase raw LRC, Tests/Fixtures/netease_newjeans_howsweet_3328905844.json)",
+        "source": "NetEase",
+        "durationSec": 191.0
+      },
+      "text": "알게 됐어 나",
+      "translation": null,
+      "startTime": 9.51,
+      "endTime": 10.0,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": "Real published lyric line (Korean), but short at the app's narrow width -- included for hangul-script stratification coverage since the live disk-cache snapshot had zero Korean content; does not itself cross the >=3 visual line bar (see research note)."
+    },
+    {
+      "id": "real-kr-002",
+      "category": "real",
+      "script": "hangul",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "fixture-newjeans-howsweet",
+        "album": "How Sweet (repo test fixture; real NetEase raw LRC, Tests/Fixtures/netease_newjeans_howsweet_3328905844.json)",
+        "source": "NetEase",
+        "durationSec": 191.0
+      },
+      "text": "알려주지 않아도 돼",
+      "translation": null,
+      "startTime": 75.82,
+      "endTime": 82.03,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": "Real published lyric line (Korean), but short at the app's narrow width -- included for hangul-script stratification coverage since the live disk-cache snapshot had zero Korean content; does not itself cross the >=3 visual line bar (see research note)."
+    },
+    {
+      "id": "real-kr-003",
+      "category": "real",
+      "script": "hangul",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "fixture-newjeans-howsweet",
+        "album": "How Sweet (repo test fixture; real NetEase raw LRC, Tests/Fixtures/netease_newjeans_howsweet_3328905844.json)",
+        "source": "NetEase",
+        "durationSec": 191.0
+      },
+      "text": "부르고 있어 나의 이름을",
+      "translation": null,
+      "startTime": 85.02,
+      "endTime": 90.43,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": "Real published lyric line (Korean), but short at the app's narrow width -- included for hangul-script stratification coverage since the live disk-cache snapshot had zero Korean content; does not itself cross the >=3 visual line bar (see research note)."
+    },
+    {
+      "id": "real-kr-004",
+      "category": "real",
+      "script": "mixed:hangul+latin",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "fixture-newjeans-howsweet",
+        "album": "How Sweet (repo test fixture; real NetEase raw LRC, Tests/Fixtures/netease_newjeans_howsweet_3328905844.json)",
+        "source": "NetEase",
+        "durationSec": 191.0
+      },
+      "text": "더는 안 봐 drama it's good karma",
+      "translation": null,
+      "startTime": 90.43,
+      "endTime": 93.25,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": "Real published lyric line (Korean), but short at the app's narrow width -- included for hangul-script stratification coverage since the live disk-cache snapshot had zero Korean content; does not itself cross the >=3 visual line bar (see research note)."
+    },
+    {
+      "id": "real-kr-005",
+      "category": "real",
+      "script": "hangul",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "fixture-newjeans-howsweet",
+        "album": "How Sweet (repo test fixture; real NetEase raw LRC, Tests/Fixtures/netease_newjeans_howsweet_3328905844.json)",
+        "source": "NetEase",
+        "durationSec": 191.0
+      },
+      "text": "완전 쉬운 공식이야",
+      "translation": null,
+      "startTime": 98.1,
+      "endTime": 104.29,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": "Real published lyric line (Korean), but short at the app's narrow width -- included for hangul-script stratification coverage since the live disk-cache snapshot had zero Korean content; does not itself cross the >=3 visual line bar (see research note)."
+    },
+    {
+      "id": "gt-001",
+      "category": "groundTruthTiming",
+      "script": "cjk",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "fixture-qicheng",
+        "album": "启程 (repo test fixture; real word-level NetEase data, Tests/Fixtures/netease_qicheng_wordlevel.json)",
+        "source": "NetEase",
+        "durationSec": null
+      },
+      "text": "每一天 都有一些事情将会发生",
+      "translation": null,
+      "startTime": 25.91,
+      "endTime": 31.830000000000002,
+      "isBackground": false,
+      "words": [],
+      "trueWords": [
+        {
+          "word": "每",
+          "startTime": 25.91,
+          "endTime": 26.26
+        },
+        {
+          "word": "一",
+          "startTime": 26.26,
+          "endTime": 26.75
+        },
+        {
+          "word": "天 ",
+          "startTime": 26.75,
+          "endTime": 28.21
+        },
+        {
+          "word": "都",
+          "startTime": 28.21,
+          "endTime": 28.46
+        },
+        {
+          "word": "有",
+          "startTime": 28.46,
+          "endTime": 28.720000000000002
+        },
+        {
+          "word": "一",
+          "startTime": 28.720000000000002,
+          "endTime": 28.900000000000002
+        },
+        {
+          "word": "些",
+          "startTime": 28.900000000000002,
+          "endTime": 29.14
+        },
+        {
+          "word": "事",
+          "startTime": 29.14,
+          "endTime": 29.400000000000002
+        },
+        {
+          "word": "情",
+          "startTime": 29.400000000000002,
+          "endTime": 29.68
+        },
+        {
+          "word": "将",
+          "startTime": 29.68,
+          "endTime": 29.93
+        },
+        {
+          "word": "会",
+          "startTime": 29.93,
+          "endTime": 30.41
+        },
+        {
+          "word": "发",
+          "startTime": 30.41,
+          "endTime": 30.740000000000002
+        },
+        {
+          "word": "生",
+          "startTime": 30.740000000000002,
+          "endTime": 31.830000000000002
+        }
+      ],
+      "note": "Word timings stripped to simulate a line-level-only source; trueWords holds the real per-character timestamps so a segmentation's estimated piece-start-times can be scored against them."
+    },
+    {
+      "id": "gt-002",
+      "category": "groundTruthTiming",
+      "script": "cjk",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "fixture-qicheng",
+        "album": "启程 (repo test fixture; real word-level NetEase data, Tests/Fixtures/netease_qicheng_wordlevel.json)",
+        "source": "NetEase",
+        "durationSec": null
+      },
+      "text": "每段路 都有即将要来的旅程",
+      "translation": null,
+      "startTime": 33.86,
+      "endTime": 39.73,
+      "isBackground": false,
+      "words": [],
+      "trueWords": [
+        {
+          "word": "每",
+          "startTime": 33.86,
+          "endTime": 34.43
+        },
+        {
+          "word": "段",
+          "startTime": 34.43,
+          "endTime": 34.89
+        },
+        {
+          "word": "路 ",
+          "startTime": 34.89,
+          "endTime": 36.25
+        },
+        {
+          "word": "都",
+          "startTime": 36.25,
+          "endTime": 36.51
+        },
+        {
+          "word": "有",
+          "startTime": 36.51,
+          "endTime": 36.739999999999995
+        },
+        {
+          "word": "即",
+          "startTime": 36.739999999999995,
+          "endTime": 37.019999999999996
+        },
+        {
+          "word": "将",
+          "startTime": 37.019999999999996,
+          "endTime": 37.239999999999995
+        },
+        {
+          "word": "要",
+          "startTime": 37.239999999999995,
+          "endTime": 37.519999999999996
+        },
+        {
+          "word": "来",
+          "startTime": 37.519999999999996,
+          "endTime": 37.82
+        },
+        {
+          "word": "的",
+          "startTime": 37.82,
+          "endTime": 38.029999999999994
+        },
+        {
+          "word": "旅",
+          "startTime": 38.029999999999994,
+          "endTime": 38.47
+        },
+        {
+          "word": "程",
+          "startTime": 38.47,
+          "endTime": 39.73
+        }
+      ],
+      "note": "Word timings stripped to simulate a line-level-only source; trueWords holds the real per-character timestamps so a segmentation's estimated piece-start-times can be scored against them."
+    },
+    {
+      "id": "gt-003",
+      "category": "groundTruthTiming",
+      "script": "cjk",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "fixture-qicheng",
+        "album": "启程 (repo test fixture; real word-level NetEase data, Tests/Fixtures/netease_qicheng_wordlevel.json)",
+        "source": "NetEase",
+        "durationSec": null
+      },
+      "text": "每颗心 都有值得期待的成分",
+      "translation": null,
+      "startTime": 41.89,
+      "endTime": 48.589999999999996,
+      "isBackground": false,
+      "words": [],
+      "trueWords": [
+        {
+          "word": "每",
+          "startTime": 41.89,
+          "endTime": 42.48
+        },
+        {
+          "word": "颗",
+          "startTime": 42.48,
+          "endTime": 42.809999999999995
+        },
+        {
+          "word": "心 ",
+          "startTime": 42.809999999999995,
+          "endTime": 44.33
+        },
+        {
+          "word": "都",
+          "startTime": 44.33,
+          "endTime": 44.589999999999996
+        },
+        {
+          "word": "有",
+          "startTime": 44.589999999999996,
+          "endTime": 44.83
+        },
+        {
+          "word": "值",
+          "startTime": 44.83,
+          "endTime": 45.089999999999996
+        },
+        {
+          "word": "得",
+          "startTime": 45.089999999999996,
+          "endTime": 45.32
+        },
+        {
+          "word": "期",
+          "startTime": 45.32,
+          "endTime": 45.64
+        },
+        {
+          "word": "待",
+          "startTime": 45.64,
+          "endTime": 45.87
+        },
+        {
+          "word": "的",
+          "startTime": 45.87,
+          "endTime": 46.089999999999996
+        },
+        {
+          "word": "成",
+          "startTime": 46.089999999999996,
+          "endTime": 46.9
+        },
+        {
+          "word": "分",
+          "startTime": 46.9,
+          "endTime": 48.589999999999996
+        }
+      ],
+      "note": "Word timings stripped to simulate a line-level-only source; trueWords holds the real per-character timestamps so a segmentation's estimated piece-start-times can be scored against them."
+    },
+    {
+      "id": "gt-004",
+      "category": "groundTruthTiming",
+      "script": "cjk",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "fixture-qicheng",
+        "album": "启程 (repo test fixture; real word-level NetEase data, Tests/Fixtures/netease_qicheng_wordlevel.json)",
+        "source": "NetEase",
+        "durationSec": null
+      },
+      "text": "每个人 都有爱上另一个人的可能",
+      "translation": null,
+      "startTime": 50,
+      "endTime": 56.87,
+      "isBackground": false,
+      "words": [],
+      "trueWords": [
+        {
+          "word": "每",
+          "startTime": 50,
+          "endTime": 50.589999999999996
+        },
+        {
+          "word": "个",
+          "startTime": 50.589999999999996,
+          "endTime": 50.919999999999995
+        },
+        {
+          "word": "人 ",
+          "startTime": 50.919999999999995,
+          "endTime": 52.41
+        },
+        {
+          "word": "都",
+          "startTime": 52.41,
+          "endTime": 52.66
+        },
+        {
+          "word": "有",
+          "startTime": 52.66,
+          "endTime": 52.919999999999995
+        },
+        {
+          "word": "爱",
+          "startTime": 52.919999999999995,
+          "endTime": 53.08
+        },
+        {
+          "word": "上",
+          "startTime": 53.08,
+          "endTime": 53.41
+        },
+        {
+          "word": "另",
+          "startTime": 53.41,
+          "endTime": 53.699999999999996
+        },
+        {
+          "word": "一",
+          "startTime": 53.699999999999996,
+          "endTime": 53.949999999999996
+        },
+        {
+          "word": "个",
+          "startTime": 53.949999999999996,
+          "endTime": 54.169999999999995
+        },
+        {
+          "word": "人",
+          "startTime": 54.169999999999995,
+          "endTime": 54.739999999999995
+        },
+        {
+          "word": "的",
+          "startTime": 54.739999999999995,
+          "endTime": 54.91
+        },
+        {
+          "word": "可",
+          "startTime": 54.91,
+          "endTime": 55.41
+        },
+        {
+          "word": "能",
+          "startTime": 55.41,
+          "endTime": 56.87
+        }
+      ],
+      "note": "Word timings stripped to simulate a line-level-only source; trueWords holds the real per-character timestamps so a segmentation's estimated piece-start-times can be scored against them."
+    },
+    {
+      "id": "gt-005",
+      "category": "groundTruthTiming",
+      "script": "cjk",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "fixture-qicheng",
+        "album": "启程 (repo test fixture; real word-level NetEase data, Tests/Fixtures/netease_qicheng_wordlevel.json)",
+        "source": "NetEase",
+        "durationSec": null
+      },
+      "text": "想爱 就不能害怕会有伤痕",
+      "translation": null,
+      "startTime": 57.58,
+      "endTime": 63.89,
+      "isBackground": false,
+      "words": [],
+      "trueWords": [
+        {
+          "word": "想",
+          "startTime": 57.58,
+          "endTime": 58.64
+        },
+        {
+          "word": "爱 ",
+          "startTime": 58.64,
+          "endTime": 60.5
+        },
+        {
+          "word": "就",
+          "startTime": 60.5,
+          "endTime": 60.769999999999996
+        },
+        {
+          "word": "不",
+          "startTime": 60.769999999999996,
+          "endTime": 61.01
+        },
+        {
+          "word": "能",
+          "startTime": 61.01,
+          "endTime": 61.209999999999994
+        },
+        {
+          "word": "害",
+          "startTime": 61.209999999999994,
+          "endTime": 61.48
+        },
+        {
+          "word": "怕",
+          "startTime": 61.48,
+          "endTime": 61.72
+        },
+        {
+          "word": "会",
+          "startTime": 61.72,
+          "endTime": 61.97
+        },
+        {
+          "word": "有",
+          "startTime": 61.97,
+          "endTime": 62.18
+        },
+        {
+          "word": "伤",
+          "startTime": 62.18,
+          "endTime": 62.699999999999996
+        },
+        {
+          "word": "痕",
+          "startTime": 62.699999999999996,
+          "endTime": 63.89
+        }
+      ],
+      "note": "Word timings stripped to simulate a line-level-only source; trueWords holds the real per-character timestamps so a segmentation's estimated piece-start-times can be scored against them."
+    },
+    {
+      "id": "gt-006",
+      "category": "groundTruthTiming",
+      "script": "cjk",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "fixture-qicheng",
+        "album": "启程 (repo test fixture; real word-level NetEase data, Tests/Fixtures/netease_qicheng_wordlevel.json)",
+        "source": "NetEase",
+        "durationSec": null
+      },
+      "text": "没有人完整 却有人能信任",
+      "translation": null,
+      "startTime": 65.63,
+      "endTime": 69.39999999999999,
+      "isBackground": false,
+      "words": [],
+      "trueWords": [
+        {
+          "word": "没",
+          "startTime": 65.63,
+          "endTime": 65.99
+        },
+        {
+          "word": "有",
+          "startTime": 65.99,
+          "endTime": 66.27
+        },
+        {
+          "word": "人",
+          "startTime": 66.27,
+          "endTime": 66.7
+        },
+        {
+          "word": "完",
+          "startTime": 66.7,
+          "endTime": 67.05
+        },
+        {
+          "word": "整 ",
+          "startTime": 67.05,
+          "endTime": 67.52
+        },
+        {
+          "word": "却",
+          "startTime": 67.52,
+          "endTime": 67.82
+        },
+        {
+          "word": "有",
+          "startTime": 67.82,
+          "endTime": 68.05
+        },
+        {
+          "word": "人",
+          "startTime": 68.05,
+          "endTime": 68.3
+        },
+        {
+          "word": "能",
+          "startTime": 68.3,
+          "endTime": 68.69
+        },
+        {
+          "word": "信",
+          "startTime": 68.69,
+          "endTime": 69.05
+        },
+        {
+          "word": "任",
+          "startTime": 69.05,
+          "endTime": 69.39999999999999
+        }
+      ],
+      "note": "Word timings stripped to simulate a line-level-only source; trueWords holds the real per-character timestamps so a segmentation's estimated piece-start-times can be scored against them."
+    },
+    {
+      "id": "gt-007",
+      "category": "groundTruthTiming",
+      "script": "cjk",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "fixture-qicheng",
+        "album": "启程 (repo test fixture; real word-level NetEase data, Tests/Fixtures/netease_qicheng_wordlevel.json)",
+        "source": "NetEase",
+        "durationSec": null
+      },
+      "text": "才找到永恒",
+      "translation": null,
+      "startTime": 69.53999999999999,
+      "endTime": 73.31,
+      "isBackground": false,
+      "words": [],
+      "trueWords": [
+        {
+          "word": "才",
+          "startTime": 69.53999999999999,
+          "endTime": 69.82
+        },
+        {
+          "word": "找",
+          "startTime": 69.82,
+          "endTime": 70.1
+        },
+        {
+          "word": "到",
+          "startTime": 70.1,
+          "endTime": 70.32
+        },
+        {
+          "word": "永",
+          "startTime": 70.32,
+          "endTime": 70.71
+        },
+        {
+          "word": "恒",
+          "startTime": 70.71,
+          "endTime": 73.31
+        }
+      ],
+      "note": "Word timings stripped to simulate a line-level-only source; trueWords holds the real per-character timestamps so a segmentation's estimated piece-start-times can be scored against them."
+    },
+    {
+      "id": "gt-008",
+      "category": "groundTruthTiming",
+      "script": "cjk",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "fixture-qicheng",
+        "album": "启程 (repo test fixture; real word-level NetEase data, Tests/Fixtures/netease_qicheng_wordlevel.json)",
+        "source": "NetEase",
+        "durationSec": null
+      },
+      "text": "想到达明天 现在就要启程",
+      "translation": null,
+      "startTime": 77.06,
+      "endTime": 81.47,
+      "isBackground": false,
+      "words": [],
+      "trueWords": [
+        {
+          "word": "想",
+          "startTime": 77.06,
+          "endTime": 77.67999999999999
+        },
+        {
+          "word": "到",
+          "startTime": 77.67999999999999,
+          "endTime": 78.25999999999999
+        },
+        {
+          "word": "达",
+          "startTime": 78.25999999999999,
+          "endTime": 78.52
+        },
+        {
+          "word": "明",
+          "startTime": 78.52,
+          "endTime": 78.95
+        },
+        {
+          "word": "天 ",
+          "startTime": 78.95,
+          "endTime": 79.44
+        },
+        {
+          "word": "现",
+          "startTime": 79.44,
+          "endTime": 80.00999999999999
+        },
+        {
+          "word": "在",
+          "startTime": 80.00999999999999,
+          "endTime": 80.25
+        },
+        {
+          "word": "就",
+          "startTime": 80.25,
+          "endTime": 80.5
+        },
+        {
+          "word": "要",
+          "startTime": 80.5,
+          "endTime": 80.73
+        },
+        {
+          "word": "启",
+          "startTime": 80.73,
+          "endTime": 81.00999999999999
+        },
+        {
+          "word": "程",
+          "startTime": 81.00999999999999,
+          "endTime": 81.47
+        }
+      ],
+      "note": "Word timings stripped to simulate a line-level-only source; trueWords holds the real per-character timestamps so a segmentation's estimated piece-start-times can be scored against them."
+    },
+    {
+      "id": "gt-009",
+      "category": "groundTruthTiming",
+      "script": "cjk",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "fixture-qicheng",
+        "album": "启程 (repo test fixture; real word-level NetEase data, Tests/Fixtures/netease_qicheng_wordlevel.json)",
+        "source": "NetEase",
+        "durationSec": null
+      },
+      "text": "只有你能带我走向未来的旅程",
+      "translation": null,
+      "startTime": 81.75,
+      "endTime": 85.33,
+      "isBackground": false,
+      "words": [],
+      "trueWords": [
+        {
+          "word": "只",
+          "startTime": 81.75,
+          "endTime": 82
+        },
+        {
+          "word": "有",
+          "startTime": 82,
+          "endTime": 82.27
+        },
+        {
+          "word": "你",
+          "startTime": 82.27,
+          "endTime": 82.53999999999999
+        },
+        {
+          "word": "能",
+          "startTime": 82.53999999999999,
+          "endTime": 82.81
+        },
+        {
+          "word": "带",
+          "startTime": 82.81,
+          "endTime": 83.03
+        },
+        {
+          "word": "我",
+          "startTime": 83.03,
+          "endTime": 83.25999999999999
+        },
+        {
+          "word": "走",
+          "startTime": 83.25999999999999,
+          "endTime": 83.5
+        },
+        {
+          "word": "向",
+          "startTime": 83.5,
+          "endTime": 83.75999999999999
+        },
+        {
+          "word": "未",
+          "startTime": 83.75999999999999,
+          "endTime": 84.05
+        },
+        {
+          "word": "来",
+          "startTime": 84.05,
+          "endTime": 84.33
+        },
+        {
+          "word": "的",
+          "startTime": 84.33,
+          "endTime": 84.50999999999999
+        },
+        {
+          "word": "旅",
+          "startTime": 84.50999999999999,
+          "endTime": 84.94
+        },
+        {
+          "word": "程",
+          "startTime": 84.94,
+          "endTime": 85.33
+        }
+      ],
+      "note": "Word timings stripped to simulate a line-level-only source; trueWords holds the real per-character timestamps so a segmentation's estimated piece-start-times can be scored against them."
+    },
+    {
+      "id": "gt-010",
+      "category": "groundTruthTiming",
+      "script": "cjk",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "fixture-qicheng",
+        "album": "启程 (repo test fixture; real word-level NetEase data, Tests/Fixtures/netease_qicheng_wordlevel.json)",
+        "source": "NetEase",
+        "durationSec": null
+      },
+      "text": "你能让我看见黑夜过去",
+      "translation": null,
+      "startTime": 89.77,
+      "endTime": 93.69,
+      "isBackground": false,
+      "words": [],
+      "trueWords": [
+        {
+          "word": "你",
+          "startTime": 89.77,
+          "endTime": 90.1
+        },
+        {
+          "word": "能",
+          "startTime": 90.1,
+          "endTime": 90.33
+        },
+        {
+          "word": "让",
+          "startTime": 90.33,
+          "endTime": 90.57
+        },
+        {
+          "word": "我",
+          "startTime": 90.57,
+          "endTime": 90.82
+        },
+        {
+          "word": "看",
+          "startTime": 90.82,
+          "endTime": 91.1
+        },
+        {
+          "word": "见",
+          "startTime": 91.1,
+          "endTime": 91.32
+        },
+        {
+          "word": "黑",
+          "startTime": 91.32,
+          "endTime": 91.58
+        },
+        {
+          "word": "夜",
+          "startTime": 91.58,
+          "endTime": 91.84
+        },
+        {
+          "word": "过",
+          "startTime": 91.84,
+          "endTime": 92.25
+        },
+        {
+          "word": "去",
+          "startTime": 92.25,
+          "endTime": 93.69
+        }
+      ],
+      "note": "Word timings stripped to simulate a line-level-only source; trueWords holds the real per-character timestamps so a segmentation's estimated piece-start-times can be scored against them."
+    },
+    {
+      "id": "gt-011",
+      "category": "groundTruthTiming",
+      "script": "cjk",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "fixture-qicheng",
+        "album": "启程 (repo test fixture; real word-level NetEase data, Tests/Fixtures/netease_qicheng_wordlevel.json)",
+        "source": "NetEase",
+        "durationSec": null
+      },
+      "text": "天开始明亮的过程",
+      "translation": null,
+      "startTime": 94.17999999999999,
+      "endTime": 99.42999999999999,
+      "isBackground": false,
+      "words": [],
+      "trueWords": [
+        {
+          "word": "天",
+          "startTime": 94.17999999999999,
+          "endTime": 94.47
+        },
+        {
+          "word": "开",
+          "startTime": 94.47,
+          "endTime": 94.74
+        },
+        {
+          "word": "始",
+          "startTime": 94.74,
+          "endTime": 95.08
+        },
+        {
+          "word": "明",
+          "startTime": 95.08,
+          "endTime": 95.39999999999999
+        },
+        {
+          "word": "亮",
+          "startTime": 95.39999999999999,
+          "endTime": 95.86999999999999
+        },
+        {
+          "word": "的",
+          "startTime": 95.86999999999999,
+          "endTime": 97.13
+        },
+        {
+          "word": "过",
+          "startTime": 97.13,
+          "endTime": 97.61
+        },
+        {
+          "word": "程",
+          "startTime": 97.61,
+          "endTime": 99.42999999999999
+        }
+      ],
+      "note": "Word timings stripped to simulate a line-level-only source; trueWords holds the real per-character timestamps so a segmentation's estimated piece-start-times can be scored against them."
+    },
+    {
+      "id": "syn-001",
+      "category": "synthetic",
+      "subtype": "no_space_no_punct_cjk_60",
+      "script": "cjk",
+      "sync": "wordLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "synthetic",
+        "album": null,
+        "source": "synthetic",
+        "durationSec": null
+      },
+      "text": "夜色渐渐笼罩着整座城市每一盏灯都藏着一个没有说完的故事我们沿着河边慢慢地走谁也没有先开口夜色渐渐笼罩着整座城市每一盏灯都",
+      "translation": "The night slowly wraps around the whole city and every lamp is hiding a story that was never finished as we walk slowly along the river neither of us wants to speak first",
+      "startTime": 100.0,
+      "endTime": 112.0,
+      "isBackground": false,
+      "words": [
+        {
+          "word": "夜",
+          "startTime": 0.0,
+          "endTime": 0.2
+        },
+        {
+          "word": "色",
+          "startTime": 0.2,
+          "endTime": 0.4
+        },
+        {
+          "word": "渐",
+          "startTime": 0.4,
+          "endTime": 0.6
+        },
+        {
+          "word": "渐",
+          "startTime": 0.6,
+          "endTime": 0.8
+        },
+        {
+          "word": "笼",
+          "startTime": 0.8,
+          "endTime": 1.0
+        },
+        {
+          "word": "罩",
+          "startTime": 1.0,
+          "endTime": 1.2
+        },
+        {
+          "word": "着",
+          "startTime": 1.2,
+          "endTime": 1.4
+        },
+        {
+          "word": "整",
+          "startTime": 1.4,
+          "endTime": 1.6
+        },
+        {
+          "word": "座",
+          "startTime": 1.6,
+          "endTime": 1.8
+        },
+        {
+          "word": "城",
+          "startTime": 1.8,
+          "endTime": 2.0
+        },
+        {
+          "word": "市",
+          "startTime": 2.0,
+          "endTime": 2.2
+        },
+        {
+          "word": "每",
+          "startTime": 2.2,
+          "endTime": 2.4
+        },
+        {
+          "word": "一",
+          "startTime": 2.4,
+          "endTime": 2.6
+        },
+        {
+          "word": "盏",
+          "startTime": 2.6,
+          "endTime": 2.8
+        },
+        {
+          "word": "灯",
+          "startTime": 2.8,
+          "endTime": 3.0
+        },
+        {
+          "word": "都",
+          "startTime": 3.0,
+          "endTime": 3.2
+        },
+        {
+          "word": "藏",
+          "startTime": 3.2,
+          "endTime": 3.4
+        },
+        {
+          "word": "着",
+          "startTime": 3.4,
+          "endTime": 3.6
+        },
+        {
+          "word": "一",
+          "startTime": 3.6,
+          "endTime": 3.8
+        },
+        {
+          "word": "个",
+          "startTime": 3.8,
+          "endTime": 4.0
+        },
+        {
+          "word": "没",
+          "startTime": 4.0,
+          "endTime": 4.2
+        },
+        {
+          "word": "有",
+          "startTime": 4.2,
+          "endTime": 4.4
+        },
+        {
+          "word": "说",
+          "startTime": 4.4,
+          "endTime": 4.6
+        },
+        {
+          "word": "完",
+          "startTime": 4.6,
+          "endTime": 4.8
+        },
+        {
+          "word": "的",
+          "startTime": 4.8,
+          "endTime": 5.0
+        },
+        {
+          "word": "故",
+          "startTime": 5.0,
+          "endTime": 5.2
+        },
+        {
+          "word": "事",
+          "startTime": 5.2,
+          "endTime": 5.4
+        },
+        {
+          "word": "我",
+          "startTime": 5.4,
+          "endTime": 5.6
+        },
+        {
+          "word": "们",
+          "startTime": 5.6,
+          "endTime": 5.8
+        },
+        {
+          "word": "沿",
+          "startTime": 5.8,
+          "endTime": 6.0
+        },
+        {
+          "word": "着",
+          "startTime": 6.0,
+          "endTime": 6.2
+        },
+        {
+          "word": "河",
+          "startTime": 6.2,
+          "endTime": 6.4
+        },
+        {
+          "word": "边",
+          "startTime": 6.4,
+          "endTime": 6.6
+        },
+        {
+          "word": "慢",
+          "startTime": 6.6,
+          "endTime": 6.8
+        },
+        {
+          "word": "慢",
+          "startTime": 6.8,
+          "endTime": 7.0
+        },
+        {
+          "word": "地",
+          "startTime": 7.0,
+          "endTime": 7.2
+        },
+        {
+          "word": "走",
+          "startTime": 7.2,
+          "endTime": 7.4
+        },
+        {
+          "word": "谁",
+          "startTime": 7.4,
+          "endTime": 7.6
+        },
+        {
+          "word": "也",
+          "startTime": 7.6,
+          "endTime": 7.8
+        },
+        {
+          "word": "没",
+          "startTime": 7.8,
+          "endTime": 8.0
+        },
+        {
+          "word": "有",
+          "startTime": 8.0,
+          "endTime": 8.2
+        },
+        {
+          "word": "先",
+          "startTime": 8.2,
+          "endTime": 8.4
+        },
+        {
+          "word": "开",
+          "startTime": 8.4,
+          "endTime": 8.6
+        },
+        {
+          "word": "口",
+          "startTime": 8.6,
+          "endTime": 8.8
+        },
+        {
+          "word": "夜",
+          "startTime": 8.8,
+          "endTime": 9.0
+        },
+        {
+          "word": "色",
+          "startTime": 9.0,
+          "endTime": 9.2
+        },
+        {
+          "word": "渐",
+          "startTime": 9.2,
+          "endTime": 9.4
+        },
+        {
+          "word": "渐",
+          "startTime": 9.4,
+          "endTime": 9.6
+        },
+        {
+          "word": "笼",
+          "startTime": 9.6,
+          "endTime": 9.8
+        },
+        {
+          "word": "罩",
+          "startTime": 9.8,
+          "endTime": 10.0
+        },
+        {
+          "word": "着",
+          "startTime": 10.0,
+          "endTime": 10.2
+        },
+        {
+          "word": "整",
+          "startTime": 10.2,
+          "endTime": 10.4
+        },
+        {
+          "word": "座",
+          "startTime": 10.4,
+          "endTime": 10.6
+        },
+        {
+          "word": "城",
+          "startTime": 10.6,
+          "endTime": 10.8
+        },
+        {
+          "word": "市",
+          "startTime": 10.8,
+          "endTime": 11.0
+        },
+        {
+          "word": "每",
+          "startTime": 11.0,
+          "endTime": 11.2
+        },
+        {
+          "word": "一",
+          "startTime": 11.2,
+          "endTime": 11.4
+        },
+        {
+          "word": "盏",
+          "startTime": 11.4,
+          "endTime": 11.6
+        },
+        {
+          "word": "灯",
+          "startTime": 11.6,
+          "endTime": 11.8
+        },
+        {
+          "word": "都",
+          "startTime": 11.8,
+          "endTime": 12.0
+        }
+      ],
+      "trueWords": null,
+      "note": "60 CJK characters, no spaces/punctuation anywhere -- stresses the segmenter's punctuation-boundary heuristics (no boundary exists at all) and, being word-level, is NEVER split by the current code."
+    },
+    {
+      "id": "syn-002",
+      "category": "synthetic",
+      "subtype": "huge_single_latin_word",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "synthetic",
+        "album": null,
+        "source": "synthetic",
+        "durationSec": null
+      },
+      "text": "Antidisestablishmentarianismsupercalifragilisticexpialidocioussesquipedalianism",
+      "translation": null,
+      "startTime": 50.0,
+      "endTime": 56.0,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": "A single unbreakable token longer than the per-line unit budget; the hard-wrap fallback must fragment it mid-word (there is no other option), which is the one case a whitespace/punctuation-based segmenter cannot avoid breaking mid-word."
+    },
+    {
+      "id": "syn-003",
+      "category": "synthetic",
+      "subtype": "long_parenthetical_backing_vocal",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "synthetic",
+        "album": null,
+        "source": "synthetic",
+        "durationSec": null
+      },
+      "text": "(ooh ooh ooh child things are gonna get brighter ooh ooh ooh child things'll get so much better wait and see)",
+      "translation": "(哦 哦 哦 宝贝 一切都会变得更好 哦 哦 哦 宝贝 一切都会好起来的 等着瞧吧)",
+      "startTime": 20.0,
+      "endTime": 30.0,
+      "isBackground": true,
+      "words": [],
+      "trueWords": null,
+      "note": "A whole-line backing-vocal parenthetical; splitting it loses the enclosing parens' 'this is one aside' signal unless a designed split keeps the parens balanced per piece."
+    },
+    {
+      "id": "syn-004",
+      "category": "synthetic",
+      "subtype": "many_short_words",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "synthetic",
+        "album": null,
+        "source": "synthetic",
+        "durationSec": null
+      },
+      "text": "I I I I want want want you you you now now now now now yeah yeah yeah go go go go",
+      "translation": null,
+      "startTime": 5.0,
+      "endTime": 13.0,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": "Many one-syllable repeated words with no punctuation -- exercises the orphan-avoidance / balanced-split word-bucket logic (LyricDisplaySegmenter.balancedSplitIndices)."
+    },
+    {
+      "id": "syn-005",
+      "category": "synthetic",
+      "subtype": "punctuation_dense",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "synthetic",
+        "album": null,
+        "source": "synthetic",
+        "durationSec": null
+      },
+      "text": "Wait, — no, stop! Really?! Yes, yes, yes... stop, wait, no! Please, just, stop, now! OK? OK. Fine, fine, fine.",
+      "translation": null,
+      "startTime": 1.0,
+      "endTime": 9.0,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": "Punctuation on almost every word -- the strong/weak boundary tables fire constantly; checks the segmenter doesn't produce many tiny orphan pieces."
+    },
+    {
+      "id": "syn-006",
+      "category": "synthetic",
+      "subtype": "very_short_duration_long_text",
+      "script": "cjk",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "synthetic",
+        "album": null,
+        "source": "synthetic",
+        "durationSec": null
+      },
+      "text": "这一句歌词特别长但是它在这首歌里只被唱了很短很短的一瞬间几乎一晃就过去了",
+      "translation": null,
+      "startTime": 1.0,
+      "endTime": 1.3,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": "38 CJK characters compressed into a 0.3s window -- triggers shouldKeepDisplayLineUnsplit's per-piece minimum-duration guard (1.65s), which currently forces this line to stay UNSPLIT despite being very long."
+    },
+    {
+      "id": "syn-007",
+      "category": "synthetic",
+      "subtype": "long_translation_short_original",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "synthetic",
+        "album": null,
+        "source": "synthetic",
+        "durationSec": null
+      },
+      "text": "Yeah",
+      "translation": "这一句翻译长得离谱因为原文里那一个短短的语气词背后其实藏着这首歌整段主歌想表达的全部情绪和转折",
+      "startTime": 2.0,
+      "endTime": 5.0,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": "balancedSegments(count=1) never triggers (the original isn't split), so this long translation renders as ONE unbroken translation row under a 4-character original -- an orphan-pairing edge case distinct from the split-line problem."
+    },
+    {
+      "id": "syn-008",
+      "category": "synthetic",
+      "subtype": "short_translation_long_original",
+      "script": "latin",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "synthetic",
+        "album": null,
+        "source": "synthetic",
+        "durationSec": null
+      },
+      "text": "I keep running through the midnight looking for a reason why every little thing keeps falling apart around me",
+      "translation": "是的",
+      "startTime": 10.0,
+      "endTime": 20.0,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": "The long original gets split into several pieces; balancedSegments(for: '是的', count>1) has almost nothing to divide, so most split pieces end up with an EMPTY translation underneath them."
+    },
+    {
+      "id": "syn-009",
+      "category": "synthetic",
+      "subtype": "emoji_numbers",
+      "script": "mixed:cjk+latin",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "synthetic",
+        "album": null,
+        "source": "synthetic",
+        "durationSec": null
+      },
+      "text": "2024年6月15日🎉🎊我们相识1000天了💕💕💕生日快乐🥳🎂🍰愿你永远开心happy 21st birthday to you my love",
+      "translation": null,
+      "startTime": 0.0,
+      "endTime": 8.0,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": "Emoji are outside CharacterSet.punctuationCharacters/whitespacesAndNewlines and not CJK/kana/hangul/thai -- displayUnits() falls through to the ASCII/other branches; check they don't get sliced apart from an adjacent digit run."
+    },
+    {
+      "id": "syn-010",
+      "category": "synthetic",
+      "subtype": "rtl_arabic",
+      "script": "other",
+      "sync": "lineLevel",
+      "hasTranslation": false,
+      "song": {
+        "key": "synthetic",
+        "album": null,
+        "source": "synthetic",
+        "durationSec": null
+      },
+      "text": "أنا أحبك أكثر من أي شيء في هذا العالم كله ولن أتوقف أبداً عن حبك يا حياتي وروحي وقلبي الذي لا يهدأ",
+      "translation": null,
+      "startTime": 0.0,
+      "endTime": 10.0,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": "RTL script -- displayUnits() treats Arabic as generic non-ASCII (0.85/char); a split must not reverse visual reading order or place a break inside a word given bidi reordering at render time."
+    },
+    {
+      "id": "syn-011",
+      "category": "synthetic",
+      "subtype": "hangul_long_line_stratification_fill",
+      "script": "hangul",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "synthetic",
+        "album": null,
+        "source": "synthetic",
+        "durationSec": null
+      },
+      "text": "사랑한다는 말로는 부족해 너를 향한 이 마음을 다 표현할 수 없어 그래도 매일매일 너에게 말해주고 싶어",
+      "translation": "Saying I love you isn't enough. I can't fully express this feeling toward you. But I still want to tell you every single day.",
+      "startTime": 0.0,
+      "endTime": 9.0,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": "Synthetic -- the real disk-cache snapshot and in-repo fixtures had no Korean line long enough to cross the >=3-visual-line bar (see research note); this fills the hangul stratum for the wrap-behavior metrics."
+    },
+    {
+      "id": "syn-012",
+      "category": "synthetic",
+      "subtype": "kana_long_line_stratification_fill",
+      "script": "kana",
+      "sync": "lineLevel",
+      "hasTranslation": true,
+      "song": {
+        "key": "synthetic",
+        "album": null,
+        "source": "synthetic",
+        "durationSec": null
+      },
+      "text": "きょうもあなたのことをかんがえていたよ　あさからばんまでずっとずっと　わすれられないの　どうしてかな",
+      "translation": "今日もあなたのことを考えていたよ、朝から晩までずっとずっと、忘れられないの、どうしてかな",
+      "startTime": 0.0,
+      "endTime": 9.0,
+      "isBackground": false,
+      "words": [],
+      "trueWords": null,
+      "note": "Synthetic, pure hiragana (no kanji) -- real Japanese lyric lines found were always kanji+kana mixed (labeled mixed:cjk+kana); this fills the pure-kana stratum."
+    }
+  ]
+}
