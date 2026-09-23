@@ -43,8 +43,8 @@ private struct GlassRootView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             Color.clear
-            edgeLight
             liquidView
+            edgeLight
             panelView
             heroView
             capsuleContentView
@@ -143,16 +143,16 @@ private struct GlassRootView: View {
         let t = EdgeCollapseTokens.self
         let len = CGFloat(max(pose.glowLength, 0))
         let boost = store.hoverBoost
-        let level = clamp01(pose.glow) * (music.isPlaying ? 1 : 0.55)
+        let level = clamp01(pose.glow) * (music.isPlaying ? 1 : 0.8)
         let color = store.glowColor
         let rim = EdgeRimPath(width: t.handleSize.width, height: len, edge: container.width, midY: container.height / 2)
         return ZStack {
             // Soft light: layered strokes of falling opacity (no blur filter).
-            rim.stroke(color.opacity(0.10 + 0.10 * boost), style: StrokeStyle(lineWidth: 8 + 4 * boost, lineCap: .round, lineJoin: .round))
-            rim.stroke(color.opacity(0.22 + 0.15 * boost), style: StrokeStyle(lineWidth: 4 + 2 * boost, lineCap: .round, lineJoin: .round))
+            rim.stroke(color.opacity(0.22 + 0.12 * boost), style: StrokeStyle(lineWidth: 9 + 4 * boost, lineCap: .round, lineJoin: .round))
+            rim.stroke(color.opacity(0.42 + 0.15 * boost), style: StrokeStyle(lineWidth: 4.5 + 2 * boost, lineCap: .round, lineJoin: .round))
             // Track, then the lit part = playback progress, starting at the
             // bottom where the sliver meets the bezel.
-            rim.stroke(color.opacity(0.30), style: StrokeStyle(lineWidth: t.glowCore, lineCap: .round, lineJoin: .round))
+            rim.stroke(color.opacity(0.45), style: StrokeStyle(lineWidth: t.glowCore, lineCap: .round, lineJoin: .round))
             rim.trim(from: 0, to: progress)
                 .stroke(color, style: StrokeStyle(lineWidth: t.glowCore, lineCap: .round, lineJoin: .round))
         }
@@ -197,7 +197,7 @@ private struct GlassRootView: View {
     @ViewBuilder
     private func controlButtons(ink: Color) -> some View {
         // Ring + pause reads the same size as the next glyph (founder 2026-09-22).
-        let ring: CGFloat = 26, stroke: CGFloat = 2
+        let ring: CGFloat = 30, stroke: CGFloat = 2.2
         ZStack {
             Circle().stroke(ink.opacity(0.25), lineWidth: stroke)
             Circle().trim(from: 0, to: progress)
@@ -206,14 +206,14 @@ private struct GlassRootView: View {
             PlayPauseControlButton(isPlaying: music.isPlaying, inkColor: ink, hoverFill: ink.opacity(0.18)) {
                 music.togglePlayPause()
             }
-            .scaleEffect(0.52)
+            .scaleEffect(0.72)
         }
         .frame(width: ring, height: ring)
         // Next: no ring (founder 2026-09-22); glyph scaled down to read the
         // same size as the pause glyph inside its progress ring.
         SkipControlButton(action: { music.nextTrack() }, direction: 1, inkColor: ink, hoverFill: ink.opacity(0.18))
-            .scaleEffect(1.05)
-            .frame(width: 32, height: ring)
+            .scaleEffect(1.15)
+            .frame(width: 34, height: ring)
     }
 
     // MARK: - Cover that flies between panel, capsule and edge

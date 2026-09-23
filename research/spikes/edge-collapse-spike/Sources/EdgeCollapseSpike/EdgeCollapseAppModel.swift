@@ -179,8 +179,10 @@ public final class EdgeCollapseAppModel: ObservableObject {
         swipe = EdgeCollapseSwipe()
         trackMotion = EdgeCollapseMotion(
             from: restCardPose().vector(), velocity: Array(repeating: 0, count: EdgeCollapsePose.channelCount),
+            // The landing rebound starts at 0.24s, well past what the fingers
+            // drive (<= 0.08s), so the same motion carries it after release.
             stages: EdgeCollapseChoreography.stages(kind: .collapse, fromTucked: false, page: page, style: tuckStyle,
-                                                    bounce: .settle, tempo: tempo))
+                                                    bounce: bounce, tempo: tempo))
     }
 
     public func swipeChanged(dx: Double, dy: Double) {

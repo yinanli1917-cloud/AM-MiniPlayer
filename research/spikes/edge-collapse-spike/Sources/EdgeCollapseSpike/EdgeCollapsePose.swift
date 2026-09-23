@@ -291,7 +291,7 @@ public enum EdgeCollapsePoses {
             let d = dropRect(style)
             return EdgeCollapsePose(
                 body: tucked, bodyCornerInner: tucked.width / 2, bodyCornerEdge: 0,
-                capsule: CGRect(x: edge, y: midY, width: 0, height: 0), capsuleCorner: 1,
+                capsule: CGRect(x: tucked.midX, y: midY, width: 0, height: 0), capsuleCorner: 100,
                 hero: coverIn(d, inset: 6), heroCorner: 8, heroOpacity: 0, heroBlur: 0,
                 panelOpacity: 0, capsuleContentOpacity: 0, capsuleContentBlur: t.contentBlur,
                 stripContentOpacity: 1, dim: 1, glow: 1, glowLength: Double(t.glowLength))
@@ -363,6 +363,8 @@ public struct EdgeCollapsePlan {
         public var spring: Spring
         public var delay: Double
         public var nominal: Double
+        /// Overrides the stage's launch for this group (stage 0 only).
+        public var impulse: Double? = nil
     }
     public var steps: [EdgeCollapseChannelGroup: Step]
     public var fallback: Step
@@ -424,8 +426,9 @@ public struct EdgeCollapseMotion {
     private func v0(_ k: Int, _ i: Int, _ step: EdgeCollapsePlan.Step) -> Double {
         guard k == 0 else { return 0 }
         if abs(velocity[i]) > 1e-9 { return velocity[i] }
-        guard stages[0].impulse > 0, step.delay == 0, step.nominal > 0 else { return 0 }
-        return stages[0].impulse * (2 * Double.pi / step.nominal) * delta(0, i)
+        let launch = step.impulse ?? stages[0].impulse
+        guard launch > 0, step.delay == 0, step.nominal > 0 else { return 0 }
+        return launch * (2 * Double.pi / step.nominal) * delta(0, i)
     }
 
     /// Stage 0 channels already moving skip their delay (no mid-air freeze).

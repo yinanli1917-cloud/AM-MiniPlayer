@@ -12,11 +12,14 @@ import MusicMiniPlayerCore
 final class LiquidContinuityTests: XCTestCase {
     private let dt = 1.0 / 120
 
-    private func motion(_ kind: EdgeCollapseTransitionKind, _ from: EdgeCollapseKeyPose, fromTucked: Bool = false) -> EdgeCollapseMotion {
+    /// Landing rebounds are intentional (founder: Dynamic-Island bounce) and
+    /// tested on their own; the one-push check runs without them.
+    private func motion(_ kind: EdgeCollapseTransitionKind, _ from: EdgeCollapseKeyPose, fromTucked: Bool = false,
+                        bounce: EdgeCollapseBounce = .settle) -> EdgeCollapseMotion {
         EdgeCollapseMotion(
             from: EdgeCollapsePoses.pose(from, page: .album, style: .handle).vector(),
             velocity: Array(repeating: 0, count: EdgeCollapsePose.channelCount),
-            stages: EdgeCollapseChoreography.stages(kind: kind, fromTucked: fromTucked, page: .album, style: .handle, bounce: .bouncy, tempo: .normal))
+            stages: EdgeCollapseChoreography.stages(kind: kind, fromTucked: fromTucked, page: .album, style: .handle, bounce: bounce, tempo: .normal))
     }
 
     /// Speed of the moving part: position + size channels of `channels`.
@@ -91,5 +94,63 @@ final class LiquidContinuityTests: XCTestCase {
         let edge = EdgeCollapseTokens.containerSize.width
         XCTAssertTrue(path.contains(CGPoint(x: edge - 0.2, y: p.body.minY + 0.3)))
         XCTAssertTrue(path.contains(CGPoint(x: edge - 0.2, y: p.body.maxY - 0.3)))
+    }
+
+    private func pose(_ m: EdgeCollapseMotion, _ t: Double) -> EdgeCollapsePose { EdgeCollapsePose(vector: m.sample(at: t).value) }
+
+    /// Founder recording 22:16: going back, the capsule vanished into the
+    /// screen edge and only then the edge body popped out (a hitch). Now the
+    /// sliver never disappears, and the capsule is still joined to it when it
+    /// is last seen; it stays rounded while shrinking.
+    func test_retract_mergesIntoTheSliver_noGap() {
+        for bounce in [EdgeCollapseBounce.settle, .bouncy] {
+            let m = motion(.retract, .floating, bounce: bounce)
+            var t = 0.0
+            var lastVisible: EdgeCollapsePose?
+            var sliverOut = false
+            while t < m.settledDuration {
+                let p = pose(m, t)
+                // Once the sliver has come out to meet it, it never goes away.
+                if p.body.width >= 4 { sliverOut = true }
+                if sliverOut, bounce == .settle {
+                    XCTAssertGreaterThanOrEqual(p.body.width, 4, "sliver gone again at t=\(Int(t * 1000))ms")
+                }
+                if p.capsule.width > 1 { lastVisible = p }
+                if p.capsule.width > 1, p.capsule.width < 60 {
+                    XCTAssertGreaterThanOrEqual(p.capsuleCorner, min(p.capsule.width, p.capsule.height) / 2 - 1, "not round at t=\(Int(t * 1000))ms")
+                }
+                t += dt
+            }
+            let last = try! XCTUnwrap(lastVisible)
+            XCTAssertGreaterThanOrEqual(last.capsule.maxX, last.body.minX - 1, "joined to the sliver when last seen")
+        }
+    }
+
+    /// Collapse lands like the Dynamic Island taking something in: the
+    /// sliver dives into the edge (narrower than at rest) and pops back.
+    func test_collapse_landsWithARebound() {
+        let m = motion(.collapse, .card, bounce: .bouncy)
+        let rest = EdgeCollapsePoses.tuckedRect(.handle).width
+        var t = 0.0, dived = false, cameBack = false
+        while t < m.settledDuration {
+            let w = pose(m, t).body.width
+            if w < rest * 0.5 { dived = true }
+            if dived, w > rest * 0.9 { cameBack = true }
+            t += dt
+        }
+        XCTAssertTrue(dived, "no dive into the edge")
+        XCTAssertTrue(cameBack, "no pop back")
+    }
+
+    /// The drop does not pop into existence: small on the first frame.
+    func test_floatOut_firstFrameIsSmall() {
+        let p = pose(motion(.floatOut, .tucked), dt)
+        XCTAssertLessThan(p.capsule.width, 12)
+    }
+
+    /// Once the capsule is out, no thin line stays at the edge.
+    func test_floatOut_edgeBodyLeavesNoLine() {
+        let m = motion(.floatOut, .tucked)
+        XCTAssertLessThan(pose(m, 0.26).body.width, 1)
     }
 }
