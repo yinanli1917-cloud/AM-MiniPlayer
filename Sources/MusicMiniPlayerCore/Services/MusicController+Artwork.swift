@@ -362,19 +362,20 @@ extension MusicController {
                     : 250_000_000
                 try? await Task.sleep(nanoseconds: retryDelay)
                 guard !Task.isCancelled else { return }
-                // 🔑 2026-09-22 proactive budget: the retry-after-miss only
-                // runs if the shared iTunes budget allows it — while the
-                // circuit breaker is open, now-playing already got its one
-                // storefront in the initial attempt above and gets nothing
-                // else; with the breaker closed but the token bucket empty,
-                // retrying would just make a request that's certain to be
-                // token-gated to zero storefronts anyway, so skip the whole
-                // attempt (including its NetEase/Deezer/MusicKit race) rather
-                // than spend the time on a call that can't reach iTunes.
+                // 🔑 2026-09-22 proactive budget: the retry-after-miss is
+                // skipped outright only while the circuit breaker is open —
+                // now-playing already got its one storefront in the initial
+                // attempt above and gets nothing else while the host is
+                // actively rejecting us, so there's no point spending a
+                // whole extra NetEase/Deezer/MusicKit race on a retry too.
+                // A merely-empty token bucket is NOT a reason to skip the
+                // retry anymore (2026-09-22 sixth round): the round function
+                // itself now WAITS (bounded, abandonable) for the next
+                // token instead of failing immediately, so "0 tokens right
+                // now" no longer reliably predicts "this retry can't work".
                 let breakerOpen = Self.ArtworkITunesCircuitBreaker.shared.isOpen()
-                let tokensAvailable = Self.ArtworkITunesTokenBucket.shared.available() >= 1
-                if breakerOpen || !tokensAvailable {
-                    self.logToFile("🎨 [API] retry skipped (iTunes budget: breaker open=\(breakerOpen), tokens available=\(tokensAvailable))")
+                if breakerOpen {
+                    self.logToFile("🎨 [API] retry skipped (circuit breaker open)")
                 } else {
                     await self.retryArtworkFetch(persistentID: persistentID, title: title, artist: artist, album: album, generation: generation)
                 }
@@ -538,16 +539,25 @@ extension MusicController {
                 }
             }
             group.addTask {
-                // nowPlaying: 4 storefronts race in parallel per round (1.6s
-                // each, artworkITunesStorefrontTimeout) and round 2 (bracket-
-                // stripped title) only runs when round 1 is unreliable
-                // everywhere — worst case ~3.2s of sequential rounds.
-                // background: storefronts go one at a time and stop at the
-                // first reliable hit, so this is naturally bounded well
-                // under this ceiling on the common path. Either way this
-                // outer ceiling leaves slack instead of double-timeout
-                // racing the inner one.
-                if let img = await self.withArtworkTimeout(seconds: 3.6, operation: {
+                // nowPlaying: 3 storefronts race in parallel per round
+                // (1.6s each, artworkITunesStorefrontTimeout) and round 2
+                // (bracket-stripped title) only runs when round 1 is
+                // unreliable everywhere — worst case ~3.2s of sequential
+                // rounds WHEN TOKENS ARE AVAILABLE. 2026-09-22 sixth round:
+                // when a round finds 0 tokens it now WAITS up to
+                // artworkTokenWaitMaxSeconds (12s) instead of failing
+                // immediately, so the outer ceiling for now-playing must
+                // cover round1's wait + round2's wait + normal processing
+                // (12+12+~3.2 ≈ 27.2s) — otherwise this very timeout would
+                // cancel the wait (via Task.isCancelled, which
+                // ArtworkTokenWaiter.live treats as "superseded") before a
+                // token ever has a chance to arrive, silently neutering the
+                // fix. background never waits (unchanged), so it stays
+                // bounded well under either ceiling on the common path.
+                let iTunesRaceTimeout: TimeInterval = priority == .nowPlaying
+                    ? (2 * MusicController.artworkTokenWaitMaxSeconds + 3.2)
+                    : 3.6
+                if let img = await self.withArtworkTimeout(seconds: iTunesRaceTimeout, operation: {
                     await Self.fetchArtworkViaITunesAPI(title: title, artist: artist, album: album, priority: priority)
                 }) { return .image(img, .iTunes) }
                 return nil
@@ -942,6 +952,107 @@ extension MusicController {
         }
     }
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Now-playing token wait (2026-09-22 sixth-round fix)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // The 5-skip trace above (research/spec-2026-09-22-radio-artwork-
+    // storefronts.md "结果补充（五轮）") showed round-1 width degrading to
+    // ZERO storefronts on some skips, not just one — a track that gets 0
+    // width and is never skipped past (the user actually lands on it and
+    // keeps listening) would silently NEVER get an iTunes artwork attempt.
+    // Fix: a now-playing round that finds 0 whole tokens WAITS for the next
+    // one (bounded) instead of giving up immediately — but the wait is
+    // abandoned instantly if superseded, so a track the user skips PAST
+    // while it's waiting spends nothing, and whichever token arrives goes
+    // to whichever track is actually current when it does.
+
+    /// Ceiling on how long a now-playing fetch will wait for the next
+    /// token. At 1 token per 10s (refillPerMinute 6), a wait that starts
+    /// from empty needs at most ~10s for the next token — 12s leaves a
+    /// couple of seconds of polling slack.
+    static let artworkTokenWaitMaxSeconds: TimeInterval = 12
+    /// Poll granularity while waiting.
+    static let artworkTokenWaitPollInterval: TimeInterval = 1
+
+    /// Injectable wait mechanism — NOT used by `.background` at all (its
+    /// behavior is unchanged: skip immediately when the reserve would be
+    /// breached). `isSuperseded` is the generation check: production wires
+    /// it to `Task.isCancelled`, which nanoPod's existing architecture
+    /// already flips the moment a new track change cancels the in-flight
+    /// `artworkAPITask` (`fetchArtwork`'s Path 1) — cancelling the owning
+    /// Task on every track change already IS declaring the previous
+    /// fetch's generation superseded, so no separate generation counter
+    /// needs to be threaded through these otherwise-pure functions. Tests
+    /// inject their own `isSuperseded`/`tick` to drive this deterministically
+    /// with a fake clock — no real sleeps.
+    struct ArtworkTokenWaiter: Sendable {
+        /// One poll step: advances time (sleeping for real in production)
+        /// and returns the new "now" to re-check token availability against.
+        var tick: @Sendable () async -> Date
+        /// True the instant this wait must abandon.
+        var isSuperseded: @Sendable () -> Bool
+
+        static let live = ArtworkTokenWaiter(
+            tick: {
+                try? await Task.sleep(nanoseconds: UInt64(MusicController.artworkTokenWaitPollInterval * 1_000_000_000))
+                return Date()
+            },
+            isSuperseded: { Task.isCancelled }
+        )
+
+        /// Abandons instantly, before ever ticking — the pre-fix "fail
+        /// immediately on 0 tokens" behavior with zero ceremony. Tests that
+        /// inject a fixed fake `now:` MUST use this (or their own
+        /// fake-clock waiter) instead of `.live`: `.live.tick` returns the
+        /// REAL wall-clock `Date()`, which — compared against a fake
+        /// `now:` from a different epoch — silently corrupts the bucket's
+        /// refill math (a decades-large apparent elapsed time) instead of
+        /// producing a clean, obviously-wrong result.
+        static let neverWait = ArtworkTokenWaiter(
+            tick: { Date() },
+            isSuperseded: { true }
+        )
+    }
+
+    /// Polls `bucket` (via `waiter.tick`) until a now-playing round can
+    /// afford at least 1 storefront, `waiter.isSuperseded()` fires, or
+    /// `artworkTokenWaitMaxSeconds` elapses — whichever comes first. Checks
+    /// supersession BEFORE each tick so an abandonment that happens between
+    /// two ticks is caught at the very next opportunity, not after waiting
+    /// out a whole extra poll interval.
+    /// Returns the width found AND the `now` at which it was found (or the
+    /// `now` the wait gave up at) — callers MUST use this returned `now` for
+    /// everything downstream (the search itself, and critically the image
+    /// download's own `tryReserve`), never the stale `startingAt` value.
+    /// Using a stale `now` after waiting several ticks would make the image
+    /// download's bucket check race against a `lastRefill` timestamp that's
+    /// already moved PAST it (negative elapsed, silently skipped refill),
+    /// starving the download of a token that legitimately regenerated
+    /// during the wait.
+    private static func waitForNowPlayingToken(
+        storefrontCount: Int, bucket: ArtworkITunesTokenBucket, waiter: ArtworkTokenWaiter,
+        startingAt: Date, roundLabel: String, term: String
+    ) async -> (width: Int, now: Date) {
+        let deadline = startingAt.addingTimeInterval(artworkTokenWaitMaxSeconds)
+        var currentNow = startingAt
+        while true {
+            guard !waiter.isSuperseded() else {
+                DebugLogger.log("Artwork", "🎨 [iTunes API][\(roundLabel)] wait for token abandoned — superseded '\(term)'")
+                return (0, currentNow)
+            }
+            currentNow = await waiter.tick()
+            let width = bucket.reserve(upTo: storefrontCount, now: currentNow)
+            if width > 0 {
+                DebugLogger.log("Artwork", "🎨 [iTunes API][\(roundLabel)] token became available after waiting — proceeding for '\(term)'")
+                return (width, currentNow)
+            }
+            if currentNow >= deadline {
+                DebugLogger.log("Artwork", "🎨 [iTunes API][\(roundLabel)] waited \(Int(artworkTokenWaitMaxSeconds))s for a token, still none — genuine miss for '\(term)'")
+                return (0, currentNow)
+            }
+        }
+    }
+
     /// iTunes' own rate-limit tell plus the standard HTTP codes for it. A
     /// generic decode failure on an otherwise-successful response IS this
     /// signal at this call site specifically because
@@ -1099,11 +1210,12 @@ extension MusicController {
         transport: ITunesArtworkTransport = .live,
         breaker: ArtworkITunesCircuitBreaker = .shared,
         bucket: ArtworkITunesTokenBucket = .shared,
-        now: Date = Date()
+        now: Date = Date(),
+        waiter: ArtworkTokenWaiter = .live
     ) async -> NSImage? {
         await fetchArtworkViaITunesAPIDetailed(
             title: title, artist: artist, album: album,
-            priority: priority, transport: transport, breaker: breaker, bucket: bucket, now: now
+            priority: priority, transport: transport, breaker: breaker, bucket: bucket, now: now, waiter: waiter
         )?.image
     }
 
@@ -1136,13 +1248,14 @@ extension MusicController {
         transport: ITunesArtworkTransport = .live,
         breaker: ArtworkITunesCircuitBreaker = .shared,
         bucket: ArtworkITunesTokenBucket = .shared,
-        now: Date = Date()
+        now: Date = Date(),
+        waiter: ArtworkTokenWaiter = .live
     ) async -> ITunesArtworkMatch? {
         let primaryTerm = "\(title) \(artist)".trimmingCharacters(in: .whitespaces)
         if let match = await fetchArtworkViaITunesAPIRound(
             term: primaryTerm, title: title, artist: artist, album: album,
             transport: transport, roundLabel: "round1", priority: priority,
-            breaker: breaker, bucket: bucket, now: now
+            breaker: breaker, bucket: bucket, now: now, waiter: waiter
         ) {
             return match
         }
@@ -1167,11 +1280,12 @@ extension MusicController {
         // Round 2 is naturally token-gated: fetchArtworkViaITunesAPIRound's
         // own reserve/tryReserve calls below return 0/false and it returns
         // nil immediately (no requests) when the bucket can't afford it —
-        // no separate pre-check needed here.
+        // no separate pre-check needed here. For now-playing, a 0-token
+        // round 2 will also WAIT (bounded, abandonable) exactly like round 1.
         if let match = await fetchArtworkViaITunesAPIRound(
             term: secondaryTerm, title: strippedTitle, artist: artist, album: album,
             transport: transport, roundLabel: "round2(stripped)", priority: priority,
-            breaker: breaker, bucket: bucket, now: now
+            breaker: breaker, bucket: bucket, now: now, waiter: waiter
         ) {
             return match
         }
@@ -1183,7 +1297,7 @@ extension MusicController {
         term: String, title: String, artist: String, album: String,
         transport: ITunesArtworkTransport, roundLabel: String,
         priority: ArtworkFetchPriority, breaker: ArtworkITunesCircuitBreaker,
-        bucket: ArtworkITunesTokenBucket, now: Date
+        bucket: ArtworkITunesTokenBucket, now: Date, waiter: ArtworkTokenWaiter
     ) async -> ITunesArtworkMatch? {
         guard !term.isEmpty else { return nil }
         var storefronts = orderedArtworkStorefronts(title: title, artist: artist)
@@ -1200,6 +1314,13 @@ extension MusicController {
             }
         }
 
+        // Advances past `now` ONLY if a now-playing wait actually ticked the
+        // clock forward — everything downstream (the search race, and
+        // critically the image download's own token check) MUST use this,
+        // never the original stale `now`, or the image download's bucket
+        // check races against a `lastRefill` already moved past it.
+        var effectiveNow = now
+
         let storefrontResults: [(country: String, results: [[String: Any]])]
         switch priority {
         case .nowPlaying:
@@ -1207,15 +1328,27 @@ extension MusicController {
             // least 1 if any token) — `reserve(upTo:)` IS this formula:
             // `upTo` is always ≥1, so it returns 0 only when there are
             // truly 0 tokens, and otherwise never exceeds either bound.
-            let width = bucket.reserve(upTo: storefronts.count, now: now)
+            var width = bucket.reserve(upTo: storefronts.count, now: now)
+            if width == 0 {
+                // Generic fix: whichever track the user is actually
+                // LISTENING to (never skipped past) must not be silently
+                // starved just because it happened to land between refill
+                // ticks — wait for the next token instead of giving up.
+                // Abandoned instantly if superseded (see ArtworkTokenWaiter).
+                let waited = await waitForNowPlayingToken(
+                    storefrontCount: storefronts.count, bucket: bucket, waiter: waiter,
+                    startingAt: now, roundLabel: roundLabel, term: term
+                )
+                width = waited.width
+                effectiveNow = waited.now
+            }
             guard width > 0 else {
-                DebugLogger.log("Artwork", "🎨 [iTunes API][\(roundLabel)] token bucket empty — skipping now-playing fetch for '\(term)'")
                 return nil
             }
             let selected = Array(storefronts.prefix(width))
             storefrontResults = await searchStorefrontsInParallel(
                 term: term, storefronts: selected, transport: transport,
-                roundLabel: roundLabel, breaker: breaker, now: now
+                roundLabel: roundLabel, breaker: breaker, now: effectiveNow
             )
         case .background:
             storefrontResults = await searchStorefrontsSequentially(
@@ -1235,7 +1368,7 @@ extension MusicController {
         // Image downloads spend from the SAME shared budget as searches.
         // Background still respects the now-playing reserve here too.
         let imageReserve = priority == .background ? ArtworkITunesTokenBucket.reserveForNowPlaying : 0
-        guard bucket.tryReserve(1, keepAtLeast: imageReserve, now: now) else {
+        guard bucket.tryReserve(1, keepAtLeast: imageReserve, now: effectiveNow) else {
             DebugLogger.log("Artwork", "🎨 [iTunes API][\(roundLabel)] token bucket empty — skipping image download for '\(term)' (storefront=\(winner.country))")
             return nil
         }

@@ -352,3 +352,61 @@ NANOPOD_LIVE_ARTWORK_EVAL=1 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Devel
 - 上面第 3 点的"退化到 0 个店面"现象是本轮新发现，追加进后续项列表，交创始人裁定要不要处理。
 - MetadataResolver 接入同一令牌桶——仍未做，依旧是后续项（本轮的容量/回填重配没有改变这条待办的性质）。
 - 之前几轮记录的后续项（电台换歌通知抖动、Deezer/MusicKit 死链、`Ripples`→`漣漪` 本地化标题）均未处理，依旧有效。
+
+---
+
+## 六轮：正在播 0 店面不再是"直接放弃"，改成有界等待下一个 token
+
+创始人对上一轮 `[3,0,1,0,1]` 这条数据的裁定：这是一个真实回归——如果用户跳到某首歌之后就不再跳了（比如第 2、4 首，round1 拿到 0 个店面），这首歌用户实际在听，却永远拿不到 iTunes 封面。要求通用修法：**正在播（NOW-PLAYING）换歌发现没有整数 token 时，不再直接放弃，而是等下一个 token 到账**（有界，比如 ≤12 秒，时钟可注入）；**这个等待一旦被"下一次换歌"取代（generation 过期）就立刻放弃**（被跳过的歌永远不消耗 token，最终落脚的那首歌拿到下一个 token）。后台路径行为不变（仍然是"没有就直接放弃"，不等待）。
+
+### 1）等待机制设计
+
+- `artworkTokenWaitMaxSeconds = 12`（等待上限）、`artworkTokenWaitPollInterval = 1`（轮询间隔，与令牌桶"每 10 秒回 1 个"的实际回填节奏无关，只是检查频率）。
+- 新增 `ArtworkTokenWaiter`：一个持有 `tick()`（异步推进时钟）+ `isSuperseded()`（同步查询"我是否已经被取代"）两个可注入闭包的 struct。`.live` 用真实 `Task.sleep` + `Date()` + `Task.isCancelled`；`.neverWait` 用于所有不测这条新行为的既有测试（拿不到就立刻返回，保持旧行为，零风险）。
+- `waitForNowPlayingToken`：循环体是"先查是否已被取代（是就立刻退出，0 请求）→ 再 tick 一次时钟 → 查桶里是否有 token（有就立刻用，返回）→ 到达 12 秒上限就放弃"。取代检查在**每轮循环顶部**、下一次 tick 开始前，不在 tick 执行期间——这是刻意的：`bucket.reserve` 一旦返回 width>0 就已经原子地把 token 记在这次调用头上了，事后再判定"你已经被取代"也没法把 token 还回去（还回去等于白白浪费，谁都拿不到），所以"等待期间被取代"的语义是"不再发起新一轮 tick"，不是"能撤销已经到手的那次"——跟这份代码库别处 `Task.isCancelled` 的协作式取消语义（在检查点之间生效，不是执行到一半强行打断）完全一致。
+
+### 2）发现并修复的一个"陈旧 now"集成 bug
+
+`waitForNowPlayingToken` 起初只返回等到的 token 数（`Int`），但等待循环内部会推进时钟，等待结束后 `fetchArtworkViaITunesAPIRound` 却继续用等待前的旧 `now` 去调用 `searchStorefrontsInParallel` 和后续图片下载的 `bucket.tryReserve`——图片下载那次调用因此拿着"过去"的时间戳跟桶里"已经被等待推进到未来"的 `lastRefill` 比较，算出负的经过时间，静默跳过回填、拿着错误的可用数。**修复**：`waitForNowPlayingToken` 改为返回 `(width, now)` 元组，调用方引入 `effectiveNow` 并在等待成功后更新，后续的搜索和图片下载 token 预留都改用 `effectiveNow`。这是集成层面的 bug，不是单纯的设计遗漏——如果不修，单元测试里"直接构造等待后的桶状态"这类写法测不出来，只有端到端跑一次"从 0 token 等到有 token 再下载图片"才会暴露，是这轮测试设计时才发现的。
+
+### 3）外层超时必须按优先级放宽，否则等待机制在生产环境形同虚设
+
+`fetchArtworkResult` 里给 iTunes 竞速分支包了一层 `withArtworkTimeout`，历史上固定 3.6 秒。这个等待机制最多要等 12 秒——如果外层超时不跟着放宽，`waitForNowPlayingToken` 的等待会在 3.6 秒时被外层 `Task` 取消，`Task.isCancelled` 变 true，`.live.isSuperseded` 随之返回 true，等待被判定"取代"提前放弃，跟被真实跳过一模一样，全新写的等待逻辑在生产里永远等不到 12 秒，静默失效——而所有新单元测试因为直接调用 `fetchArtworkViaITunesAPIDetailed`（绕过这层外层超时包装），完全测不出这个问题。**修复**：把这层超时改成按 priority 区分——`nowPlaying` 用 `2 × 12 + 3.2 = 27.2` 秒（留出等待上限之外的搜索/下载往返时间），`background` 保持原来的 `3.6` 秒不变。这是本轮里唯一一处"测试全绿但生产会失效"的隐患，记在这里防止以后被误删。
+
+### 4）测试与验证数据
+
+**两个全确定性、零真实时间等待的测试**（用假 tick，`isSuperseded` 直接返回常量）：
+- `test_landingTrack_waitsForNextToken_thenSucceeds_withinBound`：桶抽干到 0，从不被取代 → 11 次 tick（≈11 秒）后拿到 token，发起 ≥1 次店面查询，在 12 秒上限内。（注：搜索命中之后图片下载还需要单独的 token，从抽干状态醒来的第一个 token 优先给了搜索本身，下载有可能还要再等一轮回填——这是既有的"搜索命中但下载抢不到 token"的边界情况，第五轮的后台风暴测试已经记录过同一现象，不是本轮新 bug，所以断言的是"发起了查询"而不是"一定拿到图"，跟创始人这轮定的验收线"发起 ≥1 次店面查询"一致）。
+- `test_supersededWait_abandonsImmediately_zeroRequests`：从一开始就判定"已被取代"→ 0 次请求，桶里 token 数不变——这是"被跳过的歌永远不消耗 token"这条承诺唯一的、无时序竞争的精确钉死点。
+
+**一个真并发场景测试**（`test_fiveSkipsIn30Seconds_thenLandOnTrack5_...`）：5 次真实 `Task` 并发跑（模拟"6 秒跳一首，跳 5 首后停在第 5 首"），共享同一个令牌桶和同一个假时钟、各自独立的 generation/harness。跑出的一次真实结果：
+
+| 跳曲序号 | round1 起始可用店面数 | 最终该曲发起的请求数 | 说明 |
+|---|---:|---:|---|
+| 第 1 首 | 3（满仓） | 6 | 满店面搜索+round2，正常吃满 |
+| 第 2 首 | 0 | 0 | 等待中被第 3 首取代，干净放弃，0 请求——**被跳过的歌验证到 0 消耗** |
+| 第 3 首 | 1 | 1 | 拿到 1 个店面，正常查询 |
+| 第 4 首 | 0 | 1 | 见下方说明 |
+| 第 5 首（落脚） | 0 | 1 | 等待 12 秒（跑满整个等待上限）后拿到 token，发起 1 次查询——**落脚曲最终请求延迟 = 12.0 秒** |
+
+第 4 首"起始 0 个店面、最终却发起了 1 次请求"不是回归，是等待机制在"检查点之间"取消语义下的合理竞态：取代检查只发生在下一轮 tick 开始前，如果第 4 首的等待恰好在被第 5 首取代前的那一次 tick 里就摸到了 token，它会正常用掉这个 token 再退出——这跟一个真实用户"刚好在网络请求即将落地时快速切走"是同一种情况，产品上是可接受的（已经发出去的请求没有必要凭空作废）；本份精确不消耗的承诺由上面确定性的 `test_supersededWait_abandonsImmediately_zeroRequests` 单独钉死，不依赖这类真并发时序。真并发测试保留断言"落脚曲 ≥1 次请求且 ≤12 秒" + "至少观测到一次被取代 0 请求的情况"（防止测试时序调参失效后变成假绿）+ "任何被跳过的曲子最多只吃一次已在途的请求，不会无界重试"，不再对每一首被跳过的歌强行断言恰好 0 次。
+- `test_property_randomDemandSequences_neverExceed12RequestsInAnySlidingWindow`：不受本轮改动影响（等待机制只影响"没有 token 时怎么办"，不改变桶本身的算术），500 个种子全部通过，跟五轮结果一致。
+
+### 5）改动文件（本轮）
+- `Sources/MusicMiniPlayerCore/Services/MusicController+Artwork.swift`：新增 `artworkTokenWaitMaxSeconds`/`artworkTokenWaitPollInterval`/`ArtworkTokenWaiter`/`waitForNowPlayingToken`；`fetchArtworkViaITunesAPI`/`Detailed`/`Round` 全部加 `waiter` 参数（默认 `.live`）；`fetchArtworkViaITunesAPIRound` 的 nowPlaying 分支改用 `effectiveNow`；`fetchArtworkResult` 的外层超时按 priority 区分（nowPlaying 27.2s / background 3.6s）；`fetchArtwork` 的 Path1 重试门去掉了"预先检查还有没有 token"的判断（现在交给等待机制处理，重试门只保留断路器检查）。
+- `Tests/MusicMiniPlayerTests/ArtworkStorefrontSelectionTests.swift` / `ArtworkPriorityAndCircuitBreakerTests.swift`：所有直接调用 `fetchArtworkViaITunesAPI*` 的地方补上 `waiter: .neverWait`，避免这些跟等待机制无关的既有测试意外触发真实等待。
+- `Tests/MusicMiniPlayerTests/ArtworkTokenBucketBudgetTests.swift`：新增 `FakeClockBox`（可注入时钟）、`GenerationTracker`（同步"是否已被取代"）、`fakeWaiter(...)` helper；`CountingEmptyTransport` 支持外部 `nowProvider`；新增 3 个测试（上面第 4 节列出的两个确定性 + 一个真并发）。
+
+### 6）测试结果（本轮）
+- `ArtworkTokenBucketBudgetTests`：18/18 通过（新增 3 个）。
+- `ArtworkStorefrontSelectionTests`：17/17 通过。
+- `ArtworkPriorityAndCircuitBreakerTests`：16/16 通过。
+- `RowArtworkStoreTests`：7/7 通过；`TrackIdentityDisciplineTests`：19/19 通过——均无回归。
+- `swift build`：通过。
+- 本轮全程零真实网络请求（新并发测试用的是假时钟 + 假 transport，`Task.sleep` 只用于测试自身的调度让位，不代表模拟时间流逝）。
+
+### 7）后续项更新
+- 五轮记录的"round1 会退化到 0 个店面"现象，本轮已经用等待机制处理——落脚的那首歌不会再因为撞上 0 token 的瞬间就彻底拿不到封面；被跳过的歌仍然是 0 消耗。
+- 五轮"退化到 0 个店面"表格里 t=6s/t=18s 两次 0 店面依旧会发生（这是回填速率决定的，跟等不等待无关）——差别是：以前 0 店面 = 这首歌的这次机会彻底作废，现在 0 店面 = 进入等待，只要用户不再跳，最多 12 秒后仍能拿到。
+- MetadataResolver 接入同一令牌桶——仍未做。
+- 之前几轮记录的后续项（电台换歌通知抖动、Deezer/MusicKit 死链、`Ripples`→`漣漪` 本地化标题）均未处理，依旧有效。

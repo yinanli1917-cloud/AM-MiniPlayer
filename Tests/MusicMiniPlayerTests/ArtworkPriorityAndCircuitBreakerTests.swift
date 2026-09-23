@@ -205,7 +205,7 @@ final class ArtworkPriorityAndCircuitBreakerTests: XCTestCase {
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Gatsby Woman (2020 Remastered)", artist: "Kingo Hamada", album: "",
             priority: .background, transport: harness.makeTransport(),
-            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: Self.unlimitedBucket()
+            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: Self.unlimitedBucket(), waiter: MusicController.ArtworkTokenWaiter.neverWait
         )
 
         XCTAssertNotNil(image)
@@ -221,7 +221,7 @@ final class ArtworkPriorityAndCircuitBreakerTests: XCTestCase {
         _ = await MusicController.fetchArtworkViaITunesAPI(
             title: "Ripples", artist: "Danny Chan", album: "",
             priority: .background, transport: harness.makeTransport(),
-            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: Self.unlimitedBucket()
+            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: Self.unlimitedBucket(), waiter: MusicController.ArtworkTokenWaiter.neverWait
         )
 
         let maxConcurrent = await harness.maxConcurrentInFlight
@@ -234,7 +234,7 @@ final class ArtworkPriorityAndCircuitBreakerTests: XCTestCase {
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Gatsby Woman (2020 Remastered)", artist: "Kingo Hamada", album: "",
             priority: .background, transport: harness.makeTransport(),
-            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: Self.unlimitedBucket()
+            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: Self.unlimitedBucket(), waiter: MusicController.ArtworkTokenWaiter.neverWait
         )
 
         XCTAssertNil(image)
@@ -257,7 +257,7 @@ final class ArtworkPriorityAndCircuitBreakerTests: XCTestCase {
         _ = await MusicController.fetchArtworkViaITunesAPI(
             title: "Ripples", artist: "Danny Chan", album: "",
             priority: .nowPlaying, transport: harness.makeTransport(),
-            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: Self.unlimitedBucket()
+            breaker: MusicController.ArtworkITunesCircuitBreaker(), bucket: Self.unlimitedBucket(), waiter: MusicController.ArtworkTokenWaiter.neverWait
         )
 
         let maxConcurrent = await harness.maxConcurrentInFlight
@@ -281,7 +281,7 @@ final class ArtworkPriorityAndCircuitBreakerTests: XCTestCase {
 
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Ripples", artist: "Danny Chan", album: "",
-            priority: .background, transport: harness.makeTransport(), breaker: breaker, bucket: Self.unlimitedBucket()
+            priority: .background, transport: harness.makeTransport(), breaker: breaker, bucket: Self.unlimitedBucket(), waiter: MusicController.ArtworkTokenWaiter.neverWait
         )
 
         XCTAssertNil(image)
@@ -300,7 +300,7 @@ final class ArtworkPriorityAndCircuitBreakerTests: XCTestCase {
 
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Ripples", artist: "Danny Chan", album: "",
-            priority: .background, transport: harness.makeTransport(), breaker: breaker, bucket: Self.unlimitedBucket()
+            priority: .background, transport: harness.makeTransport(), breaker: breaker, bucket: Self.unlimitedBucket(), waiter: MusicController.ArtworkTokenWaiter.neverWait
         )
 
         XCTAssertNil(image)
@@ -325,7 +325,7 @@ final class ArtworkPriorityAndCircuitBreakerTests: XCTestCase {
 
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Ripples", artist: "Danny Chan", album: "",
-            priority: .nowPlaying, transport: harness.makeTransport(), breaker: breaker, bucket: Self.unlimitedBucket()
+            priority: .nowPlaying, transport: harness.makeTransport(), breaker: breaker, bucket: Self.unlimitedBucket(), waiter: MusicController.ArtworkTokenWaiter.neverWait
         )
 
         XCTAssertNotNil(image, "now-playing must still get a chance at real art during an outage")
@@ -343,14 +343,14 @@ final class ArtworkPriorityAndCircuitBreakerTests: XCTestCase {
 
         _ = await MusicController.fetchArtworkViaITunesAPI(
             title: "A", artist: "B", album: "",
-            priority: .nowPlaying, transport: nowPlayingHarness.makeTransport(), breaker: breaker, bucket: Self.unlimitedBucket()
+            priority: .nowPlaying, transport: nowPlayingHarness.makeTransport(), breaker: breaker, bucket: Self.unlimitedBucket(), waiter: MusicController.ArtworkTokenWaiter.neverWait
         )
         XCTAssertTrue(breaker.isOpen())
 
         let backgroundHarness = TransportHarness()
         let image = await MusicController.fetchArtworkViaITunesAPI(
             title: "Ripples", artist: "Danny Chan", album: "",
-            priority: .background, transport: backgroundHarness.makeTransport(), breaker: breaker, bucket: Self.unlimitedBucket()
+            priority: .background, transport: backgroundHarness.makeTransport(), breaker: breaker, bucket: Self.unlimitedBucket(), waiter: MusicController.ArtworkTokenWaiter.neverWait
         )
 
         XCTAssertNil(image)
