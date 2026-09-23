@@ -1170,6 +1170,22 @@ extension MusicController {
         }
     }
 
+    /// Caches a row-resolved image under its persistentID (and, when given,
+    /// its metadata key too) so `getCachedArtwork(persistentID:)` — the free
+    /// first check every row does before touching any fetch tier — hits on
+    /// the next mount. Public wrapper around the private disk/memory
+    /// `cacheArtwork`, for PlaylistView's row to call after a last-resort
+    /// ScriptingBridge lookup succeeds.
+    func cacheRowArtworkByPersistentID(
+        _ image: NSImage,
+        persistentID: String,
+        title: String = "",
+        artist: String = "",
+        album: String = ""
+    ) {
+        cacheArtwork(image, persistentID: persistentID, title: title, artist: artist, album: album, persistToDisk: false)
+    }
+
     // Fetch artwork by persistentID using ScriptingBridge (for playlist items)
     public func fetchArtworkByPersistentID(persistentID: String) async -> NSImage? {
         guard !isPreview, !persistentID.isEmpty else { return nil }

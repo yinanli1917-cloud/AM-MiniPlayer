@@ -9,8 +9,12 @@ struct NativeLyricsStaticTextRenderPlan: Equatable {
 
     static func make(
         line: LyricLine,
-        constants: NativeLyricsTextConstants = NativeLyricsTextConstants()
+        constants: NativeLyricsTextConstants? = nil
     ) -> NativeLyricsStaticTextRenderPlan {
+        // Default constants track the LINE's own isBackground flag, so every
+        // existing call site that doesn't explicitly override picks up the
+        // 0.8× backing-vocal font scale automatically.
+        let constants = constants ?? NativeLyricsTextConstants(scale: NativeLyricsTextConstants.scale(forBackground: line.isBackground))
         let tokens = LyricDisplaySegmenter.displayTokens(forWords: line.words)
         var runs = tokens.map(NativeLyricsStaticWordRunPlan.make(token:))
         // Emphasis is contrast: a line where EVERY word qualifies (held short
@@ -82,19 +86,28 @@ struct NativeLyricsTextRenderPlan: Equatable {
         let isActive: Bool
         let staticOpacity: CGFloat
         let showTranslation: Bool
+        /// 2026-09-20 (founder: 入场行在滚动前原地抖 1–2px): the per-word −2pt float must not begin
+        /// before the row's own position wave has fired, or the first word lifts in place while
+        /// the row still waits its stagger turn (0.16–0.24s under topDown). `nil` = no gate (float
+        /// from the word's own start, the v2.8 timing); a finite value = the float clock for every
+        /// word starts no earlier than this playback time; `.infinity` = held at 0 for now.
+        /// Sweep brightness is NOT gated — sync stays exact; only the lift waits for the motion.
+        let wordFloatReleaseTime: TimeInterval?
 
         init(
             line: LyricLine,
             currentTime: TimeInterval,
             isActive: Bool,
             staticOpacity: CGFloat = 0.35,
-            showTranslation: Bool = true
+            showTranslation: Bool = true,
+            wordFloatReleaseTime: TimeInterval? = nil
         ) {
             self.line = line
             self.currentTime = currentTime
             self.isActive = isActive
             self.staticOpacity = staticOpacity
             self.showTranslation = showTranslation
+            self.wordFloatReleaseTime = wordFloatReleaseTime
         }
     }
 
@@ -136,7 +149,8 @@ struct NativeLyricsTextRenderPlan: Equatable {
                 currentTime: configuration.currentTime,
                 isActiveLine: configuration.isActive && appliesTimedWordSweep,
                 staticOpacity: configuration.staticOpacity,
-                constants: constants
+                constants: constants,
+                floatReleaseTime: configuration.wordFloatReleaseTime
             )
         }
         let translation = makeTranslationPlan(
@@ -276,9 +290,32 @@ struct NativeLyricsTextRenderPlan: Equatable {
 }
 
 struct NativeLyricsTextConstants: Equatable {
-    let mainFontSize: CGFloat = 24
-    let translationFontSize: CGFloat = 24 * 0.67
+    /// Backing-vocal (和声) rows render at 0.8× the melody row's font size — both main
+    /// and translation text (founder 2026-09-20: subordinate row under its melody line).
+    static let backgroundRowFontScale: CGFloat = 0.8
+
+    let mainFontSize: CGFloat
+    let translationFontSize: CGFloat
     let translationLineSpacing: CGFloat = 2
+    /// 2026-09-21 founder feedback: wrapped lines within ONE lyric row read too tight next to
+    /// Apple Music's lyrics panel (their second wrapped line sits noticeably lower). Shared by
+    /// BOTH text engines — `NativeLyricsTextSweepLayout.mainParagraphStyle` (active-line glyph
+    /// layout / bitmap rects) and the whole-line dim base's `attributedText`/`displayWrapped`
+    /// calls in `NativeLyricsRowView` — so wrap points and inter-line pitch stay identical
+    /// between engines (banned-patterns.md's two-text-engine rule). Scales with the font size
+    /// (so a 0.8×-scaled background/和声 row gets a proportionally smaller gap too): 24pt → 4pt.
+    let mainLineSpacing: CGFloat
+
+    init(scale: CGFloat = 1.0) {
+        mainFontSize = 24 * scale
+        translationFontSize = 24 * 0.67 * scale
+        mainLineSpacing = (24 * scale * 0.18).rounded()
+    }
+
+    /// Convenience: the scale a render plan should use for `line`.
+    static func scale(forBackground isBackground: Bool) -> CGFloat {
+        isBackground ? backgroundRowFontScale : 1.0
+    }
     let brightAlpha: CGFloat = 0.85
     // The dim tier is no longer a baked alpha: the unswept base reads at the row's
     // dimBaseBrightness (inactive tier 0.35, user decision 2026-07-12) via layer-opacity
@@ -310,7 +347,8 @@ struct NativeLyricsWordRunPlan: Equatable {
         currentTime: TimeInterval,
         isActiveLine: Bool,
         staticOpacity: CGFloat,
-        constants: NativeLyricsTextConstants
+        constants: NativeLyricsTextConstants,
+        floatReleaseTime: TimeInterval? = nil
     ) -> NativeLyricsWordRunPlan {
         let progress = wordProgress(
             currentTime: currentTime,
@@ -318,11 +356,14 @@ struct NativeLyricsWordRunPlan: Equatable {
             endTime: staticRun.endTime
         )
         let opacity = isActiveLine ? constants.brightAlpha : staticOpacity
+        // Float clock starts at the word's own start, or later at the row's motion release
+        // (see Configuration.wordFloatReleaseTime); the float DURATION stays the word's own.
+        let floatStart = max(staticRun.startTime, floatReleaseTime ?? -.infinity)
         let baseFloatY = isActiveLine
             ? baseFloat(
                 currentTime: currentTime,
-                startTime: staticRun.startTime,
-                endTime: staticRun.endTime,
+                startTime: floatStart,
+                endTime: floatStart + max(0, staticRun.endTime - staticRun.startTime),
                 targetY: constants.baseFloatTargetY
             )
             : 0

@@ -625,7 +625,16 @@ public struct LyricsView: View {
                 lineAdvanceTimerTargetPlaybackTime = nil
                 translationPreflightTask?.cancel()
                 translationPreflightTask = nil
-                translationSessionConfigAny = nil
+                // 缺陷1修复（2026-09-14）：这里曾经把 translationSessionConfigAny
+                // 清空，导致 TranslationTaskHostView 的 .translationTask 被拆除。
+                // 但 TranslationTaskHostView 本身跟页面无关，一直挂在视图树里
+                // （829行 .background），A5 的设计意图就是"一个 session 撑全程，
+                // 换歌不重建"——离开歌词页把它清空，直接违反这个意图：回到歌词页
+                // 没有任何地方会重建它，此后不管换多少首歌，翻译请求都 yield 到
+                // 一个没有活跃消费者的 stream 上，永久失效直到用户手动切一次语言
+                // 或翻译开关。不再清空，session 跟着 songID/语言/开关变化才重建
+                // （见下面 newPage == .lyrics 分支 + onChange(translationLanguage/
+                // showTranslation) 三处既有触发点）。
                 lineMotionFrameCaptureActive = false
                 pendingLineMotionCapture = nil
                 latestLineMotionFrames.removeAll()
@@ -639,6 +648,14 @@ public struct LyricsView: View {
                 updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
                 scheduleNextLineAdvanceTimer()
                 startLineMotionSamplingWindow(duration: lyricLineMotionPageSwitchSampleDuration)
+                // 缺陷1修复：首次进入歌词页（session 还从未建立过，比如启动后
+                // 默认停在封面页、翻译开关此前一直没被切换过）在这里兜底建一次。
+                // session 一旦建立，上面的分支不再清空它，之后换页不需要重复
+                // 触发；updateTranslationSessionConfig 内部按配置是否真的变化
+                // 短路，重复调用无副作用。
+                if #available(macOS 15.0, *) {
+                    scheduleTranslationSessionConfigUpdate(after: lyricPageSwitchTranslationDeferDuration)
+                }
             }
         }
         // Initial mount and track changes.
@@ -2693,17 +2710,36 @@ private struct TranslationTaskHostCore: View {
     let lyricsService: LyricsService
 
     var body: some View {
-        Color.clear
-            .translationTask(activeConfig, action: { session in
-                // No outer showTranslation/lyrics gate here: this closure
-                // only restarts when `activeConfig` (the language pair)
-                // changes, so a one-time gate evaluated at start would stay
-                // stuck if the user toggles showTranslation off then back on
-                // without the language changing — serveTranslationRequests
-                // must loop unconditionally; performSystemTranslation
-                // re-checks showTranslation/lyrics on every request already.
-                await lyricsService.serveTranslationRequests(with: session)
-            })
+        // Each session gets its OWN zero-size host view. 2026-09-20 regression: stacking a second
+        // `.translationTask` on the same `Color.clear` (the explicit-ko session) left the primary
+        // auto-detect loop never starting — translate button pressed, no "Starting translation"
+        // ever logged. One translationTask per view; siblings in a ZStack.
+        ZStack {
+            Color.clear
+                .translationTask(activeConfig, action: { session in
+                    // No outer showTranslation/lyrics gate here: this closure
+                    // only restarts when `activeConfig` (the language pair)
+                    // changes, so a one-time gate evaluated at start would stay
+                    // stuck if the user toggles showTranslation off then back on
+                    // without the language changing — serveTranslationRequests
+                    // must loop unconditionally; performSystemTranslation
+                    // re-checks showTranslation/lyrics on every request already.
+                    await lyricsService.serveTranslationRequests(with: session)
+                })
+            // Second, invisible session with an EXPLICIT Korean source —
+            // script-determined (ScriptRunSegmenter classifies Hangul), not
+            // NLLanguageRecognizer-guessed. Used only for Hangul runs inside
+            // mixed-script lines; this task just warms/holds the session and
+            // hands it to LyricsService.koreanRunTranslationExecutor.
+            Color.clear
+                .translationTask(koreanRunConfig, action: { session in
+                    await lyricsService.updateKoreanRunTranslationExecutor(session)
+                    while !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 3_600_000_000_000)
+                    }
+                    await lyricsService.updateKoreanRunTranslationExecutor(nil)
+                })
+        }
     }
 
     private var activeConfig: TranslationSession.Configuration {
@@ -2711,6 +2747,13 @@ private struct TranslationTaskHostCore: View {
             return config
         }
         return TranslationSession.Configuration(target: Locale.Language(identifier: "zh-Hans"))
+    }
+
+    private var koreanRunConfig: TranslationSession.Configuration {
+        TranslationSession.Configuration(
+            source: Locale.Language(identifier: "ko"),
+            target: activeConfig.target
+        )
     }
 }
 

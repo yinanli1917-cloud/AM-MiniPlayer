@@ -14,8 +14,8 @@ final class NativeLyricsRowView: NSView {
     }
 
     private let backgroundLayer = CALayer().lyricsInert()
-    private let mainTextLayer = CATextLayer().lyricsInert()
-    private let mainBrightTextLayer = CATextLayer().lyricsInert()
+    private let mainTextLayer = NativeLyricsLayoutTextLayer().lyricsInert()
+    private let mainBrightTextLayer = NativeLyricsLayoutTextLayer().lyricsInert()
     private let mainBaseRevealMaskLayer = CALayer().lyricsInert()
     private let mainSweepMaskLayer = CAGradientLayer().lyricsInert()
     private let mainPerRunSweepMaskLayer = CALayer().lyricsInert()
@@ -62,6 +62,10 @@ final class NativeLyricsRowView: NSView {
     private var emphasisGlyphLayers: [CATextLayer] = []
     private var emphasisGlyphLayerSignatures: [EmphasisGlyphLayerSignature?] = []
     private var activeHiddenEmphasisSignature: String?
+    // Sweep-ghost fix (2026-09-12): mirrors activeHiddenEmphasisSignature but tracks which
+    // NON-emphasis word orders are currently blanked out of the whole-line dim base because
+    // they are floating (see applyFloatingHiddenBase / applyMainWordFloatGlyphLayers).
+    private var activeFloatingHiddenSignature: String?
     // v2.8 per-word cascade: non-emphasis words render as per-glyph layers so each WORD can float by
     // its own baseFloatY (rolling rise), while brightness still comes from the shared sweep mask. The
     // dim glyphs parent to mainTextLayer (always visible), the bright glyphs to mainBrightTextLayer
@@ -69,6 +73,13 @@ final class NativeLyricsRowView: NSView {
     private var mainDimWordGlyphLayers: [CATextLayer] = []
     private var mainBrightWordGlyphLayers: [CATextLayer] = []
     private var mainWordGlyphLayerSignatures: [EmphasisGlyphLayerSignature?] = []
+    // feel/emphasis v28/amll arms (2026-09-17): index-aligned with mainBrightWordGlyphLayers.
+    // `amll` mounts a pre-rendered (offline, non-resident) blurred-bitmap sibling directly below
+    // the matching bright tile for a glyph currently inside its emphasis glow window; its
+    // position/transform are copied from that SAME bright tile at the same call site
+    // (applyMainWordFloatGlyphLayers), so it can never be independently wrong. `current`/`v28`
+    // never populate this pool.
+    private var mainEmphasisGlowLayers: [CALayer] = []
     private var lastMainSweepWavefrontX: [Int: CGFloat] = [:]
     private var lastTranslationSweepWavefrontX: [Int: CGFloat] = [:]
     private var lastLineLayoutMetrics = LineLayoutAppliedMetrics.inactive
@@ -106,6 +117,10 @@ final class NativeLyricsRowView: NSView {
 
     private static let hoverBackgroundAlpha: CGFloat = 0.08
     private static let hoverBackgroundCornerRadius: CGFloat = 12
+    /// Top padding before the main lyric text starts — `layout()`'s `mainTextLayer.frame.minY`.
+    /// Named (was a bare `8` literal) so `verticalScalePivotY` below can share the exact same
+    /// value layout() actually uses, instead of risking the two drifting apart.
+    private static let mainTextTopInset: CGFloat = 8
     // CATextLayer clips text tight to its bounds: at frame height == usedRect.height the LAST wrapped
     // line's bottom pixels (CJK strokes / descenders) get shaved. Pad the rendered text-layer height so
     // the glyph bottoms have room. The row's stacking offset still uses the true (un-padded) height, so
@@ -175,16 +190,56 @@ final class NativeLyricsRowView: NSView {
         let height: CGFloat
         let fontSize: CGFloat
         let brightAlpha: CGFloat
+        // 2026-09-20 (3p): the resolved font NAME is part of the signature — when it changes
+        // (a different character resolves to a different concrete font, or the shared layout
+        // rebuilds), the tile must re-set `.font`, not just `.string`/`.bounds`. Included in
+        // Equatable so a signature-unchanged frame is still a true no-op (the common case).
+        let fontName: String
 
-        init(glyph: NativeLyricsTextSweepVisualRun.Glyph, fontSize: CGFloat, brightAlpha: CGFloat = 1) {
+        init(
+            glyph: NativeLyricsTextSweepVisualRun.Glyph, fontSize: CGFloat, brightAlpha: CGFloat = 1,
+            fontName: String
+        ) {
             text = glyph.text
             width = glyph.rect.width.rounded(.toNearestOrAwayFromZero)
             height = glyph.rect.height.rounded(.toNearestOrAwayFromZero)
             self.fontSize = fontSize
             self.brightAlpha = (brightAlpha * 1000).rounded(.toNearestOrAwayFromZero) / 1000
+            self.fontName = fontName
         }
     }
 
+    /// 2026-09-20 (3p root-cause fix, verified on the founder's machine): the per-glyph tiles must
+    /// paint with the SAME concrete font AppKit's layout resolved for that character (CJK fallback
+    /// lands on `.PingFangUIDisplaySC-Semibold`), not the generic system font, or the bright
+    /// outline never coincides with the dim outline beneath it (persistent double edge on every
+    /// swept glyph). `NSTextStorage.fixAttributes` performs exactly that font substitution and
+    /// writes the resolved font back into the attribute; cached per (text, size) per row.
+    private var resolvedFontStorageKey: String?
+    private var resolvedFontStorage: NSTextStorage?
+    private func resolvedGlyphFont(text: String, characterIndex: Int, fallbackSize: CGFloat) -> NSFont {
+        let key = "\(fallbackSize)|\(text)"
+        if resolvedFontStorageKey != key {
+            let storage = NSTextStorage(
+                string: text,
+                attributes: [.font: NSFont.systemFont(ofSize: fallbackSize, weight: .semibold)]
+            )
+            storage.fixAttributes(in: NSRange(location: 0, length: storage.length))
+            resolvedFontStorage = storage
+            resolvedFontStorageKey = key
+        }
+        if let storage = resolvedFontStorage,
+           characterIndex >= 0, characterIndex < storage.length,
+           let font = storage.attribute(.font, at: characterIndex, effectiveRange: nil) as? NSFont {
+            return font
+        }
+        return NSFont.systemFont(ofSize: fallbackSize, weight: .semibold)
+    }
+
+    /// v2.8-style single-pass active line renderer (see NativeLyricsActiveLineDrawLayer).
+    let activeLineDrawLayer = NativeLyricsActiveLineDrawLayer()
+    private var singlePassActive = false
+    private var singlePassPrewarmKey: String?
     private var cachedStaticTextPlanKey: StaticTextPlanCacheKey?
     private var cachedStaticTextPlan: NativeLyricsStaticTextRenderPlan?
 
@@ -209,6 +264,7 @@ final class NativeLyricsRowView: NSView {
         if self.row?.displayLine.id != row.displayLine.id {
             mainPostLineFadeFloor = 1
             translationPostLineFadeFloor = 1
+            mainWasTextActiveLastPhase = false
         }
         self.row = row
         self.configuration = configuration
@@ -261,6 +317,12 @@ final class NativeLyricsRowView: NSView {
     // ───────────────────────────────────────────────────────────────────────────
     private var mainPostLineFadeFloor: CGFloat = 1
     private var translationPostLineFadeFloor: CGFloat = 1
+    // Tracks the text-activation state `updatePlaybackPhase` observed LAST TIME it ran on this
+    // view (regardless of role/config churn in between) — the activation-edge detector the fade
+    // floor reset above relies on. Never true after `prepareForReuse`/a fresh mount, so a
+    // recycled view can't inherit a stale "already active" reading from whatever line it used
+    // to represent.
+    private var mainWasTextActiveLastPhase = false
 
     func freezeParkedTextPhaseOpacity() {
         if parkedMainBrightOpacity == nil {
@@ -291,6 +353,7 @@ final class NativeLyricsRowView: NSView {
     }
 
     func updateDeactivationFade(progress: CGFloat) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["updateDeactivationFade", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let f = Float(max(0, min(1, progress)))
         if let base = mainDeactivationOverlayBaseline {
             mainBrightTextLayer.opacity = base * f
@@ -323,6 +386,7 @@ final class NativeLyricsRowView: NSView {
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        pendingFloatReturn = nil
         #if DEBUG
         debugPrepareForReuseCount += 1
         #endif
@@ -339,6 +403,7 @@ final class NativeLyricsRowView: NSView {
         clearParkedTextPhaseOpacity()
         mainPostLineFadeFloor = 1
         translationPostLineFadeFloor = 1
+        mainWasTextActiveLastPhase = false
         // Clear the scale/position transform too. layout() re-asserts positioningTransform on every
         // commit; if a recycled row keeps the previous row's scale, the next mount flashes that old
         // size for one frame before applyFrame writes the new scale (the seek size-pop).
@@ -364,19 +429,24 @@ final class NativeLyricsRowView: NSView {
         cachedStaticTextPlan = nil
         lastLineLayoutCacheKey = nil
         activeHiddenEmphasisSignature = nil
+        activeFloatingHiddenSignature = nil
         // The base-layer opacity reset below (opacity = 1) is only safe because the
         // compensation flags reset with it — a recycled row must start uncompensated.
         mainDimCompensationActive = false
         translationDimCompensationActive = false
         lastDimBaseTier = 0.35
-        [
+        mainTextLayer.string = nil
+        mainBrightTextLayer.string = nil
+        translationTextLayer.string = nil
+        translationBrightTextLayer.string = nil
+        interludeTextLayer.string = nil
+        ([
             mainTextLayer,
             mainBrightTextLayer,
             translationTextLayer,
             translationBrightTextLayer,
             interludeTextLayer
-        ].forEach { textLayer in
-            textLayer.string = nil
+        ] as [CALayer]).forEach { textLayer in
             textLayer.isHidden = true
             textLayer.opacity = 1
             textLayer.setAffineTransform(.identity)
@@ -402,7 +472,7 @@ final class NativeLyricsRowView: NSView {
 
     @discardableResult
     func applyBlurRadius(_ radius: CGFloat) -> CGFloat {
-        let logicalBlur = radius > 0.1 ? radius : 0
+        let logicalBlur = radius > 0.1 && !NativeLyricsFeelParity.depthBlurDisabled ? radius : 0
         let calibrated = logicalBlur > 0 ? sqrt(logicalBlur) * Self.blurRenderCalibration : 0
         let effectiveRadius = calibrated > 0.1 ? calibrated : 0
         let quantizedRadius = (effectiveRadius * 2).rounded(.toNearestOrAwayFromZero) / 2
@@ -441,12 +511,24 @@ final class NativeLyricsRowView: NSView {
     // which costs more than the live filter).
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    // Temporary same-build A/B switch for the WindowServer measurement; remove after acceptance.
-    private static let rasterizationDisabledByEnv =
-        ProcessInfo.processInfo.environment["NANOPOD_BLUR_RASTER_OFF"] != nil
-
-    func applyRasterizationPolicy(isSettled: Bool, isActive: Bool) {
-        rasterizationEligible = isSettled && !isActive
+    // 2026-09-18 (3h round, item 1 final form — founder-dictated after the activation-bound fix
+    // still measured the old 1.5-2.0s delay via the kept `hasActiveMotion` safety net): a
+    // deactivated row is rasterized from the SAME frame it deactivates, unconditionally, including
+    // through any position motion that follows. This is safe because blur is a STEPPED channel
+    // (`NativeLyricsVisualMotionState.setTarget` snaps `blur = nextTarget.blur` the instant a row's
+    // target changes — no springing left to race), so the only things that change DURING a
+    // deactivated row's subsequent motion are its FRAME (position) and its LAYER OPACITY — both of
+    // which are applied AFTER rasterization (CA composites the cached bitmap at wherever the layer
+    // currently is, at whatever opacity it currently has; neither triggers a recapture). There is
+    // no "still in flight, captured a stale/blurry snapshot" window left to protect (f1b8d8f's own
+    // repro is rewritten to assert the NEW contract — shouldRasterize itself must not flip during
+    // motion, not "must not rasterize" — see LyricsRenderDefects20260918ReproTests). The one-time
+    // bitmap-vs-live-vector visual difference this flip can produce (if it is ever the actual
+    // artifact — undetectable headlessly, only the render server applies rasterization) now lands
+    // on the SAME frame as the deactivation's own much larger visual transition, never isolated in
+    // dead calm afterward.
+    func applyRasterizationPolicy(isActive: Bool) {
+        rasterizationEligible = !isActive
         refreshRasterization()
     }
 
@@ -454,11 +536,23 @@ final class NativeLyricsRowView: NSView {
         !translationLoadingDotContainerLayer.isHidden || !dotContainerLayer.isHidden
     }
 
+    // 2026-09-18: no manual off-then-on recapture dance anymore. CA invalidates and regenerates a
+    // rasterized layer's cached bitmap automatically whenever the layer's own content (or a
+    // sublayer's) actually needs display — a genuine blur-radius or geometry change already
+    // triggers that through the normal `setNeedsDisplay`-on-property-change path, same as any other
+    // CALayer property. The manual signature-based toggle this used to do (RasterizationSignature,
+    // "force a FRESH capture: toggling off then on...") existed to fix 2026-09-17's CJK
+    // trailing-word ghost — but that bug's actual cause was `shouldRasterize` staying TRUE through
+    // the window a row's TEXT PHASE went live (a stale snapshot kept compositing behind fresh live
+    // tile writes), which is fixed by `rasterizationEligible = !isActive` itself (isActive folds in
+    // `isTextPhaseActiveThisFrame`, revoking rasterization the SAME frame text goes live — see the
+    // call site in LyricsLayerRendererView.applyFrame, and NativeLyricsRasterizationSignatureTests'
+    // invariant (a), kept and still green). The toggle was never load-bearing for that fix.
     private func refreshRasterization() {
         let desired = rasterizationEligible
             && appliedBlurRadius > 0.001
             && !hasLiveDotAnimation
-            && !Self.rasterizationDisabledByEnv
+            && !NativeLyricsFeelParity.rasterizationDisabled
         guard let layer, layer.shouldRasterize != desired else { return }
         if desired {
             // Same contentsScale convention as commonInit; without it the cache renders at 1x.
@@ -479,20 +573,33 @@ final class NativeLyricsRowView: NSView {
     // horizontal-clip + blank-row bug).
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     private func contentTextWidth(_ configuration: LyricsLayerRendererConfiguration) -> CGFloat {
-        max(1, configuration.rowWidth - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset)
+        guard let row, !row.isPrelude else {
+            return max(1, configuration.rowWidth - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset)
+        }
+        let staticPlan = staticTextPlan(for: row)
+        return NativeLyricsRowMeasurement.textWidth(
+            for: staticPlan.displayText,
+            font: .systemFont(ofSize: staticPlan.constants.mainFontSize, weight: .semibold),
+            rowWidth: configuration.rowWidth
+        )
     }
 
     func measuredHeight(width: CGFloat) -> CGFloat {
         guard let row, let configuration else { return 1 }
-        let textWidth = max(1, width - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset)
         if row.isPrelude {
             return 46
         }
         let plan = textRenderPlan(row: row, configuration: configuration)
+        let textWidth = NativeLyricsRowMeasurement.textWidth(
+            for: plan.displayText,
+            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold),
+            rowWidth: width
+        )
         let mainHeight = measuredTextHeight(
             plan.displayText,
             width: textWidth,
-            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
+            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold),
+            lineSpacing: plan.constants.mainLineSpacing
         )
         var height = mainHeight + 16
         if let translation = plan.translation {
@@ -507,6 +614,41 @@ final class NativeLyricsRowView: NSView {
             height += plan.constants.mainFontSize * 0.33 + Self.translationLoadingRowHeight
         }
         return ceil(height)
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 2026-09-18 fix (founder real-machine LineGaps evidence, research/repro-2026-09-18-
+    // lyrics-render-3d.md §4 third round): the 0.95<->1.00 active/inactive scale used to pivot Y
+    // at the row's geometric CENTER (`frame.height / 2`) — chosen, per NativeLyricsRowScale's own
+    // doc comment, to fix a DIFFERENT, earlier bug (pivoting near the top made CJK wrapped lines
+    // visibly gain/lose 行距 as the scale sprang). But centering the pivot means the row's FIRST
+    // (topmost) line of text — the line the founder is actually looking at, having just finished
+    // singing it — moves by `firstLineOffsetFromCenter * |Δscale|` every single activation/
+    // deactivation: for a typical 40pt single-line row that is ≈1pt, matching the founder's
+    // reported "each line change nudges 1-2px" and "the just-finished line's settle position
+    // doesn't match where it lands as the previous line" exactly.
+    //
+    // Fix (coordinator-approved): pivot Y at the FIRST LINE'S TEXT BASELINE instead — the
+    // baseline the founder is reading stays bit-for-bit fixed across the scale toggle; the
+    // shrink/expand now visibly extends DOWNWARD (into wrap-lines 2/3+ and the translation line,
+    // if any) instead of being distributed above and below a row center nobody is looking at.
+    // `mainTextTopInset` (8pt) is the same value `layout()` uses for `mainTextLayer.frame.minY`;
+    // `font.ascender` is the standard distance from a line's top to its own baseline for the
+    // default (non-custom) line height NSLayoutManager uses here (confirmed: `measuredTextHeight`
+    // does not set a custom line-height multiple). X pivot (`nativeLyricContentLeadingInset`,
+    // the 2026-09-17 C1 fix) is UNCHANGED — orthogonal axis, not touched here.
+    //
+    // Falls back to the row's own vertical center for non-text rows (the prelude dots row) —
+    // "first line baseline" has no meaning there, and this is deliberately scoped to the
+    // founder-reported text-row regression, not a blanket re-anchor of every row kind.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    var verticalScalePivotY: CGFloat {
+        guard let row, !row.isPrelude, let configuration else {
+            return bounds.height / 2
+        }
+        let plan = textRenderPlan(row: row, configuration: configuration)
+        let font = NSFont.systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
+        return Self.mainTextTopInset + font.ascender
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -525,8 +667,12 @@ final class NativeLyricsRowView: NSView {
     }
 
     var debugMainTextLayerFrame: CGRect { mainTextLayer.frame }
+    var debugMainTextUsedWidth: CGFloat? { mainTextLayer.usedTextWidth }
+    static var debugHoverBackgroundEdgeMargin: CGFloat { hoverBackgroundEdgeMargin }
 
     var debugMainTextLayerHidden: Bool { mainTextLayer.isHidden }
+
+    var debugActiveLineDrawLayerHidden: Bool { activeLineDrawLayer.isHidden }
 
     var debugVisibleDimWordGlyphCount: Int {
         mainDimWordGlyphLayers.filter { !$0.isHidden }.count
@@ -536,11 +682,137 @@ final class NativeLyricsRowView: NSView {
         mainBrightWordGlyphLayers.filter { !$0.isHidden }.count
     }
 
+    /// Sweep-ghost diagnostic: dim/bright glyph tile pairs, index-aligned (both loops in
+    /// `applyMainWordFloatGlyphLayers` build `inputs` in the same order, so index i's dim and
+    /// bright layer represent the SAME glyph). `dimHidden` distinguishes "no tile drawn — the
+    /// whole-line base is still showing this glyph, unfloated" from "tile drawn and floated".
+    var debugMainWordGlyphPairs: [(dimPositionY: CGFloat, brightPositionY: CGFloat, dimHidden: Bool)] {
+        zip(mainDimWordGlyphLayers, mainBrightWordGlyphLayers).map {
+            ($0.position.y, $1.position.y, $0.isHidden)
+        }
+    }
+
+    /// Repro/regression instrumentation (defect 1, emphasis words, 2026-09-14 founder report).
+    /// `applyMainWordFloatGlyphLayers` still SKIPS emphasis-order runs entirely (`where
+    /// !emphasisOrders.contains(run.order)`) — emphasis words render exclusively through
+    /// `emphasisGlyphLayers` — but as of the 2026-09-14 fix `floatingOrders` (fed to
+    /// `applyFloatingHiddenBase`) DOES include an emphasis word's order while its animation is
+    /// actively displacing it (liftY/floatY nonzero or scale != 1), so the whole-line dim base is
+    /// blanked for it the same way an ordinary floating word is. Reports each emphasis glyph
+    /// layer's applied Y/scale, index-aligned to `emphasisGlyphLayers`, for tests to compare
+    /// against the (now correctly hidden) dim-base rest position.
+    var debugEmphasisGlyphLayerPositions: [(appliedPositionY: CGFloat, appliedScale: CGFloat, isHidden: Bool)] {
+        emphasisGlyphLayers.map { layer in
+            let t = layer.affineTransform()
+            return (layer.position.y, sqrt(t.a * t.a + t.c * t.c), layer.isHidden)
+        }
+    }
+
+    /// True when NOTHING in the legacy `emphasisGlyphLayers` pool is currently visible — the
+    /// feel/emphasis `v28`/`amll` contrast arms must never populate this pool (they fold emphasis
+    /// words into the ordinary per-word tile pipeline instead), so this pins "no second
+    /// independently-positioned object" directly (`NativeLyricsEmphasisFeelParityTests`).
+    var debugEmphasisGlyphLayerPoolAllHidden: Bool {
+        emphasisGlyphLayers.allSatisfy(\.isHidden)
+    }
+
+    /// feel/emphasis `v28`: shadowOpacity currently applied to each `mainBrightWordGlyphLayers`
+    /// tile — the glow for this arm is a real CALayer shadow on the SAME object that carries the
+    /// sharp glyph (never a second layer), so this is the whole observable glow signal for it.
+    var debugMainBrightWordGlyphShadowOpacities: [Float] {
+        mainBrightWordGlyphLayers.map(\.shadowOpacity)
+    }
+
+    /// feel/emphasis `amll`: true only if NONE of the glow sibling layers carry a live
+    /// `layer.filters` entry — the glow bitmap must be `layer.contents` (a cached, offline-
+    /// rendered CGImage), never a resident CIFilter attached to the layer.
+    var debugEmphasisGlowLayersHaveNoLiveFilters: Bool {
+        mainEmphasisGlowLayers.allSatisfy { $0.filters == nil || $0.filters?.isEmpty == true }
+    }
+
+    /// feel/emphasis `amll`: index-aligned (bright tile position/scale, glow sibling
+    /// position/scale, glow visible/opacity) pairs, sourced from `mainBrightWordGlyphLayers` /
+    /// `mainEmphasisGlowLayers`. The glow's position/transform are copied from the bright tile at
+    /// the same call site (`applyEmphasisGlowOnSharedTile`), so this pair should read IDENTICAL
+    /// whenever the glow is visible — that equality is the structural guarantee against ghosting.
+    var debugEmphasisGlowTilePairs: [(
+        brightPosition: CGPoint, glowPosition: CGPoint,
+        brightScale: CGFloat, glowScale: CGFloat,
+        glowVisible: Bool, glowOpacity: Float
+    )] {
+        zip(mainBrightWordGlyphLayers, mainEmphasisGlowLayers).map { bright, glow in
+            let bt = bright.affineTransform()
+            let gt = glow.affineTransform()
+            return (
+                bright.position, glow.position,
+                sqrt(bt.a * bt.a + bt.c * bt.c), sqrt(gt.a * gt.a + gt.c * gt.c),
+                !glow.isHidden, glow.opacity
+            )
+        }
+    }
+
+    /// True when `mainTextLayer.string` (the whole-line dim base) has BLANKED the character range
+    /// belonging to word `order` — i.e. something subtracted it the way `applyFloatingHiddenBase`
+    /// subtracts an ordinary floating word. `nil` when the layer has no attributed string or the
+    /// order is out of range. Character offset is derived the same way
+    /// `NativeLyricsHiddenTextMask.ranges` locates a word's range: sequential concatenation of
+    /// `plan.wordRuns[i].text`.
+    func debugMainTextLayerIsWordHidden(order: Int, plan: NativeLyricsTextRenderPlan) -> Bool? {
+        guard let attributed = mainTextLayer.string as? NSAttributedString else { return nil }
+        guard plan.wordRuns.indices.contains(order) else { return nil }
+        var location = 0
+        for (index, run) in plan.wordRuns.enumerated() {
+            let length = (run.text as NSString).length
+            if index == order {
+                guard location < attributed.length else { return nil }
+                guard let color = attributed.attribute(.foregroundColor, at: location, effectiveRange: nil) as? NSColor else {
+                    return nil
+                }
+                return color.alphaComponent < 0.01
+            }
+            location += length
+        }
+        return nil
+    }
+
+    /// Same check as `debugMainTextLayerIsWordHidden` but against `mainBrightTextLayer` — the
+    /// sweep/karaoke overlay layer that `emphasisGlyphLayers` are mounted onto as sublayers
+    /// (`mainEmphasisLayer` parents into it). 2026-09-15 repro: unlike `mainTextLayer` (fixed
+    /// 2026-09-14, `applyFloatingHiddenBase`), NOTHING ever hides an emphasis word's glyph range
+    /// in `mainBrightTextLayer.string` while `geometryReady == true` (the normal, majority-of-
+    /// playback-time path) — `applyHiddenEmphasisText` (the one function that hides BOTH layers)
+    /// only runs when `managesContainerText` (`!geometryReady`) is true. `mainPerRunSweepMaskLayer`
+    /// reveals `mainBrightTextLayer`'s own text for that word once the sweep wavefront passes it,
+    /// at the word's static rest position — simultaneously with the floating/scaled/glowing
+    /// `emphasisGlyphLayers` copy on top. This accessor exists to make that gap directly
+    /// observable from tests, not to change any rendering behavior.
+    func debugMainBrightTextLayerIsWordHidden(order: Int, plan: NativeLyricsTextRenderPlan) -> Bool? {
+        guard let attributed = mainBrightTextLayer.string as? NSAttributedString else { return nil }
+        guard plan.wordRuns.indices.contains(order) else { return nil }
+        var location = 0
+        for (index, run) in plan.wordRuns.enumerated() {
+            let length = (run.text as NSString).length
+            if index == order {
+                guard location < attributed.length else { return nil }
+                guard let color = attributed.attribute(.foregroundColor, at: location, effectiveRange: nil) as? NSColor else {
+                    return nil
+                }
+                return color.alphaComponent < 0.01
+            }
+            location += length
+        }
+        return nil
+    }
+
     var debugDimCompensationActive: Bool { mainDimCompensationActive }
 
     /// True when the hover background is actually painted for this row. Tests assert it clears once
     /// the row is no longer under the cursor (the "hover bg stuck after the row moved away" bug).
     var debugHoverBackgroundVisible: Bool { isHovering && !backgroundLayer.isHidden }
+
+    /// The hover background layer's actual frame — tests assert it hugs the content rect
+    /// (`hoverBackgroundFrame()`), not the row's full bounds (2026-09-21 founder feedback).
+    var debugHoverBackgroundFrame: CGRect { backgroundLayer.frame }
 
     func debugForceLayout() { layoutSubtreeIfNeeded() }
 
@@ -582,6 +854,31 @@ final class NativeLyricsRowView: NSView {
     var debugPreludeDotCenterYInSuperview: CGFloat {
         frame.minY + dotContainerLayer.position.y
     }
+
+    /// Repro instrumentation (defect 3, 2026-09-14 founder report: prelude dots parked at the
+    /// panel's top-left instead of centred like the active line). Mirrors the Y accessor above —
+    /// the dot cluster's centre X in the ROW's own coordinate space, so a test can compare it
+    /// against the row's content leading inset / width without guessing at CALayer internals.
+    var debugPreludeDotCenterX: CGFloat { dotContainerLayer.position.x }
+    var debugPreludeDotContainerHidden: Bool { dotContainerLayer.isHidden }
+    var debugPreludeDotContainerOpacity: Float { dotContainerLayer.opacity }
+
+    /// Cross-hierarchy position readback for annotated diagrams (defect 3, 2026-09-14). Walks
+    /// the REAL CALayer tree (`CALayer.convert(_:to:)`, which correctly folds in any ancestor
+    /// `setAffineTransform` — e.g. the row's own `positioningTransform` — unlike hand-adding
+    /// `frame.minX/minY`) so the returned point matches exactly where `CALayer.render(in:)` would
+    /// actually paint the dots, in `targetLayer`'s coordinate space (pass the hosting surface's
+    /// own `.layer` to get surface-space coordinates for a full-panel screenshot annotation).
+    func debugDotContainerCenter(in targetLayer: CALayer) -> CGPoint {
+        dotContainerLayer.superlayer?.convert(dotContainerLayer.position, to: targetLayer) ?? .zero
+    }
+
+    /// Same cross-hierarchy conversion for the main (dim) text layer's own centre — used as the
+    /// "current line's text horizontal centre" reference line in the defect-3 diagram.
+    func debugMainTextLayerCenter(in targetLayer: CALayer) -> CGPoint {
+        let localCenter = CGPoint(x: mainTextLayer.frame.midX, y: mainTextLayer.frame.midY)
+        return mainTextLayer.superlayer?.convert(localCenter, to: targetLayer) ?? .zero
+    }
     #endif
 
     // Available to both the unit tests (DEBUG) and the in-app brightness diagnostic
@@ -597,11 +894,78 @@ final class NativeLyricsRowView: NSView {
     /// advance shows whether the recede is monotonic (clean) or has a brighten-then-dim
     /// step (blink).
     var debugMainBrightOpacity: Float { mainBrightTextLayer.isHidden ? 0 : mainBrightTextLayer.opacity }
+    var debugMainBrightWordGlyphOpacities: [Float] { mainBrightWordGlyphLayers.map { $0.isHidden ? 0 : $0.opacity } }
 
     /// The CIGaussianBlur radius actually applied to this row's layer (the depth-of-field blur).
     /// Compiled into every build for the same reason as `debugMainBrightOpacity` above — the
     /// LineGaps probe reads it under DebugLogger's runtime switch.
     var debugAppliedBlurRadius: CGFloat { max(0, appliedBlurRadius) }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Row-dump probe (founder 2026-09-18, CJK trailing-word ghost follow-up,
+    // nanopod://debug/rowdump). One-shot, on-demand text-sublayer inventory for the row —
+    // every layer that can carry visible glyphs, so a founder who sees a duplicate/ghosted
+    // character on screen can dump the exact layer tree at that instant and hand back
+    // evidence instead of a description. Compiled into EVERY build (including plain
+    // release), same discipline as `debugMainBrightOpacity`/`debugAppliedBlurRadius` above —
+    // this reads plain CALayer properties, no DEBUG-only state, and does no I/O itself (the
+    // caller writes the returned lines to disk, matching NativeLyricsMaskTrace's own
+    // "armed at the call site, not the accessor" split).
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    func rowDumpLines(role: String) -> [String] {
+        var lines: [String] = []
+        let rowText = row?.displayLine.line.text ?? "?"
+        let rowID = row?.displayLine.id ?? "?"
+        lines.append("row role=\(role) id=\(rowID) text=\"\(rowText.prefix(12))\"")
+        func describe(_ label: String, _ layer: CALayer?) {
+            guard let layer else { return }
+            let string = (layer as? NativeLyricsTextStringProviding)?.attributedStringValue
+            let stringPrefix = string?.string.prefix(8).description
+            let isBitmapContents = layer.contents != nil
+            let t = layer.affineTransform()
+            // 2026-09-19 founder follow-up: the model layer (what this whole dump otherwise
+            // reads) can commit a value the render server has not caught up to yet — an
+            // implicit-animation leak (see banned-patterns.md) that only shows up on the
+            // PRESENTATION layer, the tree Core Animation is actually compositing on screen right
+            // now. Printing both side by side turns "model says X, screen looked like Y" from an
+            // unfalsifiable eyewitness report into a captured discrepancy. `superlayer` names the
+            // actual parent this layer composites under — confirms/refutes whether a layer still
+            // lives under the opacity-bearing ancestor its dim tier depends on (e.g. a dim glyph
+            // tile that got reparented off mainTextLayer would no longer inherit its 0.35).
+            let presentationOpacity = layer.presentation()?.opacity
+            let presentationOpacityText = presentationOpacity.map { String($0) } ?? "nil(no-presentation)"
+            let superlayerName = layer.superlayer.map { "\(type(of: $0))" } ?? "nil"
+            lines.append(
+                "  \(label) class=\(type(of: layer)) frame=\(layer.frame) opacity=\(layer.opacity) "
+                    + "presentationOpacity=\(presentationOpacityText) superlayer=\(superlayerName) "
+                    + "hidden=\(layer.isHidden) string=\(stringPrefix.map { "\"\($0)\"" } ?? "nil") "
+                    + "contentsIsBitmap=\(isBitmapContents) shouldRasterize=\(layer.shouldRasterize) "
+                    + "transform=(a:\(t.a) b:\(t.b) c:\(t.c) d:\(t.d) tx:\(t.tx) ty:\(t.ty))"
+            )
+        }
+        describe("mainTextLayer(dim-base)", mainTextLayer)
+        describe("mainBrightTextLayer(line-level-bright)", mainBrightTextLayer)
+        describe("mainEmphasisLayer", mainEmphasisLayer)
+        describe("activeLineDrawLayer", activeLineDrawLayer)
+        for entry in activeLineDrawLayer.recentInputs.suffix(240) {
+            let floats = entry.floats.map { String(format: "%.2f", $0) }.joined(separator: ",")
+            let waves = entry.waves.map { String(format: "%.1f", $0) }.joined(separator: ",")
+            lines.append(String(format: "  singlePass t=%.0f dim=%.3f bright=%.3f floats=[%@] waves=[%@]", entry.wall, entry.dim, entry.bright, floats, waves))
+        }
+        for (i, l) in mainDimWordGlyphLayers.enumerated() where !l.isHidden {
+            describe("mainDimWordGlyphLayers[\(i)]", l)
+        }
+        for (i, l) in mainBrightWordGlyphLayers.enumerated() where !l.isHidden {
+            describe("mainBrightWordGlyphLayers[\(i)]", l)
+        }
+        for (i, l) in emphasisGlyphLayers.enumerated() where !l.isHidden {
+            describe("emphasisGlyphLayers[\(i)](legacy-current-arm)", l)
+        }
+        for (i, l) in mainEmphasisGlowLayers.enumerated() where !l.isHidden {
+            describe("mainEmphasisGlowLayers[\(i)]", l)
+        }
+        return lines
+    }
 
     #if DEBUG || LOCAL_DEVELOPER_BUILD
     var debugMainBrightOverlayActive: Bool {
@@ -615,11 +979,24 @@ final class NativeLyricsRowView: NSView {
     /// the tests pin that product across handoff frames, so each factor is exposed.
     var debugMainBaseLayerOpacity: Float { mainTextLayer.opacity }
     var debugMainBaseAttrAlpha: CGFloat { Self.firstRunForegroundAlpha(mainTextLayer) }
+
+    /// Whichever dim channel is ACTUALLY on screen right now: the single-pass draw layer's
+    /// dim tile opacity while it is the visible one, `mainTextLayer`'s (compensated) opacity
+    /// once the row has handed back to the whole-line base. Reading `debugMainBaseLayerOpacity`
+    /// alone during single-pass rendering hides the bug this exists for — that layer is
+    /// correctly compensated but INVISIBLE (`mainTextLayer.isHidden == true`), while the
+    /// visible layer (`activeLineDrawLayer.dimContainer`) is the one that can go stale.
+    var debugVisibleDimChannel: Float {
+        if !activeLineDrawLayer.isHidden {
+            return Float(activeLineDrawLayer.frameInput?.dimAlpha ?? 1)
+        }
+        return mainTextLayer.isHidden ? 1 : mainTextLayer.opacity
+    }
     var debugTranslationBaseLayerOpacity: Float { translationTextLayer.opacity }
     var debugTranslationBaseAttrAlpha: CGFloat { Self.firstRunForegroundAlpha(translationTextLayer) }
 
-    private static func firstRunForegroundAlpha(_ layer: CATextLayer) -> CGFloat {
-        guard let attributed = layer.string as? NSAttributedString, attributed.length > 0,
+    private static func firstRunForegroundAlpha(_ layer: NativeLyricsTextStringProviding) -> CGFloat {
+        guard let attributed = layer.attributedStringValue, attributed.length > 0,
               let color = attributed.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
         else { return 1 }
         return color.alphaComponent
@@ -705,6 +1082,18 @@ final class NativeLyricsRowView: NSView {
     /// and forces CoreText to typeset again (measured 2026-08-27: CATextLayer drawInContext
     /// dominated presentationTick).
     private(set) var debugWordGlyphColorAssignCount = 0
+    /// 2026-09-21 switch-window probe accessors (release-safe, read-only).
+    /// Test-only: the draw layer's recent frame inputs (ms timestamp, per-run floatY, dimAlpha, brightAlpha).
+    var probeRecentDrawInputs: [(Double, [CGFloat], CGFloat, CGFloat)] {
+        activeLineDrawLayer.probeRecentInputs
+    }
+    var probeMainTextFrame: CGRect { mainTextLayer.frame }
+    var probeMainTextPresentationFrame: CGRect { mainTextLayer.presentation()?.frame ?? mainTextLayer.frame }
+    var probeActiveDrawFrame: CGRect { activeLineDrawLayer.frame }
+    var probeActiveDrawHidden: Bool { activeLineDrawLayer.isHidden }
+    var probeMainTextHidden: Bool { mainTextLayer.isHidden }
+    var probeRasterized: Bool { layer?.shouldRasterize ?? false }
+
     func setPositioning(_ transform: CGAffineTransform) {
         layerMutationAttempts += 1
         // Track the intended transform for layout()'s re-assertion regardless of whether we write now.
@@ -755,6 +1144,16 @@ final class NativeLyricsRowView: NSView {
             translationTextLayer.opacity = translationValue
             layerMutationCount += 1
         }
+        // Mirror the SAME compensated value onto the single-pass draw layer's visible dim tile.
+        // `mainTextLayer` itself is hidden while this row renders through `activeLineDrawLayer`
+        // (active text phase, and — the deferred-deactivation case — the recede AFTER text phase
+        // stops driving this row) so writing only to the hidden layer above is invisible; without
+        // this, the draw layer's dim tile stays pinned at whatever `update(_:)` last baked while
+        // the row's own opacity spring keeps moving underneath it — see
+        // `NativeLyricsActiveLineDrawLayer.setDimAlpha`.
+        if singlePassActive {
+            activeLineDrawLayer.setDimAlpha(CGFloat(mainValue))
+        }
     }
 
     /// The effective dim alpha the compensated base currently renders at — the single
@@ -777,11 +1176,13 @@ final class NativeLyricsRowView: NSView {
         // Re-assert the positioning transform AppKit's layout just reset (see above).
         layer?.setAffineTransform(positioningTransform)
         guard let row, let configuration else { return }
-        let textX = nativeLyricContentLeadingInset
         // Single source of truth (same value updateTextLayers baked against). Deriving the frame
         // width from configuration.rowWidth instead of bounds.width removes the last bounds-timing
         // hazard, so the frame can never disagree with the baked line-breaks even on the first pass.
         let textWidth = contentTextWidth(configuration)
+        // Orphan-avoidance rows borrow from both margins: shift left by the leading share.
+        let textX = nativeLyricContentLeadingInset
+            - NativeLyricsRowMeasurement.leadingShift(forTextWidth: textWidth, rowWidth: configuration.rowWidth)
         // Memoization gate: build the key from cheap/cached inputs (staticTextPlan is cached) and
         // skip the whole layout body when nothing that affects it changed. layout() is invoked on
         // every commit; the body's NSLayoutManager measurement + frame writes are idempotent, so an
@@ -802,8 +1203,7 @@ final class NativeLyricsRowView: NSView {
         if cacheKey == lastLineLayoutCacheKey { return }
         lastLineLayoutCacheKey = cacheKey
         let plan = textRenderPlan(row: row, configuration: configuration)
-        backgroundLayer.frame = Self.hoverBackgroundFrame(in: bounds)
-        var y: CGFloat = 8
+        var y: CGFloat = Self.mainTextTopInset
         if row.isPrelude {
             mainTextLayer.frame = .zero
             mainBrightTextLayer.frame = mainTextLayer.frame
@@ -823,6 +1223,7 @@ final class NativeLyricsRowView: NSView {
                 width: textWidth,
                 height: NativeLyricsRowMeasurement.preludeDotContainerHeight
             ))
+            backgroundLayer.frame = hoverBackgroundFrame()
             lastLineLayoutMetrics = .inactive
             return
         }
@@ -830,9 +1231,11 @@ final class NativeLyricsRowView: NSView {
         let mainHeight = measuredTextHeight(
             plan.displayText,
             width: textWidth,
-            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
+            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold),
+            lineSpacing: plan.constants.mainLineSpacing
         )
         mainTextLayer.frame = CGRect(x: textX, y: y, width: textWidth, height: mainHeight + Self.textBottomClipPad)
+        activeLineDrawLayer.frame = mainTextLayer.frame
         mainBrightTextLayer.frame = mainTextLayer.frame
         mainSweepMaskLayer.frame = mainBrightTextLayer.bounds
         mainBaseRevealMaskLayer.frame = mainTextLayer.bounds
@@ -880,6 +1283,10 @@ final class NativeLyricsRowView: NSView {
         }
         interludeTextLayer.frame = .zero
         if !row.isPrelude { hideDotLayers() }
+        // Derived AFTER mainTextLayer/translationTextLayer land their final frames this pass, so
+        // the hover background hugs the geometry that is actually about to render (see
+        // `hoverBackgroundFrame()`).
+        backgroundLayer.frame = hoverBackgroundFrame()
         let mainFrameHeightError = abs(mainTextLayer.frame.height - mainHeight)
         let mainFrameWidthError = abs(mainTextLayer.frame.width - textWidth)
         lastLineLayoutMetrics = LineLayoutAppliedMetrics(
@@ -926,6 +1333,137 @@ final class NativeLyricsRowView: NSView {
         return lines.joined(separator: "\n")
     }
 
+    /// Sweep-ghost fix: the RAW-text character ranges `displayWrapped` breaks the line into (its
+    /// wrap points, computed the same way, minus each fragment's trailing space). Shared with
+    /// `attributedDisplayWrapped` below so the hidden-ranges variant of the dim base wraps
+    /// IDENTICALLY to `wholeLineMainString` — same fragment count, same fragment content — instead
+    /// of accidentally re-wrapping the (unwrapped) `plan.displayText` and shifting the line height.
+    private static func wrapLineRanges(for text: String, width: CGFloat, font: NSFont) -> [NSRange]? {
+        guard width > 1, text.count > 1, !text.contains("\n") else { return nil }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        let storage = NSTextStorage(attributedString: NSAttributedString(
+            string: text,
+            attributes: [.font: font, .paragraphStyle: paragraph]
+        ))
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        container.maximumNumberOfLines = 0
+        container.lineBreakMode = .byWordWrapping
+        manager.addTextContainer(container)
+        storage.addLayoutManager(manager)
+        manager.ensureLayout(for: container)
+
+        let ns = text as NSString
+        var ranges: [NSRange] = []
+        var glyphIndex = 0
+        let glyphCount = manager.numberOfGlyphs
+        while glyphIndex < glyphCount {
+            var lineGlyphRange = NSRange()
+            _ = manager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineGlyphRange)
+            var charRange = manager.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
+            if charRange.length > 0,
+               ns.substring(with: NSRange(location: charRange.location + charRange.length - 1, length: 1)) == " " {
+                charRange.length -= 1
+            }
+            ranges.append(charRange)
+            glyphIndex = NSMaxRange(lineGlyphRange)
+        }
+        guard ranges.count > 1 else { return nil }
+        return ranges
+    }
+
+    /// Wraps an ALREADY-ATTRIBUTED string (e.g. one with hidden-range glyphs colored `.clear`) the
+    /// same way `displayWrapped` wraps plain text — same wrap points (from `rawText`), fragments
+    /// re-joined with `\n` — while preserving every existing per-character attribute (the hidden
+    /// ranges' color). Falls back to the input unchanged when the raw text doesn't wrap.
+    private static func attributedDisplayWrapped(
+        _ attributed: NSAttributedString,
+        rawText: String,
+        width: CGFloat,
+        font: NSFont
+    ) -> NSAttributedString {
+        guard let ranges = wrapLineRanges(for: rawText, width: width, font: font) else { return attributed }
+        let result = NSMutableAttributedString()
+        for (index, range) in ranges.enumerated() {
+            if index > 0 {
+                result.append(NSAttributedString(string: "\n", attributes: [.font: font]))
+            }
+            guard range.location + range.length <= attributed.length else { return attributed }
+            result.append(attributed.attributedSubstring(from: range))
+        }
+        return withFixedWrapLineHeight(result)
+    }
+
+    /// 2026-09-21 (founder recording: wrapped-row "twitch" 1-2px at the CATextLayer→bitmap swap;
+    /// headless: `NativeLyricsIncomingRowGeometryTests.test_activationDoesNotJumpTransformedInk_wrappedRows`):
+    /// `displayWrapped`/`attributedDisplayWrapped` join wrap fragments with a literal "\n" so a
+    /// wrapped row's dim base (`mainTextLayer`, a CATextLayer drawing via CoreText/CTFramesetter)
+    /// stays a SINGLE laid-out string (the 08-27 constraint). But CoreText computes each CTLine's
+    /// typographic height from the MAX ascent/descent of every glyph in that line's range —
+    /// including the "\n" itself, whose control-character glyph is measured against a font whose
+    /// metrics differ from the CJK fallback (PingFang) used for the visible glyphs. That inflates
+    /// the line carrying the break by ~2pt versus `NSLayoutManager`'s own `lineFragmentRect`
+    /// (the layout the sweep/bitmap paths use), so `mainTextLayer`'s wrapped lines sit at a
+    /// different pitch than `NativeLyricsActiveLineDrawLayer`'s bitmap-tile positions — the
+    /// swap moves ink even though neither path's row FRAME changed.
+    /// Fix: measure the ACTUAL per-fragment line height this exact (already-wrapped, per-char
+    /// font-resolved) string lays out to via the same `NSLayoutManager` machinery, then bake that
+    /// as a uniform `minimumLineHeight == maximumLineHeight` into the string's paragraph style so
+    /// CoreText can no longer let the break glyph inflate one line over another. No-op (returns
+    /// the input unchanged) for single-line text — never touches the single-line geometry pinned
+    /// by `NativeLyricsActiveLineSpacingTests`.
+    private static func withFixedWrapLineHeight(_ attributed: NSAttributedString) -> NSAttributedString {
+        // 2026-09-21: retired. Both engines are NSLayoutManager now and share one paragraph style
+        // (`mainLineSpacing`); baking min/max line height here OVERRODE that style (it also reset
+        // lineSpacing to 0) and shifted the whole base block by one line-spacing vs the bitmaps
+        // (pin: NativeLyricsIncomingRowGeometryTests wrapped-row swap Δ−3.8). Pass-through.
+        return attributed
+    }
+
+    private static func withFixedWrapLineHeight_retired(_ attributed: NSAttributedString) -> NSAttributedString {
+        guard attributed.string.contains("\n"), let height = measuredWrapLineHeight(for: attributed) else {
+            return attributed
+        }
+        let result = NSMutableAttributedString(attributedString: attributed)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.alignment = .left
+        paragraph.lineSpacing = 0
+        paragraph.minimumLineHeight = height
+        paragraph.maximumLineHeight = height
+        result.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: result.length))
+        return result
+    }
+
+    /// The per-line-fragment height `NSLayoutManager` computes for this EXACT already-wrapped,
+    /// per-character font-resolved string (hard "\n" breaks only, no re-wrapping — the container
+    /// is unbounded width). This is the same measurement the sweep layout / active-line bitmap
+    /// path (`NativeLyricsActiveLineDrawLayer.prepareLayout`, `NativeLyricsTextSweepLayout`) uses
+    /// for its line pitch, so baking it into the CATextLayer string's paragraph style makes both
+    /// rasterizers agree by construction instead of by a hand-tuned constant.
+    private static func measuredWrapLineHeight(for attributed: NSAttributedString) -> CGFloat? {
+        let storage = NSTextStorage(attributedString: attributed)
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        container.maximumNumberOfLines = 0
+        manager.addTextContainer(container)
+        storage.addLayoutManager(manager)
+        manager.ensureLayout(for: container)
+        var maxHeight: CGFloat = 0
+        var glyphIndex = 0
+        let glyphCount = manager.numberOfGlyphs
+        while glyphIndex < glyphCount {
+            var lineGlyphRange = NSRange()
+            let rect = manager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineGlyphRange)
+            maxHeight = max(maxHeight, rect.height)
+            glyphIndex = NSMaxRange(lineGlyphRange)
+        }
+        return maxHeight > 0 ? maxHeight : nil
+    }
+
     // No per-row tracking area. The surface (NativeLyricsSurfaceView) is the SINGLE hover authority:
     // it hit-tests the cursor against each row's real frame and drives setPointerHovering. A per-row
     // tracking area could fire mouseEntered but not mouseExited when the row slid out from under a
@@ -968,6 +1506,8 @@ final class NativeLyricsRowView: NSView {
             $0.masksToBounds = false
             layer?.addSublayer($0)
         }
+        activeLineDrawLayer.isHidden = true
+        layer?.addSublayer(activeLineDrawLayer)
         dotLayers.forEach { dot in
             dot.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
             dot.cornerRadius = NativeLyricsDotPhasePlan.baseDotSize / 2
@@ -995,7 +1535,7 @@ final class NativeLyricsRowView: NSView {
         backgroundLayer.cornerRadius = Self.hoverBackgroundCornerRadius
         backgroundLayer.backgroundColor = NSColor.white.withAlphaComponent(Self.hoverBackgroundAlpha).cgColor
         backgroundLayer.isHidden = true
-        [mainTextLayer, mainBrightTextLayer, translationTextLayer, translationBrightTextLayer, interludeTextLayer].forEach { textLayer in
+        ([mainTextLayer, mainBrightTextLayer, translationTextLayer, translationBrightTextLayer, interludeTextLayer] as [NativeLyricsWrappableTextLayer]).forEach { textLayer in
             textLayer.isWrapped = true
             textLayer.alignmentMode = .left
             textLayer.truncationMode = .none
@@ -1031,6 +1571,7 @@ final class NativeLyricsRowView: NSView {
             hideEmphasisGlyphLayers()
             hideMainWordGlyphLayers()
             activeHiddenEmphasisSignature = nil
+            activeFloatingHiddenSignature = nil
             translationTextLayer.string = nil
             translationBrightTextLayer.string = nil
             hideTranslationLoadingDots()
@@ -1075,12 +1616,14 @@ final class NativeLyricsRowView: NSView {
         let wrappedMainText = Self.displayWrapped(
             plan.displayText,
             width: displayTextWidth,
-            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
+            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold),
+            lineSpacing: plan.constants.mainLineSpacing
         )
         wholeLineMainString = attributedText(
             wrappedMainText,
             fontSize: plan.constants.mainFontSize,
-            alpha: mainAlpha
+            alpha: mainAlpha,
+            lineSpacing: plan.constants.mainLineSpacing
         )
         mainTextLayer.string = wholeLineMainString
         // The reuse pool hides every text layer in prepareForReuse() to kill stale content during
@@ -1089,10 +1632,16 @@ final class NativeLyricsRowView: NSView {
         // recycles rows, and the active line shows only its sung (bright) portion. Restore it now.
         mainTextLayer.isHidden = false
         wholeLineBrightString = appliesMainSweep
-            ? attributedText(wrappedMainText, fontSize: plan.constants.mainFontSize, alpha: plan.constants.brightAlpha)
+            ? attributedText(
+                wrappedMainText,
+                fontSize: plan.constants.mainFontSize,
+                alpha: plan.constants.brightAlpha,
+                lineSpacing: plan.constants.mainLineSpacing
+            )
             : nil
         mainBrightTextLayer.string = wholeLineBrightString
         activeHiddenEmphasisSignature = nil
+        activeFloatingHiddenSignature = nil
         hideEmphasisGlyphLayers()
         if let translation = plan.translation {
             // Sweep the translation ONLY for word-timed songs (match appliesMainSweep's gating).
@@ -1200,7 +1749,7 @@ final class NativeLyricsRowView: NSView {
         // hovered. Writing the layer each time re-composites it (the render-churn class this session
         // killed). Skip the write when the value is unchanged — frame tracks bounds (constant), isHidden
         // only flips on a hover transition. cornerRadius is a constant set once in commonInit.
-        let frame = Self.hoverBackgroundFrame(in: bounds)
+        let frame = hoverBackgroundFrame()
         if lastAppliedHoverFrame != frame {
             backgroundLayer.frame = frame
             lastAppliedHoverFrame = frame
@@ -1215,7 +1764,7 @@ final class NativeLyricsRowView: NSView {
             let alpha = NSColor(cgColor: backgroundLayer.backgroundColor ?? NSColor.clear.cgColor)?.alphaComponent
                 ?? Self.hoverBackgroundAlpha
             (superview as? NativeLyricsSurfaceView)?.recordHoverBackgroundParity(NativeLyricsHoverParitySample(
-                expectedFrame: Self.hoverBackgroundFrame(in: bounds),
+                expectedFrame: hoverBackgroundFrame(),
                 appliedFrame: backgroundLayer.frame,
                 expectedCornerRadius: Self.hoverBackgroundCornerRadius,
                 appliedCornerRadius: backgroundLayer.cornerRadius,
@@ -1226,21 +1775,65 @@ final class NativeLyricsRowView: NSView {
         lastHoverBackgroundVisible = visible
     }
 
-    private static func hoverBackgroundFrame(in bounds: CGRect) -> CGRect {
-        let x = nativeLyricContentLeadingInset - 8
-        let width = max(1, bounds.width - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset + 16)
-        return CGRect(x: x, y: 0, width: width, height: max(1, bounds.height))
+    // 2026-09-21 founder feedback: the hover background did not track the new text geometry
+    // (moved-left insets, wrapped-line pitch, any future orphan-avoidance widening) because it
+    // was derived independently from `bounds` instead of from the SAME content rect the text
+    // layers were just laid out with. `layout()` already sets `mainTextLayer.frame` /
+    // `translationTextLayer.frame` to the exact (leadingInset, textWidth, measured height)
+    // content box — union them and pad by the existing 8pt so the highlight always hugs the
+    // rendered text, single/wrapped/widened rows alike.
+    static let hoverBackgroundPadding: CGFloat = 8
+
+    private func hoverBackgroundFrame() -> CGRect {
+        var contentRect = mainTextLayer.frame
+        if contentRect == .zero {
+            // Not laid out yet (or a prelude row, where hover never shows) — fall back to the
+            // full content box so the frame is never nonsensical before the first layout() runs.
+            let x = nativeLyricContentLeadingInset - Self.hoverBackgroundPadding
+            let width = max(1, bounds.width - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset + 2 * Self.hoverBackgroundPadding)
+            return CGRect(x: x, y: 0, width: width, height: max(1, bounds.height))
+        }
+        // Hug the text actually drawn, not the layout container: an orphan-avoidance row's container
+        // is widened up to the trailing safety margin, so a container-sized box ran off the panel
+        // (founder 2026-09-21). Width = the layout manager's used width; then clamp the padded box
+        // inside the row with a minimum edge margin so it can never leave the screen.
+        if let used = mainTextLayer.usedTextWidth, used > 1 {
+            contentRect.size.width = min(contentRect.width, ceil(used))
+        }
+        if !translationTextLayer.isHidden, translationTextLayer.frame != .zero {
+            contentRect = contentRect.union(translationTextLayer.frame)
+        }
+        var box = contentRect.insetBy(dx: -Self.hoverBackgroundPadding, dy: -Self.hoverBackgroundPadding)
+        let limit = bounds.insetBy(dx: Self.hoverBackgroundEdgeMargin, dy: 0)
+        if box.minX < limit.minX { box.origin.x = limit.minX }
+        if box.maxX > limit.maxX { box.size.width = max(1, limit.maxX - box.minX) }
+        return box
     }
+    private static let hoverBackgroundEdgeMargin: CGFloat = 4
 
     @discardableResult
     func updatePlaybackPhase(
         configuration: LyricsLayerRendererConfiguration,
         managesTransaction: Bool = true
     ) -> NativeLyricsTextPhaseSample? {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["updatePlaybackPhase", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         guard let row else { return nil }
         #if DEBUG
         debugPlaybackPhaseUpdateCount += 1
         #endif
+        // A genuine playback discontinuity (explicit seek / tap-to-line / direct snap) is the
+        // same class of event `configure()` already treats as a reason to reset the monotone
+        // post-line karaoke fade floor (see mainPostLineFadeFloor's declaration comment) — except
+        // configure() only fires that reset when THIS VIEW gets reassigned to a DIFFERENT row.
+        // A row view that stays mounted across a seek (the common case: nearby rows are never
+        // recycled through prepareForReuse) never took that path, so a floor already pinned near
+        // 0 from before the seek stayed pinned forever, even after seeking back into that same
+        // line's own span where the freshly computed fade is 1 — the karaoke highlight overlay
+        // never returned (2026-09-17: "seek back into an already-sung line loses its highlight").
+        if configuration.nativeSeekDiscontinuityOccurred {
+            mainPostLineFadeFloor = 1
+            translationPostLineFadeFloor = 1
+        }
         // Phase timing MUST come from the shared monotonic clock (phaseRenderTime), never the raw
         // SB clock: a backward resync dip at line start collapses the active plan to progress 0
         // for a frame — the handoff style flash (docs/defect-recordings/2026-07-11).
@@ -1249,6 +1842,32 @@ final class NativeLyricsRowView: NSView {
             rowIndex: row.index,
             textActiveIndex: configuration.effectiveTextActiveIndex
         )
+        // 2026-09-19 real-device repro (row dump + mask trace, "想爱 就不能害怕会有伤痕"):
+        // the `nativeSeekDiscontinuityOccurred` reset above only fires for rows that actually
+        // get `updatePlaybackPhase` called on them during the exact tick the flag is true — a
+        // transient, one-frame signal. A row that sits mounted-but-inactive (e.g. representing
+        // an upcoming line that hasn't been promoted to "active" yet) can miss that tick
+        // entirely, so a floor pinned near 0 from a PREVIOUS activation of this same line
+        // survives, and the row's karaoke overlay never lights when it naturally becomes
+        // active again — independent of whether a seek ever happened.
+        // Fix at the clock/activation-edge level instead of the transient flag: the floor must
+        // be armed to 1 whenever this row is (re)entering its own active window, detected two
+        // ways — (a) the activation EDGE (this row was not text-active last update and is now),
+        // which catches every promotion path regardless of how it happened, and (b) the render
+        // clock sitting before this line's own start (a landing seek can put a row directly into
+        // "active" mid-span without ever crossing a false→true edge on this exact view). Gating
+        // on the edge (not every active frame) is required — resetting on every tick a row is
+        // active is the previously-banned `.initialLayout`-style repeat-snap that relit an
+        // ALREADY-CORRECTLY-fading previous line (see docs/defect-recordings, 2026-09-17).
+        if isActive {
+            let justEnteredActiveWindow = !mainWasTextActiveLastPhase
+            let renderTimeBeforeLineStart = renderTime < row.displayLine.line.startTime
+            if justEnteredActiveWindow || renderTimeBeforeLineStart {
+                mainPostLineFadeFloor = 1
+                translationPostLineFadeFloor = 1
+            }
+        }
+        mainWasTextActiveLastPhase = isActive
 
         var sample: NativeLyricsTextPhaseSample?
         if managesTransaction {
@@ -1272,6 +1891,24 @@ final class NativeLyricsRowView: NSView {
                 currentTime: renderTime
             )
             let expectsPerRunSweep = row.displayLine.line.hasSyllableSync && !plan.wordRuns.isEmpty
+            // 2026-09-19 real-device repro (rowdump "想爱 就不能害怕会有伤痕"): the dim-base
+            // compensation flags (`mainDimCompensationActive`/`translationDimCompensationActive`)
+            // used to be written ONLY inside `updateTextLayers` (called from `configure()`, which
+            // runs at mount/reuse — not every frame). A row promoted to active purely through the
+            // per-frame `updatePlaybackPhase` path (the common case: the render loop reassigns
+            // roles without a fresh `configure()` when the row's own content didn't change) kept
+            // whatever flag value was baked in when it was last configured — often `false` from
+            // when it was configured as an upcoming/inactive row — so `applyDimBaseCompensation`
+            // forced the dim base to full opacity (uncompensated) even while genuinely active and
+            // swept: the whole line read as fully bright with no per-word mask. Recompute both
+            // flags from the CURRENT activation state on every phase update, not just at
+            // configure-time, so an activation transition that skips `configure()` still corrects
+            // the compensation the same frame.
+            mainDimCompensationActive = expectsPerRunSweep
+            translationDimCompensationActive = isActive
+                && row.displayLine.line.hasSyllableSync
+                && plan.translation != nil
+            applyDimBaseCompensation()
             let appliedMainProgress = expectsPerRunSweep
                 ? applyActiveMainPhase(plan: plan, currentTime: renderTime)
                 : applyStaticActiveTextPhase(plan: plan)
@@ -1305,15 +1942,42 @@ final class NativeLyricsRowView: NSView {
                 && !appliedMainProgress.appliedPerRunSweep
                 && !mainBrightTextLayer.isHidden
                 && mainBrightTextLayer.string != nil
+            #endif
+            // 2026-09-14: NativeLyricsMaskTrace now also arms via a UserDefaults switch (the
+            // founder cannot pass an environment variable when launching from Finder), so this
+            // call must run in EVERY build configuration, not just DEBUG/LOCAL_DEVELOPER_BUILD —
+            // the trace itself still defaults to off (checked inside `record`, zero I/O when
+            // disarmed). Recomputes the same two values locally instead of reading the
+            // DEBUG-only stored properties above, which don't exist in a plain release build.
+            let maskTraceWordIndex = expectsPerRunSweep
+                ? (plan.wordRuns.lastIndex(where: { $0.startTime <= renderTime }) ?? 0)
+                : -1
+            let maskTraceWholeLineHighlight = expectsPerRunSweep
+                && !appliedMainProgress.appliedPerRunSweep
+                && !mainBrightTextLayer.isHidden
+                && mainBrightTextLayer.string != nil
+            // 2026-09-19 real-device repro blind spot: neither `wholeLineHighlight` (bright visible
+            // with no mask) nor `brightUnmaskedIncomplete` (bright visible + incomplete) catch the
+            // OPPOSITE shape actually seen on device — the bright overlay entirely HIDDEN
+            // (mainPostLineFadeFloor pinned to 0 from a stale prior activation) while the active
+            // line's expected sweep progress is partway through. That row silently renders as
+            // dim-only with no karaoke overlay at all; record it as its own field so a future
+            // real-device session doesn't require a live repro to notice it again.
+            let maskTraceBrightHiddenWhileSweeping = expectsPerRunSweep
+                && plan.mainSweepProgress > 0.001
+                && plan.mainSweepProgress < 0.999
+                && mainBrightTextLayer.isHidden
             NativeLyricsMaskTrace.record(
                 rowID: row.displayLine.id,
-                wordIndex: debugLastActiveWordIndex,
-                wholeLineHighlight: debugLastWholeLineHighlight,
+                wordIndex: maskTraceWordIndex,
+                wholeLineHighlight: maskTraceWholeLineHighlight,
                 perRunSweep: appliedMainProgress.appliedPerRunSweep,
                 expected: plan.mainSweepProgress,
-                applied: appliedMainProgress.progress
+                applied: appliedMainProgress.progress,
+                mainBrightOverlayPresent: !mainBrightTextLayer.isHidden && mainBrightTextLayer.string != nil,
+                mainBrightOpacity: debugMainBrightOpacity,
+                brightHiddenWhileSweeping: maskTraceBrightHiddenWhileSweeping
             )
-            #endif
             let expectsNoLineLevelMainSweep = !expectsPerRunSweep
             let appliesLineLevelMainSweep = expectsNoLineLevelMainSweep
                 && mainBrightTextLayer.string != nil
@@ -1381,6 +2045,12 @@ final class NativeLyricsRowView: NSView {
                 )
             }
         } else {
+            // Same staleness fix as the active branch above: a row demoted from active purely via
+            // the per-frame role reassignment (no fresh `configure()`) must not keep reading as
+            // "sweep in progress" for dim-compensation purposes.
+            mainDimCompensationActive = false
+            translationDimCompensationActive = false
+            applyDimBaseCompensation()
             applyInactivePlaybackLayerState()
         }
         updateDotsPhase(row: row, currentTime: renderTime)
@@ -1391,6 +2061,8 @@ final class NativeLyricsRowView: NSView {
     }
 
     private func applyInactivePlaybackLayerState() {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["applyInactivePlaybackLayerState", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
+        leaveSinglePassActiveLine()
         // Leaving the active word-cascade: the whole-line base must come back
         // before the per-word/emphasis glyphs hide, or the row goes blank.
         if mainTextLayer.string == nil, let wholeLineMainString {
@@ -1405,11 +2077,13 @@ final class NativeLyricsRowView: NSView {
         hideEmphasisGlyphLayers()
         hideMainWordGlyphLayers()
         activeHiddenEmphasisSignature = nil
+        activeFloatingHiddenSignature = nil
         translationBrightTextLayer.isHidden = true
         hideTranslationSweepMaskLayers()
         mainTextLayer.setAffineTransform(.identity)
         mainBrightTextLayer.setAffineTransform(.identity)
         clearEmphasis(from: mainBrightTextLayer)
+        if let pending = pendingFloatReturn, pending.start == nil { applyFloatReturnOffset(pending.from) }
     }
 
     private struct MainTextPhaseAppliedMetrics {
@@ -1452,27 +2126,100 @@ final class NativeLyricsRowView: NSView {
         plan: NativeLyricsTextRenderPlan,
         currentTime: TimeInterval
     ) -> MainTextPhaseAppliedMetrics {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["applyActiveMainPhase", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let activeRun = plan.wordRuns.last { $0.startTime <= currentTime }
             ?? plan.wordRuns.first
-        let linePlan = mainSweepLinePlan(for: plan, bounds: mainBrightTextLayer.bounds)
+        // 2026-09-18 (stage bundle 3i, item 3 — CJK trailing-line ghost): the dim base
+        // (`applyFloatingHiddenBase`, below) wraps against `contentTextWidth(configuration)` —
+        // `configuration.rowWidth` minus insets, documented at its own declaration as the
+        // "single source of truth ... never bounds.width, which can be stale/zero on a fresh
+        // view [or] pooled one before layout() runs". The bright per-glyph sweep layout used to
+        // read `mainBrightTextLayer.bounds.width` instead — exactly the quantity that comment
+        // warns against — so a `configure()` at a NEW rowWidth landing before the next AppKit
+        // layout pass catches `bounds` up to it (a dropped/delayed frame; `layout()`'s own
+        // memoization gate means this is not guaranteed to run synchronously with configure())
+        // made the two systems wrap the SAME text against DIFFERENT widths for one or more
+        // ticks: the dim base commits to its new wrap immediately, the bright per-glyph tiles
+        // stay laid out for the OLD width until `bounds` catches up. The dim base's newly
+        // revealed trailing line then has no bright tile drawn over it at all — a dim-only
+        // (0.35 opacity), blurred-looking duplicate of the row's own trailing text. Route both
+        // through the exact same width source so they can never disagree.
+        let sweepBounds: CGRect
+        if let configuration {
+            sweepBounds = CGRect(x: 0, y: 0, width: contentTextWidth(configuration), height: mainBrightTextLayer.bounds.height)
+        } else {
+            sweepBounds = mainBrightTextLayer.bounds
+        }
+        let linePlan = mainSweepLinePlan(for: plan, bounds: sweepBounds)
         let emphasisOrders = Self.activeEmphasisOrders(plan: plan)
         // v2.8 Canvas: dim base is one laid-out string (pass 1); only the bright overlay
         // is per-glyph so words can float (pass 2). Nilling the dim string and retessellating
         // it as CATextLayer tiles was the activation 行距/字距 jump (founder 2026-08-27).
         // Before layout (bounds are .zero on a fresh/pooled row) we keep the whole-line dim
         // and hide the sung overlay, so the dim base is never blank (the 从无到有 guard).
+        // `geometryReady`'s WIDTH check stays on the real `bounds` (not `contentTextWidth`,
+        // which is always > 0 regardless of layout state) — it is asking "has this row been
+        // laid out at all yet", not "what width should wrapping use".
         let geometryReady = mainBrightTextLayer.bounds.width > 1
             && mainBrightTextLayer.bounds.height > 1
             && !linePlan.isEmpty
         let keepWholeLineDim = NativeLyricsFeelParity.keepsWholeLineDimBase
+        if geometryReady, NativeLyricsFeelParity.activeLineRenderer == .singlePass {
+            return applySinglePassActiveLine(plan: plan, currentTime: currentTime, linePlan: linePlan, sweepBounds: sweepBounds)
+        }
         let wordFloatResult: MainWordFloatAppliedMetrics
+        // Sweep-ghost fix: non-emphasis words that are ACTUALLY floating (baseFloatY != 0)
+        // must not also show through the whole-line dim base — that second, unfloated copy
+        // is the reported double image on swept CJK glyphs. A word at floatY == 0 (not yet
+        // started) is left alone: it coincides exactly with the whole-line glyph already, so
+        // there is nothing to hide and no tile needed (also keeps the activation-instant
+        // layout tests, which sample at floatY == 0, unaffected).
+        //
+        // 2026-09-14 founder report: the SAME double image on emphasis words ("WHAT IT'S ALL
+        // ABOU[T]") — applyEmphasisGlyphLayers draws a separate scale/lift/glow glyph for
+        // emphasis-order words, but this set used to unconditionally EXCLUDE emphasisOrders, so
+        // an emphasis word's whole-line dim-base copy was NEVER hidden while it animated. Extend
+        // the same "hide only while actually displaced" rule to emphasis words: liftY/floatY
+        // nonzero or scale != 1 means the emphasis animation is currently moving the glyph away
+        // from its rest position, so the base copy must be blanked exactly like a floating
+        // ordinary word. amount == 0 (outside the emphasis window) leaves the word coincident
+        // with the base, matching the existing floatY == 0 exemption above.
+        // 2026-09-18 (3h round, item 6, founder-dictated fix): `NativeLyricsEmphasisPlan.scale`
+        // (1 + emphasisWeight*0.1*amount, up to ~1.12x — confirmed by
+        // NativeLyricsEmphasisHollowOverlapTests) enlarges the bright tile around its own centre,
+        // so a scale > 1 makes the rendered tile wider than the STATIC (unscaled) hollow cut for
+        // just this word's own characters — the overflow bleeds onto the immediately adjacent
+        // word's still-full-opacity dim ink (the "edge blur/double image" shape the founder
+        // described). Hollow the SAME neighbour character(s) too, using the identical `scale`
+        // value already computed for the bright layer (no separate calculation) as the trigger.
+        // This is safe, not just "hides the symptom": `applyMainWordFloatGlyphLayers` already
+        // builds a per-glyph dim tile for EVERY word in the line (not only floating ones) —
+        // widening `floatingOrders` to include the neighbour makes its dim tile become VISIBLE at
+        // its own REST position (`floatY` is 0 for a word that hasn't started), which is exactly
+        // where the whole-line base was drawing it — a clean 1:1 ink replacement, not a new gap.
+        let floatingOrders: Set<Int> = keepWholeLineDim
+            ? Set(plan.wordRuns.enumerated().flatMap { order, run -> [Int] in
+                  if emphasisOrders.contains(order) {
+                      let isActiveEmphasis = run.emphasis.liftY != 0
+                          || run.emphasis.floatY != 0
+                          || run.emphasis.scale != 1
+                      guard isActiveEmphasis else { return [] }
+                      var orders = [order]
+                      if run.emphasis.scale > 1.001 {
+                          if order > 0 { orders.append(order - 1) }
+                          if order < plan.wordRuns.count - 1 { orders.append(order + 1) }
+                      }
+                      return orders
+                  }
+                  return run.baseFloatY != 0 ? [order] : []
+              })
+            : []
         if geometryReady {
             if keepWholeLineDim {
-                if mainTextLayer.string == nil, let wholeLineMainString {
-                    mainTextLayer.string = wholeLineMainString
-                }
+                applyFloatingHiddenBase(plan: plan, floatingOrders: floatingOrders)
             } else if mainTextLayer.string != nil {
                 mainTextLayer.string = nil
+                activeFloatingHiddenSignature = nil
             }
             if mainBrightTextLayer.string != nil { mainBrightTextLayer.string = nil }
             activeHiddenEmphasisSignature = nil
@@ -1482,12 +2229,50 @@ final class NativeLyricsRowView: NSView {
             if mainBrightTextLayer.affineTransform() != .identity {
                 mainBrightTextLayer.setAffineTransform(.identity)
             }
+            // Pin the post-line fade monotone BEFORE the per-glyph pass (moved up from below,
+            // 2026-09-19 founder-dictated fix) so the bright tiles it paints this SAME frame use
+            // the floored value too — a backward clock step can't re-light them, and their fade
+            // stays in lockstep with `mainBrightTextLayer`'s own opacity.
+            //
+            // 2026-09-19 real-device repro (/tmp/nanopod_debug.log 18:10:55 "position jump
+            // 215.4s→83.7s" during a pause/play mash; 18:11:36 `bright=0.000 eff=0.000` on a row
+            // whose line is still genuinely active, minutes later): the floor's semantics only
+            // hold AFTER the line has ended. A transient interpolated-clock reading that briefly
+            // reports a time WELL PAST this line's own end (a pause/resume mash's position
+            // correction landing on a stale sample, or any other momentary bad read) makes
+            // `plan.mainPostLineFade` compute as fully decayed for that ONE frame — `min` then
+            // crushes the floor to ~0, and since nothing else re-arms it (this row never took a
+            // line-change/seek/activation-edge, because the clock recovers a frame later and the
+            // line is STILL genuinely active), the floor stays crushed forever: the karaoke
+            // overlay reads permanently invisible for the rest of that line. The floor's monotone
+            // "never rises" guarantee is only meant to apply to the post-line GAP, never to time
+            // that is legitimately still inside the line's own sung window — so re-arm it to 1
+            // unconditionally whenever `currentTime` sits at or before this line's own end.
+            //
+            // FOUNDER-FLAGGED TRADE-OFF: a row has no signal available here to tell "this line is
+            // still genuinely playing" (this bug) apart from "the surface has already moved past
+            // this line and is parking it through the post-line gap, and a non-explicit backward
+            // jitter happens to land before its end" (the older, narrower scenario
+            // `NativeLyricsGapHandoffTests.test_overlayRelightsOnBackwardJitterAcrossLineEnd_founderAcceptedTradeoff`
+            // exercises) — `configuration.effectiveCurrentIndex` does NOT distinguish them (it
+            // stays on this row throughout the post-line gap too). This fix accepts reopening the
+            // older, narrower case to close the newer, worse one (see that test's header comment
+            // for the full trade-off write-up); a real reconciliation needs a signal this row does
+            // not currently have (e.g. whether the surface has begun this row's deferred
+            // deactivation) plumbed through from the surface, out of scope for this pass.
+            let mainLineEnd = plan.wordRuns.last?.endTime ?? currentTime
+            if currentTime <= mainLineEnd {
+                mainPostLineFadeFloor = 1
+            } else {
+                mainPostLineFadeFloor = min(mainPostLineFadeFloor, plan.mainPostLineFade)
+            }
             wordFloatResult = applyMainWordFloatGlyphLayers(
                 plan: plan,
                 currentTime: currentTime,
                 linePlan: linePlan,
                 emphasisOrders: emphasisOrders,
-                floatsDimBase: !keepWholeLineDim
+                floatsDimBase: !keepWholeLineDim,
+                floatingOrders: floatingOrders
             )
         } else {
             // Geometry is not ready (fresh/pooled/offscreen row). A whole-line bright
@@ -1538,9 +2323,16 @@ final class NativeLyricsRowView: NSView {
                 mainWordFloatSpread: 0
             )
         }
-        // Pin the post-line fade monotone so a backward clock step can't re-light the overlay. The
-        // floor only falls here; it is reset solely by the line-key / explicit-seek guard at the top.
-        mainPostLineFadeFloor = min(mainPostLineFadeFloor, plan.mainPostLineFade)
+        // Floor already pinned above (before the per-glyph pass, with the same "still inside the
+        // line ⇒ force 1" guard) when geometryReady; the non-geometry-ready branch returns early
+        // and never reaches here, so this is a no-op re-assertion in that case, kept as a safety
+        // net if a future call path reaches this line without having gone through the pin above.
+        let mainLineEndSafetyNet = plan.wordRuns.last?.endTime ?? currentTime
+        if currentTime <= mainLineEndSafetyNet {
+            mainPostLineFadeFloor = 1
+        } else {
+            mainPostLineFadeFloor = min(mainPostLineFadeFloor, plan.mainPostLineFade)
+        }
         mainBrightTextLayer.opacity = Float(mainPostLineFadeFloor)
         mainBrightTextLayer.isHidden = plan.mainSweepProgress <= 0.001 || mainPostLineFadeFloor <= 0.001
         let sweepResult = updatePerRunSweepMask(
@@ -1568,14 +2360,25 @@ final class NativeLyricsRowView: NSView {
                 bounds: mainBrightTextLayer.bounds
             )
         }
+        // feel/emphasis v28/amll (2026-09-17): emphasis words are folded into the per-glyph tile
+        // pipeline (applyMainWordFloatGlyphLayers, above) instead of the separate emphasisGlyphLayers
+        // pool. Forcing an empty emphasisOrders set here routes through applyEmphasisGlyphLayers'
+        // own existing "no emphasis words" early-out, which already hides that pool correctly.
+        let tilesOwnEmphasis = !emphasisOrders.isEmpty && NativeLyricsFeelParity.emphasisMode != .current
         let emphasisResult = applyEmphasisGlyphLayers(
             plan: plan,
             currentTime: currentTime,
             linePlan: linePlan,
-            emphasisOrders: emphasisOrders,
+            emphasisOrders: tilesOwnEmphasis ? [] : emphasisOrders,
             managesContainerText: !geometryReady
         )
-        if emphasisResult.applied {
+        if tilesOwnEmphasis {
+            // The per-glyph tile pipeline already rendered this line's emphasis glow on/beside each
+            // glyph's own tile. A shadow painted on the WHOLE-LINE mainBrightTextLayer here too would
+            // be a second, independently-positioned glow source — the exact class of ghost this arm
+            // exists to eliminate — so it must stay clean.
+            clearEmphasis(from: mainBrightTextLayer)
+        } else if emphasisResult.applied {
             clearEmphasis(from: mainBrightTextLayer)
         } else if let activeRun, activeRun.emphasis.glowOpacity > 0 {
             mainBrightTextLayer.shadowColor = NSColor.white.cgColor
@@ -1629,6 +2432,7 @@ final class NativeLyricsRowView: NSView {
     }
 
     private func applyStaticActiveTextPhase(plan: NativeLyricsTextRenderPlan) -> MainTextPhaseAppliedMetrics {
+        leaveSinglePassActiveLine()
         hideMainWordGlyphLayers()
         mainTextLayer.setAffineTransform(.identity)
         mainBrightTextLayer.setAffineTransform(.identity)
@@ -1639,6 +2443,7 @@ final class NativeLyricsRowView: NSView {
         hidePerRunSweepMaskLayers()
         hideEmphasisGlyphLayers()
         activeHiddenEmphasisSignature = nil
+        activeFloatingHiddenSignature = nil
         clearEmphasis(from: mainBrightTextLayer)
         let layoutResult = lastLineLayoutMetrics
         return MainTextPhaseAppliedMetrics(
@@ -1691,7 +2496,14 @@ final class NativeLyricsRowView: NSView {
             translationBrightTextLayer.isHidden = true
             return nil
         }
-        translationPostLineFadeFloor = min(translationPostLineFadeFloor, translation.postLineFade)
+        // Same "still inside the line ⇒ force 1" guard as `mainPostLineFadeFloor` above (same
+        // founder-flagged trade-off documented there) — a transient bad clock read past this
+        // line's own end must not permanently crush the translation overlay either.
+        if translation.currentTime <= translation.lineEndTime {
+            translationPostLineFadeFloor = 1
+        } else {
+            translationPostLineFadeFloor = min(translationPostLineFadeFloor, translation.postLineFade)
+        }
         translationBrightTextLayer.opacity = Float(translationPostLineFadeFloor)
         translationBrightTextLayer.isHidden = translation.progress <= 0.001 || translationPostLineFadeFloor <= 0.001
         guard let configuration else { return nil }
@@ -2091,6 +2903,7 @@ final class NativeLyricsRowView: NSView {
                 let metrics = applyEmphasisGlyph(
                     layer,
                     layerIndex: currentLayerIndex,
+                    displayText: plan.displayText,
                     glyph: glyph,
                     run: run,
                     glyphCount: glyphCount,
@@ -2149,29 +2962,259 @@ final class NativeLyricsRowView: NSView {
             fontSize: plan.constants.mainFontSize,
             alpha: 1,
             hiddenOrders: hiddenOrders,
-            wordRuns: plan.wordRuns
+            wordRuns: plan.wordRuns,
+            lineSpacing: plan.constants.mainLineSpacing
         )
         mainBrightTextLayer.string = attributedText(
             plan.displayText,
             fontSize: plan.constants.mainFontSize,
             alpha: plan.constants.brightAlpha,
             hiddenOrders: hiddenOrders,
-            wordRuns: plan.wordRuns
+            wordRuns: plan.wordRuns,
+            lineSpacing: plan.constants.mainLineSpacing
+        )
+    }
+
+    /// Sweep-ghost fix: keeps `mainTextLayer` as the ONE laid-out whole-line string (so wrap-line
+    /// height/tracking never change on activation — the 08-27 constraint pinned by
+    /// NativeLyricsActiveLineSpacingTests) while making the glyph ranges of currently-displaced
+    /// words transparent in it — ordinary words floating by `baseFloatY`, AND (as of 2026-09-14)
+    /// emphasis words whose scale/lift/float animation is actively moving them. Those words'
+    /// visible dim ink then comes ONLY from the per-glyph dim tile in
+    /// `applyMainWordFloatGlyphLayers` (ordinary words) or the emphasis glyph layer in
+    /// `applyEmphasisGlyphLayers` (emphasis words) — eliminating the second, undisplaced copy
+    /// underneath (the reported double image, both on swept CJK glyphs and on emphasized English
+    /// words like "about"). Gated by a signature so this only rewrites the string when the set of
+    /// floating words actually changes (once per word boundary), not every frame.
+    private func applyFloatingHiddenBase(
+        plan: NativeLyricsTextRenderPlan,
+        floatingOrders: Set<Int>
+    ) {
+        let signature = floatingOrders.isEmpty
+            ? "\(plan.displayText)|float|"
+            : "\(plan.displayText)|float|\(floatingOrders.sorted().map(String.init).joined(separator: ","))"
+        guard activeFloatingHiddenSignature != signature else { return }
+        activeFloatingHiddenSignature = signature
+        guard !floatingOrders.isEmpty else {
+            if let wholeLineMainString {
+                mainTextLayer.string = wholeLineMainString
+            }
+            return
+        }
+        // Hidden ranges are computed against the RAW (unwrapped) displayText — matches
+        // NativeLyricsHiddenTextMask's assumption that displayText is exactly the concatenation of
+        // word-run texts. Re-wrap the result with the SAME wrap points `wholeLineMainString` used
+        // (from `configuration`'s known width — never bounds.width, which can be stale/zero) so the
+        // 08-27 constraint (wrap-line count / height / tracking never change on activation) holds.
+        let hiddenRaw = attributedText(
+            plan.displayText,
+            fontSize: plan.constants.mainFontSize,
+            alpha: 1,
+            hiddenOrders: floatingOrders,
+            wordRuns: plan.wordRuns,
+            lineSpacing: plan.constants.mainLineSpacing
+        )
+        guard let configuration else {
+            mainTextLayer.string = hiddenRaw
+            return
+        }
+        mainTextLayer.string = Self.attributedDisplayWrapped(
+            hiddenRaw,
+            rawText: plan.displayText,
+            width: contentTextWidth(configuration),
+            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
+        )
+    }
+
+    // MARK: - Single-pass active line (v2.8 model)
+
+    /// 2026-09-20 line-switch hitch (tick probe: the activation frame cost 5–9ms + 2 dropped
+    /// frames): the surface calls this on the row AFTER the active one every tick, so the next
+    /// line's layout, run bitmaps and layers exist before activation; the activation frame only
+    /// toggles visibility and positions cached images.
+    func prewarmSinglePassIfNeeded() {
+        guard let row, let configuration,
+              row.displayLine.line.hasSyllableSync,
+              NativeLyricsFeelParity.activeLineRenderer == .singlePass else { return }
+        let width = contentTextWidth(configuration)
+        guard width > 1 else { return }
+        let prewarmKey = "\(row.id)|\(width)"
+        guard singlePassPrewarmKey != prewarmKey else { return }
+        singlePassPrewarmKey = prewarmKey
+        let plan = textRenderPlan(row: row, configuration: configuration)
+        let linePlan = mainSweepLinePlan(for: plan, bounds: CGRect(x: 0, y: 0, width: width, height: max(1, mainTextLayer.bounds.height)))
+        var runs: [(charRange: NSRange, rect: CGRect)] = []
+        for line in linePlan {
+            for visualRun in line.runs {
+                guard let first = visualRun.glyphs.first, let last = visualRun.glyphs.last else { continue }
+                runs.append((NSRange(location: first.characterIndex, length: last.characterIndex - first.characterIndex + 1), visualRun.rect))
+            }
+        }
+        activeLineDrawLayer.prewarm(text: plan.displayText, width: width, fontSize: plan.constants.mainFontSize, lineSpacing: plan.constants.mainLineSpacing, runs: runs)
+    }
+
+    private func leaveSinglePassActiveLine() {
+        guard singlePassActive else { return }
+        singlePassActive = false
+        // 2026-09-21 (founder: 历史行在切行瞬间动一下, 啟程 '才找到永恒' +1.9px): the bitmaps held
+        // the sung words at −2pt; the base shows them at 0. Carry the held float over and ease it
+        // back (contract row "Per-char float": eases to 0, never an instant snap).
+        let held = activeLineDrawLayer.currentHeldFloat
+        pendingFloatReturn = held != 0 ? (from: held, start: nil) : nil
+        activeLineDrawLayer.isHidden = true
+        mainTextLayer.isHidden = false
+        applyFloatReturnOffset(held)
+    }
+
+    /// (from, start): the base layer's vertical offset eases from `from` to 0 over
+    /// `floatReturnDuration` starting at the first `advanceFloatReturn` tick after the swap.
+    private var pendingFloatReturn: (from: CGFloat, start: TimeInterval?)?
+    private static let floatReturnDuration: TimeInterval = 0.35
+
+    private func applyFloatReturnOffset(_ offset: CGFloat) {
+        let t = abs(offset) > 0.001 ? CGAffineTransform(translationX: 0, y: offset) : .identity
+        if mainTextLayer.affineTransform() != t { mainTextLayer.setAffineTransform(t) }
+        if mainBrightTextLayer.affineTransform() != t { mainBrightTextLayer.setAffineTransform(t) }
+    }
+
+    /// Called once per presentation tick for every mounted row (cheap no-op when nothing pends).
+    func advanceFloatReturn(renderTime: TimeInterval) {
+        guard var pending = pendingFloatReturn else { return }
+        guard !singlePassActive else { pendingFloatReturn = nil; return }
+        if pending.start == nil { pending.start = renderTime; pendingFloatReturn = pending }
+        let elapsed = max(0, renderTime - (pending.start ?? renderTime))
+        let p = CGFloat(min(1, elapsed / Self.floatReturnDuration))
+        let eased = NativeLyricsEasing.cubicBezier(x1: 0, y1: 0, x2: 0.58, y2: 1, x: p)
+        applyFloatReturnOffset(pending.from * (1 - eased))
+        if p >= 1 { pendingFloatReturn = nil; applyFloatReturnOffset(0) }
+    }
+
+    private func applySinglePassActiveLine(
+        plan: NativeLyricsTextRenderPlan,
+        currentTime: TimeInterval,
+        linePlan: [NativeLyricsTextSweepVisualLinePlan],
+        sweepBounds: CGRect
+    ) -> MainTextPhaseAppliedMetrics {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["applySinglePassActiveLine", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
+        singlePassActive = true
+        // Everything the tile path would have shown is off: one layer owns the active line.
+        if mainTextLayer.string == nil, let wholeLineMainString { mainTextLayer.string = wholeLineMainString }
+        mainTextLayer.isHidden = true
+        mainBrightTextLayer.isHidden = true
+        mainBrightTextLayer.mask = nil
+        hideMainWordGlyphLayers()
+        hideEmphasisGlyphLayers()
+        hidePerRunSweepMaskLayers()
+        hideBaseRevealMaskLayers()
+        activeHiddenEmphasisSignature = nil
+        activeFloatingHiddenSignature = nil
+        activeLineDrawLayer.isHidden = false
+        activeLineDrawLayer.frame = mainTextLayer.frame
+
+        // Karaoke post-line fade floor: inside the line's own span the overlay is always fully
+        // lit; it only ratchets down after the last word ends (2026-09-19 founder-verified rule).
+        let mainLineEnd = plan.wordRuns.last?.endTime ?? currentTime
+        if currentTime <= mainLineEnd {
+            mainPostLineFadeFloor = 1
+        } else {
+            mainPostLineFadeFloor = min(mainPostLineFadeFloor, plan.mainPostLineFade)
+        }
+
+        activeLineDrawLayer.prepareLayout(
+            text: plan.displayText,
+            width: sweepBounds.width,
+            fontSize: plan.constants.mainFontSize,
+            lineSpacing: plan.constants.mainLineSpacing
+        )
+        let maskLines = NativeLyricsTextSweepLayout.maskLines(
+            from: linePlan,
+            fadeHalfPoint: plan.constants.fadeHalfPoint,
+            currentTime: currentTime
+        )
+        var runs: [NativeLyricsActiveLineDrawLayer.RunInput] = []
+        for (lineIndex, line) in linePlan.enumerated() {
+            for visualRun in line.runs {
+                guard let first = visualRun.glyphs.first, let last = visualRun.glyphs.last else { continue }
+                let charRange = NSRange(location: first.characterIndex, length: last.characterIndex - first.characterIndex + 1)
+                let wordRun = visualRun.order < plan.wordRuns.count ? plan.wordRuns[visualRun.order] : nil
+                let emphasis = wordRun?.emphasis ?? .inactive
+                let isEmphasis = wordRun.map { $0.isEmphasis || $0.emphasis != .inactive } ?? false
+                runs.append(.init(
+                    lineIndex: lineIndex,
+                    charRange: charRange,
+                    rect: visualRun.rect,
+                    floatY: wordRun?.baseFloatY ?? 0,
+                    isEmphasis: isEmphasis,
+                    scale: isEmphasis ? emphasis.scale : 1,
+                    liftY: isEmphasis ? emphasis.liftY : 0,
+                    glowOpacity: isEmphasis ? emphasis.glowOpacity : 0,
+                    glowRadius: isEmphasis ? min(0.3 * plan.constants.mainFontSize, emphasis.blurLevel * 0.3 * plan.constants.mainFontSize) : 0
+                ))
+            }
+        }
+        let lines = maskLines.map { NativeLyricsActiveLineDrawLayer.LineInput(maskRect: $0.maskRect, wavefrontX: $0.wavefrontX) }
+        // Dim alpha rides the same compensated channel the whole-line base uses (0.35 tier ÷ row
+        // opacity), so brightness stays continuous across the activation spring.
+        let dimAlpha = CGFloat(mainTextLayer.opacity)
+        activeLineDrawLayer.update(.init(
+            runs: runs,
+            lines: lines,
+            dimAlpha: dimAlpha,
+            brightAlpha: plan.constants.brightAlpha * mainPostLineFadeFloor,
+            fadeHalfPoint: plan.constants.fadeHalfPoint
+        ))
+        return MainTextPhaseAppliedMetrics(
+            progress: plan.mainSweepProgress,
+            appliedPerRunSweep: true,
+            appliedBaseReveal: false,
+            appliedPerGlyphEmphasis: runs.contains { $0.isEmphasis },
+            expectedEmphasisGlyphCount: 0,
+            appliedEmphasisGlyphCount: 0,
+            appliedEmphasisGlyphMotionCount: 0,
+            maxAppliedEmphasisScale: runs.map(\.scale).max() ?? 1,
+            maxAppliedEmphasisLiftMagnitude: runs.map { abs($0.liftY) }.max() ?? 0,
+            maxAppliedEmphasisGlowOpacity: runs.map(\.glowOpacity).max() ?? 0,
+            maxAppliedEmphasisAlpha: plan.constants.brightAlpha * mainPostLineFadeFloor,
+            textLayoutCoverageGapCount: 0,
+            expectedSweepLineCount: linePlan.count,
+            appliedSweepLineCount: lines.count,
+            sweepLineCoverageGapCount: max(0, linePlan.count - lines.count),
+            sweepWavefrontErrorMax: 0,
+            baseRevealLineCoverageGapCount: 0,
+            baseRevealWavefrontErrorMax: 0,
+            emphasisGlyphPositionSampleCount: 0,
+            emphasisGlyphPositionErrorMax: 0,
+            emphasisGlyphScaleErrorMax: 0,
+            emphasisGlyphAlphaErrorMax: 0,
+            emphasisGlyphGlowErrorMax: 0,
+            textGlyphGeometrySampleCount: 0,
+            textGlyphGeometryCoverageGapCount: 0,
+            textGlyphGeometryPositionErrorMax: 0,
+            lineLayoutSampleCount: 0,
+            lineLayoutHeightErrorMax: 0,
+            lineLayoutWidthErrorMax: 0,
+            mainTextFrameHeightErrorMax: 0,
+            translationTextFrameHeightErrorMax: 0,
+            mainWordFloatSampleCount: 0,
+            mainWordFloatSpread: 0
         )
     }
 
     private func restoreMainTextIfNeeded(plan: NativeLyricsTextRenderPlan) {
         guard activeHiddenEmphasisSignature != nil else { return }
         activeHiddenEmphasisSignature = nil
+        activeFloatingHiddenSignature = nil
         mainTextLayer.string = attributedText(
             plan.displayText,
             fontSize: plan.constants.mainFontSize,
-            alpha: 1
+            alpha: 1,
+            lineSpacing: plan.constants.mainLineSpacing
         )
         mainBrightTextLayer.string = attributedText(
             plan.displayText,
             fontSize: plan.constants.mainFontSize,
-            alpha: plan.constants.brightAlpha
+            alpha: plan.constants.brightAlpha,
+            lineSpacing: plan.constants.mainLineSpacing
         )
     }
 
@@ -2210,26 +3253,129 @@ final class NativeLyricsRowView: NSView {
         static let inactive = MainWordFloatAppliedMetrics(sampleCount: 0, floatSpread: 0)
     }
 
+    private struct EmphasisGlowBitmapKey: Hashable {
+        let text: String
+        let fontSize: CGFloat
+        let blurRadius: CGFloat
+    }
+
+    // Offline (non-resident) blurred glyph bitmaps for the feel/emphasis `amll` arm. Rendered ONCE
+    // per (text, fontSize, blurRadius) and cached — never attached as a live `layer.filters` CIFilter
+    // (banned-patterns.md: a stored CIFilter's mutated inputRadius is silently ignored by the render
+    // server; a fresh instance per change is required, but a fresh instance EVERY FRAME is the
+    // resident-blur WindowServer cost this arm exists to avoid). Assigning a cached CGImage to
+    // `layer.contents` costs nothing to composite while the layer sits hidden between emphasis words.
+    private static var emphasisGlowBitmapCache: [EmphasisGlowBitmapKey: (image: CGImage, size: CGSize)] = [:]
+    private static let emphasisGlowCIContext = CIContext(options: [.useSoftwareRenderer: false])
+
+    private static func emphasisGlowBitmap(
+        text: String, fontSize: CGFloat, blurRadius: CGFloat
+    ) -> (image: CGImage, size: CGSize)? {
+        guard blurRadius > 0.05, !text.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        // Blur radius is a smooth per-frame ramp, not a discrete set of values; round to the nearest
+        // 0.5pt (visually indistinguishable) so the cache stays small across a whole emphasis window.
+        let roundedRadius = (blurRadius * 2).rounded() / 2
+        let key = EmphasisGlowBitmapKey(text: text, fontSize: fontSize, blurRadius: roundedRadius)
+        if let cached = emphasisGlowBitmapCache[key] { return cached }
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        let attributed = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor.white])
+        let glyphSize = attributed.size()
+        guard glyphSize.width > 0, glyphSize.height > 0 else { return nil }
+        // Pad for the blur's spread so it is not clipped at the bitmap edge.
+        let pad = ceil(roundedRadius * 3)
+        let canvasSize = CGSize(width: glyphSize.width + pad * 2, height: glyphSize.height + pad * 2)
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        let pixelWidth = max(1, Int((canvasSize.width * scale).rounded(.up)))
+        let pixelHeight = max(1, Int((canvasSize.height * scale).rounded(.up)))
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil, width: pixelWidth, height: pixelHeight, bitsPerComponent: 8, bytesPerRow: 0,
+                space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else { return nil }
+        context.scaleBy(x: scale, y: scale)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        attributed.draw(at: CGPoint(x: pad, y: pad))
+        NSGraphicsContext.restoreGraphicsState()
+        guard let sharpImage = context.makeImage() else { return nil }
+        guard let filter = CIFilter(name: "CIGaussianBlur") else { return nil }
+        filter.setValue(CIImage(cgImage: sharpImage), forKey: kCIInputImageKey)
+        filter.setValue(roundedRadius * scale, forKey: kCIInputRadiusKey)
+        guard let output = filter.outputImage,
+              let cgImage = emphasisGlowCIContext.createCGImage(
+                output, from: CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight)
+              )
+        else { return nil }
+        let result = (image: cgImage, size: canvasSize)
+        emphasisGlowBitmapCache[key] = result
+        return result
+    }
+
     /// v2.8 per-word cascade: draw every NON-emphasis word as per-glyph layers floated by that word's
     /// own `baseFloatY`. The dim glyphs (always visible) parent to `mainTextLayer`; the bright glyphs
     /// parent to `mainBrightTextLayer` and so inherit the sweep mask — brightness stays a smooth
     /// gradient and the 2pt float never shifts the horizontal wavefront. Position carries the float
-    /// (scale stays 1 → no top-clip). Emphasis (long) words are skipped; they keep their own
-    /// scale/glow glyph layers, so the two partitions cover the line without overlap or gap.
+    /// (scale stays 1 → no top-clip).
+    ///
+    /// Emphasis words: under the `current` feel/emphasis arm they are skipped here entirely — they
+    /// keep their own separate scale/glow glyph layers (`applyEmphasisGlyphLayers`), so the two
+    /// partitions cover the line without overlap or gap. Under `v28`/`amll` (2026-09-17, founder-
+    /// approved contrast arm for the emphasis ghost, research/repro-2026-09-17-lyrics-render-3c.md
+    /// §B) emphasis words are folded INTO this same per-glyph tile instead — one positioned object
+    /// per glyph, never two — with the intensification (scale/lift) applied as an extra transform on
+    /// that SAME bright tile, and the glow rendered either as a real shadow on that same tile (`v28`)
+    /// or a position-copied blurred-bitmap sibling (`amll`); see `applyEmphasisGlyphOnSharedTile`.
     private func applyMainWordFloatGlyphLayers(
         plan: NativeLyricsTextRenderPlan,
         currentTime: TimeInterval,
         linePlan: [NativeLyricsTextSweepVisualLinePlan],
         emphasisOrders: Set<Int>,
-        floatsDimBase: Bool
+        floatsDimBase: Bool,
+        floatingOrders: Set<Int> = []
     ) -> MainWordFloatAppliedMetrics {
         let floats = plan.perWordFloatY(at: currentTime)
-        var inputs: [(glyph: NativeLyricsTextSweepVisualRun.Glyph, floatY: CGFloat)] = []
+        let tilesOwnEmphasis = !emphasisOrders.isEmpty && NativeLyricsFeelParity.emphasisMode != .current
+        struct Input {
+            let glyph: NativeLyricsTextSweepVisualRun.Glyph
+            let floatY: CGFloat
+            let isFloatingWord: Bool
+            let emphasis: EmphasisGlyphExpectedMetrics?
+        }
+        var inputs: [Input] = []
         for line in linePlan {
-            for run in line.runs where !emphasisOrders.contains(run.order) {
+            let wavefront = tilesOwnEmphasis
+                ? NativeLyricsTextSweepLayout.wavefrontX(
+                    for: line, fadeHalfPoint: plan.constants.fadeHalfPoint, currentTime: currentTime
+                  )
+                : 0
+            for run in line.runs where tilesOwnEmphasis || !emphasisOrders.contains(run.order) {
                 let floatY = run.order < floats.count ? floats[run.order] : 0
-                for glyph in run.glyphs {
-                    inputs.append((glyph, floatY))
+                // `floatsDimBase` (the `layer` A/B arm) always tessellates every non-emphasis word as
+                // a dim tile. The default (whole-line dim base) arm shows a dim tile ONLY for a word
+                // that is actually floating — `applyFloatingHiddenBase` blanks that same word's range
+                // out of the whole-line string, so exactly one visible copy of the glyph exists, at
+                // the SAME floated position as the bright tile (no ghost).
+                let isFloatingWord = floatsDimBase || floatingOrders.contains(run.order)
+                let isEmphasisRun = tilesOwnEmphasis && emphasisOrders.contains(run.order) && run.order < plan.wordRuns.count
+                if isEmphasisRun {
+                    let wordRun = plan.wordRuns[run.order]
+                    let glyphCount = max(1, run.glyphs.count)
+                    let duration = max(0, wordRun.endTime - wordRun.startTime)
+                    let du = max(1.0, duration) * (run.order == plan.wordRuns.count - 1 ? 1.2 : 1.0)
+                    for glyph in run.glyphs {
+                        let expected = expectedEmphasisGlyphMetrics(
+                            glyph: glyph, run: wordRun, glyphCount: glyphCount, du: du,
+                            wavefrontX: wavefront, fadeHalfPoint: plan.constants.fadeHalfPoint,
+                            brightAlpha: plan.constants.brightAlpha * plan.mainPostLineFade,
+                            dimAlpha: dimBaseEffectiveAlpha(), currentTime: currentTime
+                        )
+                        inputs.append(Input(glyph: glyph, floatY: floatY, isFloatingWord: isFloatingWord, emphasis: expected))
+                    }
+                } else {
+                    for glyph in run.glyphs {
+                        inputs.append(Input(glyph: glyph, floatY: floatY, isFloatingWord: isFloatingWord, emphasis: nil))
+                    }
                 }
             }
         }
@@ -2247,14 +3393,22 @@ final class NativeLyricsRowView: NSView {
         var maxFloat = -CGFloat.greatestFiniteMagnitude
         for (index, input) in inputs.enumerated() {
             let glyph = input.glyph
+            let isFloatingWord = input.isFloatingWord
             let dimLayer = mainDimWordGlyphLayers[index]
             let brightLayer = mainBrightWordGlyphLayers[index]
-            dimLayer.isHidden = !floatsDimBase
+            let glowLayer = mainEmphasisGlowLayers[index]
+            dimLayer.isHidden = !isFloatingWord
             brightLayer.isHidden = false
+            // 2026-09-20 (3p): pull the SAME concrete font the shared NSLayoutManager already
+            // resolved for THIS character, instead of an independently re-derived generic system
+            // font — see `resolvedGlyphFont`'s doc comment for the founder-reported real-device
+            // root cause (persistent double-edge ghost on every swept CJK glyph).
+            let resolvedFont = resolvedGlyphFont(text: plan.displayText, characterIndex: glyph.characterIndex, fallbackSize: fontSize)
             let signature = EmphasisGlyphLayerSignature(
                 glyph: glyph,
                 fontSize: fontSize,
-                brightAlpha: plan.constants.brightAlpha
+                brightAlpha: plan.constants.brightAlpha,
+                fontName: resolvedFont.fontName
             )
             if mainWordGlyphLayerSignatures.indices.contains(index),
                mainWordGlyphLayerSignatures[index] != signature {
@@ -2263,41 +3417,138 @@ final class NativeLyricsRowView: NSView {
                 // ink of CJK strokes / descenders is shaved (same trap the whole-line layer pads
                 // around). The view is flipped (y-down), so glyph.rect.minY is the top: extend the box
                 // DOWNWARD by textBottomClipPad (keeping the top edge fixed) for room below the glyph.
-                let layersToWrite = floatsDimBase ? [dimLayer, brightLayer] : [brightLayer]
-                for layer in layersToWrite {
+                // Always write BOTH layers here (even though the dim tile may render hidden this
+                // frame): the dim tile can become visible on a LATER frame without this signature
+                // changing (same glyph/size/alpha/font), and it must already carry the right
+                // text/color/font.
+                for layer in [dimLayer, brightLayer] {
                     layer.string = glyph.text
+                    layer.font = resolvedFont
+                    layer.fontSize = fontSize
                     layer.bounds = CGRect(
                         origin: .zero,
                         size: CGSize(width: glyph.rect.width, height: glyph.rect.height + Self.textBottomClipPad)
                     )
                 }
-                if floatsDimBase {
-                    dimLayer.foregroundColor = dimColor
-                    debugWordGlyphColorAssignCount += 1
-                }
+                dimLayer.foregroundColor = dimColor
                 brightLayer.foregroundColor = brightColor
-                debugWordGlyphColorAssignCount += 1
+                debugWordGlyphColorAssignCount += 2
             }
             // Center sits pad/2 below the glyph midY so the taller box keeps its TOP at glyph.rect.minY
             // (text stays exactly where the whole-line layer drew it; only the bottom gains room).
-            // v2.8 Canvas: dim pass has zero vertical float; only the bright overlay lifts.
-            // The `layer` A/B arm floats dim tiles too (the activation 行距 jump).
-            let dimCenterY = glyph.rect.midY + Self.textBottomClipPad / 2 + (floatsDimBase ? input.floatY : 0)
-            let brightCenterY = glyph.rect.midY + Self.textBottomClipPad / 2 + input.floatY
+            // The dim tile floats in lockstep with the bright tile whenever it is the one standing in
+            // for the (now-blanked) whole-line glyph — otherwise it sits at rest, coincident with the
+            // whole-line copy that is still showing through (floatY == 0 there anyway).
+            let padHalf = Self.textBottomClipPad / 2
+            let dimCenterY = glyph.rect.midY + padHalf + (isFloatingWord ? input.floatY : 0)
             dimLayer.position = CGPoint(x: glyph.rect.midX, y: dimCenterY)
-            brightLayer.position = CGPoint(x: glyph.rect.midX, y: brightCenterY)
-            let appliedFloat = brightLayer.position.y - glyph.rect.midY - Self.textBottomClipPad / 2
+            if let emphasis = input.emphasis {
+                // v28/amll: the emphasis position formula already includes baseFloatY + the per-
+                // glyph cascade (charFloat/liftY/spreadX) — apply it directly to THIS tile instead of
+                // the plain `floats[order]` float, and add the intensification scale as a transform
+                // on the SAME object, so it is geometrically impossible for the glow/scale to land
+                // anywhere but exactly where the sharp glyph itself is.
+                brightLayer.position = CGPoint(x: emphasis.position.x, y: emphasis.position.y + padHalf)
+                brightLayer.setAffineTransform(CGAffineTransform(scaleX: emphasis.scale, y: emphasis.scale))
+                applyEmphasisGlowOnSharedTile(
+                    brightLayer: brightLayer, glowLayer: glowLayer, glyph: glyph,
+                    fontSize: fontSize, expected: emphasis
+                )
+            } else {
+                brightLayer.position = CGPoint(x: glyph.rect.midX, y: glyph.rect.midY + padHalf + input.floatY)
+                if brightLayer.affineTransform() != .identity { brightLayer.setAffineTransform(.identity) }
+                if brightLayer.shadowOpacity != 0 {
+                    brightLayer.shadowOpacity = 0
+                    brightLayer.shadowRadius = 0
+                }
+                glowLayer.isHidden = true
+                // 2026-09-18 instrumentation (stage bundle 3g item 3, research/repro-2026-09-18-
+                // lyrics-render-3g.md): a genuine repro attempt for the founder's "CJK trailing
+                // glyph ghost" found the DIM/BRIGHT tile pair always position-matched in every
+                // synthetic scenario tried — but this line is the one place they could legitimately
+                // desync: `dimLayer`'s Y only adds `input.floatY` when `isFloatingWord` (line 2862's
+                // `!isFloatingWord` gate, using `floatingOrders` computed from `run.baseFloatY` in
+                // `applyActiveMainPhase`), while `brightLayer`'s Y ALWAYS adds `input.floatY`
+                // (`plan.perWordFloatY(at:)`, a separately-evaluated quantity). If those two float
+                // sources ever disagree on WHETHER a word counts as "floating" while both still
+                // report a nonzero `floatY` for it, the bright tile visibly floats away from its dim
+                // twin while `dimLayer.isHidden` stays false (both visible, offset) — exactly the
+                // reported "same character with a blurred duplicate offset down-right" shape. Not
+                // reproduced synthetically; this records the specific desync condition on-device so
+                // the next real-occurrence session has evidence instead of another blind repro
+                // attempt. Shares NativeLyricsMaskTrace's isArmed gate/output file — zero I/O by
+                // default, same discipline as every other production-safe probe in this file.
+                if !isFloatingWord, input.floatY != 0 {
+                    NativeLyricsMaskTrace.recordWordFloatDesync(
+                        rowID: row?.displayLine.id ?? "?",
+                        glyphIndex: index,
+                        glyphText: glyph.text,
+                        floatY: input.floatY
+                    )
+                }
+            }
+            let appliedFloat = brightLayer.position.y - glyph.rect.midY - padHalf
             minFloat = min(minFloat, appliedFloat)
             maxFloat = max(maxFloat, appliedFloat)
         }
         for index in inputs.count..<mainDimWordGlyphLayers.count {
             mainDimWordGlyphLayers[index].isHidden = true
             mainBrightWordGlyphLayers[index].isHidden = true
+            mainEmphasisGlowLayers[index].isHidden = true
         }
         return MainWordFloatAppliedMetrics(
             sampleCount: inputs.count,
             floatSpread: maxFloat - minFloat
         )
+    }
+
+    /// Applies the `v28`/`amll` glow treatment to an emphasis glyph that is sharing the ordinary
+    /// per-word bright tile (never a second independently-positioned layer). `v28`: a real
+    /// `CALayer.shadow*` on `brightLayer` itself — cannot desync because it IS that layer. `amll`: a
+    /// pre-rendered blurred-bitmap sibling (`glowLayer`) whose position/transform are copied from
+    /// `brightLayer` in this SAME call (never computed independently), opacity riding
+    /// `expected.glowOpacity`, mounted only while that glyph is inside its emphasis window.
+    private func applyEmphasisGlowOnSharedTile(
+        brightLayer: CATextLayer,
+        glowLayer: CALayer,
+        glyph: NativeLyricsTextSweepVisualRun.Glyph,
+        fontSize: CGFloat,
+        expected: EmphasisGlyphExpectedMetrics
+    ) {
+        switch NativeLyricsFeelParity.emphasisMode {
+        case .current:
+            glowLayer.isHidden = true
+        case .v28:
+            glowLayer.isHidden = true
+            if expected.glowOpacity > 0.001 {
+                brightLayer.shadowColor = NSColor.white.cgColor
+                brightLayer.shadowOpacity = Float(min(1, expected.glowOpacity))
+                brightLayer.shadowRadius = expected.shadowRadius
+                brightLayer.shadowOffset = .zero
+            } else {
+                brightLayer.shadowOpacity = 0
+                brightLayer.shadowRadius = 0
+            }
+        case .amll:
+            if brightLayer.shadowOpacity != 0 {
+                brightLayer.shadowOpacity = 0
+                brightLayer.shadowRadius = 0
+            }
+            guard expected.glowOpacity > 0.001,
+                  let bitmap = Self.emphasisGlowBitmap(text: glyph.text, fontSize: fontSize, blurRadius: expected.shadowRadius)
+            else {
+                glowLayer.isHidden = true
+                return
+            }
+            glowLayer.isHidden = false
+            glowLayer.contents = bitmap.image
+            glowLayer.bounds = CGRect(origin: .zero, size: bitmap.size)
+            // Position/transform are COPIED from the sharp tile that was just written above — the
+            // sibling can never be independently wrong because it never computes its own position.
+            glowLayer.position = brightLayer.position
+            glowLayer.setAffineTransform(brightLayer.affineTransform())
+            glowLayer.opacity = Float(min(1, expected.glowOpacity))
+        }
     }
 
     private func ensureMainWordGlyphLayerCount(_ count: Int) {
@@ -2314,6 +3565,16 @@ final class NativeLyricsRowView: NSView {
             mainDimWordGlyphLayers.append(dimLayer)
             mainBrightWordGlyphLayers.append(brightLayer)
             mainWordGlyphLayerSignatures.append(nil)
+            // Glow sibling for the amll arm — inserted BELOW its bright tile so the sharp glyph
+            // always paints on top of its own soft halo. contents-only layer (a pre-rendered
+            // bitmap image, never a live CIFilter), so it costs nothing to composite while hidden.
+            let glowLayer = CALayer().lyricsInert()
+            glowLayer.contentsScale = scale
+            glowLayer.masksToBounds = false
+            glowLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+            glowLayer.isHidden = true
+            mainBrightTextLayer.insertSublayer(glowLayer, below: brightLayer)
+            mainEmphasisGlowLayers.append(glowLayer)
         }
     }
 
@@ -2333,6 +3594,10 @@ final class NativeLyricsRowView: NSView {
     private func hideMainWordGlyphLayers() {
         for layer in mainDimWordGlyphLayers { layer.isHidden = true }
         for layer in mainBrightWordGlyphLayers { layer.isHidden = true }
+        for layer in mainEmphasisGlowLayers {
+            layer.isHidden = true
+            layer.shadowOpacity = 0
+        }
     }
 
     private struct EmphasisGlyphAppliedMetrics {
@@ -2362,6 +3627,7 @@ final class NativeLyricsRowView: NSView {
     private func applyEmphasisGlyph(
         _ layer: CATextLayer,
         layerIndex: Int,
+        displayText: String,
         glyph: NativeLyricsTextSweepVisualRun.Glyph,
         run: NativeLyricsWordRunPlan,
         glyphCount: Int,
@@ -2385,16 +3651,23 @@ final class NativeLyricsRowView: NSView {
         )
         layer.isHidden = false
         let fontSize = NativeLyricsTextConstants().mainFontSize
-        let signature = EmphasisGlyphLayerSignature(glyph: glyph, fontSize: fontSize)
+        // 2026-09-20 (3p): same fix as the main word-tile pool — pull the concrete font the
+        // shared layout already resolved for this character (see `resolvedGlyphFont`'s doc).
+        let resolvedFont = resolvedGlyphFont(text: displayText, characterIndex: glyph.characterIndex, fallbackSize: fontSize)
+        let signature = EmphasisGlyphLayerSignature(
+            glyph: glyph, fontSize: fontSize, fontName: resolvedFont.fontName
+        )
         if emphasisGlyphLayerSignatures.indices.contains(layerIndex),
            emphasisGlyphLayerSignatures[layerIndex] != signature {
             emphasisGlyphLayerSignatures[layerIndex] = signature
             layer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
-            layer.font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+            layer.font = resolvedFont
             layer.fontSize = fontSize
             layer.string = glyph.text
             layer.bounds = CGRect(origin: .zero, size: glyph.rect.size)
         } else if layer.string == nil {
+            layer.font = resolvedFont
+            layer.fontSize = fontSize
             layer.string = glyph.text
             layer.bounds = CGRect(origin: .zero, size: glyph.rect.size)
         }
@@ -2489,6 +3762,7 @@ final class NativeLyricsRowView: NSView {
         for plan: NativeLyricsTextRenderPlan,
         bounds: CGRect
     ) -> [NativeLyricsTextSweepVisualLinePlan] {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["mainSweepLinePlan", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let key = SweepLayoutCacheKey(rowID: row?.id, plan: plan, width: bounds.width)
         if cachedMainSweepLayoutKey == key {
             return cachedMainSweepLinePlan
@@ -2498,7 +3772,8 @@ final class NativeLyricsRowView: NSView {
             wordRuns: plan.wordRuns,
             width: bounds.width,
             fontSize: plan.constants.mainFontSize,
-            fadeHalfPoint: plan.constants.fadeHalfPoint
+            fadeHalfPoint: plan.constants.fadeHalfPoint,
+            lineSpacing: plan.constants.mainLineSpacing
         )
         cachedMainSweepLayoutKey = key
         cachedMainSweepLinePlan = linePlan
@@ -2809,7 +4084,8 @@ final class NativeLyricsRowView: NSView {
                 textActiveIndex: configuration.effectiveTextActiveIndex
             ),
             staticOpacity: 1,
-            showTranslation: configuration.showTranslation
+            showTranslation: configuration.showTranslation,
+            wordFloatReleaseTime: configuration.nativeWordFloatReleaseTime
         )
     }
 
@@ -2828,10 +4104,14 @@ final class NativeLyricsRowView: NSView {
             .foregroundColor: NSColor.white.withAlphaComponent(alpha),
             .paragraphStyle: paragraph
         ]
-        return NSAttributedString(
-            string: text,
-            attributes: attributes
-        )
+        // 2026-09-20 (founder screen recording: "切行时字突然变粗"): CATextLayer's own CJK
+        // fallback and NSLayoutManager's fallback pick DIFFERENT PingFang variants, so a row's
+        // weight jumped the moment it switched between the whole-line base and the active-line
+        // bitmaps. Resolve the concrete per-character font here (same `fixAttributes` AppKit's
+        // layout performs) so every path draws the identical font.
+        let storage = NSTextStorage(string: text, attributes: attributes)
+        storage.fixAttributes(in: NSRange(location: 0, length: storage.length))
+        return Self.withFixedWrapLineHeight(NSAttributedString(attributedString: storage))
     }
 
     private func attributedText(
@@ -2839,10 +4119,11 @@ final class NativeLyricsRowView: NSView {
         fontSize: CGFloat,
         alpha: CGFloat,
         hiddenOrders: Set<Int>,
-        wordRuns: [NativeLyricsWordRunPlan]
+        wordRuns: [NativeLyricsWordRunPlan],
+        lineSpacing: CGFloat? = nil
     ) -> NSAttributedString {
         let attributed = NSMutableAttributedString(
-            attributedString: attributedText(text, fontSize: fontSize, alpha: alpha)
+            attributedString: attributedText(text, fontSize: fontSize, alpha: alpha, lineSpacing: lineSpacing)
         )
         for range in NativeLyricsHiddenTextMask.ranges(
             in: text,

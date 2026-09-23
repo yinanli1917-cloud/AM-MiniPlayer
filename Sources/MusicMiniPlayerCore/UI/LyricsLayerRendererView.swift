@@ -4,8 +4,12 @@ import CoreVideo
 import QuartzCore
 import SwiftUI
 
-let nativeLyricContentLeadingInset: CGFloat = 32
-let nativeLyricContentTrailingInset: CGFloat = 32
+// Single source of truth: `NativeLyricsRowMeasurement.leadingInset`/`trailingInset` (2026-09-21
+// founder feedback: text column moved left, 32→20/24). Every consumer — this file's interlude-dot
+// x anchor, `NativeLyricsRowScale.leadingTransform`'s scale pivot X, `NativeLyricsRowView`'s
+// content width / hover background frame — reads these two aliases.
+let nativeLyricContentLeadingInset: CGFloat = NativeLyricsRowMeasurement.leadingInset
+let nativeLyricContentTrailingInset: CGFloat = NativeLyricsRowMeasurement.trailingInset
 private let nativeLyricAutoVisibleRowRadius = 12
 private let nativeLyricManualVisibleRowRadius = 12
 private let nativeLyricVisualStateRetentionRadius = nativeLyricAutoVisibleRowRadius * 4
@@ -167,11 +171,27 @@ struct LyricsLayerRendererConfiguration {
     var nativeManualScrollSnapshot: NativeLyricsManualScrollSnapshot? = nil
     var nativeDirectSnapIndex: Int? = nil
     var nativeDirectSnapReason: LyricsPresentationDirectSnapReason? = nil
+    /// Per-row float gate (see NativeLyricsTextRenderPlan.Configuration.wordFloatReleaseTime):
+    /// set by the surface for the row whose text phase is being driven.
+    var nativeWordFloatReleaseTime: TimeInterval? = nil
     var nativeSemanticCurrentIndex: Int? = nil
     var nativeScrollTargetIndex: Int? = nil
     var nativeHotActiveIndices: Set<Int> = []
     var nativeBufferedActiveIndices: Set<Int> = []
     var nativeTextActiveIndex: Int? = nil
+    // Set once per configure() cycle by synchronizeNativeSemanticIndex whenever it detects a
+    // genuine playback discontinuity (explicit seek, tap-to-line, direct snap/manual-scroll
+    // landing, or a jump beyond the resync tolerance) — never for ordinary forward playback or
+    // small backward clock jitter. Consumed by NativeLyricsRowView.updatePlaybackPhase to release
+    // the monotone post-line karaoke fade floor (mainPostLineFadeFloor). Without this, a row view
+    // that stays mounted across a backward seek (common: nearby rows are never recycled through
+    // prepareForReuse) keeps a floor pinned near 0 from BEFORE the seek forever — even though the
+    // freshly computed fade for the seeked-to time is 1 — so the karaoke highlight never returns
+    // ("seek back into an already-sung line loses its highlight", 2026-09-17). The floor's own
+    // reset condition inside configure() already treats a row-identity change as this same class
+    // of "genuine discontinuity"; an explicit seek that re-enters the SAME row's own line is that
+    // same class of event and gets the same treatment here.
+    var nativeSeekDiscontinuityOccurred: Bool = false
     // Monotonic phase clock (defect-A fix, 2026-07-12). The semantic index is protected from the
     // SB clock's backward resync dips by the renderer's monotonic clock, but the TEXT PHASE
     // (karaoke sweep, translation reveal, bright overlays, dots) read the RAW clock — so in the
@@ -226,7 +246,7 @@ private class _FlippedView: NSView {
 }
 
 @MainActor
-final class NativeLyricsSurfaceView: NSView {
+final class NativeLyricsSurfaceView: NSView, RowDumpProvider {
     override var isFlipped: Bool { true }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
@@ -245,6 +265,59 @@ final class NativeLyricsSurfaceView: NSView {
     nonisolated(unsafe) private let displayLinkScheduler = NativeLyricsDisplayLinkScheduler()
     private var rowTapHandlers: [Int: () -> Void] = [:]
     private var measuredHeightsByIndex: [Int: CGFloat] = [:]
+    // 2026-09-20 (stage bundle 3r, Task 2 Part A): bumped at every site that mutates
+    // `measuredHeightsByIndex` (seed-estimate insert, real-measurement update, both `removeAll`
+    // resets). `runtimeConfiguration(from:)`'s accumulated-heights recomputation is keyed on this
+    // — a line-level song sitting idle between switches never touches
+    // `measuredHeightsByIndex`, so the version stays flat and the recomputation can be skipped.
+    private var measuredHeightsVersion: Int = 0
+    private var geometryProbeTicksRemaining = 0
+    private var geometryProbeTick = 0
+    private var geometryProbeRing: [[String]] = []
+    private static let geometryProbeEnabled = UserDefaults.standard.bool(forKey: "NanoPodGeomProbe")
+    // Memoizes the ONE genuinely expensive part of `runtimeConfiguration(from:)` — the
+    // `NativeLyricsHeightAccumulator.accumulatedHeights(...)` O(rows) recomputation, which used
+    // to run unconditionally on every call (several calls per presentation tick, per the founder's
+    // `/tmp/nanopod_mask_trace.jsonl` phase totals: runtimeConfiguration alone billed 6.9s over a
+    // 200s idle-heavy session). Keyed on `RuntimeConfigHeightsCacheKey`; a cache hit skips the
+    // accumulator call and reuses the last result. Everything else in `runtimeConfiguration(from:)`
+    // — including `synchronizeNativeSemanticIndex`'s side effects — still runs on every call
+    // unchanged.
+    private struct RuntimeConfigHeightsCacheKey: Equatable {
+        let renderedIndices: [Int]
+        let interludeAfterIndex: Int?
+        let measuredHeightsVersion: Int
+        let configuredAccumulatedHeightsCount: Int
+    }
+    private var lastRuntimeConfigHeightsKey: RuntimeConfigHeightsCacheKey?
+    private var lastRuntimeConfigAccumulatedHeights: [Int: CGFloat]?
+    #if DEBUG || LOCAL_DEVELOPER_BUILD
+    /// Test/diagnostic only: incremented on every accumulated-heights memo hit so a test can
+    /// assert the idle path is actually skipping the recomputation rather than just measuring a
+    /// timing threshold (which is noisy on CI/shared machines).
+    private(set) var runtimeConfigHeightsMemoHitCount: Int = 0
+    #endif
+    /// The `accumulatedHeights` most recently fed to `presentationEngine.update(...)`, from
+    /// EITHER call site (`configure()`'s always-runs call, or the same-cycle height correction in
+    /// `reconcileVisibleRowViews`) — see `updatePresentationEngine(...)`. `nil` means "never fed",
+    /// which forces the very first update through.
+    ///
+    /// 2026-09-15 (redo of b12db38, reverted 1a93ffd after a founder-reported CPU/flashing
+    /// regression): this is deliberately NOT compared against the externally-supplied
+    /// `configuration.accumulatedHeights` (SwiftUI/LyricsView's own height cache). That external
+    /// value structurally can never be guaranteed to bit-match the renderer's own
+    /// `measuredHeightsByIndex`-derived recomputation — they are two independently-measured,
+    /// independently-rounded pipelines (one direct `NSView` measurement here, one routed through
+    /// two `DispatchQueue.main.async` hops and LyricsView's own cache) that have no reason to ever
+    /// converge to the identical `CGFloat` values. Comparing against it made
+    /// "did heights actually change" read true on effectively every reconcile, re-priming the
+    /// presentation spring's target every cycle — the spring never reached `isSettled`, so
+    /// `presentationEngine.hasActiveMotion` stayed permanently true and defeated the idle gate
+    /// (CPU stayed high, no genuine pixel movement was pending). Comparing against a value we
+    /// ourselves fed last time is an exact-equality check between two computations of the SAME
+    /// pipeline (`measuredHeightsByIndex`) when nothing has actually changed, so it converges to
+    /// `false` and stays there once the row heights are known.
+    private var lastAccumulatedHeightsFedToPresentationEngine: [Int: CGFloat]?
     private var displayLink: CVDisplayLink?
     private var lastPresentationTick: CFTimeInterval?
     #if LOCAL_DEVELOPER_BUILD
@@ -287,6 +360,17 @@ final class NativeLyricsSurfaceView: NSView {
     private var manualScrollState = NativeLyricsManualScrollState()
     private var manualPresentationNeedsApply = false
     private var manualScrollEndTimer: Timer?
+    // 2026-09-18 (3h round, item 4): `synchronizeNativeSemanticIndex` is invoked from MANY
+    // independent call sites (`runtimeConfiguration(from:)`'s many callers), each of which consumes
+    // `lastObservedSeekGeneration` — a real seekGeneration bump only gets "noticed" by the FIRST
+    // call within a tick; every later call in the SAME tick already sees it as stale. A per-call
+    // `LyricsLayerRendererConfiguration` flag is therefore the wrong place to carry "we just
+    // released a manual-scroll freeze because of a genuine seek" — whichever caller happens to read
+    // that PARTICULAR returned config misses it if a different caller's call consumed the signal
+    // first. This is a renderer-instance-level timestamp instead: stable across the race, and gives
+    // every subsequent tick within the window a chance to force-refresh the text/dot phase, not just
+    // a single (possibly-missed) tick.
+    private var manualScrollFreezeReleaseForceUntil: CFTimeInterval = 0
     private var manualScrollRecoveryTimer: Timer?
     private var nativeLineAdvanceTimer: Timer?
     private var nativeLineAdvanceTimerTargetPlaybackTime: TimeInterval?
@@ -298,6 +382,11 @@ final class NativeLyricsSurfaceView: NSView {
     // poll jitter is held at this peak so amllState never re-derives an earlier (brighter) hot set; an
     // explicit seek or a beyond-threshold backward jump follows it. nil until the first frame inits it.
     private var nativeRenderClock: TimeInterval?
+    // 2026-09-14 founder (message B): which display index the phase clock was last anchored to
+    // while manual-scroll-frozen. Lets synchronizeNativeSemanticIndex tell "just landed on this
+    // row via manual scroll" (re-anchor once) apart from "still parked on the same row" (let the
+    // clock free-run) — see the fix note at its call site.
+    private var lastManualScrollPhaseAnchorIndex: Int?
     private var pausedSemanticLocked = false
     private var lastObservedSeekGeneration: Int = 0
     private var lastTextPhaseUpdateAt: CFTimeInterval?
@@ -314,6 +403,37 @@ final class NativeLyricsSurfaceView: NSView {
     private var localEventMonitor: Any?
     private var lastConfigureEventSignature: String?
     private var lastAppliedConfigureSignature: String?
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Row-dump probe (founder 2026-09-18, nanopod://debug/rowdump). One-shot, on-demand dump
+    // of the CURRENTLY ACTIVE row and the row immediately BEFORE it — the pair involved in
+    // every "trailing glyph reads doubled" report — to a plain-text file the founder can
+    // attach as evidence the moment they see it, instead of describing it after the fact.
+    // Compiled into EVERY build, including plain release (same discipline as
+    // `NativeLyricsMaskTrace`): finding the layer tree costs nothing when nobody asks for it,
+    // and this function does no I/O of its own — `LyricsLayerRendererView.dumpActiveRows`
+    // wires it to a file write only when the URL handler invokes it.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    func rowDumpLines() -> [String] {
+        guard let activeIndex = nativeSemanticCurrentIndex else {
+            return ["(no active row — nothing playing)"]
+        }
+        var lines: [String] = []
+        if let activeID = rowIDByIndex[activeIndex], let activeView = rowViews[activeID] {
+            lines += activeView.rowDumpLines(role: "active(idx=\(activeIndex))")
+        } else {
+            lines.append("active row idx=\(activeIndex) not mounted")
+        }
+        let previousIndex = activeIndex - 1
+        if previousIndex >= 0 {
+            if let prevID = rowIDByIndex[previousIndex], let prevView = rowViews[prevID] {
+                lines += prevView.rowDumpLines(role: "previous(idx=\(previousIndex))")
+            } else {
+                lines.append("previous row idx=\(previousIndex) not mounted")
+            }
+        }
+        return lines
+    }
     #if DEBUG
     var debugSkipDedupe = false
     /// Soak/churn seams: bounded-growth proxies (mounted rows, visual-state map, reuse pool).
@@ -321,6 +441,18 @@ final class NativeLyricsSurfaceView: NSView {
     var debugVisualStateCount: Int { visualStates.count }
     var debugReusePoolCount: Int { rowViewReusePool.count }
     var debugIsPresentationLoopRunning: Bool { displayLink != nil }
+    var debugPresentationEngineHasActiveMotion: Bool { presentationEngine.hasActiveMotion }
+    /// Stage bundle 3r, Task 2 Part C: the visual-motion-state loop-idle veto (blur/scale/opacity
+    /// springs), exposed so a test can pin how long after a line switch it clears without needing
+    /// `stopPresentationLoopIfIdle`'s other, unrelated vetoes (appear window, text animation, …).
+    var debugHasActiveVisualMotion: Bool { hasActiveVisualMotion }
+    /// Counts actual re-feeds of `presentationEngine.update(...)` from the same-cycle height
+    /// correction (`updatePresentationEngineIfHeightsChanged`) ONLY — not the unconditional
+    /// top-of-configure() feed, which is expected to fire every reaching cycle regardless of
+    /// height. A stable count across N configure cycles with unchanged row heights is the direct
+    /// proof the 2026-09-15 fix converges instead of re-priming the spring forever (the CPU/
+    /// flashing regression the prior version of this fix caused).
+    private(set) var debugHeightCorrectionReFeedCount = 0
     /// A/B seam: when true, visualCurrentIndex binds the visual demotion to the SEMANTIC line index
     /// (pre-1e1ffbf), instead of the scroll wave's per-row targetIndex (current). Headless-only.
     static var debugForceSemanticVisualIndex = false
@@ -330,7 +462,29 @@ final class NativeLyricsSurfaceView: NSView {
         guard let configuration else { return }
         beginNativeManualScrollIfNeeded(configuration: runtimeConfiguration(from: configuration))
     }
+    /// Repro seam (2026-09-14, founder: "手动滚动回到开头" as a THIRD prelude-entry path,
+    /// distinct from an explicit seek). Freezes manual-scroll state at an ARBITRARY index
+    /// (bypassing the need to fabricate real trackpad/wheel NSEvents, which the codebase already
+    /// treats as unfakeable headlessly) so a test can simulate "the user scrolled all the way back
+    /// to the prelude row" without touching the playback clock at all — manual scroll's frozen
+    /// index short-circuits BEFORE the semantic/amllState index resolution
+    /// (`effectiveCurrentIndex`), which is the structural difference from an explicit seek.
+    func debugBeginManualScroll(frozenAt index: Int) {
+        guard !manualScrollState.isActive else { return }
+        manualScrollState.begin(frozenDisplayIndex: index)
+    }
     var debugManualScrollActive: Bool { manualScrollState.isActive }
+    /// Stage bundle 3i item 4 (seek-landing mask, variant (b) "手动滚动→tapToLine"): tap-to-line
+    /// is normally only reachable from a real mouse-down inside the surface's own hit-testing
+    /// (a genuine NSEvent), which this codebase already treats as unfakeable headlessly (same
+    /// reasoning as `debugBeginManualScroll` above for scroll-wheel events). Exposes the
+    /// production `handleNativeLineTap` path directly so a test can drive "manual-scroll frozen,
+    /// then tap a line to recover" — a structurally distinct discontinuity from an explicit
+    /// progress-bar seek (goes through `semanticSpringRetarget(reason: .tapToLine)`, not
+    /// `mc.seek(to:)`/seekGeneration at all).
+    func debugTapLine(index: Int, line: LyricLine) {
+        handleNativeLineTap(rowIndex: index, line: line)
+    }
     #endif
     private var initialMeasurementsPending = true
     // Reveal gate. Freshly-mounted rows are positioned ONLY by their layer transform, so for the
@@ -368,6 +522,14 @@ final class NativeLyricsSurfaceView: NSView {
     }
     /// The renderer's resolved semantic (active) line index — what the surface believes is current.
     var debugNativeSemanticIndex: Int? { nativeSemanticCurrentIndex }
+    /// Stage bundle 3j: the interlude-advance-adjusted `anchorY` this frame's `runtimeConfiguration`
+    /// would resolve to for the CURRENT `configuration` — exposes the exact value
+    /// `interludeAnchorAdvance` (LyricsLayerRendererView.swift ~1213) produces, so a test can pin
+    /// it to a derived number instead of only inferring it from a row's on-screen Y.
+    var debugCurrentAnchorY: CGFloat? {
+        guard let configuration else { return nil }
+        return runtimeConfiguration(from: configuration).anchorY
+    }
     #if DEBUG
     /// Test seam: deterministic wall clock for the presentation-tick path (spring/wave deltas,
     /// the appear window, the text-phase throttle). nil = CACurrentMediaTime().
@@ -488,6 +650,7 @@ final class NativeLyricsSurfaceView: NSView {
     // activation (~1.2s after it settles) and at most twice per manual-scroll gesture (start/end)
     // — never per frame. A no-op file write when DebugLogger's runtime switch is off.
     private func logLineGapsProbe(phase: String?, activeIndex: Int, anchorY: CGFloat) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["logLineGapsProbe", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         struct RowGeometry {
             let index: Int
             let minY: CGFloat
@@ -687,6 +850,7 @@ final class NativeLyricsSurfaceView: NSView {
         configuration: LyricsLayerRendererConfiguration,
         snap: Bool
     ) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["updateSurfaceInterludeDots", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         guard let interludeIndex = configuration.interludeAfterIndex,
               let row = configuration.rows.first(where: { $0.index == interludeIndex }),
               let interlude = row.interlude else {
@@ -875,6 +1039,7 @@ final class NativeLyricsSurfaceView: NSView {
             forceSnapUntil = NativeLyricsFeelParity.forceSnapDeadline(now: currentMediaTime())
             visualStates.removeAll()
             measuredHeightsByIndex.removeAll()
+            measuredHeightsVersion += 1
             lastAppliedYByIndex.removeAll()
             nativeSemanticCurrentIndex = nil
             nativeTimelineState = nil
@@ -919,7 +1084,7 @@ final class NativeLyricsSurfaceView: NSView {
         consumeDirectSnapRequestIfNeeded(runtimeConfiguration)
         recordConfigureEventIfNeeded(configuration: runtimeConfiguration)
         let snapMode = frameSnapMode(for: runtimeConfiguration)
-        presentationEngine.update(
+        feedPresentationEngine(
             LyricsPresentationEngineConfiguration(
                 currentIndex: runtimeConfiguration.effectiveCurrentIndex,
                 scrollTargetIndex: runtimeConfiguration.effectiveScrollTargetIndex,
@@ -1051,12 +1216,74 @@ final class NativeLyricsSurfaceView: NSView {
     }
     #endif
 
+    /// Unconditional feed: calls `presentationEngine.update(...)` exactly as before (every
+    /// configure() cycle that reaches this point — index/hotGroups/mode changes on every line
+    /// advance, not just height changes) and records what `accumulatedHeights` it fed, so a LATER
+    /// gated call in the same or a subsequent cycle (`updatePresentationEngineIfHeightsChanged`)
+    /// has an accurate "what did we last actually tell the engine" baseline. This must stay
+    /// UNCONDITIONAL — gating it on heights would break every ordinary line-advance whenever row
+    /// heights happen to be stable (the overwhelming majority of the time, once first measured).
+    private func feedPresentationEngine(
+        _ configuration: LyricsPresentationEngineConfiguration,
+        onTargetsChanged: @escaping () -> Void
+    ) {
+        presentationEngine.update(configuration, onTargetsChanged: onTargetsChanged)
+        lastAccumulatedHeightsFedToPresentationEngine = configuration.accumulatedHeights
+    }
+
+    /// Same-cycle height correction (2026-09-15 redo of b12db38, reverted in 1a93ffd after a
+    /// founder-reported CPU/flashing regression — see `lastAccumulatedHeightsFedToPresentationEngine`'s
+    /// doc comment for the root cause). Re-feeds the engine with FRESHLY-recomputed
+    /// `accumulatedHeights` ONLY when they differ from what was last actually fed — comparing
+    /// against our own last-fed value (not the externally-supplied, structurally-never-guaranteed-
+    /// to-match `configuration.accumulatedHeights`) so this converges to a no-op once a row's real
+    /// height is known and stops changing, instead of re-priming the spring's target — and
+    /// therefore keeping `presentationEngine.hasActiveMotion` true — every single cycle forever.
+    /// Returns whether it actually re-fed the engine (for callers that want to know).
+    @discardableResult
+    private func updatePresentationEngineIfHeightsChanged(
+        runtimeConfiguration: LyricsLayerRendererConfiguration,
+        refreshedAccumulatedHeights: [Int: CGFloat]
+    ) -> Bool {
+        guard refreshedAccumulatedHeights != lastAccumulatedHeightsFedToPresentationEngine else {
+            return false
+        }
+        #if DEBUG
+        debugHeightCorrectionReFeedCount += 1
+        #endif
+        let refreshedSnapMode = frameSnapMode(for: runtimeConfiguration)
+        feedPresentationEngine(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: runtimeConfiguration.effectiveCurrentIndex,
+                scrollTargetIndex: runtimeConfiguration.effectiveScrollTargetIndex,
+                hotActiveIndices: runtimeConfiguration.nativeHotActiveIndices,
+                bufferedActiveIndices: runtimeConfiguration.nativeBufferedActiveIndices,
+                isManualScrolling: runtimeConfiguration.effectiveIsManualScrolling,
+                renderedIndices: runtimeConfiguration.renderedIndices,
+                anchorY: runtimeConfiguration.anchorY,
+                accumulatedHeights: refreshedAccumulatedHeights,
+                lineInterval: runtimeConfiguration.lineInterval,
+                hasSyllableSync: runtimeConfiguration.hasSyllableSync,
+                isInterludeActive: runtimeConfiguration.interludeAfterIndex != nil,
+                trackContext: runtimeConfiguration.trackContext,
+                isWaveTimelineDiagnosticsEnabled: runtimeConfiguration.isWaveTimelineDiagnosticsEnabled
+                    || DiagnosticsService.shared.isLyricWaveTimelineEnabled,
+                playbackMode: refreshedSnapMode.playbackMode
+            ),
+            onTargetsChanged: { [weak self] in
+                self?.startPresentationLoop()
+            }
+        )
+        return true
+    }
+
     @discardableResult
     private func reconcileVisibleRowViews(
         runtimeConfiguration: LyricsLayerRendererConfiguration,
         snapPositions: Bool,
         snapVisuals: Bool
     ) -> Bool {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["reconcileVisibleRowViews", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let visibleRows = visibleRows(for: runtimeConfiguration)
         let nextIDs = Set(visibleRows.map(\.id))
         var unmountedCount = 0
@@ -1136,6 +1363,33 @@ final class NativeLyricsSurfaceView: NSView {
                 }
                 _ = updateContentIfNeeded(view: view, row: row, configuration: rowTextConfiguration)
             }
+            // Symptom-3 fix (2026-09-14, redone 2026-09-15 after a founder-reported CPU/flashing
+            // regression forced a revert — see `lastAccumulatedHeightsFedToPresentationEngine`'s
+            // doc comment for the root cause of that regression and why the comparison basis
+            // changed). The content loop just above can measure a row's REAL height for the first
+            // time this cycle (`updateContentIfNeeded` → `measuredHeightsByIndex`), but
+            // `runtimeConfiguration.accumulatedHeights` was computed once in `runtimeConfiguration(from:)`
+            // before that loop ran, so it still reflects the OLD/placeholder height for that row —
+            // every row below it would be positioned via a stale offset this whole frame, until the
+            // EXTERNAL SwiftUI height cache (two `DispatchQueue.main.async` hops away) eventually
+            // catches up on a LATER cycle and produces a correcting jump (the reported "settle then
+            // synchronized snap"). Recompute `accumulatedHeights` HERE from the now-fresh
+            // `measuredHeightsByIndex` so this frame's positioning is already correct — but only
+            // re-feed the presentation engine's spring target when that recomputed value actually
+            // differs from what we last fed it (not from the structurally-lagging external cache),
+            // so this is a one-time correction per genuine height change, not a perpetual re-prime.
+            let refreshedAccumulatedHeights = NativeLyricsHeightAccumulator.accumulatedHeights(
+                renderedIndices: runtimeConfiguration.renderedIndices,
+                configuredAccumulatedHeights: runtimeConfiguration.accumulatedHeights,
+                measuredHeights: measuredHeightsByIndex,
+                interludeAfterIndex: runtimeConfiguration.interludeAfterIndex
+            )
+            var runtimeConfiguration = runtimeConfiguration
+            runtimeConfiguration.accumulatedHeights = refreshedAccumulatedHeights
+            updatePresentationEngineIfHeightsChanged(
+                runtimeConfiguration: runtimeConfiguration,
+                refreshedAccumulatedHeights: refreshedAccumulatedHeights
+            )
             let renderSnapshot = nativeFrameRenderSnapshot(
                 rows: visibleRows,
                 configuration: runtimeConfiguration,
@@ -1230,6 +1484,7 @@ final class NativeLyricsSurfaceView: NSView {
     private func runtimeConfiguration(
         from configuration: LyricsLayerRendererConfiguration
     ) -> LyricsLayerRendererConfiguration {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["runtimeConfiguration", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         var runtimeConfiguration = configuration
         // ROOT FIX for the track-switch bloom (verified via the bloom probe: rows=42, ySpread=0,
         // maxBlur=9 on the first frame after a switch). A configure can arrive with `rows`
@@ -1272,13 +1527,40 @@ final class NativeLyricsSurfaceView: NSView {
                 isTranslating: runtimeConfiguration.isTranslating,
                 pendingTranslationLineIndices: runtimeConfiguration.pendingTranslationLineIndices
             )
+            measuredHeightsVersion += 1
         }
-        runtimeConfiguration.accumulatedHeights = NativeLyricsHeightAccumulator.accumulatedHeights(
+        // 2026-09-20 (stage bundle 3r, Task 2 Part A): `NativeLyricsHeightAccumulator
+        // .accumulatedHeights` recomputes an O(rows) running sum on EVERY call to
+        // `runtimeConfiguration(from:)` — several calls per presentation tick — even when nothing
+        // that could change its output has changed since the last call (the common case: a
+        // line-level song sitting idle between line switches). The only inputs that can change
+        // its output are `renderedIndices`, `interludeAfterIndex`, and `measuredHeightsByIndex`
+        // (tracked via `measuredHeightsVersion`, bumped at every mutation site); the seed loop
+        // just above guarantees every rendered row already has a `measuredHeightsByIndex` entry
+        // by the time this runs, so `configuredAccumulatedHeights`'s fallback branch is inert here
+        // and safe to leave out of the cache key. A key match reuses the last result outright.
+        let heightsKey = RuntimeConfigHeightsCacheKey(
             renderedIndices: runtimeConfiguration.renderedIndices,
-            configuredAccumulatedHeights: runtimeConfiguration.accumulatedHeights,
-            measuredHeights: measuredHeightsByIndex,
-            interludeAfterIndex: runtimeConfiguration.interludeAfterIndex
+            interludeAfterIndex: runtimeConfiguration.interludeAfterIndex,
+            measuredHeightsVersion: measuredHeightsVersion,
+            configuredAccumulatedHeightsCount: runtimeConfiguration.accumulatedHeights.count
         )
+        if heightsKey == lastRuntimeConfigHeightsKey, let cached = lastRuntimeConfigAccumulatedHeights {
+            runtimeConfiguration.accumulatedHeights = cached
+            #if DEBUG || LOCAL_DEVELOPER_BUILD
+            runtimeConfigHeightsMemoHitCount += 1
+            #endif
+        } else {
+            let recomputed = NativeLyricsHeightAccumulator.accumulatedHeights(
+                renderedIndices: runtimeConfiguration.renderedIndices,
+                configuredAccumulatedHeights: runtimeConfiguration.accumulatedHeights,
+                measuredHeights: measuredHeightsByIndex,
+                interludeAfterIndex: runtimeConfiguration.interludeAfterIndex
+            )
+            runtimeConfiguration.accumulatedHeights = recomputed
+            lastRuntimeConfigHeightsKey = heightsKey
+            lastRuntimeConfigAccumulatedHeights = recomputed
+        }
         // Interlude scroll advance — makes the interlude behave like a real lyric line. While an
         // interlude is active, advance the anchor so the gap reserved after the preceding line
         // reaches the active centre: the three dots take the centre, the preceding line recedes
@@ -1306,9 +1588,65 @@ final class NativeLyricsSurfaceView: NSView {
         // fresh, never-backward time. A backward step beyond the resync tolerance is a real
         // discontinuity and is followed; synchronize itself re-anchors on explicit seeks below.
         let musicController = configuration.musicController
+        // Defect D fix (founder 2026-09-17, screenshot 3: progress bar at 0:00 while the FIRST
+        // REAL LYRIC LINE — not the prelude row — held the active slot/capsule): an external seek
+        // (progress bar, not a tap-to-line inside this view) only bumps `seekGeneration` — it does
+        // NOT go through `forceDirectSnap`/`nativeDirectSnapReason`, and has zero knowledge of
+        // `manualScrollState`. If the seek lands while a manual-scroll gesture is still active (or
+        // within grace before `scheduleNativeScrollEnd`'s 2s timer fires), `playbackMode` computes
+        // `.directSnap(.manualScroll)` REGARDLESS of the seek (`effectiveIsManualScrolling` is
+        // checked before `.natural` in `playbackMode`), and that branch anchors to
+        // `frozenDisplayIndex` — the row that was playing when the gesture BEGAN — not to the
+        // seek's target time. frozenDisplayIndex then "survives" the seek landing entirely, which
+        // is exactly the founder's repro: seeking to 0 (prelude window) still showed the row that
+        // was playing at the OLD frozen position (index 1) as active. A genuine external seek must
+        // always win over a stale manual-scroll freeze — release it here, before `playbackMode`/
+        // `effectiveIsManualScrolling` are evaluated, so the seek resolves through the SAME
+        // semantic path (amllState from real playback time) every other entry does. This does NOT
+        // affect manual scroll ending normally (timer/tap) — those already call `.reset()`
+        // themselves; this only covers the case nothing else was going to.
+        // 2026-09-18 (3h round, item 4 — "三点根本没出现" after scrolling to the prelude row and
+        // pressing 从头播): capture whether THIS call is the one that releases a manual-scroll
+        // freeze because of a genuine seek, and mark the discontinuity directly here — do not rely
+        // on `configuration.playbackMode` after the reset. `playbackMode` is a computed property
+        // read from fields (`nativeManualScrollSnapshot`, baked into `configuration` by the CALLER
+        // BEFORE this function runs) that predate `manualScrollState.reset()` below; because the
+        // founder's repro freezes AND restarts on the SAME index (0), `playbackMode` still reads
+        // `.directSnap(.manualScroll)` on this exact tick (never `.seek`/`.tapToLine`), so a
+        // reason-matching check downstream can never see this release as a discontinuity — the
+        // dot/text phase for that row then never gets force-refreshed and stays stuck on whatever
+        // it was showing when frozen (here: hidden, opacity 0). The release itself — a genuine
+        // seekGeneration bump arriving while a freeze was active — IS the discontinuity, regardless
+        // of what stale reason enum `playbackMode` still carries this tick.
+        let seekGenerationChanged = configuration.musicController.seekGeneration != lastObservedSeekGeneration
+        let releasingManualScrollFreeze = seekGenerationChanged && manualScrollState.isActive
+        if releasingManualScrollFreeze {
+            manualScrollState.reset()
+            configuration.nativeSeekDiscontinuityOccurred = true
+            // See `manualScrollFreezeReleaseForceUntil`'s declaration: this per-call config flag
+            // alone is not reliable across `runtimeConfiguration(from:)`'s many independent
+            // callers within one real tick — back it with a small time window on the renderer
+            // instance itself so the text/dot phase force-refresh cannot be silently dropped by a
+            // race between callers. 0.5s covers several real frames at any caller's own cadence.
+            manualScrollFreezeReleaseForceUntil = currentMediaTime() + 0.5
+        }
+        // 2026-09-14 founder (message B): while manual-scroll frozen, the phase clock must NOT
+        // track real playback time — real playback keeps advancing wherever the song actually is
+        // while the display freezes on a row the user scrolled to. Feeding that real (unrelated)
+        // time into the frozen row's phase math is what produced scenario C's "dots read as long
+        // since finished" bug (root-caused via NativeLyricsDotPhasePlan.make's fadeOutProgress
+        // hitting 1 once currentTime >= the prelude row's own endTime, which real playback time
+        // routinely is once the song has moved on). Hold the clock at whatever
+        // synchronizeNativeSemanticIndex anchors it to below instead of tracking raw forward —
+        // captured once here (matching the `musicController` capture just above) since this
+        // closure cannot read the `inout configuration` it is being installed on.
+        let isManualScrollFrozen = configuration.effectiveIsManualScrolling
         configuration.nativePhaseClock = { [weak self] in
+            guard let self else { return musicController.lyricRenderTime() }
+            if isManualScrollFrozen {
+                return self.nativeRenderClock ?? musicController.lyricRenderTime()
+            }
             let raw = musicController.lyricRenderTime()
-            guard let self else { return raw }
             let held = NativeLyricsSeekClassifier.monotonicTime(
                 previous: self.nativeRenderClock ?? raw,
                 rawTime: raw,
@@ -1321,8 +1659,32 @@ final class NativeLyricsSurfaceView: NSView {
         guard configuration.playbackMode == .natural else {
             let snapIndex = configuration.effectiveCurrentIndex
             // A snap (seek / tap / direct snap) is a deliberate discontinuity: reset the monotonic
-            // clock to the snapped time so natural playback resumes without holding against a stale peak.
-            let snapTime = configuration.musicController.lyricRenderTime()
+            // clock to the snapped time so natural playback resumes without holding against a stale
+            // peak.
+            //
+            // Manual scroll is the ONE snap reason where "the snapped time" must NOT be
+            // `musicController.lyricRenderTime()` (see the phase-clock note above for why).
+            // Anchor to the FROZEN row's own start time instead — the same reference an explicit
+            // seek TO that row would use, making manual-scroll-back use the identical presentation
+            // entry point as seek/cold-start rather than a separate fallback (founder: "让
+            // seek/滚回前奏与冷启动走同一套呈现入口"). Re-anchor only on the FIRST cycle a given
+            // frozen index becomes active (`lastManualScrollPhaseAnchorIndex` tracks that); on
+            // later cycles reuse the already-anchored clock unchanged so it does not keep resetting
+            // to the same startTime every configure() call. Every other snap reason (explicit seek,
+            // tap-to-line, reduced motion, initial layout) is unaffected and keeps using real
+            // playback time, which IS accurate for them.
+            let isFreshManualScrollLanding = isManualScrollFrozen
+                && lastManualScrollPhaseAnchorIndex != snapIndex
+            let snapTime: TimeInterval
+            if isFreshManualScrollLanding,
+               let anchorRow = configuration.rows.first(where: { $0.index == snapIndex }) {
+                snapTime = anchorRow.displayLine.line.startTime
+            } else if isManualScrollFrozen, let heldClock = nativeRenderClock {
+                snapTime = heldClock
+            } else {
+                snapTime = configuration.musicController.lyricRenderTime()
+            }
+            lastManualScrollPhaseAnchorIndex = isManualScrollFrozen ? snapIndex : nil
             nativeRenderClock = snapTime
             nativeSemanticCurrentIndex = snapIndex
             nativeTimelineState = NativeLyricsTimelinePolicy.AMLLState(
@@ -1339,6 +1701,25 @@ final class NativeLyricsSurfaceView: NSView {
             // Keep the seek token in sync: this branch already snapped, so a seek that happened in
             // snap mode must not re-fire when natural playback resumes.
             lastObservedSeekGeneration = configuration.musicController.seekGeneration
+            // Only `.seek`/`.tapToLine` represent a genuine jump to a different point in playback
+            // time — the class of event the post-line fade floor needs releasing for. The other
+            // snap reasons are NOT time-jumps and must NOT release it:
+            // `.initialLayout`/`.reducedMotion`/`.occlusionResume` can recur on essentially every
+            // `configure()` cycle for a surface that never satisfies their "settled" condition
+            // (confirmed empirically: a synthetic test harness that never fully lays out kept
+            // reporting `.initialLayout` on every call, which — before this narrowing — reset the
+            // floor every frame and reintroduced the exact "previous line pops back to full
+            // brightness on ordinary forward playback" bug `NativeLyricsGapHandoffTests` exists to
+            // prevent; regression caught 2026-09-17, same session as the fix). `.manualScroll` was
+            // already excluded above for a different reason (its own investigation). `.trackReset`
+            // is a new-song discontinuity already covered by `configure()`'s own row-identity reset.
+            let playbackModeSaysSeek: Bool = {
+                guard case .directSnap(let reason) = configuration.playbackMode else { return false }
+                return reason == .seek || reason == .tapToLine
+            }()
+            if !isManualScrollFrozen, playbackModeSaysSeek || seekGenerationChanged {
+                configuration.nativeSeekDiscontinuityOccurred = true
+            }
             cancelNativeLineAdvanceTimer()
             return
         }
@@ -1391,8 +1772,23 @@ final class NativeLyricsSurfaceView: NSView {
             || NativeLyricsSeekClassifier.isSeek(
                 previousIndex: nativeSemanticCurrentIndex,
                 liveIndex: liveIndex,
-                explicitSeek: explicitSeek
+                explicitSeek: explicitSeek,
+                naturalNextIndex: nativeSemanticCurrentIndex.map {
+                    NativeLyricsSeekClassifier.naturalNextIndex(after: $0, rows: configuration.rows)
+                } ?? nil
             )
+        // Deliberately narrower than `isSeek` (which also fires for a passive backward CLOCK
+        // JITTER/resync beyond resyncRewindTolerance — `clock.step == .seek` — and for
+        // non-explicit index divergence): `NativeLyricsGapHandoffTests` pins that jitter crossing a
+        // line's end must NOT re-light its just-faded overlay, which is exactly what happened when
+        // this flag was driven by `isSeek` (regression caught 2026-09-17). `explicitSeek` is the
+        // production entry point's own signal (`MusicController.seek(to:)` → `registerSeek()`,
+        // bumping `seekGeneration`) — true only for a real user-initiated seek, never for a passive
+        // clock correction, so it is the correct "genuine discontinuity" test for releasing the
+        // post-line fade floor.
+        if explicitSeek {
+            configuration.nativeSeekDiscontinuityOccurred = true
+        }
         // On a seek, recompute with the buffered trail reset so the scroll snaps to the new line
         // instead of dragging the previous bright lines (and waving) toward it.
         let timelineState = isSeek
@@ -1542,6 +1938,7 @@ final class NativeLyricsSurfaceView: NSView {
         pendingTapToLineSettleTiming = nil
         visualStates.removeAll()
         measuredHeightsByIndex.removeAll()
+        measuredHeightsVersion += 1
         stopNativeLineMotionSamplingTimer()
         presentationEngine.stop()
         stopPresentationLoop()
@@ -1580,8 +1977,11 @@ final class NativeLyricsSurfaceView: NSView {
         let heightChanged = abs((measuredHeightsByIndex[row.index] ?? 0) - height) > 2
         renderTelemetry.recordHeightMeasurement(changed: heightChanged)
         if heightChanged {
-
+            DebugLogger.log("RowHeight", String(format: "row=%d %.1f→%.1f (active=%d)", row.index,
+                                                measuredHeightsByIndex[row.index] ?? -1, height,
+                                                row.index == (nativeSemanticCurrentIndex ?? -1) ? 1 : 0))
             measuredHeightsByIndex[row.index] = height
+            measuredHeightsVersion += 1
             DispatchQueue.main.async {
                 configuration.onHeightMeasured(row.index, height)
             }
@@ -1599,6 +1999,7 @@ final class NativeLyricsSurfaceView: NSView {
         visibleRows: [LayerBackedLyricRow]? = nil,
         snap: Bool
     ) -> Bool {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["syncVisualTargets", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let rows = visualRowsToSync(
             visibleRows: visibleRows ?? self.visibleRows(for: runtimeConfiguration),
             configuration: runtimeConfiguration
@@ -1682,6 +2083,7 @@ final class NativeLyricsSurfaceView: NSView {
 
     @discardableResult
     private func advanceVisualStates(delta: TimeInterval) -> Bool {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["advanceVisualStates", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         // Drive blur/scale/opacity on the SAME spring as line position so the depth-of-field stays
         // locked to the scroll (no past-sharper-than-upcoming lag during transitions).
         let spring = presentationEngine.currentVisualSpringParameters
@@ -1712,7 +2114,8 @@ final class NativeLyricsSurfaceView: NSView {
             hotActiveIndices: visualHotActiveIndices,
             isManualScrolling: configuration.effectiveIsManualScrolling,
             interludeBlend: interludeBlend(for: row, configuration: configuration),
-            gapRecedeBlend: gapRecedeBlend(for: row, configuration: configuration)
+            gapRecedeBlend: gapRecedeBlend(for: row, configuration: configuration),
+            isBackground: row.displayLine.line.isBackground
         )
     }
 
@@ -1750,8 +2153,28 @@ final class NativeLyricsSurfaceView: NSView {
         // singing-line translation absent 1258/1258 frames wave-bound vs 3/1258 semantic). POSITION /
         // movement still follows the wave via visualTarget; only the phase input is decoupled here.
         textConfiguration.nativeTextActiveIndex = presentationSnapshot.semanticIndex
+        // 2026-09-20 float gate: the per-word lift of the SINGING row waits until the scroll wave
+        // has actually retargeted that row (its engine target == the semantic index). Under the
+        // topDown stagger the incoming row's own move starts 0.16–0.24s after activation; letting
+        // the first word float during that wait read as a 1–2px twitch in place (founder
+        // recording, 下雨天). Brightness/sweep are untouched — only the lift waits for the motion.
+        let semantic = presentationSnapshot.semanticIndex
+        if row.index == semantic {
+            let waveFired = (presentationSnapshot.targetIndices[row.index] ?? semantic) == semantic
+            if let held = wordFloatRelease, held.semanticIndex == semantic {
+                if held.releaseTime == nil, waveFired {
+                    wordFloatRelease = (semantic, configuration.phaseRenderTime())
+                }
+            } else {
+                wordFloatRelease = (semantic, waveFired ? configuration.phaseRenderTime() : nil)
+            }
+            textConfiguration.nativeWordFloatReleaseTime = wordFloatRelease?.releaseTime ?? .infinity
+        }
         return textConfiguration
     }
+
+    /// (semanticIndex, playback time its wave fired — nil while still waiting its stagger turn).
+    private var wordFloatRelease: (semanticIndex: Int, releaseTime: TimeInterval?)?
 
     private func shouldDriveTextPhase(
         row: LayerBackedLyricRow,
@@ -1804,6 +2227,7 @@ final class NativeLyricsSurfaceView: NSView {
     private func refreshTextActivation(
         runtimeConfiguration: LyricsLayerRendererConfiguration
     ) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["refreshTextActivation", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let visibleRows = visibleRows(for: runtimeConfiguration)
         let liveIndices = Set(runtimeConfiguration.rows.map(\.index))
         textActiveByRowIndex = textActiveByRowIndex.filter { liveIndices.contains($0.key) }
@@ -2002,7 +2426,13 @@ final class NativeLyricsSurfaceView: NSView {
         // The transform now carries ONLY scale — never translation. (Translation here was the bug:
         // AppKit's commit-time layout resets a layer-backed view's transform to identity, dropping the
         // row to the origin for a frame; the frame does not get reset.)
-        view.setPositioning(NativeLyricsRowScale.leadingTransform(scale: visual.scale, height: frame.height))
+        view.setPositioning(NativeLyricsRowScale.leadingTransform(
+            // 2026-09-20 founder: "下一行激活后行间距会变" — the 3f first-line-baseline pivot made a
+            // wrapped row's lower lines stretch downward on activation, changing the visual gap to
+            // the next row. v2.8 scaled about the row's vertical centre (`.scaleEffect(anchor:
+            // .leading)`); restore that so activation is symmetric and the gap reads constant.
+            scale: visual.scale, height: frame.height, pivotY: frame.height / 2
+        ))
         let appliedTransform = view.layer?.affineTransform() ?? .identity
         let appliedScale = sqrt(appliedTransform.a * appliedTransform.a + appliedTransform.c * appliedTransform.c)
         recordRowFrameParityIfChanged(rowID: row.id, sample: NativeLyricsRowFrameParitySample(
@@ -2014,7 +2444,65 @@ final class NativeLyricsSurfaceView: NSView {
             appliedScale: appliedScale
         ))
         let appliedBlur = view.applyBlurRadius(visual.blur)
-        view.applyRasterizationPolicy(isSettled: visual.isSettled, isActive: visual.target.isActive)
+        // 2026-09-17 (CJK trailing-word ghost, "滋味"): `visual.target.isActive` is the VISUAL
+        // wave/spring target's own activation flag, deliberately decoupled from the TEXT PHASE's
+        // activation (`configurationForTextPhase`'s own comment: text phase follows the semantic
+        // singing line, not the scroll wave's per-row visual target — a different bug's fix). That
+        // decoupling left a window where a row's text phase is ALREADY driving live per-glyph
+        // sweep writes while the visual target still reports inactive — `shouldRasterize` stayed
+        // true through that window, so WindowServer kept compositing a stale cached bitmap
+        // (captured while the row was still blurred/inactive) simultaneously with the fresh live
+        // tiles (confirmed: 6 consecutive real frames, t=13.85-14.10, blur=0.5, sweepApplied=true
+        // — research/repro-2026-09-17-lyrics-render-3c.md §CJK). Fold in text-phase activation AND
+        // the deferred-deactivation fade (the other case where a settled-looking row's own tiles
+        // are still being animated, via updateDeactivationFade) so rasterization is revoked the
+        // SAME frame either one goes live, not only when the visual target catches up.
+        let isTextPhaseActiveThisFrame = textActiveByRowIndex[row.index] ?? false
+        // 2026-09-18 (3h round, item 1 FINAL FORM, founder-dictated after the previous round's
+        // activation-bound fix still measured the old 1.5-2.0s delay — the bottleneck had merely
+        // moved from `visual.isSettled`'s opacity/scale/blur epsilon to the kept `hasActiveMotion`
+        // position-motion gate). `hasActiveMotion` (and the per-row `deferredDeactivationIndex`
+        // check) are DROPPED from this condition entirely. A deactivated row rasterizes from the
+        // SAME frame it deactivates, unconditionally — including all the way through any position
+        // motion that follows (the natural wave settling it into its new slot). This is safe: blur
+        // is a STEPPED channel (`NativeLyricsVisualMotionState.setTarget` snaps `blur =
+        // nextTarget.blur` the instant the target changes, no spring left to race), so the ONLY
+        // things that change on a deactivated, rasterized row during its subsequent motion are its
+        // FRAME (position, via `view.frame`) and its LAYER OPACITY — both applied AFTER
+        // rasterization by AppKit/CA compositing the cached bitmap at wherever the layer currently
+        // is and however opaque it currently is; neither one invalidates or re-triggers the
+        // rasterized bitmap. There is no "still in flight, captured a stale/blurry snapshot" window
+        // left for `hasActiveMotion` to protect against — f1b8d8f's own regression test is rewritten
+        // under the new contract (`shouldRasterize` must not FLIP during motion, not "must not be
+        // rasterized during motion" — see LyricsRenderDefects20260918ReproTests) and stays green.
+        // 2026-09-21: the row that will activate NEXT stays live too. A rasterized layer is
+        // composited from a cached bitmap (pixel-snapped) and the activation tick flips it to live
+        // compositing at the same fractional position — the last ~1px "twitch" on the incoming
+        // row's first line in the founder's 60fps recording after the single-engine fix. Keeping
+        // the next melody row unrasterized removes that raster→live discontinuity from the switch
+        // frame entirely; it costs one live 0.5-radius blur row.
+        let isNextMelodyRow = nativeSemanticCurrentIndex.map {
+            NativeLyricsSeekClassifier.naturalNextIndex(after: $0, rows: configuration.rows) == row.index
+        } ?? false
+        view.advanceFloatReturn(renderTime: configuration.phaseRenderTime())
+        view.applyRasterizationPolicy(
+            isActive: visual.target.isActive || isTextPhaseActiveThisFrame || isNextMelodyRow
+        )
+        // Defect C instrumentation (founder 2026-09-17): frame.origin.y is the row's REAL carried
+        // position (not the layer transform, which AppKit resets on every commit — see the
+        // comment above on `view.frame`), so trace that, not a transform ty. Logs only the active
+        // row and the just-deactivated (deferred) row, only on change — see recordRowPosition.
+        if visual.target.isActive {
+            NativeLyricsMaskTrace.recordRowPosition(
+                rowID: row.id, role: "active", y: frame.origin.y,
+                isSettled: visual.isSettled, shouldRasterize: view.layer?.shouldRasterize ?? false
+            )
+        } else if row.index == deferredDeactivationIndex {
+            NativeLyricsMaskTrace.recordRowPosition(
+                rowID: row.id, role: "deactivated", y: frame.origin.y,
+                isSettled: visual.isSettled, shouldRasterize: view.layer?.shouldRasterize ?? false
+            )
+        }
         #if DEBUG
         if debugCensusEnabled {
             var track = debugCensusByIndex[row.index] ?? DebugCensusTrack()
@@ -2201,6 +2689,7 @@ final class NativeLyricsSurfaceView: NSView {
     private func sampleNativeLineMotionDuringPresentationTickIfNeeded(
         runtimeConfiguration: LyricsLayerRendererConfiguration
     ) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["sampleNativeLineMotionDuringPresentationTickIfNeeded", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         guard runtimeConfiguration.lineMotionSamplingEnabled,
               presentationEngine.hasActiveMotion else { return }
 
@@ -2340,6 +2829,7 @@ final class NativeLyricsSurfaceView: NSView {
         snap: Bool,
         managesTransaction: Bool = true
     ) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["applyFrames", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let applyFrames = {
             #if DEBUG
             if self.debugCensusEnabled {
@@ -2572,7 +3062,73 @@ final class NativeLyricsSurfaceView: NSView {
         #endif
     }
 
+    nonisolated(unsafe) static var tickPhaseAccum: [String: Double] = [:]
+    private var singlePassPrewarmArmedFor: Int?
+    private var singlePassPrewarmDoneFor: Set<Int> = []
     private func presentationTick(
+        displayInterval: TimeInterval?,
+        displayTimestamp: TimeInterval?
+    ) {
+        Self.tickPhaseAccum.removeAll(keepingCapacity: true)
+        // Frame-cost probe (2026-09-20): whole-tick main-thread time to the batched trace (no I/O
+        // here; `recordTick` returns immediately when the trace is disarmed).
+        let tickStart = CFAbsoluteTimeGetCurrent()
+        let activeBefore = nativeSemanticCurrentIndex
+        presentationTickBody(displayInterval: displayInterval, displayTimestamp: displayTimestamp)
+        // 2026-09-21 switch-window geometry probe (armed with the mask trace). Every tick builds the
+        // lines for rows active-1…active+3 into a 3-tick ring buffer; a switch flushes the ring
+        // (k=-2,-1,0 = the pre-switch state) and then keeps recording for 40 ticks.
+        // Expensive (5 rows × presentation() reads per tick): only with the separate NanoPodGeomProbe pref.
+        if NativeLyricsMaskTrace.isArmedForProbes, Self.geometryProbeEnabled {
+            let switched = activeBefore != nativeSemanticCurrentIndex
+            if switched { geometryProbeTicksRemaining = 40; geometryProbeTick = 0 }
+            if let active = nativeSemanticCurrentIndex {
+                var lines: [String] = []
+                for idx in (active - 1)...(active + 3) {
+                    guard let v = rowIDByIndex[idx].flatMap({ rowViews[$0] }), let layer = v.layer else { continue }
+                    let m = layer.affineTransform()
+                    let pres = layer.presentation()
+                    let pm = pres?.affineTransform() ?? m
+                    let st = visualStates[idx]
+                    let mf = v.probeMainTextFrame, pmf = v.probeMainTextPresentationFrame
+                    if let line = NativeLyricsMaskTrace.recordRowGeometry(
+                        tickSinceSwitch: geometryProbeTick, active: active, rowIndex: idx,
+                        frameY: v.frame.origin.y, frameH: v.frame.height, modelA: m.a, modelTy: m.ty,
+                        presY: pres?.frame.origin.y ?? -1, presA: pm.a, presTy: pm.ty,
+                        engineY: presentationEngine.presentation(for: idx)?.y ?? -1,
+                        scale: st?.scale ?? -1, opacity: st?.opacity ?? -1, blur: st?.blur ?? -1,
+                        mainY: mf.origin.y, mainH: mf.height, presMainY: pmf.origin.y, presMainH: pmf.height,
+                        drawY: v.probeActiveDrawFrame.origin.y, drawHidden: v.probeActiveDrawHidden,
+                        mainHidden: v.probeMainTextHidden, rasterized: v.probeRasterized) { lines.append(line) }
+                }
+                if geometryProbeTicksRemaining > 0 {
+                    if switched {
+                        // flush the ring as k=-2,-1 (they were built with the previous active index)
+                        let ring = geometryProbeRing
+                        NativeLyricsMaskTrace.enqueueLines(ring.enumerated().flatMap { i, ls in
+                            ls.map { $0.replacingOccurrences(of: "\"k\":0,", with: "\"k\":\(i - ring.count),") }
+                        })
+                    }
+                    NativeLyricsMaskTrace.enqueueLines(lines)
+                    geometryProbeTicksRemaining -= 1; geometryProbeTick += 1
+                    if geometryProbeTicksRemaining == 0 { geometryProbeTick = 0; geometryProbeRing.removeAll() }
+                } else {
+                    geometryProbeRing.append(lines)
+                    if geometryProbeRing.count > 2 { geometryProbeRing.removeFirst() }
+                }
+            }
+        }
+        NativeLyricsMaskTrace.recordTick(
+            dtMs: (CFAbsoluteTimeGetCurrent() - tickStart) * 1000,
+            intervalMs: (displayInterval ?? 0) * 1000,
+            activeBefore: activeBefore,
+            activeAfter: nativeSemanticCurrentIndex,
+            mountedRows: rowViews.count,
+            phases: Self.tickPhaseAccum
+        )
+    }
+
+    private func presentationTickBody(
         displayInterval: TimeInterval?,
         displayTimestamp: TimeInterval?
     ) {
@@ -2599,9 +3155,9 @@ final class NativeLyricsSurfaceView: NSView {
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
         let now = currentMediaTime()
         let snapMode = frameSnapMode(for: runtimeConfiguration, now: now)
-        let delta = lastPresentationTick.map { max(0, now - $0) }
-            ?? displayInterval
-            ?? 0
+        // Whole-frame steps (NativeLyricsFrameStep): callback jitter must not become uneven motion.
+        let rawDelta = lastPresentationTick.map { max(0, now - $0) } ?? displayInterval ?? 0
+        let delta = NativeLyricsFrameStep.quantizedDelta(raw: rawDelta, nominal: displayInterval)
         lastPresentationTick = now
         // Reveal gate countdown: hold the just-mounted rows hidden until the loop has committed a
         // spread frame, then reveal them already in position (no first-frame stacked flash). The
@@ -2690,10 +3246,33 @@ final class NativeLyricsSurfaceView: NSView {
             lineGapsProbeLogged = true
             logLineGapsProbe(phase: nil, activeIndex: armedIdx, anchorY: runtimeConfiguration.anchorY)
         }
+        // 2026-09-18 (3h round, item 4 — "三点根本没出现" after a manual-scroll-to-top freeze
+        // followed by 从头播): `activeTextLineChanged` is an INDEX-equality check, but a genuine
+        // discontinuity (an explicit seek releasing a manual-scroll freeze) can land on the SAME
+        // index the frozen display was already showing — here, both the freeze (`frozenAt: 0`) and
+        // the restart land on index 0, so the index never visibly "changes" even though the
+        // semantic MEANING of index 0 just flipped from "a stale frozen snapshot from deep in the
+        // song" to "the real prelude at t≈0". Without a force, the text/dot phase for that row is
+        // never re-driven: `shouldUpdateActiveTextPhase`'s non-force path throttles on a REAL wall
+        // clock interval, so a tight test loop (or, in production, a user who restarts and does not
+        // touch anything else for a frame) can go the whole census window without a single refresh,
+        // leaving the dots stuck at their frozen values (hidden opacity 0 — read on screen as "the
+        // three dots never came back"). `nativeSeekDiscontinuityOccurred` is already the correct,
+        // narrower signal for exactly this class of event (set only for a real user-initiated seek
+        // or tap-to-line, not passive clock jitter — see its own call sites above), but it is a
+        // PER-CALL config flag and `synchronizeNativeSemanticIndex` runs from many independent
+        // `runtimeConfiguration(from:)` call sites within one real tick — whichever call first
+        // notices the seekGeneration bump consumes `lastObservedSeekGeneration`, so a LATER call's
+        // own returned config (the one THIS function actually reads) can read the flag back false
+        // even though a release genuinely just happened. `manualScrollFreezeReleaseForceUntil` is
+        // the race-proof version: a renderer-instance timestamp set once at the release site,
+        // checked here against the real clock so no caller can miss it.
         let shouldUpdateTextPhase = shouldUpdateActiveTextPhase(
             runtimeConfiguration: runtimeConfiguration,
             now: now,
             force: activeTextLineChanged || shouldApplyManualPresentation
+                || runtimeConfiguration.nativeSeekDiscontinuityOccurred
+                || now < manualScrollFreezeReleaseForceUntil
         )
         let shouldApplyPresentationFrame = shouldApplyManualPresentation
             || semanticChanged
@@ -3046,6 +3625,7 @@ final class NativeLyricsSurfaceView: NSView {
     }
 
     private func finalizeDeferredDeactivation(runtimeConfiguration: LyricsLayerRendererConfiguration) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["finalizeDeferredDeactivation", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         guard let idx = deferredDeactivationIndex else { return }
         if NativeLyricsLoopIdleDecision.shouldCancelDeferredDeactivation(
             deferredIndex: idx,
@@ -3598,6 +4178,7 @@ final class NativeLyricsSurfaceView: NSView {
     }
 
     private func checkPendingTapToLineSettleTiming(now: CFTimeInterval) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["checkPendingTapToLineSettleTiming", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         guard let pending = pendingTapToLineSettleTiming else { return }
         guard let configuration else { return }
         var runtimeConfiguration = runtimeConfiguration(from: configuration)
@@ -3691,6 +4272,7 @@ final class NativeLyricsSurfaceView: NSView {
         previousTimelineState: NativeLyricsTimelinePolicy.AMLLState?,
         runtimeConfiguration: LyricsLayerRendererConfiguration
     ) -> Bool {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["updateNativeTimelineForCurrentPlaybackIfNeeded", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         guard runtimeConfiguration.playbackMode == .natural else {
             scheduleNativeLineAdvanceTimerIfNeeded(configuration: runtimeConfiguration)
             return false
@@ -3785,6 +4367,7 @@ final class NativeLyricsSurfaceView: NSView {
     private func engineConfiguration(
         from configuration: LyricsLayerRendererConfiguration
     ) -> LyricsPresentationEngineConfiguration {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["engineConfiguration", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let currentIndex = configuration.effectiveCurrentIndex
         let scrollTargetIndex = configuration.effectiveScrollTargetIndex
         let snapMode = frameSnapMode(for: configuration)
@@ -3992,6 +4575,7 @@ final class NativeLyricsSurfaceView: NSView {
     private func updateTextPhasesForCurrentConfiguration(
         runtimeConfiguration: LyricsLayerRendererConfiguration
     ) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["updateTextPhasesForCurrentConfiguration", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         let visibleRows = visibleRows(for: runtimeConfiguration)
         let presentationSnapshot = nativePresentationSnapshot(
             lineIndices: visibleRows.map(\.index),
@@ -4016,6 +4600,17 @@ final class NativeLyricsSurfaceView: NSView {
         // ordering fix as the reconcile path.
         if view.frame.size != .zero {
             view.layoutSubtreeIfNeeded()
+        }
+        // Prewarm the NEXT line (single-pass renderer): layout + run bitmaps + layers ready before
+        // activation, so the switch frame does no rasterization or layer creation.
+        // Never on the switch frame itself: arm on the first tick of a new active line, run on
+        // the following tick, so the (one-off) layout + rasterization lands in a quiet frame.
+        if singlePassPrewarmArmedFor != row.index {
+            singlePassPrewarmArmedFor = row.index
+        } else if !singlePassPrewarmDoneFor.contains(row.index),
+                  let nextID = rowIDByIndex[row.index + 1], let nextView = rowViews[nextID] {
+            singlePassPrewarmDoneFor.insert(row.index)
+            nextView.prewarmSinglePassIfNeeded()
         }
         guard let textSample = view.updatePlaybackPhase(configuration: textConfiguration, managesTransaction: false) else {
             return
@@ -4062,6 +4657,7 @@ final class NativeLyricsSurfaceView: NSView {
         now: CFTimeInterval,
         force: Bool
     ) -> Bool {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["shouldUpdateActiveTextPhase", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         if force {
             lastTextPhaseUpdateAt = now
             return true

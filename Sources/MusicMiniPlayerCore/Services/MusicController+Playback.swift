@@ -64,20 +64,33 @@ extension MusicController {
         let now = Date()
         let renderTime = lyricRenderTime(at: now)
         self.isPlaying.toggle()
+        var resumeAlignPosition: Double?
         if self.isPlaying {
+            // 2026-09-20 (founder: "暂停在字的一半，继续就该从那一半继续，现在每次继续都卡一下"):
+            // our sweep froze at the click, but Music.app itself paused a beat later, so its own
+            // position sits AHEAD of the frozen render time. Resuming from the frozen time locally
+            // while Music resumes from its later position ends in a poll drift correction — the
+            // visible hitch. Re-align Music to the frozen time BEFORE it plays; the seek is
+            // invisible while paused and the two clocks start together.
             syncPlaybackClock(to: renderTime, playing: true, at: now)
+            lastFrameTime = now
+            lastPollTime = now
+            positionPollCooldownUntil = now.addingTimeInterval(1.0)
+            seekPending = true
+            resumeAlignPosition = renderTime
         } else {
+            // Freeze the phase clock at the click itself, not on the next timer turn.
+            syncPlaybackClock(to: renderTime, playing: false, at: now)
             stopInterpolationTimerImmediately()
         }
         updateTimerState()
-
-        // 🔑 User controls use dedicated controlApp/controlQueue — never blocked by
-        // heavyweight scriptingBridgeQueue work (polls, queue scans, state syncs).
-        // Each SBApplication is an independent Apple Event proxy, safe on its own serial queue.
         controlQueue.async { [weak self] in
             guard let app = self?.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] togglePlayPause: app not available\n")
                 return
+            }
+            if let resumeAlignPosition {
+                app.setValue(resumeAlignPosition, forKey: "playerPosition")
             }
             debugPrint("▶️ [MusicController] togglePlayPause() executing\n")
             app.perform(Selector(("playpause")))
@@ -582,6 +595,7 @@ extension MusicController {
             self.lastQueueFetchCompletedAt = Date()
             self.lastQueueFetchCompletedGeneration = requestQueueGeneration
             self.logger.info("✅ Fetched \(tracks.count) up next tracks via ScriptingBridge")
+            DebugLogger.log("QueuePreload", "fetchUpNextViaBridge outcome=\(outcome) didChange=\(didChange) currentTrack='\(self.currentTrackTitle)' tracks=\(tracks.map { "\($0.title)|album='\($0.album)'|dur=\($0.duration)" })")
             if didChange {
                 self.preloadNearbyAssets(from: tracks)
             }
@@ -730,6 +744,7 @@ extension MusicController {
                     await MainActor.run {
                         let didChange = self.applyRecentTracksIfChanged(tracks)
                         self.logger.info("✅ Fetched \(tracks.count) recent tracks via Apple Music API")
+                        DebugLogger.log("QueuePreload", "fetchRecentHistoryViaAppleMusicAPI didChange=\(didChange) currentTrack='\(self.currentTrackTitle)' tracks=\(tracks.map { "\($0.title)|album='\($0.album)'|dur=\($0.duration)" })")
                         if didChange {
                             self.preloadNearbyAssets(from: tracks)
                         }
@@ -764,6 +779,7 @@ extension MusicController {
             DispatchQueue.main.async {
                 let didChange = self.applyRecentTracksIfChanged(tracks)
                 self.logger.info("✅ Fetched \(tracks.count) recent tracks via ScriptingBridge")
+                DebugLogger.log("QueuePreload", "fetchRecentHistoryViaScriptingBridge didChange=\(didChange) currentTrack='\(self.currentTrackTitle)' tracks=\(tracks.map { "\($0.title)|album='\($0.album)'|dur=\($0.duration)" })")
                 if didChange {
                     self.preloadNearbyAssets(from: tracks)
                 }
@@ -922,6 +938,8 @@ extension MusicController {
 
         guard !validTracks.isEmpty else { return }
 
+        DebugLogger.log("QueuePreload", "preloadNearbyAssets scheduled currentTrack='\(currentTrackTitle)' validTracks=\(validTracks.map { "\($0.title)|album='\($0.album)'|dur=\($0.duration)" })")
+
         os_signpost(.event, log: performanceLog, name: "PreloadNearbyScheduled", "count=%{public}d", validTracks.count)
         assetPreloadTask?.cancel()
         let generation = artworkFetchGeneration
@@ -946,6 +964,7 @@ extension MusicController {
                         }
                     )
                 } else {
+                    DebugLogger.log("QueuePreload", "preloadNextSongs SKIPPED (native lyrics renderer active on lyrics page) currentTrack='\(self.currentTrackTitle)'")
                     os_signpost(
                         .event,
                         log: self.performanceLog,

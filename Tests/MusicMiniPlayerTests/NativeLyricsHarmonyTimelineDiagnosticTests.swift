@@ -40,24 +40,26 @@ final class NativeLyricsHarmonyTimelineDiagnosticTests: XCTestCase {
     /// real line index, start, end, text. Word timings synthesized as an even split —
     /// the stutter mechanism is line-window driven, not word driven.
     private func puzzleRows() -> [LayerBackedLyricRow] {
-        let spec: [(TimeInterval, TimeInterval, String)] = [
-            (1.42, 5.26, "迷路で立ちすくむわ"),      // real 151.42-155.26
-            (6.10, 7.98, "助けて"),                  // real 156.10-157.98
-            (7.98, 7.98, "（I want you）"),          // real 157.98-157.98 ZERO DURATION
-            (7.98, 13.28, "恋は"),                   // real 157.98-163.28
-            (13.36, 15.93, "切ないラビリンス"),      // real 163.36-165.93
-            (16.08, 18.41, "You are not so hot to me"),
-            (18.64, 21.30, "I can't wait for you"),
+        // isBackground flags the parenthetical harmony line directly (founder 2026-09-20:
+        // data-model concept, not a text heuristic the render/timeline layer re-derives).
+        let spec: [(TimeInterval, TimeInterval, String, Bool)] = [
+            (1.42, 5.26, "迷路で立ちすくむわ", false),      // real 151.42-155.26
+            (6.10, 7.98, "助けて", false),                  // real 156.10-157.98
+            (7.98, 7.98, "（I want you）", true),           // real 157.98-157.98 ZERO DURATION
+            (7.98, 13.28, "恋は", false),                   // real 157.98-163.28
+            (13.36, 15.93, "切ないラビリンス", false),      // real 163.36-165.93
+            (16.08, 18.41, "You are not so hot to me", false),
+            (18.64, 21.30, "I can't wait for you", false),
         ]
         return spec.enumerated().map { index, item in
-            let (s, e, text) = item
+            let (s, e, text, isBackground) = item
             let effectiveEnd = max(e, s + 0.01)
             let chars = Array(text)
             let per = max(0.01, (effectiveEnd - s) / Double(max(1, chars.count)))
             let words = chars.enumerated().map { i, ch in
                 LyricWord(word: String(ch), startTime: s + Double(i) * per, endTime: min(effectiveEnd, s + Double(i + 1) * per))
             }
-            let line = LyricLine(text: text, startTime: s, endTime: e, words: words)
+            let line = LyricLine(text: text, startTime: s, endTime: e, words: words, isBackground: isBackground)
             let dl = DisplayLyricLine(id: "pz\(index)", sourceIndex: index, segmentIndex: 0, segmentCount: 1, line: line)
             return LayerBackedLyricRow(id: dl.id, index: index, displayLine: dl, sourceLine: line,
                                        isPrelude: false, preludeEndTime: 0, interlude: nil)
@@ -129,14 +131,14 @@ final class NativeLyricsHarmonyTimelineDiagnosticTests: XCTestCase {
     /// melody line, so a 0.4s "（I want you）" no longer yanks the anchor down and back.
     func test_backingVocalLine_lightsSimultaneously_neverClaimsPrimary() {
         // Call-response pattern from Puzzle (shifted): melody A, bracketed backing, melody B.
-        let spec: [(TimeInterval, TimeInterval, String)] = [
-            (0.0, 3.0, "眠れないの"),
-            (3.0, 3.44, "（I want you）"),
-            (3.44, 8.0, "愛してるよと言って"),
+        let spec: [(TimeInterval, TimeInterval, String, Bool)] = [
+            (0.0, 3.0, "眠れないの", false),
+            (3.0, 3.44, "（I want you）", true),
+            (3.44, 8.0, "愛してるよと言って", false),
         ]
         let rows = spec.enumerated().map { index, item -> LayerBackedLyricRow in
-            let (s, e, text) = item
-            let line = LyricLine(text: text, startTime: s, endTime: e)
+            let (s, e, text, isBackground) = item
+            let line = LyricLine(text: text, startTime: s, endTime: e, isBackground: isBackground)
             let dl = DisplayLyricLine(id: "bv\(index)", sourceIndex: index, segmentIndex: 0, segmentCount: 1, line: line)
             return LayerBackedLyricRow(id: dl.id, index: index, displayLine: dl, sourceLine: line,
                                        isPrelude: false, preludeEndTime: 0, interlude: nil)
@@ -157,11 +159,12 @@ final class NativeLyricsHarmonyTimelineDiagnosticTests: XCTestCase {
         )
         XCTAssertEqual(after.semanticIndex, 2, "primary hands off melody-to-melody")
 
-        // ASCII brackets are the same convention.
-        XCTAssertTrue(NativeLyricsTimelinePolicy.isBackingVocalText("(ooh ooh)"))
-        XCTAssertTrue(NativeLyricsTimelinePolicy.isBackingVocalText(" （I want you） "))
-        XCTAssertFalse(NativeLyricsTimelinePolicy.isBackingVocalText("普通歌词 (with aside)"))
-        XCTAssertFalse(NativeLyricsTimelinePolicy.isBackingVocalText("()"))
+        // The flag is now the parser's data-model output (LyricModels.swift /
+        // LyricsParser.splitBackgroundVocalLines), not a render-layer text
+        // heuristic — verified in LyricsParserTests instead of here.
+        XCTAssertTrue(rows[1].displayLine.line.isBackground)
+        XCTAssertFalse(rows[0].displayLine.line.isBackground)
+        XCTAssertFalse(rows[2].displayLine.line.isBackground)
     }
 
     @MainActor

@@ -82,6 +82,11 @@ public enum LanguageUtils {
         japaneseRanges.contains { $0.contains(scalar.value) }
     }
 
+    /// Scalar-level Korean (Hangul syllable + jamo) detection.
+    public static func isKoreanScalar(_ scalar: Unicode.Scalar) -> Bool {
+        koreanRanges.contains { $0.contains(scalar.value) }
+    }
+
     // MARK: - Southeast Asian Scripts (东南亚)
 
     private static let thaiRanges: [ClosedRange<UInt32>] = scriptRanges["Thai"]!

@@ -43,14 +43,29 @@ struct PlaybackPositionCorrectionPolicy {
     static let minimumSuspiciousBackwardJump: TimeInterval = 8.0
     static let visibleLyricCorrectionThreshold: TimeInterval = 0.1
 
+    // 2026-09-18 (stage bundle 3i, item 2 — founder real-device log): a single poll can be
+    // judged by TWO independent detectors in the same tick — this transient-reset guard
+    // (reading raw position/duration numbers) and `positionJumpedBack` in
+    // MusicController.pollPositionViaSB (the radio-song-change backstop, which fires on ANY
+    // backward jump >=3s while playing and not seeking). Before this parameter existed they
+    // could disagree on the SAME poll: positionJumpedBack correctly recognized a real restart
+    // (83.2s -> 0.0s, "从头播" outside MusicController.seek() — e.g. the system Now Playing
+    // widget), while this guard's own math (isPlaying && !seekPending && backward jump > 8s)
+    // ALSO qualified it as "suspicious" and deferred landing the real position for up to
+    // maxConsecutiveTransientResetDeferrals polls (~3s), during which the restarted song's own
+    // clock/lyrics stayed frozen mid-song. A confirmed jump is not the kind of one-off ambiguous
+    // glitch this guard exists to filter — the caller already knows better, so honor it
+    // unconditionally regardless of the deferral cap or duration-near-end carve-out.
     static func shouldDeferTransientReset(
         polledPosition: TimeInterval,
         interpolatedPosition: TimeInterval,
         duration: TimeInterval,
         isPlaying: Bool,
         seekPending: Bool,
-        consecutiveDeferrals: Int = 0
+        consecutiveDeferrals: Int = 0,
+        positionJumpedBack: Bool = false
     ) -> Bool {
+        guard !positionJumpedBack else { return false }
         guard isPlaying, !seekPending else { return false }
         guard consecutiveDeferrals < maxConsecutiveTransientResetDeferrals else { return false }
         guard polledPosition >= 0, interpolatedPosition > minimumSuspiciousBackwardJump else { return false }
@@ -59,6 +74,20 @@ struct PlaybackPositionCorrectionPolicy {
             return false
         }
         return true
+    }
+
+    // Same-poll counterpart for the velocity-based pause inference in
+    // MusicController.pollPositionViaSB: a large "expected - polled" deficit is ordinarily
+    // read as "the player silently paused mid-interval" (the notification was delayed), but if
+    // THIS poll already triggered the confirmed position-jump detector, the deficit is fully
+    // explained by a real restart/seek, not a pause — inferring pause on top of it flipped
+    // `isPlaying` false with no user pause action (confirmed in the founder's real-device log).
+    static func shouldInferPauseFromVelocityDeficit(
+        deficit: TimeInterval,
+        positionJumpedBack: Bool
+    ) -> Bool {
+        guard !positionJumpedBack else { return false }
+        return deficit > 0.8
     }
 
     static func shouldCorrectVisibleLyrics(
@@ -240,6 +269,13 @@ public class MusicController: ObservableObject {
 
     /// Playlist-row artwork tiers (memory → disk → merged network fetch).
     @MainActor lazy var rowArtworkStore: RowArtworkStore = makeRowArtworkStore()
+
+    /// Bounds how many playlist rows resolve artwork concurrently (2026-09-15
+    /// artwork-storm fix — see RowArtworkFetchPolicy.swift).
+    let rowArtworkFetchGate = RowArtworkFetchGate()
+
+    /// Session-scoped backoff memo for row artwork terminal failures.
+    let rowArtworkNegativeCache = RowArtworkNegativeCache()
 
     /// Estimate NSImage memory cost for NSCache (RGBA, 4 bytes/pixel)
     static func imageCacheCost(_ image: NSImage) -> Int {
@@ -867,7 +903,7 @@ public class MusicController: ObservableObject {
             // Queue hash scans touch Music.app's playlist through SB. Normal
             // updates come from notifications and track-change refreshes.
             self.queueCheckTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
-                self?.checkQueueHashAndRefresh()
+                self?.checkQueueHashAndRefresh(reason: "timer:30s")
             }
             RunLoop.main.add(self.queueCheckTimer!, forMode: .common)
 
@@ -981,8 +1017,14 @@ public class MusicController: ObservableObject {
     // MARK: - Queue Sync (Two-Layer Detection)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    private func checkQueueHashAndRefresh() {
+    /// `reason` is diagnostic-only (repro instrumentation for the 2026-09-14
+    /// repeated-fetch investigation — see research/nanopod_debug_*.log) and
+    /// never affects control flow: it identifies which trigger (30s timer vs
+    /// a DistributedNotification) asked for this hash check, so a log replay
+    /// can tell a legitimate queue change from a spurious self-sustaining loop.
+    private func checkQueueHashAndRefresh(reason: String) {
         guard !isPreview else { return }
+        DebugLogger.log("QueuePreload", "checkQueueHashAndRefresh reason=\(reason)")
 
         scriptingBridgeQueue.async { [weak self] in
             guard let self = self, let app = self.queueApp, app.isRunning else { return }
@@ -997,6 +1039,7 @@ public class MusicController: ObservableObject {
                 }
                 if hash != self.lastQueueHash {
                     debugPrint("🔄 [checkQueueHash] Queue changed: \(self.lastQueueHash) -> \(hash)\n")
+                    DebugLogger.log("QueuePreload", "checkQueueHash CHANGED reason=\(reason) '\(self.lastQueueHash)' -> '\(hash)' -> fetchUpNextQueue()")
                     self.lastQueueHash = hash
                     self.fetchUpNextQueue()
                 }
@@ -1029,8 +1072,9 @@ public class MusicController: ObservableObject {
 
     @objc private func queueMayHaveChanged(_ notification: Notification) {
         guard Date().timeIntervalSince(lastPollTime) >= 1.0 else { return }
+        DebugLogger.log("QueuePreload", "queueMayHaveChanged notification=\(notification.name.rawValue)")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.checkQueueHashAndRefresh()
+            self?.checkQueueHashAndRefresh(reason: "notification:\(notification.name.rawValue)")
         }
     }
 
@@ -1767,7 +1811,9 @@ public class MusicController: ObservableObject {
                     if playing && self.isPlaying && !self.seekPending {
                         let expectedPosition = self.internalCurrentTime
                         let deficit = expectedPosition - position
-                        if deficit > 0.8 {
+                        if PlaybackPositionCorrectionPolicy.shouldInferPauseFromVelocityDeficit(
+                            deficit: deficit, positionJumpedBack: positionJumpedBack
+                        ) {
                             DebugLogger.log("Timing", "⏸ VELOCITY PAUSE: polled=\(String(format: "%.2f", position)) expected=\(String(format: "%.2f", expectedPosition)) deficit=\(String(format: "%.2f", deficit))s — inferring pause")
                             self.isPlaying = false
                             self.cachedPositionPollStateRaw = Self.sbStopped
@@ -1785,7 +1831,8 @@ public class MusicController: ObservableObject {
                     duration: self.duration,
                     isPlaying: playing && self.currentPage == .lyrics,
                     seekPending: self.seekPending,
-                    consecutiveDeferrals: self.transientPositionResetDeferrals
+                    consecutiveDeferrals: self.transientPositionResetDeferrals,
+                    positionJumpedBack: positionJumpedBack
                 )
                 if shouldDeferTransientReset {
                     self.transientPositionResetDeferrals += 1

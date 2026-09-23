@@ -50,6 +50,7 @@ Sources/
 │   │       ├── LyricsScorer.swift               - Quality scoring
 │   │       └── MetadataResolver.swift           - iTunes multi-region metadata + 四入口 single-flight 合流（同 key 并发咨询共享一次解析，仅去重不缓存）+ 目录别名共识桥（song-scoped 查询坍缩单一身份 = Apple 索引断言翻译标题，Dinner→三個人的晚餐）+ 行级证据戳回放（exact-title/phonetic/catalog-alias，英→CJK 缓存行不再每会话重解析）
 │   ├── UI/
+│   │   ├── NativeLyricsFrameStep.swift  - 呈现弹簧步长量化（整数刷新周期）
 │   │   ├── MiniPlayerView.swift   - Main player view + page switching
 │   │   ├── LyricsView.swift       - Lyrics display + scrolling + translation
 │   │   ├── LyricsLayerRendererView.swift - Native lyrics surface + frame loop
@@ -74,6 +75,7 @@ Sources/
 │   ├── Utils/
 │   │   ├── HTTPClient.swift           - HTTP requests + retry + connection warmup + NetworkOutcomeLedger (protocol vs transport)
 │   │   ├── LanguageUtils.swift        - Language detection + S/T Chinese conversion + Japanese reading (CFStringTokenizer) + two-lane romanized-title corroboration
+│   │   ├── ScriptRunSegmenter.swift   - 混排行按文字系统切段（谚文/假名/泰文等脚本确定语言→显式 source；拉丁/汉字→source nil），翻译后按序拼回（09-20）
 │   │   ├── MatchingUtils.swift        - Matching score utilities
 │   │   ├── DebugLogger.swift          - Debug logging
 │   │   ├── E2EEventLog.swift          - 真 app 端到端冒烟：NANOPOD_E2E=1 才写 JSONL 事件 + status 快照（生产默认无 I/O）
@@ -130,6 +132,16 @@ Tests/MusicMiniPlayerTests/         - 999 个单元测试（2026-08-27 `swift te
     └── NativeLyricsMaskExhaustiveHandoffTests.swift - 假时钟穷举切行 mask（零几何/appear 窗/远跳/中段 seek）+ v2.8 visual spring damping 20
     └── LyricsLateTranslationInsertTests.swift - 翻译后补热插入：只改译文、词轴/displayState 不动；托管 surface 3.1s sidecar 不重建 semantic
     └── RadioTrackChangeDebounceTests.swift - 电台换歌确认：无 PID 身份需连续两次一致读数才触发管线（缓冲期标题瞬态不再刷新页面）
+    └── NativeLyricsLineLevelIdleCostTests.swift - 行级切行后 loop 必须在 2.1s 内可停摆 + runtimeConfiguration 行高累计记忆化命中计数（09-20）
+    └── NativeLyricsMaskTraceEconomyTests.swift - mask trace 探针：空闲 tick 只出 tick_summary，切行/卡顿才出单条 tick
+    └── NativeLyricsBackgroundRowTests.swift - 和声从属行：0.8× 字号、低一档亮度、不放大、不模糊焦点、主行几何不变（09-20）
+    └── LyricsImplausibleDensitySelectionTests（LyricsSelectionTests.swift 内）- 真抓取件：NetEase 坏时间轴（朗读速率不合理）不得靠 ±12 翻盘 LRCLIB
+    └── ScriptRunSegmenterTests.swift - 混排切段/拼回纯函数
+    └── NativeLyricsIncomingRowGeometryTests.swift - 切行窗口入场/出场行墨迹几何（含行自身 transform 映射）：折行行跨 CATextLayer→位图切换零跳动；两套文本引擎根因钉死（09-21）
+    └── NativeLyricsDeferredDeactivationBrightnessTests.swift - 出场行延迟去活期间有效亮度逐帧连续，finalize 不得弹亮
+    └── NativeLyricsFrameStepTests.swift - 弹簧步长按整数刷新周期量化
+    └── NativeLyricsOrphanAvoidanceTests.swift - CJK/短拉丁孤字折行：仅当尾巴≤2字且放宽 24pt 能少一行时放宽容器宽度
+    └── NativeLyricsWordFloatGateTests.swift - 入场行逐字上浮从本行波浪触发帧起算
     └── NativeLyricsHandoffClockTests.swift - 切行确定性时钟门：注入播放钟+墙钟锁步驱动真 surface（debugNowOverride/debugTick/debugPlaybackClockDateProvider），钉死上一行位移/opacity/亮层同帧退场（边界后 +150ms 错峰）；复现旧红测试=0.8s appear 窗内切行被冻结、余晖先暗的 harness 伪影
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix
@@ -211,6 +223,14 @@ Pure ASCII input: Parallel queries to CN + inferred region (JP/KR), CN CJK title
   ✅ 先拷 icns，再尝试 actool 出 Assets.car；bundle 内没有 `AppIcon.icns` 则拒绝交付
 - ❌ 行级 LRCLIB 命中就 cancelAll 前台/回填 → 逐字源被剪掉；P1 一律冻结显示 → 行级永远升不了逐字
   ✅ 预算内到手的逐字优先；行级/unsynced 必须 launch 回填（含 AMLL/AM）；只允许升级热切换、禁止降级
+- ❌ 排查完把 `NanoPodMaskTraceEnabled` 留在 ~/Library/Preferences/com.yinanli.nanoPod.plist → 120Hz 每帧拼 JSON 写盘，行级歌曲 CPU 40%（09-20 第三次探针当元凶）
+  ✅ 探针武装判定缓存一次；空闲 tick 只聚合出 tick_summary；排查完必须 `defaults write … NanoPodMaskTraceEnabled -bool NO`
+- ❌ 「人工整理源优先 ±12」只看头/尾/大空洞 → NetEase 副歌 1.7s 塞 5 行照样翻盘 LRCLIB
+  ✅ 朗读速率合理性（>40 拉丁当量字符/秒 且窗口 <0.6s）计入时间轴完整性缺陷，取消容差；H07 用例 `maxImplausibleDenseLines: 0`
+- ❌ 混排行整行 `source: nil` 自动检测 → 只译主脚本，韩文段残留
+  ✅ ScriptRunSegmenter 按脚本切段，谚文段显式 ko 源（脚本判定，非识别器猜测）
+- ❌ 和声只靠「整行括号」文本启发式，TTML x-bg 被解析器丢弃
+  ✅ `LyricLine.isBackground` 数据模型字段，三路识别（x-bg / 整行括号 / 行首尾括号拆分），渲染为主行从属行（LyricsDiskCache schemaVersion 31）
 - Full records in `postmortem/` and `.claude/rules/banned-patterns.md`
 
 ### Matching Algorithm (Unified SearchCandidate)

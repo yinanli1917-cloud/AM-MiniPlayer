@@ -21,12 +21,12 @@ final class EdgeMorphFeelTests: XCTestCase {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     func test_resolve_absentValue_fallsBackToMorph() {
-        XCTAssertEqual(MicroInteractionFeel.EdgeMorphMode.resolve(from: nil), .morph)
+        XCTAssertEqual(MicroInteractionFeel.EdgeMorphMode.resolve(from: nil), .v0)
     }
 
     func test_resolve_unknownValue_fallsBackToMorph() {
-        XCTAssertEqual(MicroInteractionFeel.EdgeMorphMode.resolve(from: "glassy"), .morph)
-        XCTAssertEqual(MicroInteractionFeel.EdgeMorphMode.resolve(from: ""), .morph)
+        XCTAssertEqual(MicroInteractionFeel.EdgeMorphMode.resolve(from: "glassy"), .v0)
+        XCTAssertEqual(MicroInteractionFeel.EdgeMorphMode.resolve(from: ""), .v0)
     }
 
     func test_resolve_knownValues_caseInsensitive() {
@@ -54,11 +54,11 @@ final class EdgeMorphFeelTests: XCTestCase {
         XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.edgeMorphDefaultsKey))
     }
 
-    func test_apply_unknownValue_clampsToMorphInDefaults() {
+    func test_apply_unknownValue_clampsToV0InDefaults() {
         _ = MicroInteractionFeel.apply(channel: "edgemorph", value: "bogus")
         XCTAssertEqual(
             UserDefaults.standard.string(forKey: MicroInteractionFeel.edgeMorphDefaultsKey),
-            MicroInteractionFeel.EdgeMorphMode.morph.rawValue
+            MicroInteractionFeel.EdgeMorphMode.v0.rawValue
         )
         MicroInteractionFeel.reset()
     }

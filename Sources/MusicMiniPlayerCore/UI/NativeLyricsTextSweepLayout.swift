@@ -22,6 +22,23 @@ struct NativeLyricsTextSweepVisualRun: Equatable {
         let index: Int
         let text: String
         let rect: CGRect
+        // 2026-09-20 (3p, founder real-device root cause — 《下雨天》"点点雨似渗出眼泪"): the
+        // per-glyph tile's OWN CATextLayer used to render with a hardcoded
+        // `NSFont.systemFont(weight:.semibold)` while `rect` (and the whole-line dim base, via
+        // `NativeLyricsUnifiedDimDrawLayer`) came from THIS `NSLayoutManager`'s actual glyph
+        // layout — for CJK, AppKit resolves that generic UI font to a DIFFERENT concrete font
+        // (`.PingFangUIDisplaySC-Semibold`) than what a CATextLayer given the same nominal font
+        // resolves to for its own independent Han fallback (`.AppleSystemUIFontDemi`'s own
+        // fallback, a different PingFang optical size/variant) — same advance-origin `rect.minX`,
+        // different glyph OUTLINE/width at that origin, so bright ink never sits exactly on dim
+        // ink underneath: reads as a persistent double-edge/ghost on every swept glyph, worst on
+        // the line's last character (rowdump: layoutManagerX == tile.minX exactly, advance
+        // 22.8496 exactly, only the FONT differed). `characterIndex` is this glyph's location in
+        // the shared `NSTextStorage` (`NativeLyricsUnifiedTextBuild.textStorage`), so a tile
+        // renderer can pull the SAME resolved font AppKit already committed to for this exact
+        // character via `textStorage.attribute(.font, at: characterIndex, ...)` instead of
+        // re-deriving its own generic one. See research/repro-2026-09-20-lyrics-render-3p.md.
+        let characterIndex: Int
     }
 
     let order: Int
@@ -49,11 +66,16 @@ private struct NativeLyricsTokenGlyphPlan {
 }
 
 enum NativeLyricsTextSweepLayout {
-    static var mainParagraphStyle: NSParagraphStyle {
+    // `lineSpacing` default (0) preserves every existing caller's geometry unless it opts in —
+    // production wiring is `NativeLyricsRowView`'s call at line ~3561, which passes
+    // `plan.constants.mainLineSpacing` so this engine's glyph rects and the whole-line dim base's
+    // `NSLayoutManager` wrap (`NativeLyricsRowView.attributedText`/`displayWrapped`) agree on the
+    // SAME paragraph recipe (banned-patterns.md's two-text-engine rule).
+    static func mainParagraphStyle(lineSpacing: CGFloat = 0) -> NSParagraphStyle {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byWordWrapping
         paragraph.alignment = .left
-        paragraph.lineSpacing = 0
+        paragraph.lineSpacing = lineSpacing
         return paragraph
     }
 
@@ -63,7 +85,8 @@ enum NativeLyricsTextSweepLayout {
         width: CGFloat,
         fontSize: CGFloat,
         fadeHalfPoint: CGFloat,
-        currentTime: TimeInterval
+        currentTime: TimeInterval,
+        lineSpacing: CGFloat = 0
     ) -> [NativeLyricsTextSweepMaskLine] {
         maskLines(
             from: makePlan(
@@ -71,7 +94,8 @@ enum NativeLyricsTextSweepLayout {
                 wordRuns: wordRuns,
                 width: width,
                 fontSize: fontSize,
-                fadeHalfPoint: fadeHalfPoint
+                fadeHalfPoint: fadeHalfPoint,
+                lineSpacing: lineSpacing
             ),
             fadeHalfPoint: fadeHalfPoint,
             currentTime: currentTime
@@ -83,7 +107,8 @@ enum NativeLyricsTextSweepLayout {
         wordRuns: [NativeLyricsWordRunPlan],
         width: CGFloat,
         fontSize: CGFloat,
-        fadeHalfPoint: CGFloat
+        fadeHalfPoint: CGFloat,
+        lineSpacing: CGFloat = 0
     ) -> [NativeLyricsTextSweepVisualLinePlan] {
         guard !displayText.isEmpty, !wordRuns.isEmpty, width > 1 else { return [] }
 
@@ -91,7 +116,7 @@ enum NativeLyricsTextSweepLayout {
             string: displayText,
             attributes: [
                 .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
-                .paragraphStyle: NativeLyricsTextSweepLayout.mainParagraphStyle
+                .paragraphStyle: NativeLyricsTextSweepLayout.mainParagraphStyle(lineSpacing: lineSpacing)
             ]
         )
         let storage = NSTextStorage(attributedString: attributed)
@@ -134,7 +159,27 @@ enum NativeLyricsTextSweepLayout {
                 layoutManager: layoutManager,
                 textContainer: textContainer
             )
-            var matchedFragment = false
+            // 2026-09-20 (3q item 3, founder real-device repro — 《啟程》"只有你能带我走向 /
+            // 未来的旅程"): a word RUN's glyph range can span the wrap boundary between two
+            // VISUAL lines (common for CJK, where the lyric-source "word" segmentation doesn't
+            // align with where NSLayoutManager wraps). The old loop below added a full COPY of
+            // this run — same `run.startTime`/`run.endTime` — into every fragment it touched.
+            // While line 1 was mid-sweep through that run, line 2's duplicate copy independently
+            // evaluated the SAME [startTime, endTime] window against `currentTime` and computed
+            // its own nonzero progress fraction, revealing line 2's (narrower) copy of the run in
+            // lockstep with line 1 — the founder's "第二行「未来的旅」整段半亮" (a whole
+            // not-yet-sung visual line partially lit, tracking line 1's live progress). Fix:
+            // collect every intersecting fragment first, then — when a run spans more than one —
+            // split its time window PROPORTIONALLY by glyph count across the fragments in reading
+            // order, so only the fragment currently under the wavefront has a `startTime` at or
+            // before `currentTime`; a not-yet-reached line's slice always starts strictly later.
+            struct FragmentMatch {
+                let lineIndex: Int
+                let glyphRange: NSRange
+                let glyphs: [NativeLyricsTextSweepVisualRun.Glyph]
+                let rect: CGRect
+            }
+            var matches: [FragmentMatch] = []
             for (lineIndex, fragment) in fragments.enumerated() {
                 let fragmentGlyphRange = NSIntersectionRange(fragment.glyphRange, tokenGlyphRange)
                 guard fragmentGlyphRange.length > 0 else { continue }
@@ -149,19 +194,44 @@ enum NativeLyricsTextSweepLayout {
                     textContainer: textContainer
                 )
                 guard fragmentRect.width > 0, fragmentRect.height > 0 else { continue }
-                matchedFragment = true
-                visualRunsByLine[lineIndex, default: []].append(NativeLyricsTextSweepVisualRun(
-                    order: order,
-                    startTime: run.startTime,
-                    endTime: run.endTime,
-                    text: run.text,
-                    isEmphasis: run.isEmphasis || run.emphasis != .inactive,
-                    rect: fragmentRect,
-                    glyphs: fragmentGlyphs
+                matches.append(FragmentMatch(
+                    lineIndex: lineIndex,
+                    glyphRange: fragmentGlyphRange,
+                    glyphs: fragmentGlyphs,
+                    rect: fragmentRect
                 ))
             }
 
-            if matchedFragment {
+            if !matches.isEmpty {
+                let totalGlyphCount = matches.reduce(0) { $0 + $1.glyphRange.length }
+                let runDuration = run.endTime - run.startTime
+                var sliceStart = run.startTime
+                // `matches` is already in ascending fragment/line order (fragments enumerated in
+                // order), which is reading order — so the earliest visual line gets the earliest
+                // time slice.
+                for match in matches {
+                    let isLastMatch = match.lineIndex == matches.last?.lineIndex
+                    let sliceDuration: TimeInterval
+                    if matches.count == 1 || totalGlyphCount <= 0 {
+                        sliceDuration = runDuration
+                    } else {
+                        let share = Double(match.glyphRange.length) / Double(totalGlyphCount)
+                        sliceDuration = isLastMatch
+                            ? max(0, run.endTime - sliceStart)
+                            : runDuration * share
+                    }
+                    let sliceEnd = isLastMatch ? run.endTime : sliceStart + sliceDuration
+                    visualRunsByLine[match.lineIndex, default: []].append(NativeLyricsTextSweepVisualRun(
+                        order: order,
+                        startTime: sliceStart,
+                        endTime: sliceEnd,
+                        text: run.text,
+                        isEmphasis: run.isEmphasis || run.emphasis != .inactive,
+                        rect: match.rect,
+                        glyphs: match.glyphs
+                    ))
+                    sliceStart = sliceEnd
+                }
                 continue
             }
 
@@ -186,11 +256,24 @@ enum NativeLyricsTextSweepLayout {
                 return $0.order < $1.order
             }
 
-            var maskRect = fragments[lineIndex].rect
+            // 2026-09-20 (founder: wrapped rows showed the NEXT visual line partially lit up to the
+            // first line's wavefront). The per-visual-line mask layers are SIBLINGS inside one mask;
+            // wherever two of them overlap, the union reveals. The old `insetBy(dy: -4)` plus the
+            // union with run rects let line N's solid region reach into line N+1's glyph band, so
+            // the unsung line inherited line N's sweep. Rule (v2.8 lineRects): a line's mask spans
+            // that line's fragment band ONLY — never above or below it — and the horizontal reach
+            // (fade slack) comes from the run union.
+            let fragmentRect = fragments[lineIndex].rect
+            var horizontal = fragmentRect
             for visualRun in visualRuns {
-                maskRect = maskRect.union(visualRun.rect)
+                horizontal = horizontal.union(visualRun.rect)
             }
-            maskRect = maskRect.insetBy(dx: -20, dy: -4)
+            let maskRect = CGRect(
+                x: horizontal.minX - 20,
+                y: fragmentRect.minY,
+                width: horizontal.width + 40,
+                height: fragmentRect.height
+            )
             return NativeLyricsTextSweepVisualLinePlan(maskRect: maskRect, runs: visualRuns)
         }
     }
@@ -300,7 +383,8 @@ enum NativeLyricsTextSweepLayout {
                 glyph: NativeLyricsTextSweepVisualRun.Glyph(
                     index: glyphs.count,
                     text: tokenCharacter,
-                    rect: rect
+                    rect: rect,
+                    characterIndex: location
                 ),
                 glyphRange: glyphRange
             ))
@@ -334,14 +418,16 @@ enum NativeLyricsTextSweepLayout {
         displayText: String,
         wordRuns: [NativeLyricsWordRunPlan],
         width: CGFloat,
-        fontSize: CGFloat
+        fontSize: CGFloat,
+        lineSpacing: CGFloat = 0
     ) -> LayoutSnapshot {
         let plan = makePlan(
             displayText: displayText,
             wordRuns: wordRuns,
             width: width,
             fontSize: fontSize,
-            fadeHalfPoint: 12
+            fadeHalfPoint: 12,
+            lineSpacing: lineSpacing
         )
         var heights: [CGFloat] = []
         var minYs: [CGFloat] = []

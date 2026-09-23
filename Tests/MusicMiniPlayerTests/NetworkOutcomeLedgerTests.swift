@@ -251,4 +251,126 @@ final class NetworkOutcomeLedgerTests: XCTestCase {
         XCTAssertEqual(ledger.protocolResponses, 100)
         XCTAssertEqual(ledger.transportFailures, 100)
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Envelope failures (QQ search, 2026-09-20)
+    //
+    // A protocol response can still be untrustworthy: the server answered
+    // (HTTP 200, valid JSON), but the app-level envelope (`code`/`req.code`)
+    // reported failure, or the expected candidate-list shape never arrived.
+    // That must count the same as a transport failure for negative-verdict
+    // quorum purposes — a QQ session where every query silently returned 0
+    // candidates due to a declined envelope must not be able to write a 24h
+    // "no lyrics" verdict.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    func testRecordEnvelopeFailure_blocksNegativeVerdictQuorum() {
+        let ledger = NetworkOutcomeLedger()
+        ledger.recordProtocolResponse()
+        XCTAssertFalse(ledger.hadTransportFailures)
+
+        ledger.recordEnvelopeFailure()
+        XCTAssertTrue(ledger.hadTransportFailures,
+            "an indeterminate envelope must block the negative-verdict quorum like a transport failure")
+        // But it must NOT claim the network was unreachable — a real
+        // protocol response was recorded.
+        XCTAssertFalse(ledger.indicatesNetworkUnreachable)
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - QQ search envelope decoding (pure function)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+final class QQSearchEnvelopeDecodeTests: XCTestCase {
+
+    private let fetcher = LyricsFetcher.shared
+
+    private func songList(_ count: Int) -> [[String: Any]] {
+        (0..<count).map { ["mid": "id\($0)", "name": "song\($0)"] }
+    }
+
+    func testHealthyEnvelope_zeroCode_returnsSongs() {
+        let json: [String: Any] = [
+            "code": 0,
+            "req": ["code": 0, "data": ["body": ["song": ["list": songList(3)]]]]
+        ]
+        let envelope = fetcher.decodeQQSearchEnvelope(json)
+        XCTAssertEqual(envelope.code, 0)
+        XCTAssertEqual(envelope.reqCode, 0)
+        XCTAssertEqual(envelope.songs?.count, 3)
+        XCTAssertFalse(envelope.isIndeterminate)
+    }
+
+    func testHealthyEnvelope_emptyList_isRealZeroCandidates() {
+        let json: [String: Any] = [
+            "code": 0,
+            "req": ["code": 0, "data": ["body": ["song": ["list": songList(0)]]]]
+        ]
+        let envelope = fetcher.decodeQQSearchEnvelope(json)
+        XCTAssertEqual(envelope.songs?.count, 0)
+        XCTAssertFalse(envelope.isIndeterminate,
+            "a healthy envelope with a genuinely empty list is a real miss, not indeterminate")
+    }
+
+    func testNonZeroTopLevelCode_isIndeterminate() {
+        let json: [String: Any] = [
+            "code": -2401,
+            "req": ["code": 0, "data": ["body": ["song": ["list": songList(5)]]]]
+        ]
+        let envelope = fetcher.decodeQQSearchEnvelope(json)
+        XCTAssertTrue(envelope.isIndeterminate,
+            "a non-zero top-level code means the envelope was declined even if a list shape is present")
+    }
+
+    func testNonZeroReqCode_isIndeterminate() {
+        let json: [String: Any] = [
+            "code": 0,
+            "req": ["code": 1000, "data": ["body": ["song": ["list": songList(5)]]]]
+        ]
+        let envelope = fetcher.decodeQQSearchEnvelope(json)
+        XCTAssertEqual(envelope.reqCode, 1000)
+        XCTAssertTrue(envelope.isIndeterminate)
+    }
+
+    func testMissingShape_isIndeterminate() {
+        let json: [String: Any] = ["code": 0, "req": ["code": 0, "data": [:]]]
+        let envelope = fetcher.decodeQQSearchEnvelope(json)
+        XCTAssertNil(envelope.songs)
+        XCTAssertTrue(envelope.isIndeterminate)
+    }
+
+    func testEmptyJSON_isIndeterminate() {
+        let envelope = fetcher.decodeQQSearchEnvelope([:])
+        XCTAssertNil(envelope.code)
+        XCTAssertNil(envelope.reqCode)
+        XCTAssertNil(envelope.songs)
+        XCTAssertTrue(envelope.isIndeterminate)
+    }
+
+    // MARK: - decodeQQSearchSongs (call-site wrapper): ledger side effect
+
+    func testDecodeQQSearchSongs_indeterminate_recordsEnvelopeFailureAndReturnsNil() async {
+        let ledger = NetworkOutcomeLedger()
+        let json: [String: Any] = ["code": -2401, "req": ["code": 0, "data": ["body": ["song": ["list": songList(5)]]]]]
+
+        let songs = await NetworkOutcomeLedger.$current.withValue(ledger) {
+            fetcher.decodeQQSearchSongs(json)
+        }
+
+        XCTAssertNil(songs, "an indeterminate envelope must return nil, same as the old missing-shape guard")
+        XCTAssertTrue(ledger.hadTransportFailures)
+    }
+
+    func testDecodeQQSearchSongs_healthy_returnsSongsWithoutTouchingLedger() async {
+        let ledger = NetworkOutcomeLedger()
+        let json: [String: Any] = ["code": 0, "req": ["code": 0, "data": ["body": ["song": ["list": songList(2)]]]]]
+
+        let songs = await NetworkOutcomeLedger.$current.withValue(ledger) {
+            fetcher.decodeQQSearchSongs(json)
+        }
+
+        XCTAssertEqual(songs?.count, 2)
+        XCTAssertFalse(ledger.hadTransportFailures)
+    }
 }

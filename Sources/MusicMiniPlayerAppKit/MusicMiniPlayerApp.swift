@@ -196,7 +196,12 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
             }
         case "debug-lyrics":
             openDebugLyricsFixture(named: url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+        #endif
         case "debug":
+            // nanopod://debug/rowdump — one-shot active+previous row text-sublayer dump
+            // (CJK trailing-word ghost follow-up). Deliberately available in EVERY build,
+            // including plain release — see NativeLyricsRowDump.swift.
+            // The remaining nanopod://debug/* paths below are DEBUG/LOCAL_DEVELOPER_BUILD only:
             // nanopod://debug/animsweep — one-shot whole-window animation census
             // (defect 5: names server-side animation survivors on a static panel).
             // nanopod://debug/feel/<appear|blur|sweep>/<v28|current|layer>
@@ -205,6 +210,10 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
             // nanopod://debug/feel/reset — resets both NativeLyricsFeelParity and MicroInteractionFeel
             // nanopod://debug/onboarding/<show|reset> — force-show or reset the C6 onboarding window
             let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
+            if path == "rowdump" {
+                Task { @MainActor in NativeLyricsRowDump.dump() }
+            }
+            #if DEBUG || LOCAL_DEVELOPER_BUILD
             if path == "animsweep" {
                 Task { @MainActor in WindowAnimationCensus.dump() }
             } else if path.hasPrefix("onboarding/") {
@@ -228,7 +237,7 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
                     }
                 }
             }
-        #endif
+            #endif
         default:
             break
         }

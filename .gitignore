@@ -62,3 +62,4 @@ __pycache__/
 
 # compiled spike binaries
 research/spikes/**/axspike
+builds/

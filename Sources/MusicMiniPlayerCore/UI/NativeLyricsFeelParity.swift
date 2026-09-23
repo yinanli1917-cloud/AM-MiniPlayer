@@ -16,8 +16,35 @@ import Foundation
 public enum NativeLyricsFeelParity {
     public static let appearDefaultsKey = "nanoPodFeelAppearWindow"
     public static let blurDefaultsKey = "nanoPodFeelBlur"
+    public static let activeLineDefaultsKey = "nanoPodFeelActiveLine"
+
+    /// 2026-09-20: how the ACTIVE syllable-synced line is rendered. `singlePass` = one CALayer
+    /// drawing dim + bright + mask from one layout every frame (v2.8/AMLL model, shipping
+    /// default). `tiles` = the 2026-07 per-glyph CATextLayer tile + hollowed-base path, kept for
+    /// A/B (`nanopod://debug/feel/activeline/tiles`) and for the tile-era unit tests.
+    public enum ActiveLineRenderer: String, CaseIterable {
+        case singlePass = "singlepass"
+        case tiles = "tiles"
+        public static func resolve(from raw: String?) -> ActiveLineRenderer {
+            guard let raw else { return .singlePass }
+            return ActiveLineRenderer(rawValue: raw.lowercased()) ?? .singlePass
+        }
+    }
+    #if DEBUG
+    nonisolated(unsafe) public static var testingActiveLine: ActiveLineRenderer?
+    #endif
+    public static var activeLineRenderer: ActiveLineRenderer {
+        #if DEBUG
+        if let testingActiveLine { return testingActiveLine }
+        // Tile-era unit tests observe per-glyph tiles directly; they keep that path unless a test
+        // opts into single-pass explicitly (NativeLyricsSinglePassActiveLineTests).
+        if isRunningTests || NSClassFromString("XCTestCase") != nil { return .tiles }
+        #endif
+        return ActiveLineRenderer.resolve(from: UserDefaults.standard.string(forKey: activeLineDefaultsKey))
+    }
     public static let sweepDefaultsKey = "nanoPodFeelSweep"
     public static let waveDefaultsKey = "nanoPodFeelWave"
+    public static let emphasisDefaultsKey = "nanoPodFeelEmphasis"
     public static let appearWindowDuration: TimeInterval = 0.8
 
     public enum AppearWindowMode: String, CaseIterable {
@@ -68,17 +95,50 @@ public enum NativeLyricsFeelParity {
         }
     }
 
+    /// 2026-09-17 founder-approved contrast arm for the emphasis-word ghost (09-14/09-15/09-17
+    /// reports): `current` keeps the historical two-object split — a separate `emphasisGlyphLayers`
+    /// pool positioned independently of the ordinary per-word tiles in
+    /// `applyMainWordFloatGlyphLayers` (`NativeLyricsRowView.swift`, fork point at the
+    /// `!emphasisOrders.contains(run.order)` filter) — which is structurally ghost-prone: two
+    /// separately-positioned CALayer objects for the same characters, updated by two independent
+    /// formulas, can drift apart by a sub-point amount that reads as a duplicate at 24pt. `v28` and
+    /// `amll` both fold emphasis words into the SAME per-glyph tile pipeline every other word uses
+    /// (one positioned object per glyph, never two) and apply the scale/lift intensification as an
+    /// extra transform on that SAME object — so the position can never drift. They differ only in
+    /// how the glow/blur highlight is rendered: `v28` replicates the v2.8 SwiftUI engine's shape
+    /// (real `CALayer.shadowOpacity/shadowRadius` on that SAME tile — a shadow cannot desync from
+    /// its own layer); `amll` uses a pre-rendered (offline, non-resident) blurred bitmap sibling
+    /// layer whose position/transform is copied from the sharp tile at the SAME call site (so it
+    /// cannot be independently wrong), avoiding both the CIFilter-mutation trap (banned-patterns.md:
+    /// a stored CIFilter's mutated inputRadius is silently ignored by the render server) and a
+    /// resident live blur filter's per-frame WindowServer cost.
+    public enum EmphasisMode: String, CaseIterable {
+        case current = "current"
+        case v28 = "v28"
+        case amll = "amll"
+
+        // 2026-09-17: founder switched the shipping default to `amll` after independently
+        // verifying the arm (this session's B report + the founder's own real-machine check).
+        // `current`/`v28` stay fully selectable via the debug URL for A/B comparison.
+        public static func resolve(from raw: String?) -> EmphasisMode {
+            guard let raw else { return .amll }
+            return EmphasisMode(rawValue: raw.lowercased()) ?? .amll
+        }
+    }
+
     #if DEBUG
     nonisolated(unsafe) public static var testingAppear: AppearWindowMode?
     nonisolated(unsafe) public static var testingBlur: BlurMode?
     nonisolated(unsafe) public static var testingSweep: SweepPathMode?
     nonisolated(unsafe) public static var testingWave: WaveMode?
+    nonisolated(unsafe) public static var testingEmphasis: EmphasisMode?
 
     public static func resetTestingOverrides() {
         testingAppear = nil
         testingBlur = nil
         testingSweep = nil
         testingWave = nil
+        testingEmphasis = nil
     }
     #endif
 
@@ -91,6 +151,29 @@ public enum NativeLyricsFeelParity {
             from: UserDefaults.standard.string(forKey: appearDefaultsKey)
         )
     }
+
+    // 2026-09-20 real-machine isolation arms (headless cannot see CIFilter output or the
+    // rasterized-snapshot→live composite switch). Read from UserDefaults at most once per second
+    // so the per-row call sites stay cheap. `defaults write … nanoPodFeelDepthBlur -string off`
+    // removes every depth-of-field blur filter (rows never rasterize either, since rasterization
+    // is gated on blur); `… nanoPodFeelRaster -string off` keeps the blur but never rasterizes.
+    public static let depthBlurDefaultsKey = "nanoPodFeelDepthBlur"
+    public static let rasterDefaultsKey = "nanoPodFeelRaster"
+    nonisolated(unsafe) private static var isolationArmsCache: (at: CFAbsoluteTime, blurOff: Bool, rasterOff: Bool) = (0, false, false)
+    private static func isolationArms() -> (blurOff: Bool, rasterOff: Bool) {
+        let now = CFAbsoluteTimeGetCurrent()
+        if now - isolationArmsCache.at > 1 {
+            let d = UserDefaults.standard
+            isolationArmsCache = (
+                now,
+                d.string(forKey: depthBlurDefaultsKey)?.lowercased() == "off",
+                d.string(forKey: rasterDefaultsKey)?.lowercased() == "off"
+            )
+        }
+        return (isolationArmsCache.blurOff, isolationArmsCache.rasterOff)
+    }
+    public static var depthBlurDisabled: Bool { isolationArms().blurOff }
+    public static var rasterizationDisabled: Bool { isolationArms().rasterOff }
 
     public static var blurMode: BlurMode {
         #if DEBUG
@@ -119,6 +202,16 @@ public enum NativeLyricsFeelParity {
         #endif
         return WaveMode.resolve(
             from: UserDefaults.standard.string(forKey: waveDefaultsKey)
+        )
+    }
+
+    public static var emphasisMode: EmphasisMode {
+        #if DEBUG
+        if let testingEmphasis { return testingEmphasis }
+        if isRunningTests { return .amll }
+        #endif
+        return EmphasisMode.resolve(
+            from: UserDefaults.standard.string(forKey: emphasisDefaultsKey)
         )
     }
 
@@ -164,6 +257,7 @@ public enum NativeLyricsFeelParity {
             UserDefaults.standard.removeObject(forKey: blurDefaultsKey)
             UserDefaults.standard.removeObject(forKey: sweepDefaultsKey)
             UserDefaults.standard.removeObject(forKey: waveDefaultsKey)
+            UserDefaults.standard.removeObject(forKey: emphasisDefaultsKey)
             #if DEBUG
             resetTestingOverrides()
             #endif
@@ -176,11 +270,17 @@ public enum NativeLyricsFeelParity {
         case "blur":
             UserDefaults.standard.set(BlurMode.resolve(from: value).rawValue, forKey: blurDefaultsKey)
             return true
+        case "activeline":
+            UserDefaults.standard.set(ActiveLineRenderer.resolve(from: value).rawValue, forKey: activeLineDefaultsKey)
+            return true
         case "sweep":
             UserDefaults.standard.set(SweepPathMode.resolve(from: value).rawValue, forKey: sweepDefaultsKey)
             return true
         case "wave":
             UserDefaults.standard.set(WaveMode.resolve(from: value).rawValue, forKey: waveDefaultsKey)
+            return true
+        case "emphasis":
+            UserDefaults.standard.set(EmphasisMode.resolve(from: value).rawValue, forKey: emphasisDefaultsKey)
             return true
         default:
             return false
@@ -194,12 +294,35 @@ public enum NativeLyricsFeelParity {
 /// sprang 0.95 → 1, because the first wrap-line stayed put while later
 /// wrap-lines dropped.
 enum NativeLyricsRowScale {
-    static func leadingTransform(scale: CGFloat, height: CGFloat) -> CGAffineTransform {
+    // 2026-09-17 fix (C1, research/repro-2026-09-17-lyrics-render-3c.md §C1): the X pivot used
+    // to be 0 — the ROW'S OWN frame origin — not the text's left edge. Text content (and every
+    // sibling that shares its leading reference: translation, emphasis layer, prelude dots'
+    // frame) starts at `nativeLyricContentLeadingInset`, so scaling around x=0 moved the text's
+    // left edge by `leadingInset * |Δscale|` on every active<->inactive transition — a real,
+    // deterministic 1.6pt (32pt inset × 0.05) displacement every single time, confirmed exactly
+    // via `RowScaleAnchorDisplacementTests` before this fix. Pivoting X at the SAME leading inset
+    // the content itself uses makes the text's left edge invariant across the scale change (the
+    // row still visually reads as "left-aligned, at the same x, just slightly larger/smaller").
+    //
+    // 2026-09-18 fix (founder real-machine LineGaps evidence, research/repro-2026-09-18-lyrics-
+    // render-3d.md §4 third round): the Y pivot used to be the row's geometric CENTER
+    // (`height / 2`) — chosen to fix the ORIGINAL CJK-wrapped-line-spacing bug described above
+    // (pivoting near the TOP made lower wrap-lines visibly shift as scale sprang). But centering
+    // means the row's FIRST line of text — the line the founder is actually reading, having just
+    // finished or about to start singing it — ALSO moves by `firstLineOffsetFromCenter *
+    // |Δscale|` on every activation/deactivation (≈1pt for a typical single-line row) — matching
+    // the founder's "each line change nudges 1-2px" report exactly. Callers now pass `pivotY`
+    // directly (typically `NativeLyricsRowView.verticalScalePivotY`, the first line's text
+    // baseline) instead of this function deriving `height/2` itself — the row view is the only
+    // place with the font-metrics context needed to locate that baseline; this function stays a
+    // pure, pivot-agnostic geometry primitive. `height` is kept only as a validity guard (a
+    // degenerate zero-height row has nothing meaningful to scale).
+    static func leadingTransform(scale: CGFloat, height: CGFloat, pivotY: CGFloat) -> CGAffineTransform {
         guard abs(scale - 1) > 0.0001, height > 0 else { return .identity }
-        let pivotY = height / 2
-        return CGAffineTransform(translationX: 0, y: pivotY)
+        let pivotX = nativeLyricContentLeadingInset
+        return CGAffineTransform(translationX: pivotX, y: pivotY)
             .scaledBy(x: scale, y: scale)
-            .translatedBy(x: 0, y: -pivotY)
+            .translatedBy(x: -pivotX, y: -pivotY)
     }
 }
 

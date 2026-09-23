@@ -12,6 +12,17 @@
  * No real Translation framework session is needed: `performSystemTranslation`
  * is generic over `LyricsTranslationExecuting`, so a fake executor stands in
  * for `TranslationSession` here.
+ *
+ * Disk-cache isolation (found during the 2026-09-14 repro): this test drives
+ * `LyricsService.shared` — the real, process-wide singleton — through
+ * `performSystemTranslation`, which persists successful translations via
+ * `translationDiskCache`. Before this fix that field defaulted to
+ * `TranslationDiskCache.defaultURL()`, the SAME path the real app reads and
+ * writes (`~/Library/Application Support/nanoPod/translation_cache.json`), so
+ * every `swift test` run was writing "译:hello world" rows into the
+ * founder's real translation cache (79/82 real rows on the machine this was
+ * found on). Same redirect-to-temp-file pattern as
+ * `TranslationDiskCacheTests.swift` / `MetadataDiskCacheTierTests.swift`.
  */
 
 import XCTest
@@ -34,18 +45,24 @@ final class LyricsServiceTranslationSessionReuseTests: XCTestCase {
 
     private var savedShowTranslation = false
     private var savedTranslationLanguage = "zh-Hans"
+    private var savedDiskCache: TranslationDiskCache?
 
     override func setUp() {
         super.setUp()
         let service = LyricsService.shared
         savedShowTranslation = service.showTranslation
         savedTranslationLanguage = service.translationLanguage
+        savedDiskCache = service.translationDiskCache
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("translation_cache_session_reuse_test_\(UUID().uuidString).json")
+        service.translationDiskCache = TranslationDiskCache(fileURL: tmp, persistDebounce: 0.05)
     }
 
     override func tearDown() async throws {
         let service = LyricsService.shared
         service.showTranslation = savedShowTranslation
         service.translationLanguage = savedTranslationLanguage
+        if let savedDiskCache { service.translationDiskCache = savedDiskCache }
         // `LyricsService.shared` is a process-wide singleton: a `for await`
         // loop left suspended by a merely-`cancel()`ed Task (Task
         // cancellation does not itself unblock an AsyncStream await) would
@@ -113,19 +130,44 @@ final class LyricsServiceTranslationSessionReuseTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 50_000_000)
 
         service.resetTranslationRequestStream()
-        // Finishing the stream must end the OLD loop cleanly.
-        await oldServeTask.value
         XCTAssertEqual(oldExecutor.callCount, 0, "no request was ever enqueued before the reset")
 
         let newExecutor = FakeExecutor()
         let newDone = expectation(description: "new session translated after reset")
         newExecutor.onCall = { _ in newDone.fulfill() }
+        // Registering the NEW server retires the old loop (its stream is
+        // finished and it is no longer the registered server), so the old
+        // executor can never fire again.
         let newServeTask = Task { await service.serveTranslationRequests(with: newExecutor) }
+        await oldServeTask.value
         service.requestTranslation()
         await fulfillment(of: [newDone], timeout: 2.0)
         newServeTask.cancel()
 
         XCTAssertEqual(newExecutor.callCount, 1, "the new session must serve the post-reset request")
         XCTAssertEqual(oldExecutor.callCount, 0, "the old executor must never fire after its queue was reset")
+    }
+
+    /// 2026-09-20 founder repro: the first config landing calls
+    /// `resetTranslationRequestStream()` while the language pair is unchanged,
+    /// so SwiftUI never restarts `.translationTask`. The SAME serve loop must
+    /// keep serving after a reset, or the translate button fires into nothing.
+    func test_resetWithoutSessionRestart_sameLoopKeepsServing() async {
+        let service = makeService()
+        let executor = FakeExecutor()
+
+        seed(service, title: "Song A")
+        let serveTask = Task { await service.serveTranslationRequests(with: executor) }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        service.resetTranslationRequestStream()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        let done = expectation(description: "request after a config-equal reset is still served")
+        executor.onCall = { _ in done.fulfill() }
+        service.requestTranslation()
+        await fulfillment(of: [done], timeout: 2.0)
+        serveTask.cancel()
+        XCTAssertEqual(executor.callCount, 1)
     }
 }

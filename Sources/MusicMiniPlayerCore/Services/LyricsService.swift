@@ -147,8 +147,26 @@ public class LyricsService: ObservableObject {
     @MainActor
     private lazy var translationRequestCoalescer = TranslationRequestCoalescer(delay: 0.05)
     private var translationRequestContinuation: AsyncStream<Void>.Continuation?
-    private lazy var translationRequestStream: AsyncStream<Void> = AsyncStream { [weak self] continuation in
-        self?.translationRequestContinuation = continuation
+    /// Identity of the serve loop currently registered as THE consumer of
+    /// translation requests. A newer `serveTranslationRequests` call replaces
+    /// it; an older loop that wakes up and finds itself retired returns.
+    private var translationServeToken = UUID()
+    /// Explicit-source Korean `TranslationSession`, warmed by a second,
+    /// invisible `.translationTask(Configuration(source: "ko", target:))`
+    /// host in LyricsView (`TranslationTaskHostCore`). Used only for Hangul
+    /// script runs inside mixed-script lines (`ScriptRunSegmenter`) — every
+    /// other run keeps going through `source: nil` auto-detection exactly as
+    /// before. `nil` until that second session has warmed, or on macOS < 15;
+    /// `performSystemTranslation` degrades gracefully to auto-detect for
+    /// Korean runs too when it's absent.
+    private var koreanRunTranslationExecutor: (any LyricsTranslationExecuting)?
+
+    /// Called from `TranslationTaskHostCore`'s ko-source `.translationTask`
+    /// action once its session is available (and with `nil` when that task
+    /// is torn down/cancelled).
+    @MainActor
+    public func updateKoreanRunTranslationExecutor(_ executor: (any LyricsTranslationExecuting)?) {
+        koreanRunTranslationExecutor = executor
     }
     @Published public var isTranslating: Bool = false
     @Published public var translationFailed: Bool = false
@@ -1045,6 +1063,7 @@ public class LyricsService: ObservableObject {
         // from different fetches can never mix.
         let networkLedger = NetworkOutcomeLedger()
         let foregroundStartedAt = Date()
+        DebugLogger.log("LyricsFetch", "fetchAllSources caller=foreground songID='\(songID)' album='\(album)' dur=\(duration)")
         let results = await NetworkOutcomeLedger.$current.withValue(networkLedger) {
             await fetcher.fetchAllSources(
                 title: title,
@@ -2317,11 +2336,15 @@ public class LyricsService: ObservableObject {
     /// OLD session/language can never be replayed onto the NEW one.
     @MainActor
     public func resetTranslationRequestStream() {
+        // Finishing the continuation drops every buffered request. The live
+        // serve loop (if any) wakes, sees it is still the registered server
+        // and re-subscribes with a fresh stream — a reset alone must never
+        // leave the app without a consumer (2026-09-20 bug: the FIRST config
+        // landing reset the stream while the language pair was unchanged, so
+        // SwiftUI never restarted `.translationTask`; the translate button
+        // then fired into a finished stream forever).
         translationRequestContinuation?.finish()
         translationRequestContinuation = nil
-        translationRequestStream = AsyncStream { [weak self] continuation in
-            self?.translationRequestContinuation = continuation
-        }
     }
 
     /// Consumes translation requests for as long as `session` (or the
@@ -2336,10 +2359,26 @@ public class LyricsService: ObservableObject {
     @available(macOS 15.0, *)
     @MainActor
     public func serveTranslationRequests<Executor: LyricsTranslationExecuting>(with session: Executor) async {
-        for await _ in translationRequestStream {
-            if Task.isCancelled { return }
-            await performSystemTranslation(session: session)
+        let token = UUID()
+        translationServeToken = token
+        debugLogPublic("🈺 translation session ready — serving requests")
+        while !Task.isCancelled, translationServeToken == token {
+            // Each subscription owns a fresh stream; registering it retires any
+            // continuation a previous (now-superseded) loop was blocked on, so
+            // a SwiftUI-cancelled-but-still-suspended old loop can never steal
+            // a request meant for this session.
+            let stream = AsyncStream<Void> { [weak self] continuation in
+                self?.translationRequestContinuation?.finish()
+                self?.translationRequestContinuation = continuation
+            }
+            for await _ in stream {
+                if Task.isCancelled || translationServeToken != token { return }
+                await performSystemTranslation(session: session)
+            }
+            // Stream finished (reset or superseded). Loop re-checks the guard:
+            // still the registered server → re-subscribe; otherwise exit.
         }
+        debugLogPublic("🈺 translation serve loop retired")
     }
 
     /// Performs system translation from SwiftUI .translationTask().
@@ -2440,9 +2479,15 @@ public class LyricsService: ObservableObject {
         } else {
             let textsToTranslate = remainingIndices.map { lyrics[$0].text }
             var anyChunkLanded = false
-            await ChunkedTranslationRunner.run(
+            // executorsByLanguage: only Hangul runs get an explicit-source
+            // executor (when the second ko-source session has warmed);
+            // every other script run — including ja/th/unknown — falls back
+            // to `session` (source: nil, auto-detect), unchanged from before.
+            let koExecutor = koreanRunTranslationExecutor
+            await ChunkedTranslationRunner.runMultiScript(
                 lines: textsToTranslate,
-                executor: session
+                defaultExecutor: session,
+                executorsByLanguage: koExecutor.map { ["ko": $0] } ?? [:]
             ) { [weak self] chunkResult in
                 guard let self else { return }
                 // chunkResult keys are indices into `textsToTranslate`; map back
@@ -2657,6 +2702,20 @@ public class LyricsService: ObservableObject {
     /// on the same actor as fetchLyrics, which owns the cancel side.
     @MainActor
     public func preloadNextSongs(tracks: [(title: String, artist: String, duration: TimeInterval, album: String)]) {
+        // Diagnostic input table (repro instrumentation for the 2026-09-14
+        // repeated-fetch investigation): every candidate's computed songID and
+        // whether it already hit the lyrics cache, so a log replay can tell
+        // whether the currently-playing song keeps resurfacing here and, if
+        // so, whether its songID matches what the foreground path cached
+        // (album normalization mismatch would explain an endless cache miss).
+        var diagInputSummaries: [String] = []
+        for t in tracks.prefix(4) {
+            let sid = Self.songIdentity(title: t.title, artist: t.artist, duration: t.duration, album: t.album)
+            let cached = lyricsCache.object(forKey: sid as NSString) != nil
+            diagInputSummaries.append("[\(t.title)|album='\(t.album)'|dur=\(t.duration)|songID='\(sid)'|cached=\(cached)]")
+        }
+        DebugLogger.log("LyricsFetch", "preloadNextSongs input=\(tracks.count) currentSongID='\(currentSongID ?? "nil")' candidates=\(diagInputSummaries)")
+
         let candidates = tracks
             .prefix(4)
             .filter { !$0.title.isEmpty && $0.title != kNotPlayingSentinel }
@@ -2689,6 +2748,8 @@ public class LyricsService: ObservableObject {
                     album: track.album
                 )
                 if self.lyricsCache.object(forKey: songID as NSString) != nil { continue }
+
+                DebugLogger.log("LyricsFetch", "fetchAllSources caller=preload songID='\(songID)' album='\(track.album)' dur=\(track.duration) currentSongID='\(self.currentSongID ?? "nil")'")
 
                 // Per-track ledger: preload writes the same 24h availability
                 // verdicts as the foreground, so it needs the same transport-

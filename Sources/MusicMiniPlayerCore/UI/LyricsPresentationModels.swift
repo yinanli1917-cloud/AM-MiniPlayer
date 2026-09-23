@@ -358,7 +358,56 @@ struct NativeLyricsVisualTarget: Equatable {
         )
     }
 
+    /// Ordered brightness tiers this codebase uses across opacity AND
+    /// dimBaseBrightness (1.0 sweeping-bright, 0.85 harmony/duet, 0.6
+    /// manual-scroll all-clear, 0.35 inactive dim base). A backing-vocal
+    /// (和声) row reads ONE STEP LOWER than its melody row's own tier in the
+    /// same state (founder 2026-09-20) — 0.22 extends the ladder one step
+    /// below the lowest existing tier for that case. Needs the founder's
+    /// on-device check like every other value on this ladder.
+    private static let brightnessTierLadder: [CGFloat] = [1.0, 0.85, 0.6, 0.35, 0.22]
+
+    static func nextLowerBrightnessTier(_ value: CGFloat) -> CGFloat {
+        for tier in brightnessTierLadder where tier < value - 0.001 {
+            return tier
+        }
+        return brightnessTierLadder.last ?? value
+    }
+
     static func amllTarget(
+        displayIndex: Int,
+        currentIndex: Int,
+        scrollTargetIndex: Int,
+        hotActiveIndices: Set<Int>,
+        isManualScrolling: Bool,
+        interludeBlend: CGFloat = 0,
+        gapRecedeBlend: CGFloat = 0,
+        isBackground: Bool = false
+    ) -> NativeLyricsVisualTarget {
+        let melody = melodyAmllTarget(
+            displayIndex: displayIndex,
+            currentIndex: currentIndex,
+            scrollTargetIndex: scrollTargetIndex,
+            hotActiveIndices: hotActiveIndices,
+            isManualScrolling: isManualScrolling,
+            interludeBlend: interludeBlend,
+            gapRecedeBlend: gapRecedeBlend
+        )
+        guard isBackground else { return melody }
+        // Subordinate row (founder 2026-09-20): lights up alongside its melody
+        // (isActive carries through so the word sweep still runs when it has
+        // words) at one tier lower brightness, never scales up past the
+        // inactive scale, and is never itself a blur-focus centre.
+        return NativeLyricsVisualTarget(
+            opacity: nextLowerBrightnessTier(melody.opacity),
+            scale: min(melody.scale, 0.95),
+            blur: 0,
+            isActive: melody.isActive,
+            dimBaseBrightness: nextLowerBrightnessTier(melody.dimBaseBrightness)
+        )
+    }
+
+    private static func melodyAmllTarget(
         displayIndex: Int,
         currentIndex: Int,
         scrollTargetIndex: Int,
@@ -458,13 +507,23 @@ struct NativeLyricsVisualMotionState: Equatable {
         self.target = target
     }
 
+    // 2026-09-20 (stage bundle 3r, Task 2 Part C): loosened from 0.002/0.001/0.03 — the founder's
+    // real-device trace (line-level song, `/tmp/nanopod_mask_trace.jsonl`) showed the presentation
+    // loop unable to reach an idle "may stop" decision for over a second after a settled line
+    // switch, keeping the display link (and its ~2ms/tick main-thread cost) alive continuously.
+    // `NativeLyricsLineLevelIdleCostTests.test_lineLevelSwitch_settlesWithinPinnedBudget` measured
+    // the shipping springs converging well inside these looser tolerances long before a viewer can
+    // perceive any residual delta — 0.005 opacity / 0.002 scale is still sub-1% of full range and
+    // 0.05 blur is under a fifth of a point of Gaussian radius, both below single-pixel visibility.
+    // Spring parameters (mass/stiffness/damping) are UNCHANGED; only the "are we there yet"
+    // epsilon moved.
     var isSettled: Bool {
-        abs(opacity - target.opacity) < 0.002
-            && abs(scale - target.scale) < 0.001
-            && abs(blur - target.blur) < 0.03
-            && abs(opacityVelocity) < 0.002
-            && abs(scaleVelocity) < 0.001
-            && abs(blurVelocity) < 0.03
+        abs(opacity - target.opacity) < 0.005
+            && abs(scale - target.scale) < 0.002
+            && abs(blur - target.blur) < 0.05
+            && abs(opacityVelocity) < 0.005
+            && abs(scaleVelocity) < 0.002
+            && abs(blurVelocity) < 0.05
     }
 
     mutating func setTarget(_ nextTarget: NativeLyricsVisualTarget) -> Bool {
@@ -629,10 +688,28 @@ struct LyricsPresentationPendingWave {
 /// progress-bar scrub) also forces a seek even for a +1 step that would otherwise look natural.
 enum NativeLyricsSeekClassifier {
     static func isSeek(previousIndex: Int?, liveIndex: Int, explicitSeek: Bool) -> Bool {
+        isSeek(previousIndex: previousIndex, liveIndex: liveIndex, explicitSeek: explicitSeek, naturalNextIndex: previousIndex.map { $0 + 1 })
+    }
+
+    /// Row-aware variant (2026-09-20 founder: 和声行处硬切、没有波浪). Background rows sit in the
+    /// row array between melody lines but never become the semantic index, so melody→melody
+    /// advance is `previous + 1 + (background rows in between)`. The caller supplies the index of
+    /// the next NON-background row after `previous` as `naturalNextIndex`; stepping exactly onto
+    /// it is natural playback, anything else is still a seek.
+    static func isSeek(previousIndex: Int?, liveIndex: Int, explicitSeek: Bool, naturalNextIndex: Int?) -> Bool {
         if explicitSeek { return true }
         guard let previous = previousIndex else { return false }
-        if liveIndex == previous || liveIndex == previous + 1 { return false }
+        if liveIndex == previous { return false }
+        if let naturalNextIndex, liveIndex == naturalNextIndex { return false }
         return true
+    }
+
+    /// The next melody (non-background) row index after `index`, in row order; nil at the end.
+    static func naturalNextIndex(after index: Int, rows: [LayerBackedLyricRow]) -> Int? {
+        rows.lazy
+            .filter { $0.index > index && !$0.displayLine.line.isBackground && !$0.isPrelude }
+            .map(\.index)
+            .min()
     }
 
     // The playback clock may step BACKWARD by up to the clock's non-seek window when a poll resync
@@ -704,19 +781,6 @@ enum NativeLyricsTimelinePolicy {
         let semanticIndex: Int
     }
 
-    /// A line whose whole text is bracket-wrapped is a BACKING-VOCAL part — the convention
-    /// every lyric source uses for background/duet parts (（I want you）, (ooh ooh)). Backing
-    /// parts light up alongside the melody (they stay in hotGroups) but never claim the
-    /// PRIMARY slot: the scroll and the karaoke sweep follow the melody line (user
-    /// 2026-07-13: 和声同时播放，滚动不跳). Structural rule, no per-song lists.
-    static func isBackingVocalText(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count > 2, let first = trimmed.first, let last = trimmed.last else { return false }
-        let opens: Set<Character> = ["(", "（"]
-        let closes: Set<Character> = [")", "）"]
-        return opens.contains(first) && closes.contains(last)
-    }
-
     static func liveDisplayIndex(
         at playbackTime: TimeInterval,
         rows: [LayerBackedLyricRow],
@@ -734,7 +798,11 @@ enum NativeLyricsTimelinePolicy {
                 bestAnyStartTime = startTime
                 bestAnyIndex = row.index
             }
-            guard !isBackingVocalText(row.displayLine.line.text) else { continue }
+            // 和声 (backing vocal) rows light up alongside their melody (they stay in
+            // hotGroups) but never claim the PRIMARY slot: the scroll and the karaoke
+            // sweep follow the melody line (founder 2026-09-20: data-model flag, not a
+            // text heuristic — user 2026-07-13: 和声同时播放，滚动不跳).
+            guard !row.displayLine.line.isBackground else { continue }
             if startTime > bestStartTime || (startTime == bestStartTime && row.index > (bestIndex ?? Int.min)) {
                 bestStartTime = startTime
                 bestIndex = row.index
@@ -767,7 +835,7 @@ enum NativeLyricsTimelinePolicy {
             fallback: fallback
         )
         let backingIndices = Set(
-            sortedRows.filter { isBackingVocalText($0.displayLine.line.text) }.map(\.index)
+            sortedRows.filter { $0.displayLine.line.isBackground }.map(\.index)
         )
         let firstFutureIndex = sortedRows
             .filter {
@@ -800,14 +868,48 @@ enum NativeLyricsTimelinePolicy {
         // Backing parts stay in hotGroups (they LIGHT simultaneously) but never lead:
         // the primary slot and the scroll resolve on melody lines only, falling back to
         // the unfiltered sets when a window contains nothing else.
+        //
+        // 2026-09-18 (stage bundle 3i, item 1 — "三点跑到别处"/scrollToIndex-semanticIndex
+        // divergence, pinned as a known-unfixed defect by
+        // LyricsRenderDefects20260914ReproTests.test_amllState_backwardSeekIntoPreludeWindow_
+        // withCorrectFallback_scrollTargetStillDivergesFromSemanticIndex): a seek landing INSIDE
+        // the prelude window (before any real line has ever started) fell into this
+        // `isSeeking, let firstFutureIndex` branch and jumped the scroll/anchor target ahead to
+        // the first REAL line, while `semanticIndex` below correctly resolves to the prelude row
+        // via its own `fallback` fallback chain. The two values then diverge for the same tick:
+        // the prelude row is text-phase-active (dots animate) but the presentation engine anchors
+        // on the NEXT row, so the prelude row renders at its in-flow offset relative to the WRONG
+        // anchor instead of the centred anchorY slot.
+        //
+        // Fix: only prefer `firstFutureIndex` when we are already inside the song (some real row
+        // has genuinely started/ended by `playbackTime`) — i.e. a seek that lands in a GAP
+        // between two real lines, where scrolling ahead to the next line is the intended
+        // behavior. A seek that lands before the first real line has ever started (the prelude/
+        // intro) has no "current melody row" to hold, so anchor on the same row semanticIndex
+        // resolves to instead — `latestStartedIndex` already equals `fallback` in exactly this
+        // case (no non-prelude row's startTime <= playbackTime), so this is a straight re-use of
+        // the same resolution semanticIndex already trusts, not a new special case.
+        let anyRealRowStarted = sortedRows.contains {
+            !$0.isPrelude && $0.displayLine.line.startTime <= playbackTime
+        }
         let scrollToIndex: Int
         if let firstBuffered = bufferedGroups.subtracting(backingIndices).min() {
             scrollToIndex = firstBuffered
+        } else if !anyRealRowStarted {
+            // No real row has ever started yet (still inside the prelude/intro) — there is no
+            // "deep in the song" state to hold onto, so a stale `previous.scrollToIndex` must
+            // NOT be trusted here (that was the old bug's other face: `previous` still carries
+            // whatever row was active before a seek back to t=0, e.g. 5, even once semanticIndex
+            // has already correctly resolved to the prelude). Resolve via the exact same
+            // `latestStartedIndex` chain `semanticIndex` below falls back to, so the two values
+            // agree instead of diverging.
+            scrollToIndex = latestStartedIndex
         } else if isSeeking, let firstFutureIndex {
             scrollToIndex = firstFutureIndex
         } else {
-            // Buffered set empty or backing-only: hold the melody. latestStartedIndex
-            // itself falls back to backing rows when a song has nothing else.
+            // Buffered set empty or backing-only, already past the first real line: hold the
+            // melody. latestStartedIndex itself falls back to backing rows when a song has
+            // nothing else.
             scrollToIndex = previous?.scrollToIndex ?? latestStartedIndex
         }
 

@@ -153,8 +153,20 @@ final class NativeLyricsActiveLineSpacingTests: XCTestCase {
                         "\(label): activation must keep the whole-line dim base (v2.8 Canvas pass 1)")
         XCTAssertEqual(view.debugMainTextLayerString, inactiveString,
                        "\(label): dim string must not be rewritten into a different wrap")
-        XCTAssertEqual(view.debugVisibleDimWordGlyphCount, 0,
-                       "\(label): dim must not retessellate into glyph tiles")
+        // Sweep-ghost fix (2026-09-12, founder: "很多歌词重影，集中在 CJK 亮字"): a word can start
+        // floating (baseFloatY != 0) from the very first post-activation frame — even syncing the
+        // clock to exactly line.startTime, a real Date()-driven clock accrues a sub-millisecond
+        // delta by the time updatePlaybackPhase reads it, so word 0 is already (barely) floating
+        // here. applyFloatingHiddenBase/applyMainWordFloatGlyphLayers now legitimately draw a dim
+        // TILE for that one floating word (parented inside mainTextLayer, floated by the SAME
+        // amount as its bright tile) so the two coincide — that is the fix for the reported double
+        // image. What this test must still guard is the ORIGINAL 08-27 regression: a FULL
+        // retessellation of the whole line into per-glyph dim tiles (which is what changed 行距/字距).
+        // A partial tessellation of only the already-floating word(s) leaves layout untouched (the
+        // assertions above/below pin that); asserting it stays partial (never the whole line) is the
+        // right invariant now, not "exactly zero".
+        XCTAssertLessThan(view.debugVisibleDimWordGlyphCount, view.debugVisibleBrightWordGlyphCount,
+                          "\(label): dim tessellation must stay partial (only currently-floating words), never retessellate the whole line")
         XCTAssertEqual(inactiveGlyphs, 0, "\(label): inactive dim was already whole-line")
         XCTAssertEqual(view.debugMainTextLayerFrame.height, inactiveHeight, accuracy: 0.5,
                        "\(label): dim-base frame height (行高) must not jump on activation")
@@ -207,18 +219,99 @@ final class NativeLyricsActiveLineSpacingTests: XCTestCase {
         XCTAssertGreaterThan(view.debugVisibleDimWordGlyphCount, 0)
     }
 
-    func test_leadingScale_preservesLeftCenter_matchingV28AnchorLeading() {
+    // 2026-09-17 (C1 fix, research/repro-2026-09-17-lyrics-render-3c.md §C1): the X pivot moved
+    // from the row's own frame origin (x=0) to the text's actual left edge
+    // (nativeLyricContentLeadingInset — 32pt at the time of that fix, moved to 20pt by the
+    // 2026-09-21 founder "text sits too far right" feedback) — x=0 was never the text's own
+    // position, it was `leadingInset`pt to the text's LEFT, so scaling around it silently moved
+    // the text by leadingInset * |Δscale| (a real, deterministic displacement every
+    // active<->inactive transition, confirmed via RowScaleAnchorDisplacementTests before this
+    // fix). "Preserves left" now means preserving THIS point, not x=0. This test reads
+    // `nativeLyricContentLeadingInset` live, so it tracks whatever that constant is set to.
+    //
+    // 2026-09-18 (coordinator-approved follow-up, research/repro-2026-09-18-lyrics-render-3d.md
+    // §4 third round): `leadingTransform` no longer derives its OWN Y pivot from `height/2` — it
+    // now takes `pivotY` as an explicit parameter (production caller:
+    // `NativeLyricsRowView.verticalScalePivotY`, the row's first-line text baseline, exercised by
+    // `NativeLyricsBaselinePivotInvariantTests`). This test pinned `height/2` specifically, which
+    // was ONLY ever a stand-in for "whatever the pivot is" — rewritten to pass an explicit,
+    // arbitrary `pivotY` and assert the transform's actual, timeless construction property (any
+    // point placed exactly at the pivot maps to itself, regardless of what that pivot represents)
+    // instead of re-asserting the old, now-superseded height/2 choice as if it were load-bearing.
+    func test_leadingScale_preservesGivenPivot_atArbitraryPivotY() {
         let height: CGFloat = 80
-        let t = NativeLyricsRowScale.leadingTransform(scale: 0.95, height: height)
-        let pivot = CGPoint(x: 0, y: height / 2)
+        let pivotY: CGFloat = 30 // an arbitrary stand-in for "the first line's baseline" — the
+        // production value comes from font metrics (verticalScalePivotY), not tested here.
+        let t = NativeLyricsRowScale.leadingTransform(scale: 0.95, height: height, pivotY: pivotY)
+        let pivot = CGPoint(x: nativeLyricContentLeadingInset, y: pivotY)
         let mapped = pivot.applying(t)
-        XCTAssertEqual(mapped.x, 0, accuracy: 0.0001)
-        XCTAssertEqual(mapped.y, height / 2, accuracy: 0.0001)
+        XCTAssertEqual(mapped.x, nativeLyricContentLeadingInset, accuracy: 0.0001,
+                        "the text's own left edge (not the row's bare x=0 origin) must be invariant across the scale change")
+        XCTAssertEqual(mapped.y, pivotY, accuracy: 0.0001,
+                        "whatever Y the caller designates as the pivot must be invariant across the scale change")
 
-        let top = CGPoint(x: 0, y: 0).applying(t)
-        let originScaled = CGPoint(x: 0, y: 0).applying(CGAffineTransform(scaleX: 0.95, y: 0.95))
+        let top = CGPoint(x: nativeLyricContentLeadingInset, y: 0).applying(t)
+        let originScaled = CGPoint(x: nativeLyricContentLeadingInset, y: 0).applying(CGAffineTransform(scaleX: 0.95, y: 0.95))
         XCTAssertNotEqual(top.y, originScaled.y, accuracy: 0.0001,
-                          "leading-center scale must move the top edge; origin scale leaves it put (the 行距 look)")
-        XCTAssertEqual(NativeLyricsRowScale.leadingTransform(scale: 1, height: height), .identity)
+                          "pivot-centered scale must move a point away from the pivot; origin scale leaves it put")
+        XCTAssertEqual(NativeLyricsRowScale.leadingTransform(scale: 1, height: height, pivotY: pivotY), .identity)
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 2026-09-21 founder feedback (vs. Apple Music's lyrics panel): text column moved left
+    // (leading 32→20, trailing 32→24 — `NativeLyricsRowMeasurement.leadingInset`/`trailingInset`,
+    // aliased everywhere via `nativeLyricContentLeadingInset`/`nativeLyricContentTrailingInset`),
+    // and wrapped lines within one row got explicit breathing room (`mainLineSpacing`, round(font
+    // size × 0.18): 4pt at the 24pt melody size, 3pt at the 0.8×-scaled 19.2pt background-row
+    // size). These pin the new numbers so a future edit can't silently drift them back.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    func test_contentInsets_32Leading_32Trailing_balancedOrphanBorrow() {
+        XCTAssertEqual(NativeLyricsRowMeasurement.leadingInset, 32, "leading inset: 32 (founder 2026-09-21: 20 and 26 both looked wrong (2026-09-21 founder feedback)")
+        XCTAssertEqual(NativeLyricsRowMeasurement.trailingInset, 32, "trailing inset 32: symmetric margins; orphan rows borrow from both sides instead (2026-09-21 founder feedback)")
+        XCTAssertEqual(nativeLyricContentLeadingInset, NativeLyricsRowMeasurement.leadingInset,
+                       "LyricsLayerRendererView's alias must read the same single source of truth")
+        XCTAssertEqual(nativeLyricContentTrailingInset, NativeLyricsRowMeasurement.trailingInset,
+                       "LyricsLayerRendererView's alias must read the same single source of truth")
+    }
+
+    func test_mainLineSpacing_isRoundedFontSizeTimes0Point18_andScalesWithBackgroundRow() {
+        let melody = NativeLyricsTextConstants(scale: 1.0)
+        XCTAssertEqual(melody.mainFontSize, 24)
+        XCTAssertEqual(melody.mainLineSpacing, 4, "round(24 × 0.18) = round(4.32) = 4")
+
+        let background = NativeLyricsTextConstants(scale: NativeLyricsTextConstants.backgroundRowFontScale)
+        XCTAssertEqual(background.mainFontSize, 24 * 0.8, accuracy: 0.001)
+        XCTAssertEqual(background.mainLineSpacing, 3, "round(19.2 × 0.18) = round(3.456) = 3 — scales with the background row's smaller font")
+    }
+
+    /// Both text engines must apply the SAME `mainLineSpacing` (banned-patterns.md's 2026-09-21
+    /// two-text-engine rule): `NativeLyricsTextSweepLayout` (active-line glyph rects) and the
+    /// whole-line dim base's `NativeLyricsTextMeasurement`/`displayWrapped` path
+    /// (`NativeLyricsRowMeasurement.estimatedHeight`). A wrapped row's measured height must grow
+    /// by exactly (lineCount - 1) × mainLineSpacing versus the same text laid out with zero
+    /// line spacing.
+    @MainActor
+    func test_wrappedRowHeight_growsByLineSpacing_perExtraVisualLine() {
+        let width: CGFloat = 186
+        let line = cjkLine()
+        let plan = NativeLyricsTextRenderPlan.make(configuration: .init(line: line, currentTime: line.startTime, isActive: false))
+        let textWidth = max(1, width - NativeLyricsRowMeasurement.leadingInset - NativeLyricsRowMeasurement.trailingInset)
+        let font = NSFont.systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
+
+        let spacedMetrics = NativeLyricsTextMeasurement.metrics(plan.displayText, width: textWidth, font: font, lineSpacing: plan.constants.mainLineSpacing)
+        let unspacedMetrics = NativeLyricsTextMeasurement.metrics(plan.displayText, width: textWidth, font: font, lineSpacing: 0)
+        XCTAssertGreaterThanOrEqual(spacedMetrics.lineCount, 2, "precondition: fixture must wrap")
+        XCTAssertEqual(spacedMetrics.lineCount, unspacedMetrics.lineCount, "line spacing must not change wrap points, only vertical pitch")
+
+        let expectedGrowth = CGFloat(spacedMetrics.lineCount - 1) * plan.constants.mainLineSpacing
+        XCTAssertEqual(spacedMetrics.height - unspacedMetrics.height, expectedGrowth, accuracy: 0.5,
+                       "wrapped-row height must grow by exactly (visualLines - 1) × mainLineSpacing")
+
+        let row = row(for: line, index: 1)
+        let rowMeasuredHeight = NativeLyricsRowMeasurement.estimatedHeight(
+            for: row, rowWidth: width, showTranslation: false, isTranslating: false, pendingTranslationLineIndices: []
+        )
+        XCTAssertGreaterThanOrEqual(rowMeasuredHeight, spacedMetrics.height,
+                                    "row's estimated height must account for the spaced (not unspaced) text height")
     }
 }

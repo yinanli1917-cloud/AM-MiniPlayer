@@ -14,8 +14,8 @@ final class SettingsFeelTests: XCTestCase {
     // MARK: - resolve() 钳制：未知/nil 一律回落默认，不能让 typo 改变生产表现
 
     func test_settingsTabMode_resolve_clampsUnknownAndNilToDefault() {
-        XCTAssertEqual(MicroInteractionFeel.SettingsTabMode.resolve(from: nil), .custom)
-        XCTAssertEqual(MicroInteractionFeel.SettingsTabMode.resolve(from: "garbage"), .custom)
+        XCTAssertEqual(MicroInteractionFeel.SettingsTabMode.resolve(from: nil), .system)
+        XCTAssertEqual(MicroInteractionFeel.SettingsTabMode.resolve(from: "garbage"), .system)
         XCTAssertEqual(MicroInteractionFeel.SettingsTabMode.resolve(from: "SYSTEM"), .system)
         XCTAssertEqual(MicroInteractionFeel.SettingsTabMode.resolve(from: "custom"), .custom)
     }
@@ -137,7 +137,7 @@ final class SettingsFeelTests: XCTestCase {
         MicroInteractionFeel.testingSettingsTab = .system
         XCTAssertEqual(MicroInteractionFeel.settingsTab, .system)
         MicroInteractionFeel.testingSettingsTab = nil
-        XCTAssertEqual(MicroInteractionFeel.settingsTab, .custom) // isRunningTests default
+        XCTAssertEqual(MicroInteractionFeel.settingsTab, .system) // isRunningTests default（09-14 撤回 custom 后）
     }
 
     func test_settingsToggle_testingOverride_takesPrecedence() {

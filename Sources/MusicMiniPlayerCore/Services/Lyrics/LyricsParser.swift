@@ -34,6 +34,20 @@ public final class LyricsParser {
         pattern: "<span[^>]*>([^<]+)</span>",
         options: []
     )
+    /// Opening tag of a background-vocal (和声) group, either a single leaf
+    /// span carrying both `ttm:role="x-bg"` and its own `begin`/`end`
+    /// (LRCLIB-shaped), or a wrapper span with `ttm:role="x-bg"` around
+    /// nested per-word timed spans (Apple/AMLL-shaped).
+    private let ttmlBgOpenTagRegex = try? NSRegularExpression(
+        pattern: "<span[^>]*ttm:role=\"x-bg\"[^>]*>",
+        options: []
+    )
+    /// Any span open/close tag boundary — used to depth-count a bg wrapper's
+    /// matching close tag so nested per-word spans don't confuse the scan.
+    private let ttmlAnySpanTagRegex = try? NSRegularExpression(
+        pattern: "</?span[^>]*>",
+        options: []
+    )
     private let lrcTimestampRegex = try? NSRegularExpression(
         pattern: "\\[(\\d{2}):(\\d{2})[:.](\\d{2,3})\\]",
         options: []
@@ -72,18 +86,31 @@ public final class LyricsParser {
             let endString = String(ttmlString[endRange])
             let content = String(ttmlString[contentRange])
 
-            let translation = extractTranslation(from: content)
-            var (words, lineText) = extractTimedWords(from: content)
+            let (bgGroups, strippedContent) = extractBackgroundGroups(from: content)
+
+            let translation = extractTranslation(from: strippedContent)
+            var (words, lineText) = extractTimedWords(from: strippedContent)
 
             // 回退：普通 span / 清理标签
-            if words.isEmpty { lineText = extractCleanText(from: content) }
+            if words.isEmpty { lineText = extractCleanText(from: strippedContent) }
 
             lineText = decodeHTMLEntities(lineText.trimmingCharacters(in: .whitespacesAndNewlines))
-            guard !lineText.isEmpty else { continue }
 
-            if let startTime = parseTTMLTime(beginString),
-               let endTime = parseTTMLTime(endString) {
+            let pStart = parseTTMLTime(beginString)
+            let pEnd = parseTTMLTime(endString)
+
+            if !lineText.isEmpty, let startTime = pStart, let endTime = pEnd {
                 lines.append(LyricLine(text: lineText, startTime: startTime, endTime: endTime, words: words, translation: translation))
+            }
+
+            // 和声 (backing vocal) 行：紧跟其旋律行之后，窗口取自己的逐字时间
+            // 轴（有的话），否则回退到整个 <p> 的 begin/end。
+            for group in bgGroups {
+                let groupText = decodeHTMLEntities(group.text.trimmingCharacters(in: .whitespacesAndNewlines))
+                guard !groupText.isEmpty else { continue }
+                let startTime = group.begin ?? pStart ?? 0
+                let endTime = group.end ?? pEnd ?? startTime
+                lines.append(LyricLine(text: groupText, startTime: startTime, endTime: endTime, words: group.words, translation: nil, isBackground: true))
             }
         }
 
@@ -152,6 +179,85 @@ public final class LyricsParser {
         }
 
         return (words, lineText)
+    }
+
+    // MARK: - 和声 (Backing Vocal / x-bg) 提取
+
+    /// Extract every `ttm:role="x-bg"` group from a `<p>`'s content, returning
+    /// each group's own timed words/text (or its own begin/end when it is a
+    /// leaf span with no nested timed children) alongside the content with
+    /// those regions removed, so the melody-line extraction below never sees
+    /// backing-vocal spans as ordinary words.
+    private func extractBackgroundGroups(from content: String) -> (groups: [(words: [LyricWord], text: String, begin: TimeInterval?, end: TimeInterval?)], stripped: String) {
+        guard let openRegex = ttmlBgOpenTagRegex, let anyTagRegex = ttmlAnySpanTagRegex else { return ([], content) }
+
+        var groups: [(words: [LyricWord], text: String, begin: TimeInterval?, end: TimeInterval?)] = []
+        var stripped = ""
+        var searchStart = content.startIndex
+
+        while searchStart < content.endIndex,
+              let match = openRegex.firstMatch(in: content, range: NSRange(searchStart..<content.endIndex, in: content)),
+              let openTagRange = Range(match.range, in: content) {
+            stripped += content[searchStart..<openTagRange.lowerBound]
+            let openTag = String(content[openTagRange])
+
+            // Depth-count forward from just after the open tag to find the
+            // matching close, so nested per-word <span> children (the
+            // Apple/AMLL wrapper shape) don't terminate the scan early.
+            var depth = 1
+            var cursor = openTagRange.upperBound
+            var closeTagRange: Range<String.Index>?
+            while cursor < content.endIndex {
+                guard let tagMatch = anyTagRegex.firstMatch(in: content, range: NSRange(cursor..<content.endIndex, in: content)),
+                      let tagRange = Range(tagMatch.range, in: content) else { break }
+                let tag = String(content[tagRange])
+                if tag.hasPrefix("</") {
+                    depth -= 1
+                    if depth == 0 { closeTagRange = tagRange; break }
+                } else {
+                    depth += 1
+                }
+                cursor = tagRange.upperBound
+            }
+
+            guard let closeRange = closeTagRange else {
+                // Unbalanced markup — bail out and keep the raw remainder so
+                // no lyric text is silently dropped.
+                stripped += content[openTagRange.lowerBound...]
+                searchStart = content.endIndex
+                break
+            }
+
+            let inner = String(content[openTagRange.upperBound..<closeRange.lowerBound])
+            let (words, text) = extractTimedWords(from: inner)
+            if !words.isEmpty {
+                let begin = words.map(\.startTime).min()
+                let end = words.map(\.endTime).max()
+                groups.append((words: words, text: text, begin: begin, end: end))
+            } else {
+                // Leaf span: role + its own begin/end, plain text body.
+                let leafText = stripAllTags(inner)
+                let begin = firstAttrValue(named: "begin", in: openTag).flatMap(parseTTMLTime)
+                let end = firstAttrValue(named: "end", in: openTag).flatMap(parseTTMLTime)
+                groups.append((words: [], text: leafText, begin: begin, end: end))
+            }
+
+            searchStart = closeRange.upperBound
+        }
+        stripped += content[searchStart...]
+        return (groups, stripped)
+    }
+
+    private func firstAttrValue(named name: String, in tag: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: "\(name)=\"([^\"]*)\"", options: []),
+              let match = regex.firstMatch(in: tag, range: NSRange(tag.startIndex..., in: tag)),
+              let range = Range(match.range(at: 1), in: tag) else { return nil }
+        return String(tag[range])
+    }
+
+    private func stripAllTags(_ text: String) -> String {
+        text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// 回退提取：普通 span → 清理标签
@@ -540,9 +646,16 @@ public final class LyricsParser {
                 startTime: currentStart,
                 endTime: fixedEnd,
                 words: filteredLyrics[i].words,
-                translation: filteredLyrics[i].translation
+                translation: filteredLyrics[i].translation,
+                isBackground: filteredLyrics[i].isBackground
             )
         }
+
+        // 和声 (backing vocal) 结构化拆分：全行括号、行首/行尾括号 → 独立的
+        // isBackground 行，与旋律行共享同一时间窗。中间括号不动。这是纯结构
+        // 规则，跑在所有来源（LRC/QQ/NetEase/LRCLIB/Genius）共用的后处理，
+        // 在翻译回填之前，所以翻译按数组下标写回时下标已经稳定。
+        filteredLyrics = splitBackgroundVocalLines(filteredLyrics)
 
         // Strip translations from non-lyric display markers. Providers often
         // attach the next real line's translation to standalone singer labels
@@ -558,6 +671,141 @@ public final class LyricsParser {
         // 插入前奏占位符
         let loadingLine = LyricLine(text: "⋯", startTime: 0, endTime: firstRealLyricStartTime)
         return ([loadingLine] + filteredLyrics, 1)
+    }
+
+    // MARK: - 和声 (Backing Vocal) 结构化拆分
+
+    /// Bracket pairs recognized as backing-vocal markers: ASCII and
+    /// full-width parentheses. Founder rule (2026-09-20): structural only,
+    /// no per-song/per-artist word lists.
+    private static let backgroundBracketPairs: [(open: Character, close: Character)] = [
+        ("(", ")"), ("（", "）")
+    ]
+
+    /// Expand each non-background line into melody + background `LyricLine`s
+    /// when its text carries a whole-line or leading/trailing parenthetical.
+    /// A line already marked `isBackground` (from TTML x-bg parsing) passes
+    /// through untouched. A parenthetical in the MIDDLE of a line is left
+    /// alone — only whole-line or edge-anchored brackets qualify.
+    func splitBackgroundVocalLines(_ lines: [LyricLine]) -> [LyricLine] {
+        var result: [LyricLine] = []
+        result.reserveCapacity(lines.count)
+        for line in lines {
+            if line.isBackground {
+                result.append(line)
+                continue
+            }
+            let trimmed = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                result.append(line)
+                continue
+            }
+
+            if let inner = wholeLineBracketedInner(trimmed) {
+                result.append(LyricLine(
+                    text: inner, startTime: line.startTime, endTime: line.endTime,
+                    words: [], translation: line.translation, isBackground: true
+                ))
+                continue
+            }
+
+            if let (melody, background) = splitEdgeParenthetical(trimmed) {
+                result.append(LyricLine(
+                    text: melody, startTime: line.startTime, endTime: line.endTime,
+                    words: [], translation: line.translation, isBackground: false
+                ))
+                result.append(LyricLine(
+                    text: background, startTime: line.startTime, endTime: line.endTime,
+                    words: [], translation: nil, isBackground: true
+                ))
+                continue
+            }
+
+            result.append(line)
+        }
+        return result
+    }
+
+    /// Returns the inner text when `text` is ENTIRELY wrapped by one matching
+    /// bracket pair (e.g. "（I want you）"), else nil.
+    private func wholeLineBracketedInner(_ text: String) -> String? {
+        guard let first = text.first else { return nil }
+        guard let pair = Self.backgroundBracketPairs.first(where: { $0.open == first }) else { return nil }
+        guard let closeIndex = matchingCloseIndex(in: text, openAt: text.startIndex, open: pair.open, close: pair.close) else { return nil }
+        guard closeIndex == text.index(before: text.endIndex) else { return nil }
+        let inner = String(text[text.index(after: text.startIndex)..<closeIndex]).trimmingCharacters(in: .whitespaces)
+        return letterCount(inner) >= 2 ? inner : nil
+    }
+
+    /// Splits "A (B)" → (melody: "A", background: "B") or "(B) A" →
+    /// (melody: "A", background: "B") when the bracket is anchored at the
+    /// very start or end of the line (not the whole line — that is handled
+    /// by `wholeLineBracketedInner`) and both sides are non-empty.
+    private func splitEdgeParenthetical(_ text: String) -> (melody: String, background: String)? {
+        guard let first = text.first, let last = text.last else { return nil }
+
+        // Trailing: "... (B)"
+        if let pair = Self.backgroundBracketPairs.first(where: { $0.close == last }) {
+            let lastIndex = text.index(before: text.endIndex)
+            if let openIndex = matchingOpenIndex(in: text, closeAt: lastIndex, open: pair.open, close: pair.close),
+               openIndex != text.startIndex {
+                let melody = String(text[text.startIndex..<openIndex]).trimmingCharacters(in: .whitespaces)
+                let background = String(text[text.index(after: openIndex)..<lastIndex]).trimmingCharacters(in: .whitespaces)
+                if !melody.isEmpty, letterCount(background) >= 2 {
+                    return (melody, background)
+                }
+            }
+        }
+
+        // Leading: "(B) ..."
+        if let pair = Self.backgroundBracketPairs.first(where: { $0.open == first }) {
+            if let closeIndex = matchingCloseIndex(in: text, openAt: text.startIndex, open: pair.open, close: pair.close),
+               closeIndex != text.index(before: text.endIndex) {
+                let background = String(text[text.index(after: text.startIndex)..<closeIndex]).trimmingCharacters(in: .whitespaces)
+                let afterIndex = text.index(after: closeIndex)
+                let melody = String(text[afterIndex...]).trimmingCharacters(in: .whitespaces)
+                if !melody.isEmpty, letterCount(background) >= 2 {
+                    return (melody, background)
+                }
+            }
+        }
+
+        return nil
+    }
+
+    /// Depth-counted scan forward from an opening bracket to find its match.
+    private func matchingCloseIndex(in text: String, openAt: String.Index, open: Character, close: Character) -> String.Index? {
+        var depth = 0
+        var idx = openAt
+        while idx < text.endIndex {
+            let ch = text[idx]
+            if ch == open { depth += 1 } else if ch == close {
+                depth -= 1
+                if depth == 0 { return idx }
+            }
+            idx = text.index(after: idx)
+        }
+        return nil
+    }
+
+    /// Depth-counted scan backward from a closing bracket to find its match.
+    private func matchingOpenIndex(in text: String, closeAt: String.Index, open: Character, close: Character) -> String.Index? {
+        var depth = 0
+        var idx = closeAt
+        while true {
+            let ch = text[idx]
+            if ch == close { depth += 1 } else if ch == open {
+                depth -= 1
+                if depth == 0 { return idx }
+            }
+            if idx == text.startIndex { break }
+            idx = text.index(before: idx)
+        }
+        return nil
+    }
+
+    private func letterCount(_ text: String) -> Int {
+        text.unicodeScalars.filter { CharacterSet.letters.contains($0) }.count
     }
 
     private func fillMissingRepeatedLineTranslations(_ lines: [LyricLine]) -> [LyricLine] {

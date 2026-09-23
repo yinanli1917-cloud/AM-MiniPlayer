@@ -26,6 +26,13 @@ final class NativeLyricsFeelParityTests: XCTestCase {
         XCTAssertEqual(NativeLyricsFeelParity.SweepPathMode.resolve(from: "canvas"), .v28)
         XCTAssertEqual(NativeLyricsFeelParity.SweepPathMode.resolve(from: "layer"), .layer)
         XCTAssertEqual(NativeLyricsFeelParity.SweepPathMode.resolve(from: "current"), .v28)
+        // 2026-09-17: shipping default switched to amll after independent verification
+        // (research/repro-2026-09-17-lyrics-render-3c.md §B) — current/v28 stay selectable.
+        XCTAssertEqual(NativeLyricsFeelParity.EmphasisMode.resolve(from: nil), .amll)
+        XCTAssertEqual(NativeLyricsFeelParity.EmphasisMode.resolve(from: "nope"), .amll)
+        XCTAssertEqual(NativeLyricsFeelParity.EmphasisMode.resolve(from: "current"), .current)
+        XCTAssertEqual(NativeLyricsFeelParity.EmphasisMode.resolve(from: "v28"), .v28)
+        XCTAssertEqual(NativeLyricsFeelParity.EmphasisMode.resolve(from: "amll"), .amll)
         XCTAssertEqual(NativeLyricsFeelParity.appearWindowDuration, 0.8, accuracy: 0.0001)
     }
 
@@ -140,11 +147,17 @@ final class NativeLyricsFeelParityTests: XCTestCase {
         XCTAssertTrue(NativeLyricsFeelParity.apply(channel: "blur", value: "v28"))
         XCTAssertTrue(NativeLyricsFeelParity.apply(channel: "sweep", value: "layer"))
         XCTAssertTrue(NativeLyricsFeelParity.apply(channel: "wave", value: "sync"))
+        XCTAssertTrue(NativeLyricsFeelParity.apply(channel: "emphasis", value: "current"))
+        XCTAssertEqual(
+            UserDefaults.standard.string(forKey: NativeLyricsFeelParity.emphasisDefaultsKey),
+            "current"
+        )
         XCTAssertTrue(NativeLyricsFeelParity.apply(channel: "reset", value: ""))
         XCTAssertNil(UserDefaults.standard.string(forKey: NativeLyricsFeelParity.appearDefaultsKey))
         XCTAssertNil(UserDefaults.standard.string(forKey: NativeLyricsFeelParity.blurDefaultsKey))
         XCTAssertNil(UserDefaults.standard.string(forKey: NativeLyricsFeelParity.sweepDefaultsKey))
         XCTAssertNil(UserDefaults.standard.string(forKey: NativeLyricsFeelParity.waveDefaultsKey))
+        XCTAssertNil(UserDefaults.standard.string(forKey: NativeLyricsFeelParity.emphasisDefaultsKey))
         XCTAssertFalse(NativeLyricsFeelParity.apply(channel: "nope", value: "v28"))
     }
 

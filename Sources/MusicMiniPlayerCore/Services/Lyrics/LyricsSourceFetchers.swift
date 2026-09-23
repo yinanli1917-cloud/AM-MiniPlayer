@@ -1311,16 +1311,24 @@ extension LyricsFetcher {
 
     func fetchFromAMLL(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
         emitSourceRequestE2E(.amll, phase: "fetch")
+        // 缺陷4排查埋点（2026-09-14）：AMLL 是唯一没有请求/命中/未命中/耗时日志的
+        // 源——排查"是否偏行级"时无法从日志区分"AMLL 真的没调用"还是"调用了没
+        // 结果"。只加日志，不改任何选源/评分逻辑。
+        let requestStart = Date()
+        func elapsedMs() -> Int { Int(Date().timeIntervalSince(requestStart) * 1000) }
+        DebugLogger.log("AMLL", "🔍 请求: '\(title)' by '\(artist)' (\(Int(duration))s)")
         // 尝试通过 Apple Music Track ID 直接获取
         if let trackId = await getAppleMusicTrackId(title: title, artist: artist, duration: duration),
            let lyrics = await fetchAMLLTTML(platform: "am-lyrics", filename: "\(trackId).ttml") {
             let score = scorer.calculateScore(lyrics, source: .amll, duration: duration, translationEnabled: translationEnabled)
+            DebugLogger.log("AMLL", "✅ 命中(AM trackId): \(lyrics.count)行 score=\(String(format: "%.1f", score)) [\(elapsedMs())ms]")
             return LyricsFetchResult(lyrics: lyrics, source: .amll, score: score, kind: .synced)
         }
 
         // 🔑 检查是否在冷却期内
         if let lastFail = amllIndexLoadFailed,
            Date().timeIntervalSince(lastFail) < amllIndexFailureCooldown {
+            DebugLogger.log("AMLL", "❌ 未命中: 索引加载冷却期内 [\(elapsedMs())ms]")
             return nil
         }
 
@@ -1328,9 +1336,13 @@ extension LyricsFetcher {
         // block playback. Warm it in the background and let other sources race.
         if amllIndex.isEmpty {
             Task { await loadAMLLIndex() }
+            DebugLogger.log("AMLL", "❌ 未命中: 索引未就绪，后台加载中 [\(elapsedMs())ms]")
             return nil
         }
-        guard !amllIndex.isEmpty else { return nil }
+        guard !amllIndex.isEmpty else {
+            DebugLogger.log("AMLL", "❌ 未命中: 索引为空 [\(elapsedMs())ms]")
+            return nil
+        }
 
         let titleLower = title.lowercased()
         let artistLower = artist.lowercased()
@@ -1363,13 +1375,18 @@ extension LyricsFetcher {
             }
         }
 
-        guard let match = bestMatch else { return nil }
+        guard let match = bestMatch else {
+            DebugLogger.log("AMLL", "❌ 未命中: 索引无匹配候选 [\(elapsedMs())ms]")
+            return nil
+        }
 
         if let lyrics = await fetchAMLLTTML(platform: match.entry.platform, filename: "\(match.entry.id).ttml") {
             let score = scorer.calculateScore(lyrics, source: .amll, duration: duration, translationEnabled: translationEnabled)
+            DebugLogger.log("AMLL", "✅ 命中(索引匹配): \(lyrics.count)行 score=\(String(format: "%.1f", score)) [\(elapsedMs())ms]")
             return LyricsFetchResult(lyrics: lyrics, source: .amll, score: score, kind: .synced)
         }
 
+        DebugLogger.log("AMLL", "❌ 未命中: TTML 抓取失败 [\(elapsedMs())ms]")
         return nil
     }
 
@@ -2477,6 +2494,68 @@ extension LyricsFetcher {
 
     // MARK: - QQ Music
 
+    /// QQ's `musicu.fcg` search envelope, decoded once. `code`/`req.code`
+    /// are the provider's own status fields; a non-zero value (or a
+    /// missing `req.data.body.song.list` shape) means the request was
+    /// declined or garbled at the app layer — indistinguishable from a
+    /// true "no songs matched" response UNLESS this is checked explicitly,
+    /// which the old bare `guard ... else { return nil }` chain did not do
+    /// (2026-09-20: every QQ query silently returned 0 candidates for one
+    /// session while the same request succeeded moments later).
+    struct QQSearchEnvelope {
+        let code: Int?
+        let reqCode: Int?
+        /// `nil` when the expected `req.data.body.song.list` shape is
+        /// entirely absent; an empty array is a real "0 candidates" only
+        /// when `isIndeterminate` is false.
+        let songs: [[String: Any]]?
+
+        /// True when this response cannot be trusted as evidence about the
+        /// requested song — either the provider's own envelope reported a
+        /// failure code, or the expected candidate-list shape never arrived.
+        var isIndeterminate: Bool {
+            songs == nil || (code ?? 0) != 0 || (reqCode ?? 0) != 0
+        }
+    }
+
+    /// Pure decoder for `QQSearchEnvelope` — no I/O, unit-testable with a
+    /// stubbed JSON dictionary.
+    func decodeQQSearchEnvelope(_ json: [String: Any]) -> QQSearchEnvelope {
+        let code = json["code"] as? Int
+        let reqDict = json["req"] as? [String: Any]
+        let reqCode = reqDict?["code"] as? Int
+        let songs: [[String: Any]]?
+        if let reqDict,
+           let dataDict = reqDict["data"] as? [String: Any],
+           let bodyDict = dataDict["body"] as? [String: Any],
+           let songDict = bodyDict["song"] as? [String: Any],
+           let list = songDict["list"] as? [[String: Any]] {
+            songs = list
+        } else {
+            songs = nil
+        }
+        return QQSearchEnvelope(code: code, reqCode: reqCode, songs: songs)
+    }
+
+    /// Decode a QQ search envelope at a call site: logs the envelope shape
+    /// unconditionally (code/req.code/list count — so an indeterminate
+    /// response is distinguishable from a true miss in the debug log), and
+    /// records an indeterminate envelope with the current
+    /// `NetworkOutcomeLedger` so it can never contribute to a confirmed-miss
+    /// (24h negative verdict / `LyricsMissMemo`) decision. Returns the
+    /// candidate list only when the envelope is trustworthy — same
+    /// `nil`-on-failure contract the old inline guard chains had, so every
+    /// call site's existing "fetchSongs returned nil" handling is unchanged.
+    func decodeQQSearchSongs(_ json: [String: Any], logTag: String = "QQMusic") -> [[String: Any]]? {
+        let envelope = decodeQQSearchEnvelope(json)
+        DebugLogger.log(logTag, "📨 envelope code=\(envelope.code.map(String.init) ?? "nil") req.code=\(envelope.reqCode.map(String.init) ?? "nil") songs=\(envelope.songs?.count.description ?? "missing-shape")")
+        if envelope.isIndeterminate {
+            NetworkOutcomeLedger.current?.recordEnvelopeFailure()
+            return nil
+        }
+        return envelope.songs
+    }
+
     /// Probe QQ for the CJK artist name when given an ASCII artist.
     func probeQQForCJKArtist(title: String, artist: String, duration: TimeInterval) async -> String? {
         guard LanguageUtils.isPureASCII(artist) else { return nil }
@@ -2490,11 +2569,7 @@ extension LyricsFetcher {
         ]
         do {
             let json = try await HTTPClient.postJSON(url: apiURL, body: body, timeout: 2.4)
-            guard let reqDict = json["req"] as? [String: Any],
-                  let dataDict = reqDict["data"] as? [String: Any],
-                  let bodyDict = dataDict["body"] as? [String: Any],
-                  let songDict = bodyDict["song"] as? [String: Any],
-                  let songs = songDict["list"] as? [[String: Any]] else { return nil }
+            guard let songs = decodeQQSearchSongs(json, logTag: "QQMusic-Probe") else { return nil }
             let simplifiedInputTitle = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(title))
             var preciseBest: (artist: String, dur: Double)? = nil
             for song in songs.prefix(10) {
@@ -2536,12 +2611,7 @@ extension LyricsFetcher {
                     ] as [String: Any]
                 ]
                 let json = try await HTTPClient.postJSON(url: apiURL, body: body, timeout: 2.4)
-                guard let reqDict = json["req"] as? [String: Any],
-                      let dataDict = reqDict["data"] as? [String: Any],
-                      let bodyDict = dataDict["body"] as? [String: Any],
-                      let songDict = bodyDict["song"] as? [String: Any],
-                      let songs = songDict["list"] as? [[String: Any]] else { return nil }
-                return songs
+                return self.decodeQQSearchSongs(json)
             },
             extractSong: { song in
                 guard let mid = song["mid"] as? String, let name = song["name"] as? String else { return nil }

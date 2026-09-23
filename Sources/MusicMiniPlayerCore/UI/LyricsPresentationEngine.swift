@@ -66,9 +66,16 @@ final class LyricsPresentationEngine {
     private var latestConfiguration: LyricsPresentationEngineConfiguration?
     private let spring = LyricsPresentationSpring()
 
+    // 2026-09-20 (stage bundle 3r, Task 2 Part C): loosened from 0.25/0.25 —
+    // `NativeLyricsLineLevelIdleCostTests` measured a 30-row line-level surface taking ~2.0s after
+    // a settled switch before every row's position spring individually crossed 0.25px/0.25px·s⁻¹
+    // (rows far outside the viewport, near-invisible at the 0.05-0.35 dim-tier opacity, were the
+    // long tail — their positions still converge, just slowly, and nothing about them being
+    // slightly off-target is visible). 0.5px / 0.5px·s⁻¹ is still comfortably sub-pixel on any
+    // real display; spring parameters (mass/stiffness/damping) are UNCHANGED.
     var hasActiveMotion: Bool {
         pendingWave != nil || rowStates.values.contains { state in
-            abs(state.y - state.targetY) > 0.25 || abs(state.velocity) > 0.25
+            abs(state.y - state.targetY) > 0.5 || abs(state.velocity) > 0.5
         }
     }
 
@@ -80,6 +87,7 @@ final class LyricsPresentationEngine {
         _ configuration: LyricsPresentationEngineConfiguration,
         onTargetsChanged: @escaping () -> Void
     ) {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["update", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         latestConfiguration = configuration
         updateSpringParameters(for: configuration)
         let newIndex = configuration.effectiveScrollTargetIndex
@@ -117,6 +125,7 @@ final class LyricsPresentationEngine {
         }
 
         if hasStaleTargetBacklog(for: newIndex) {
+            DebugLogger.log("EngineSnap", "stale target backlog on advance \(oldIndex)→\(newIndex): snapping all rows")
             cancelPendingWave(deferred: true)
             lastCurrentIndex = newIndex
             recoverySnapAdvancesRemaining = 0
@@ -126,6 +135,7 @@ final class LyricsPresentationEngine {
         }
 
         if abs(newIndex - oldIndex) > LyricWaveTiming.largeJumpThreshold {
+            DebugLogger.log("EngineSnap", "large jump \(oldIndex)→\(newIndex): snapping all rows")
             cancelPendingWave(deferred: true)
             lastCurrentIndex = newIndex
             recoverySnapAdvancesRemaining = 0
@@ -199,6 +209,7 @@ final class LyricsPresentationEngine {
 
     @discardableResult
     func advance(delta: TimeInterval) -> Bool {
+        let __t0 = CFAbsoluteTimeGetCurrent(); defer { NativeLyricsSurfaceView.tickPhaseAccum["advance", default: 0] += (CFAbsoluteTimeGetCurrent() - __t0) * 1000 }
         guard let configuration = latestConfiguration else { return false }
         updateSpringParameters(for: configuration)
         var changed = advancePendingWave(delta: delta, configuration: configuration)
@@ -281,6 +292,51 @@ final class LyricsPresentationEngine {
         Self.directSnapTargets(renderedIndices: renderedIndices, targetIndex: targetIndex)
     }
 
+    #if DEBUG
+    /// 2026-09-18 (defect #4 root-cause probe, coordinator instruction): records every row whose
+    /// `lineTargetIndices` entry `seededTargetsForNaturalAdvance` is about to OVERWRITE with a
+    /// DIFFERENT value than it already held — i.e. a row that was NOT freshly entering this
+    /// transition's participant set with a fresh/absent target, but had an existing, possibly
+    /// already-correct target from an EARLIER transition, now being unconditionally reset to
+    /// `oldIndex`. `priorTargetY`/`priorTargetTargetY` are the row's own `rowStates` snapshot
+    /// (its actual y and the target it was chasing) at the exact moment of the reseed — direct
+    /// evidence for whether the row was genuinely settled (`y == targetY`) when its target got
+    /// rewritten out from under it. Cleared by the test between runs (or accumulates otherwise —
+    /// this is a diagnostic seam, not shipped instrumentation).
+    struct DebugReseedEvent {
+        let rowIndex: Int
+        let priorTarget: Int
+        let newTarget: Int
+        let rowY: CGFloat?
+        let rowTargetY: CGFloat?
+        let rowVelocity: CGFloat?
+    }
+    static var debugReseedLog: [DebugReseedEvent] = []
+
+    /// 2026-09-18 (defect #4 root-cause probe, broader net than `debugReseedLog` — that one is
+    /// specific to `seededTargetsForNaturalAdvance`'s reseed step and found ZERO events, ruling
+    /// that mechanism OUT; this one instruments `reconcileRows` itself, the single place every
+    /// row's `targetY` is ever (re)computed, regardless of which caller reached it). Fires
+    /// whenever a row that was ALREADY SETTLED (its stored `y`/`velocity` already matched its
+    /// OWN prior `targetY`) gets a NEW `targetY` that differs by more than 0.25pt — i.e. the
+    /// exact "settled row's target moved again" event the founder described, with enough raw
+    /// inputs (both accumulated-height readings, the anchor, snap flag) to hand-verify the
+    /// arithmetic afterward.
+    struct DebugTargetYChangeEvent {
+        let rowIndex: Int
+        let oldTargetIndex: Int
+        let newTargetIndex: Int
+        let oldTargetY: CGFloat
+        let newTargetY: CGFloat
+        let rowOwnAccumulatedHeight: CGFloat?
+        let activeAccumulatedHeightOld: CGFloat?
+        let activeAccumulatedHeightNew: CGFloat?
+        let anchorY: CGFloat
+        let snap: Bool
+    }
+    static var debugTargetYChangeLog: [DebugTargetYChangeEvent] = []
+    #endif
+
     private func scheduleNaturalWave(
         from oldIndex: Int,
         to newIndex: Int,
@@ -289,6 +345,7 @@ final class LyricsPresentationEngine {
     ) {
         updateSpringParameters(for: configuration)
         cancelPendingWave(deferred: true)
+        let previousTargets = lineTargetIndices
         let plan = Self.makeNaturalWavePlan(
             existingTargets: lineTargetIndices,
             renderedIndices: configuration.renderedIndices,
@@ -298,6 +355,16 @@ final class LyricsPresentationEngine {
             hasSyllableSync: configuration.hasSyllableSync
         )
         guard !plan.indices.isEmpty else { return }
+        #if DEBUG
+        for index in plan.indices {
+            guard let prior = previousTargets[index], prior != oldIndex else { continue }
+            let state = rowStates[index]
+            Self.debugReseedLog.append(DebugReseedEvent(
+                rowIndex: index, priorTarget: prior, newTarget: oldIndex,
+                rowY: state?.y, rowTargetY: state?.targetY, rowVelocity: state?.velocity
+            ))
+        }
+        #endif
         lineTargetIndices = plan.seededTargets
         reconcileRows(configuration: configuration, snap: false)
 
@@ -457,6 +524,34 @@ final class LyricsPresentationEngine {
                     isBufferedActive: isBufferedActive
                 )
             } else if let existing = rowStates[index] {
+                // 2026-09-21 release-safe evidence line (runtime-gated by DebugLogger): a SETTLED
+                // row whose target moved while the target INDEX did not change is a layout-input
+                // shift (accumulatedHeights / anchorY), not a wave — the founder's "history row and
+                // incoming row bob 2–4px at activation, before the scroll".
+                if abs(existing.y - existing.targetY) <= 0.25, abs(existing.velocity) <= 0.25,
+                   abs(targetY - existing.targetY) > 0.25, snap || existing.targetIndex == targetIndex {
+                    DebugLogger.log("SettledRetarget", String(
+                        format: "row=%d target %d→%d y %.2f→%.2f Δ%+.2f ownAcc=%.2f targetAcc=%.2f anchor=%.2f snap=%d",
+                        index, existing.targetIndex, targetIndex, existing.targetY, targetY, targetY - existing.targetY,
+                        configuration.accumulatedHeights[index] ?? -1, configuration.accumulatedHeights[targetIndex] ?? -1,
+                        configuration.anchorY, snap ? 1 : 0))
+                }
+                #if DEBUG
+                let wasSettled = abs(existing.y - existing.targetY) <= 0.25 && abs(existing.velocity) <= 0.25
+                let targetYChanged = abs(targetY - existing.targetY) > 0.25
+                if wasSettled, targetYChanged {
+                    Self.debugTargetYChangeLog.append(DebugTargetYChangeEvent(
+                        rowIndex: index,
+                        oldTargetIndex: existing.targetIndex, newTargetIndex: targetIndex,
+                        oldTargetY: existing.targetY, newTargetY: targetY,
+                        rowOwnAccumulatedHeight: configuration.accumulatedHeights[index],
+                        activeAccumulatedHeightOld: configuration.accumulatedHeights[existing.targetIndex],
+                        activeAccumulatedHeightNew: configuration.accumulatedHeights[targetIndex],
+                        anchorY: configuration.anchorY,
+                        snap: snap
+                    ))
+                }
+                #endif
                 rowStates[index] = LyricsPresentationRowState(
                     index: index,
                     targetIndex: targetIndex,
