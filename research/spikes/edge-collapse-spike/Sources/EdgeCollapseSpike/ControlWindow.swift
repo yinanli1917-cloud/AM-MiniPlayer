@@ -2,7 +2,7 @@
  * [INPUT]: EdgeCollapseAppModel
  * [OUTPUT]: ControlPanelView (SwiftUI) + makeControlWindow(model:) — an
  *           ORDINARY titled NSWindow (not the floating panel) with the
- *           variant/tint/bounce/tempo/reduceMotion switches, Collapse/
+ *           tint/bounce/tempo/reduceMotion switches, Collapse/
  *           Expand/Next-track buttons, and a live state label — top-level
  *           task instruction #6.
  * [POS]: Standalone spike control surface.
@@ -40,14 +40,12 @@ struct ControlPanelView: View {
                         .disabled(model.presentation != .tucked && model.presentation != .floating)
                     Button("Next track") { model.nextTrack() }
                 }
-                Text("Gestures on the panel: two-finger scroll rightward = collapse; hover the tucked stalk = float; click a body = expand; click the control body = toggle play.")
+                Text("Two-finger swipe right on the panel = tuck into the edge. Hover the edge strip = capsule with cover, title, pause, next. Click the capsule or the strip = back to the panel.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            Section("Variant / Tint") {
-                Text("Variant: vertical only (v7)")
-
+            Section("Material") {
                 Picker("Tint", selection: $model.tint) {
                     ForEach(EdgeCollapseTint.allCases) { t in Text(t.rawValue).tag(t) }
                 }
@@ -59,7 +57,7 @@ struct ControlPanelView: View {
                     ForEach(EdgeCollapseBounce.allCases) { b in Text(b.rawValue).tag(b) }
                 }
                 .pickerStyle(.segmented)
-                Text("Collapse-only: Settle = spring(duration 0.32, bounce 0) — Apple's measured ease-out. Bouncy = spring(duration 0.36, bounce 0.28).")
+                Text("Collapse only. Bouncy: the strip tucks past the edge and pops back out. Settle: no rebound.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

@@ -31,7 +31,6 @@ enum EdgeCollapseProbeNotification {
     static let expand = Notification.Name("com.nanopod.edgeCollapseSpike.expand")
     static let hover = Notification.Name("com.nanopod.edgeCollapseSpike.hover")
     static let unhover = Notification.Name("com.nanopod.edgeCollapseSpike.unhover")
-    static let variant = Notification.Name("com.nanopod.edgeCollapseSpike.variant")
 }
 
 @MainActor
@@ -42,6 +41,7 @@ final class SpikeAppDelegate: NSObject, NSApplicationDelegate {
     var hostingView: EdgeGestureHostingView<RootContentView>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        setvbuf(stdout, nil, _IOLBF, 0)  // log lines reach /tmp/ecs.log as they are printed
         // Disable the app's old C1 EdgeMorphHost inside the hosted MiniPlayerView.
         UserDefaults.standard.set("v0", forKey: MicroInteractionFeel.edgeMorphDefaultsKey)
         UserDefaults.standard.set(true, forKey: "fullscreenAlbumCover")
@@ -51,6 +51,11 @@ final class SpikeAppDelegate: NSObject, NSApplicationDelegate {
         let panel = makeEdgeCollapsePanel()
         let hostingView = EdgeGestureHostingView(rootView: RootContentView(model: model))
         hostingView.frame = NSRect(origin: .zero, size: EdgeCollapseTokens.containerSize)
+        // The window never resizes. Without this, every per-frame pose change
+        // makes AppKit ask the hosting view for its fitting size, which
+        // re-lays-out the whole real panel with open proposals (sampled:
+        // about half of main-thread time during a transition).
+        hostingView.sizingOptions = []
         hostingView.onHorizontalSwipeToEdge = { [weak model] in
             model?.requestCollapse(edge: .right)
         }
@@ -98,15 +103,6 @@ final class SpikeAppDelegate: NSObject, NSApplicationDelegate {
             forName: EdgeCollapseProbeNotification.unhover, object: nil, queue: .main
         ) { [weak model] _ in
             Task { @MainActor in model?.requestHoverExit() }
-        }
-        DistributedNotificationCenter.default().addObserver(
-            forName: EdgeCollapseProbeNotification.variant, object: nil, queue: .main
-        ) { [weak model] note in
-            Task { @MainActor in
-                guard let model else { return }
-                model.variant = (note.object as? String) == "v" ? .v : .h
-                model.hostingView?.refreshHitRegion()
-            }
         }
     }
 
