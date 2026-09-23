@@ -19,6 +19,8 @@ enum EdgeCollapseSpikeApp {
         // file/pipe (not a TTY), which is exactly how a founder or a CI
         // check would capture it.
         setvbuf(stdout, nil, _IONBF, 0)
+        // Before anything builds a URLSession (HTTPClient's is a lazy static).
+        SpikeNetworkBlock.install()
 
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
