@@ -255,6 +255,27 @@ public class LyricsService: ObservableObject {
     #if DEBUG
     var debugCurrentSongID: String? { currentSongID }
     #endif
+
+    /// The (title, artist) identity this service is CURRENTLY fetching/showing
+    /// lyrics for — the same normalized unit `isLikelySameSongMetadataCorrection`
+    /// already keys on. Exposed (not `private`) so MusicController's generic
+    /// identity self-heal can bucket reissue-cooldown by target song, and log
+    /// it as evidence. NOT sufficient on its own to detect a torn composite
+    /// (title/artist can still agree while album/duration are torn) — see
+    /// `matchesCurrentFetchIdentity` for the precise check.
+    var currentFetchStableSongID: String? { currentStableSongID }
+
+    /// Whether (title, artist, duration, album) — normalized exactly as
+    /// `fetchLyrics` does — matches the FULL identity this service is
+    /// currently fetching/showing lyrics for. Exposed for MusicController's
+    /// generic identity self-heal: unlike `currentFetchStableSongID`, this
+    /// catches a torn album/duration even when title/artist still agree (the
+    /// MusicController.swift:1533/:1580 bug class) — a mismatch means this
+    /// service is tracking a DIFFERENT identity than what is actually playing
+    /// right now, regardless of how the mismatch was produced.
+    func matchesCurrentFetchIdentity(title: String, artist: String, duration: TimeInterval, album: String) -> Bool {
+        Self.songIdentity(title: title, artist: artist, duration: duration, album: album) == currentSongID
+    }
     private var currentSongTitle: String = ""
     private var currentSongArtist: String = ""
     private var currentSongDuration: TimeInterval = 0
@@ -2814,7 +2835,10 @@ public class LyricsService: ObservableObject {
         return "\(normalizedTitle)|\(normalizedArtist)|\(normalizedAlbum)|\(roundedDuration)"
     }
 
-    private static func stableSongIdentity(title: String, artist: String) -> String {
+    /// Not `private`: MusicController's generic identity self-heal needs to
+    /// compute the SAME normalized (title, artist) unit for its own current
+    /// track to compare against `currentFetchStableSongID`.
+    static func stableSongIdentity(title: String, artist: String) -> String {
         let normalizedTitle = MetadataDiskCache.normalize(title)
         let normalizedArtist = MetadataDiskCache.normalize(artist)
         return "\(normalizedTitle)|\(normalizedArtist)"

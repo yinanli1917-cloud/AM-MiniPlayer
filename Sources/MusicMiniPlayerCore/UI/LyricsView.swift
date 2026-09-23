@@ -513,6 +513,11 @@ public struct LyricsView: View {
     @State private var cachedFirstRealDisplayIndex: Int = 0
     @State private var cachedLayerRows: [LayerBackedLyricRow] = []
     @State private var cachedLayerRowsTrackKey: String = ""
+    /// Evidence-log throttle (2026-09-22): the stale-rows gate below is
+    /// evaluated every body render, but this timestamp ensures the actual
+    /// DebugLogger call — the only I/O — fires at most once per 3s while the
+    /// gate stays open, never per-frame. See research/diagnosis-2026-09-22-blank-lyrics-page.md.
+    @State private var staleCacheGateEvidenceLoggedAt: Date = .distantPast
     /// Fingerprint of the inputs that produced the last committed rows. The
     /// staged lyrics load drives onChange(lyrics) AND onChange(displayState),
     /// each of which calls refreshDisplayLineCache(); without a dedup the same
@@ -1056,6 +1061,7 @@ public struct LyricsView: View {
             // flash at track-change teardown). Gate on the identity the cache was built for
             // and feed an empty list until refreshDisplayLineCache rebuilds it.
             let cacheIsCurrentTrack = cachedLayerRowsTrackKey == Self.layerRowsTrackKey(for: musicController)
+            let _ = logStaleCacheGateEvidenceIfNeeded(cacheIsCurrentTrack: cacheIsCurrentTrack)
             let allLayerRows = cacheIsCurrentTrack ? cachedLayerRows : []
             let nativeRenderedIndices = cacheIsCurrentTrack ? cachedNativeRenderedIndices : []
             let layerHeightIndices = Set(nativeRenderedIndices + [displayIndex] + Array(activeWaveIndices))
@@ -2146,6 +2152,30 @@ public struct LyricsView: View {
             hasher.combine(line.translation)
         }
         return hasher.finalize()
+    }
+
+    /// Evidence log (2026-09-22, research/diagnosis-2026-09-22-blank-lyrics-page.md):
+    /// the stale-rows gate at the `cacheIsCurrentTrack` call site is exactly
+    /// where a "torn identity" episode is visible from the UI side. This is a
+    /// plain function call (not a bare `if` in the @ViewBuilder body, which
+    /// would be swept into `buildIf`/`buildEither` and need to return a View),
+    /// so it runs as an ordinary side-effecting statement on every body pass.
+    /// The condition itself is a cheap Date/String comparison (no I/O); the
+    /// actual DebugLogger call and the state write are deferred one runloop
+    /// tick (avoids "modifying state during view update") and throttled to at
+    /// most once per 3s via `staleCacheGateEvidenceLoggedAt` — never per-frame
+    /// I/O even if body re-evaluates often.
+    private func logStaleCacheGateEvidenceIfNeeded(cacheIsCurrentTrack: Bool) {
+        guard !cacheIsCurrentTrack, lyricsService.lyrics.isEmpty,
+              Date().timeIntervalSince(staleCacheGateEvidenceLoggedAt) > 3.0 else { return }
+        let staleKey = cachedLayerRowsTrackKey
+        let currentKey = Self.layerRowsTrackKey(for: musicController)
+        let rowCount = lyricsService.lyrics.count
+        let state = lyricsService.displayState
+        DispatchQueue.main.async {
+            staleCacheGateEvidenceLoggedAt = Date()
+            DebugLogger.log("LyricsView", "⚠️ Stale layer-rows cache gate open >3s: cachedLayerRowsTrackKey='\(staleKey)' currentKey='\(currentKey)' rows=\(rowCount) displayState=\(state)")
+        }
     }
 
     private func refreshDisplayLineCache() {

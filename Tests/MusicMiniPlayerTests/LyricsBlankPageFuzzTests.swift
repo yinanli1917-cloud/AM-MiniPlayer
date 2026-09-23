@@ -191,32 +191,62 @@ final class LyricsBlankPageFuzzTests: XCTestCase {
         return service.displayState == .content && service.lyrics.contains { $0.text.contains(song.marker) }
     }
 
-    /// Drives the exact MusicController.swift:1533 race: `nameSong`'s title/artist
-    /// (freshly SB-confirmed, per the guard at :1489) paired with `fieldSong`'s
-    /// live album/duration (`self.currentAlbum`, overwritten unconditionally by an
-    /// interleaved notification per :1405) and `pid` (the stale closure's OWN SB
-    /// read, :1463/:1498 — normally `nameSong`'s own PID).
-    ///
-    /// SAFETY: this call is EXPECTED to miss the disk pre-flight (that is the
-    /// entire point — proving the miss blanks a song with real cached lyrics), so
-    /// it is wrapped in `.networkOnly()` — see the file header. This is the ONLY
-    /// call site in this file that can reach a real, unstructured fetch task.
+    /// Drives the MusicController.swift:1533 deferred SB-duration-correction
+    /// closure exactly AS THE FIXED CODE NOW HANDLES IT:
+    /// `MusicController.shouldFireDeferredLyricsCorrection` is re-checked
+    /// immediately before firing. `nameSong` is the closure's captured
+    /// identity (`capturedGeneration`); `fieldSong` stands in for whatever
+    /// became live-current in the meantime (`currentGeneration`) — its
+    /// title/artist play the role of `self.currentTrackTitle`/`currentArtist`,
+    /// its album/duration the role of the torn `self.currentAlbum` the OLD
+    /// code used to read live. Only reaches `service.fetchLyrics` — the real
+    /// production behavior pre-fix, or if a future change reintroduces the
+    /// race — when the guard says the capture is still fresh, wrapped in
+    /// `.networkOnly()` for the same safety reason as the file header.
     @MainActor
-    private func applyStaleFieldRace(nameSong: FakeSong, fieldSong: FakeSong, pid: String?, on service: LyricsService) {
+    private func applyStaleFieldRace(
+        nameSong: FakeSong, fieldSong: FakeSong, pid: String?,
+        capturedGeneration: Int, currentGeneration: Int,
+        on service: LyricsService
+    ) {
+        guard MusicController.shouldFireDeferredLyricsCorrection(
+            capturedGeneration: capturedGeneration, currentGeneration: currentGeneration,
+            capturedTitle: nameSong.title, currentTitle: fieldSong.title,
+            capturedArtist: nameSong.artist, currentArtist: fieldSong.artist
+        ) else { return }
         LyricsCachePolicyContext.$current.withValue(.networkOnly()) {
             service.fetchLyrics(for: nameSong.title, artist: nameSong.artist, duration: fieldSong.duration,
                                 album: fieldSong.album, persistentID: pid, forceRefresh: false)
         }
     }
 
-    // MARK: - Minimal deterministic regression (shrunk from the live log)
+    /// Feeds a torn composite DIRECTLY to `LyricsService.fetchLyrics`,
+    /// bypassing MusicController's (now-fixed) guard entirely — simulating
+    /// "some other, not-yet-reproduced path" per the coordinator's framing of
+    /// the generic self-heal (item 2): LyricsService's own contract for bad
+    /// input is unchanged by the MusicController fix (garbage in, treated as
+    /// a new song, blanks), so this is the right seam for testing the
+    /// self-heal independently of which caller produced the blank state.
+    /// SAFETY: same `.networkOnly()` wrap as `applyStaleFieldRace`.
+    @MainActor
+    private func applyRawTornComposite(nameSong: FakeSong, fieldSong: FakeSong, pid: String?, on service: LyricsService) {
+        LyricsCachePolicyContext.$current.withValue(.networkOnly()) {
+            service.fetchLyrics(for: nameSong.title, artist: nameSong.artist, duration: fieldSong.duration,
+                                album: fieldSong.album, persistentID: pid, forceRefresh: false)
+        }
+    }
+
+    // MARK: - Minimal deterministic regression (shrunk from the live log) — root fix
 
     /// Reproduces /tmp/nanopod_debug.log L2432-2891 (Tell Me Oh Mama ↔ Mc's Road De
     /// Aimasho, 18:14:49-18:15:06) and L51698-52351 (Roland Reve ↔ Mc's Road De
-    /// Aimasho, 19:31:10-19:31:34) in miniature: two real, disk-cached songs: a
-    /// clean switch to each (both land on content, no network), then the torn
-    /// composite call from MusicController.swift:1533. This assertion states the
-    /// CORRECT, desired behavior — it fails today, which is the reproduction.
+    /// Aimasho, 19:31:10-19:31:34) in miniature: two real, disk-cached songs, a
+    /// clean switch to each, then the deferred correction closure from A's OWN
+    /// track change firing after B has already become current. Before the
+    /// 2026-09-22 root fix (MusicController.swift:1531, generation+identity
+    /// re-check) this call reached LyricsService with a torn composite and
+    /// blanked B. After the fix, `shouldFireDeferredLyricsCorrection` drops it
+    /// before it ever reaches LyricsService — this test now asserts THAT.
     @MainActor
     func test_staleAlbumDurationRace_blanksSongWithRealCachedLyrics_MusicControllerSwift1533() {
         let service = LyricsService.shared
@@ -234,42 +264,63 @@ final class LyricsBlankPageFuzzTests: XCTestCase {
 
         // 2) Real track change to B (radio moved on) — instant disk hit; B is now
         //    "current" per both LyricsService's own bookkeeping and (in the real
-        //    app) MusicController.currentTrackTitle/currentAlbum.
+        //    app) MusicController.currentTrackTitle/currentAlbum. This also
+        //    advances the artwork/lyrics generation counter (1 → 2).
         XCTAssertTrue(applyClean(songB, on: service), "sanity: B must land on content from disk")
 
         // 3) The deferred SB-duration-correction closure from step 1's OWN
         //    handleTrackChange(A) finally executes (radio flipped back to A for
         //    real, so SB's live read confirms A's name again — the guard at
-        //    MusicController.swift:1489 passes) — but self.currentAlbum was
-        //    already overwritten to B's album by step 2, and this call is never
-        //    protected by a generation re-check. The composite carries A's own
-        //    title/artist/PID with B's torn album+duration.
-        applyStaleFieldRace(nameSong: songA, fieldSong: songB, pid: songA.pid, on: service)
+        //    MusicController.swift:1489 passes). It captured generation=1 and
+        //    A's own title/artist when scheduled; by now generation is 2 and
+        //    the live identity is B's — the root fix's re-check must drop it.
+        applyStaleFieldRace(nameSong: songA, fieldSong: songB, pid: songA.pid,
+                            capturedGeneration: 1, currentGeneration: 2, on: service)
 
-        // A's real, word-level lyrics are sitting in disk cache RIGHT NOW under
-        // A's true (album, duration). Nothing about A's identity actually
-        // changed. The page must not go blank for it.
+        // FIXED: the call never reaches LyricsService, so B — the genuinely
+        // current song — is never disturbed. (Before the fix, these two
+        // assertions failed: displayState became .searching and lyrics
+        // emptied, dropping B's real cached content for a song, A, whose
+        // identity had not actually changed.)
         XCTAssertEqual(service.displayState, .content,
-            "BUG (2026-09-22 founder report): torn album/duration race blanked a song with real cached lyrics")
-        XCTAssertTrue(service.lyrics.contains { $0.text.contains(songA.marker) },
-            "BUG (2026-09-22 founder report): A's cached lyrics were dropped by the torn composite call")
-
-        // 4) Nothing else happens (Music.app's own title never changed — A was
-        //    already the real current track — so MusicController never issues
-        //    another fetchLyrics call). Confirms the "stuck until next real track
-        //    change" half of the report: the corrupted state persists with no
-        //    self-heal in sight.
-        XCTAssertTrue(service.lyrics.isEmpty, "documents the stuck-blank state (no further event ever fires)")
+            "root fix: the dropped stale-correction call must never blank the genuinely current song")
+        XCTAssertTrue(service.lyrics.contains { $0.text.contains(songB.marker) },
+            "root fix: B's content must remain untouched — nothing was ever mixed with A's stale capture")
     }
 
-    /// Positive control: proves the mechanism is specifically "no further event
-    /// ever re-queries the real song" — if the NEXT event is a normal, correctly-
-    /// paired track change for the SAME song (the "switch to another song and
-    /// back" the founder uses as a workaround, or simply the next legitimate
-    /// heartbeat poll), the disk pre-flight hits and content restores immediately.
-    /// This must currently PASS — it is why the founder's workaround works.
+    /// Positive control: the root fix must not break the LEGITIMATE use case
+    /// the guard exists to protect — a genuine same-song duration correction
+    /// (generation and identity both still match) must still fire and still
+    /// land on content.
     @MainActor
-    func test_selfHeals_whenACleanCallForTheSameSongFollowsTheRace() {
+    func test_deferredCorrection_stillFiresAndLandsOnContent_whenNothingActuallyChanged() {
+        let service = LyricsService.shared
+        let uid = UUID().uuidString.prefix(8)
+        let songA = FakeSong(title: "Legit Correction \(uid)", artist: "Artist \(uid)",
+                              album: "Album \(uid)", duration: 240.5, pid: "PID-A-\(uid)", marker: "legit\(uid)")
+        seed(songA)
+
+        XCTAssertTrue(applyClean(songA, on: service))
+        // Same generation, same live identity as captured — a real duration
+        // correction for the SAME still-current song.
+        applyStaleFieldRace(nameSong: songA, fieldSong: songA, pid: songA.pid,
+                            capturedGeneration: 1, currentGeneration: 1, on: service)
+
+        XCTAssertEqual(service.displayState, .content)
+        XCTAssertTrue(service.lyrics.contains { $0.text.contains(songA.marker) })
+    }
+
+    // MARK: - Generic self-heal recovers causes the root fix does not cover
+
+    /// Item 2's own test: "the self-heal alone also recovers the torn-
+    /// composite state" — regardless of what produced it. Feeds the torn
+    /// composite directly to LyricsService (bypassing MusicController's now-
+    /// fixed guard entirely, simulating an unforeseen path), then exercises
+    /// the REAL self-heal decision function with the REAL identity-match
+    /// check, and confirms reissuing per that decision actually restores A's
+    /// content.
+    @MainActor
+    func test_selfHeal_aloneRecoversATornCompositeState_regardlessOfCause() {
         let service = LyricsService.shared
         let uid = UUID().uuidString.prefix(8)
         let songA = FakeSong(title: "Self Heal A \(uid)", artist: "Artist A \(uid)",
@@ -281,11 +332,30 @@ final class LyricsBlankPageFuzzTests: XCTestCase {
 
         applyClean(songA, on: service)
         applyClean(songB, on: service)
-        applyStaleFieldRace(nameSong: songA, fieldSong: songB, pid: songA.pid, on: service)
-        XCTAssertTrue(service.lyrics.isEmpty, "sanity: the race must blank first (same mechanism as above)")
+        applyRawTornComposite(nameSong: songA, fieldSong: songB, pid: songA.pid, on: service)
+        XCTAssertTrue(service.lyrics.isEmpty,
+            "sanity: LyricsService's own contract for a torn composite is unchanged by the MusicController fix — it still blanks")
 
+        // The self-heal's precise identity check (full title+artist+duration+
+        // album, not just title+artist) must recognize the mismatch...
+        let identitiesMatch = service.matchesCurrentFetchIdentity(
+            title: songA.title, artist: songA.artist, duration: songA.duration, album: songA.album
+        )
+        XCTAssertFalse(identitiesMatch, "the service's tracked identity must not match A's real identity after the torn call")
+        XCTAssertTrue(MusicController.shouldReissueLyricsFetchForStaleIdentity(
+            lyricsRowsAreEmpty: service.lyrics.isEmpty,
+            lyricsMatchesControllerIdentity: identitiesMatch,
+            lastReissueStableSongID: nil,
+            controllerStableSongID: LyricsService.stableSongIdentity(title: songA.title, artist: songA.artist),
+            lastReissueAt: nil,
+            now: Date()
+        ), "the self-heal decision must say 'reissue' for this exact torn-composite state")
+
+        // ...and reissuing (what MusicController's heartbeat does once that
+        // decision is true) recovers A's real cached content — the self-heal
+        // alone, with no further "switch songs" required from the founder.
         XCTAssertTrue(applyClean(songA, on: service),
-            "a clean, correctly-paired re-affirmation of A must restore content — this is the founder's 'switch songs' workaround")
+            "the self-heal's reissue must restore A's content")
     }
 
     // MARK: - Seeded fuzzer over the PURE decision surface (zero network, zero disk I/O)

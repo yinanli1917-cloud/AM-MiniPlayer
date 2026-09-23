@@ -376,6 +376,20 @@ public class MusicController: ObservableObject {
     private var interpolationTimerActive = false
     private var interpolationTimerInterval: TimeInterval = 0
     var lastPollTime: Date = .distantPast
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Lyrics Identity Self-Heal + Evidence Log (2026-09-22)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Generic backstop for the whole "torn/stale identity fetchLyrics call"
+    // class (not just the two races fixed above): if LyricsService's own
+    // tracked identity ever drifts from this controller's current track while
+    // the page shows zero rows, re-issue ONE clean fetch for the current
+    // identity. Driven off the existing per-poll heartbeat (applySnapshot),
+    // never a new per-frame timer. See research/diagnosis-2026-09-22-blank-lyrics-page.md.
+    private var lastLyricsIdentityReissueSongID: String?
+    private var lastLyricsIdentityReissueAt: Date?
+    private var lyricsBlankSince: Date?
+    private var lyricsBlankEvidenceLogged = false
     /// Frame-relative interpolation: tracks when the last interpolation frame ran.
     /// Unlike lastPollTime (which depends on SB queue availability), this is set
     /// every 16ms by the interpolation timer itself — immune to SB starvation.
@@ -1527,10 +1541,37 @@ public class MusicController: ObservableObject {
                     // overwrite was a no-op bug (always 0, re-fetch never fired)
                     let oldDuration = self.duration
                     self.duration = sbDuration
-                    // Re-fetch lyrics if SB duration differs significantly from notification
+                    // Re-fetch lyrics if SB duration differs significantly from notification.
+                    // 🔑 2026-09-22 fix: this call used to mix the CAPTURED name/artist
+                    // (from when this closure was scheduled, up to 1.5s + a queue hop
+                    // ago) with self.currentAlbum/self.currentPersistentID read LIVE —
+                    // both of which any INTERLEAVED notification can have already
+                    // overwritten for a completely different track (applyTrackMetadata
+                    // updates currentAlbum unconditionally, not gated on trackChanged).
+                    // That torn composite (this track's title/artist + another track's
+                    // album/duration) blanked a song whose real lyrics were sitting in
+                    // cache the whole time — see research/diagnosis-2026-09-22-blank-lyrics-page.md.
+                    // Fix: (1) use ONLY coherent fields — capturedAlbum (captured
+                    // alongside name/artist) and `persistentID` (resolved by THIS SAME
+                    // SB read, already verified against `name` by the mismatch guard
+                    // above) instead of any `self.current*` field; (2) re-check that
+                    // the live identity still equals the captured one immediately
+                    // before firing, so a superseded capture is dropped instead of
+                    // firing with stale fields.
                     if abs(sbDuration - oldDuration) > 1.0 {
-                        Task { @MainActor in
-                            self.lyricsService.fetchLyrics(for: name, artist: artist, duration: sbDuration, album: self.currentAlbum, persistentID: self.currentPersistentID)
+                        if Self.shouldFireDeferredLyricsCorrection(
+                            capturedGeneration: generation,
+                            currentGeneration: self.artworkFetchGeneration,
+                            capturedTitle: name,
+                            currentTitle: self.currentTrackTitle,
+                            capturedArtist: artist,
+                            currentArtist: self.currentArtist
+                        ) {
+                            Task { @MainActor in
+                                self.lyricsService.fetchLyrics(for: name, artist: artist, duration: sbDuration, album: capturedAlbum, persistentID: persistentID)
+                            }
+                        } else {
+                            DebugLogger.log("TrackChange", "⏭️ Dropping stale duration-correction fetchLyrics: captured '\(name)'/gen\(generation) no longer matches current '\(self.currentTrackTitle)'/gen\(self.artworkFetchGeneration)")
                         }
                     }
                 }
@@ -1547,14 +1588,14 @@ public class MusicController: ObservableObject {
 
                 if sbDuration == 0 {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                        self?.retryDurationFetch(name: name, generation: generation)
+                        self?.retryDurationFetch(name: name, artist: artist, album: capturedAlbum, generation: generation)
                     }
                 }
             }
         }
     }
 
-    private func retryDurationFetch(name: String, generation: Int) {
+    private func retryDurationFetch(name: String, artist: String, album: String, generation: Int) {
         metadataBridgeQueue.async { [weak self] in
             guard let self = self, let app = self.metadataApp, app.isRunning else { return }
             defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
@@ -1575,14 +1616,53 @@ public class MusicController: ObservableObject {
                     self.duration = dur
                     // 🔑 Duration recovered from 0 — re-fetch lyrics with correct duration.
                     // Without this, lyrics stay at "No Lyrics" even though duration is now valid.
+                    // 🔑 2026-09-22 fix: same torn-composite class as handleTrackChange's
+                    // :1533 closure — use the CAPTURED artist/album (passed in from the
+                    // call site alongside `name`, not read live off `self`) and re-check
+                    // generation+identity immediately before firing.
                     if abs(dur - oldDuration) > 1.0 {
-                        Task { @MainActor in
-                            self.lyricsService.fetchLyrics(for: name, artist: self.currentArtist, duration: dur, album: self.currentAlbum, persistentID: self.currentPersistentID)
+                        if Self.shouldFireDeferredLyricsCorrection(
+                            capturedGeneration: generation,
+                            currentGeneration: self.artworkFetchGeneration,
+                            capturedTitle: name,
+                            currentTitle: self.currentTrackTitle,
+                            capturedArtist: artist,
+                            currentArtist: self.currentArtist
+                        ) {
+                            Task { @MainActor in
+                                self.lyricsService.fetchLyrics(for: name, artist: artist, duration: dur, album: album, persistentID: self.currentPersistentID)
+                            }
+                        } else {
+                            DebugLogger.log("TrackChange", "⏭️ Dropping stale retry-duration fetchLyrics: captured '\(name)'/gen\(generation) no longer matches current '\(self.currentTrackTitle)'/gen\(self.artworkFetchGeneration)")
                         }
                     }
                 }
             }
         }
+    }
+
+    /// Whether a deferred lyrics "duration/identity correction" fetch — built
+    /// from a closure-captured title/artist plus fields resolved after an
+    /// async hop (SB read + queue/main-thread dispatch) — is still safe to
+    /// fire. Both the artwork/lyrics generation AND the live current
+    /// title/artist must still match the capture; either mismatching means a
+    /// newer or different track has since become current, and firing anyway
+    /// would mix stale captured fields with unrelated live state (the
+    /// MusicController.swift:1533/:1580 "torn composite" class of bug — see
+    /// research/diagnosis-2026-09-22-blank-lyrics-page.md). A dropped call is
+    /// not a loss: the newer/different track change already issued its own
+    /// clean fetchLyrics call with its own coherent fields.
+    static func shouldFireDeferredLyricsCorrection(
+        capturedGeneration: Int,
+        currentGeneration: Int,
+        capturedTitle: String,
+        currentTitle: String,
+        capturedArtist: String,
+        currentArtist: String
+    ) -> Bool {
+        capturedGeneration == currentGeneration
+            && capturedTitle == currentTitle
+            && capturedArtist == currentArtist
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2371,7 +2451,106 @@ public class MusicController: ObservableObject {
             currentPersistentID = s.persistentID
         }
 
+        evaluateLyricsHealthOnHeartbeat()
         updateTimerState()
+    }
+
+    /// Runs on every settled poll tick (this method's only caller, applySnapshot,
+    /// is itself driven by the existing 2s polling/heartbeat/AppleScript-fallback
+    /// paths — never a new per-frame timer). Two independent, generic backstops
+    /// for the whole "lyrics page shows zero rows for a song that has content"
+    /// class, not just the two specific races fixed above:
+    ///   1. Self-heal: if LyricsService's own tracked identity has drifted from
+    ///      this controller's current track, reissue one clean fetch.
+    ///   2. Evidence log: if rows have been empty for >3s and it is NOT a
+    ///      confirmed "no lyrics" terminal, log identity/state once per episode
+    ///      so the founder's daily use leaves a trail next time.
+    private func evaluateLyricsHealthOnHeartbeat() {
+        let rowsAreEmpty = lyricsService.lyrics.isEmpty
+        if rowsAreEmpty {
+            if lyricsBlankSince == nil {
+                lyricsBlankSince = Date()
+                lyricsBlankEvidenceLogged = false
+            }
+        } else {
+            lyricsBlankSince = nil
+            lyricsBlankEvidenceLogged = false
+        }
+
+        guard Self.isValidTrackDisplayName(currentTrackTitle) else { return }
+        let controllerStableSongID = LyricsService.stableSongIdentity(title: currentTrackTitle, artist: currentArtist)
+
+        if rowsAreEmpty,
+           !lyricsBlankEvidenceLogged,
+           let blankSince = lyricsBlankSince,
+           Date().timeIntervalSince(blankSince) > 3.0,
+           lyricsService.displayState != .noLyrics {
+            lyricsBlankEvidenceLogged = true
+            DebugLogger.log("LyricsService", "⚠️ Blank >3s: serviceID='\(lyricsService.currentFetchStableSongID ?? "nil")' controllerID='\(controllerStableSongID)' displayState=\(lyricsService.displayState) rows=\(lyricsService.lyrics.count)")
+        }
+
+        // Full-identity check (title+artist+duration+album), NOT just the
+        // stable (title+artist) unit: a torn album/duration — the exact class
+        // fixed above — still agrees on title/artist, so stable-ID alone
+        // would miss it entirely. `matchesCurrentFetchIdentity` catches it.
+        let identitiesMatch = lyricsService.matchesCurrentFetchIdentity(
+            title: currentTrackTitle, artist: currentArtist, duration: duration, album: currentAlbum
+        )
+        let shouldReissue = Self.shouldReissueLyricsFetchForStaleIdentity(
+            lyricsRowsAreEmpty: rowsAreEmpty,
+            lyricsMatchesControllerIdentity: identitiesMatch,
+            lastReissueStableSongID: lastLyricsIdentityReissueSongID,
+            controllerStableSongID: controllerStableSongID,
+            lastReissueAt: lastLyricsIdentityReissueAt,
+            now: Date()
+        )
+        guard shouldReissue else { return }
+        lastLyricsIdentityReissueSongID = controllerStableSongID
+        lastLyricsIdentityReissueAt = Date()
+        DebugLogger.log("LyricsService", "🩹 Identity self-heal: reissuing clean fetch for '\(controllerStableSongID)' (lyrics service was tracking '\(lyricsService.currentFetchStableSongID ?? "nil")')")
+        let title = currentTrackTitle
+        let artist = currentArtist
+        let album = currentAlbum
+        let dur = duration
+        let pid = currentPersistentID
+        Task { @MainActor in
+            self.lyricsService.fetchLyrics(for: title, artist: artist, duration: dur, album: album, persistentID: pid)
+        }
+    }
+
+    /// Whether the lyrics service should be re-fetched from scratch because its
+    /// own tracked FULL identity (title+artist+duration+album — see
+    /// `LyricsService.matchesCurrentFetchIdentity`, which catches a torn
+    /// album/duration even when title/artist still agree) no longer matches
+    /// the controller's current track while the page has zero rows to show.
+    /// Generic backstop for the whole "torn/stale identity" bug class —
+    /// catches causes beyond the two specific races fixed in
+    /// handleTrackChange/retryDurationFetch, including any not yet
+    /// reproduced. Bounded to at most one reissue per target (title+artist)
+    /// identity per `cooldown` seconds: a genuinely confirmed "no lyrics for
+    /// this song" verdict, or a burst of transient mismatches during radio
+    /// churn, must never turn into a refetch storm — one reissue either
+    /// recovers real content (clearing the mismatch) or lands on the same
+    /// terminal again (and the cooldown then holds off the next attempt).
+    /// `controllerStableSongID` (title+artist only) is used purely to bucket
+    /// the cooldown by target song, independent of the precise mismatch
+    /// signal above.
+    static func shouldReissueLyricsFetchForStaleIdentity(
+        lyricsRowsAreEmpty: Bool,
+        lyricsMatchesControllerIdentity: Bool,
+        lastReissueStableSongID: String?,
+        controllerStableSongID: String,
+        lastReissueAt: Date?,
+        now: Date,
+        cooldown: TimeInterval = 5.0
+    ) -> Bool {
+        guard lyricsRowsAreEmpty, !lyricsMatchesControllerIdentity else { return false }
+        if lastReissueStableSongID == controllerStableSongID,
+           let lastReissueAt,
+           now.timeIntervalSince(lastReissueAt) < cooldown {
+            return false
+        }
+        return true
     }
 
     /// Resets state when no track is playing.

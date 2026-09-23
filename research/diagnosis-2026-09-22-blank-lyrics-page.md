@@ -1,5 +1,7 @@
 # 诊断：歌词页偶发完全空白（2026-09-22）
 
+**2026-09-22 更新：根因修复已落地（同一 worktree，新提交）**，见文末「## 7. 根因修复（已实施）」。以下第 1-6 节是修复前的复现记录，原样保留。
+
 **结论：已复现（reproduced = yes）。** 根因在 `MusicController.swift` 的一处 TOCTOU（check-then-act）竞态：一个歌曲的 duration-correction 回调用了**另一首**歌曲的 `currentAlbum`/`currentPersistentID`，拼出一个不属于任何真实歌曲的 "torn composite"（撕裂拼接）身份，喂给 `LyricsService.fetchLyrics`。歌词服务把它当成"确实换了一首新歌"，同步清空 `lyrics = []`、`displayState = .searching`，然后同步磁盘预检（disk pre-flight）用错误的 duration 去查，查不到——即使**真正在播的那首歌的完整歌词此刻就躺在磁盘缓存里**。此后没有任何代码路径会用正确身份重新调用 `fetchLyrics`（因为 `MusicController.currentTrackTitle` 本身从未被写错），于是页面卡在空白，直到用户真的切了一首别的歌——这正是创始人描述的"偶发完全空白……切歌能好"。
 
 已用测试在代码层面完整复现（无需真机、无需截屏），且**不触网、不碰创始人真实缓存**（详见下方"安全事故"一节——早期草稿曾意外写坏过真实缓存，已修复并验证）。
@@ -132,3 +134,67 @@
 ## 附：本次运行环境
 
 - `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter LyricsBlankPageFuzzTests` 单独跑，另与 `TrackIdentityDisciplineTests`、`RadioTrackChangeDebounceTests`、`LyricsRepeatLoopStressTests`、`LyricsMissMemoTests`、`LyricsWordLevelPriorityTests` 一起串行跑过一次（55 个测试，2 个失败——即本 bug 的两条复现断言；其余全部通过，0.17s）。全程未跑全量套件，未并行。
+
+---
+
+## 7. 根因修复（已实施，同一 worktree 新提交）
+
+### 7.1 硬约束核实
+
+修复前后分别核对了 `~/Library/Application Support/nanoPod/` 目录**全部文件**的 mtime，逐一比对，全部未变（本节的两次列表均在下方"before/after"给出）。修复过程中**没有**再触发过任何一次真实 `itunes.apple.com`/NetEase/QQ/LRCLIB 网络请求——所有会命中"撕裂身份必然磁盘未命中"这条路径的测试调用，其涉及的判定（`MusicController.shouldFireDeferredLyricsCorrection` 返回 false）本身就会在到达 `LyricsService.fetchLyrics`之前拦下，唯一两处仍可能真正调用 `fetchLyrics` 的测试（正例对照 `test_deferredCorrection_stillFiresAndLandsOnContent_whenNothingActuallyChanged` 与自愈测试 `test_selfHeal_aloneRecoversATornCompositeState_regardlessOfCause` 里的 `applyClean`）全部命中的是**同一进程内的内存缓存**（`LyricsService` 的 `NSCache`，在同一测试里被前一次 `applyClean` 调用写入），从未触达磁盘或网络。
+
+### 7.2 改了什么（file:line）
+
+1. **`Sources/MusicMiniPlayerCore/Services/MusicController.swift`**
+   - 新增纯函数 `static func shouldFireDeferredLyricsCorrection(capturedGeneration:currentGeneration:capturedTitle:currentTitle:capturedArtist:currentArtist:) -> Bool`：generation 与"当前活的 title/artist"必须与闭包创建时捕获的完全一致，否则丢弃这次调用。
+   - `handleTrackChange` 里 :1531 附近的那次"duration correction" `fetchLyrics` 调用：改为只在 `shouldFireDeferredLyricsCorrection` 为真时才发起；album 字段从 `self.currentAlbum`（实时，可能已被插播的另一首歌改写）换成 `capturedAlbum`（闭包创建时和 `name`/`artist` 一起捕获的值）；persistentID 从 `self.currentPersistentID`（实时）换成这次 SB 读取自己产出的、已经和 `name` 核对过的本地 `persistentID`。不再发生"这次调用的字段"由两个不同时间点拼出来的情况。
+   - `retryDurationFetch`：签名从 `(name:generation:)` 扩成 `(name:artist:album:generation:)`，调用方 `handleTrackChange` 传入捕获时的 `artist`/`capturedAlbum`；内部同样接入 `shouldFireDeferredLyricsCorrection` 的核对再决定是否发起。
+   - 新增纯函数 `static func shouldReissueLyricsFetchForStaleIdentity(lyricsRowsAreEmpty:lyricsMatchesControllerIdentity:lastReissueStableSongID:controllerStableSongID:lastReissueAt:now:cooldown:) -> Bool`（通用自愈，任务第 2 条）：歌词页空白且 `LyricsService` 自己跟踪的完整身份（标题+艺人+专辑+时长）与 controller 当前身份不一致时判定"该重发"；同一目标身份 `cooldown`（默认 5s）内只重发一次，防止风暴。
+   - 新增 `evaluateLyricsHealthOnHeartbeat()`：挂在 `applySnapshot` 尾部（该函数由已有的 2s 轮询/心跳/AppleScript 兜底路径驱动，不是新起的每帧计时器）。一次心跳内做两件事：(a) 空白超过 3s 且不是已确认的"无歌词"终态时打一行证据日志（任务第 3 条，覆盖 serviceID/controllerID/displayState/行数）；(b) 调用上面的自愈判定，为真则用 controller 当前的完整正确字段重新发起一次 `fetchLyrics`。
+2. **`Sources/MusicMiniPlayerCore/Services/LyricsService.swift`**
+   - `stableSongIdentity(title:artist:)` 由 `private` 改为内部可见（供 MusicController 复用同一套归一化）。
+   - 新增内部只读属性 `currentFetchStableSongID`（暴露 title+artist 归一化身份，用于自愈的冷却分桶与日志）。
+   - 新增 `func matchesCurrentFetchIdentity(title:artist:duration:album:) -> Bool`：按 `fetchLyrics` 同款归一化重算完整身份并与 `currentSongID` 比对——这是自愈判定真正依赖的精确信号（比仅比对 title+artist 更严格：专辑/时长被撕裂但标题艺人仍对得上的这类情况，靠 title+artist 是测不出来的，靠这个函数能测出来）。
+3. **`Sources/MusicMiniPlayerCore/UI/LyricsView.swift`**（任务第 3 条的另一半：`cachedLayerRowsTrackKey` 只存在于这个 View 里，MusicController 摸不到）
+   - 新增 `@State private var staleCacheGateEvidenceLoggedAt`。
+   - 新增 `private func logStaleCacheGateEvidenceIfNeeded(cacheIsCurrentTrack:)`：在既有的 `cacheIsCurrentTrack` stale-rows 判定处调用（一次普通函数调用，不是 `@ViewBuilder` 里裸的 `if`，避免了"`()` 不满足 `View`"的编译错误——写法上用 `let _ = logStaleCacheGateEvidenceIfNeeded(...)`，和文件里已有的 `let _ = primeNativeRowHeightsIfNeeded(...)` 同一惯例）。判定条件本身（`Date` 与字符串比较）零 I/O，每次 body 求值都跑；真正的 `DebugLogger` 调用与状态写入被 `DispatchQueue.main.async` 推迟一个 runloop 节拍（避免"view update 期间改 state"的 SwiftUI 警告）并被 `staleCacheGateEvidenceLoggedAt` 节流到每 3 秒最多一条——不会变成每帧 I/O。
+
+### 7.3 测试
+
+- `Tests/MusicMiniPlayerTests/TrackIdentityDisciplineTests.swift`：新增「Door 4」「Door 5」两组，共 10 条，直接对 `shouldFireDeferredLyricsCorrection`/`shouldReissueLyricsFetchForStaleIdentity` 这两个纯函数做穷举式单测（合法同曲修正必须放行、generation 不符必须丢、标题/艺人任一漂移必须丢、冷却窗口内不重发/窗口外可重发/不同目标身份不互相拖累）。
+- `Tests/MusicMiniPlayerTests/LyricsBlankPageFuzzTests.swift`：
+  - `test_staleAlbumDurationRace_blanksSongWithRealCachedLyrics_MusicControllerSwift1533`（原红测试）：改造为驱动"修复后代码路径"——`applyStaleFieldRace` 现在会先跑一遍真实的 `shouldFireDeferredLyricsCorrection`，只有为真才真的调用 `fetchLyrics`。断言从"A 被清空"翻转为"B（真正在播的歌）全程不受打扰"——**已转绿**，这就是任务要求的"红测试通过根因修复变绿"。
+  - 新增 `test_deferredCorrection_stillFiresAndLandsOnContent_whenNothingActuallyChanged`：正例对照，generation/身份都没变时，合法的"时长修正"调用必须照常发起并命中内容——防止根因修复把正常用例也堵死。
+  - 新增 `test_selfHeal_aloneRecoversATornCompositeState_regardlessOfCause`（任务第 4 条第二问）：先绕开 MusicController 的新护栏，用旧的直接调用方式把 `LyricsService` 打成撕裂/空白状态（模拟"未复现的其它成因"），再验证真实的 `matchesCurrentFetchIdentity`/`shouldReissueLyricsFetchForStaleIdentity` 判定确实说"该重发"，并验证按此重发确实能救回内容——证明通用自愈本身（不依赖根因修复）也能兜住这一类状态。
+- 全部新增/改动测试 + 相关既有类（`LyricsBlankPageFuzzTests` 6 个、`TrackIdentityDisciplineTests` 29 个、`RadioTrackChangeDebounceTests` 4 个、`LyricsMissMemoTests` 13 个，共 52 个）串行跑通，0 失败，0.07 秒；未跑全量套件，未并行。
+
+### 7.4 mtime 核对（硬约束）
+
+**Before**（修复后、首次 `swift test` 之前）：
+```
+drwxr-xr-x@  98 yinanli  staff    3136 Sep 22 18:54:15 2026 ArtworkCache
+-rw-r--r--@   1 yinanli  staff   68760 Sep 22 18:59:52 2026 lyrics-backfill-census.jsonl
+-rw-r--r--@   1 yinanli  staff  173071 Sep 22 18:54:17 2026 lyrics_cache.json
+-rw-r--r--@   1 yinanli  staff   24086 Sep 22 18:54:16 2026 metadata_cache.json
+-rw-r--r--@   1 yinanli  staff   10080 Sep 22 18:59:51 2026 playback-history.json
+-rw-r--r--@   1 yinanli  staff   43572 Sep 22 18:51:01 2026 translation_cache.json
+drwxr-xr-x@   2 yinanli  staff      64 Sep 19 18:08:12 2026 updates
+```
+
+**After**（跑完 `LyricsBlankPageFuzzTests|TrackIdentityDisciplineTests|RadioTrackChangeDebounceTests|LyricsMissMemoTests` 52 个测试之后，逐字节对比）：
+```
+drwxr-xr-x@  98 yinanli  staff    3136 Sep 22 18:54:15 2026 ArtworkCache
+-rw-r--r--@   1 yinanli  staff   68760 Sep 22 18:59:52 2026 lyrics-backfill-census.jsonl
+-rw-r--r--@   1 yinanli  staff  173071 Sep 22 18:54:17 2026 lyrics_cache.json
+-rw-r--r--@   1 yinanli  staff   24086 Sep 22 18:54:16 2026 metadata_cache.json
+-rw-r--r--@   1 yinanli  staff   10080 Sep 22 18:59:51 2026 playback-history.json
+-rw-r--r--@   1 yinanli  staff   43572 Sep 22 18:51:01 2026 translation_cache.json
+drwxr-xr-x@   2 yinanli  staff      64 Sep 19 18:08:12 2026 updates
+```
+**完全一致，无任何变化。** （`lyrics-backfill-census.jsonl`/`playback-history.json` 两个文件的 mtime 早于本次修复工作开始，属于创始人机器上真实 app 会话自己的活动，与本次测试运行无关，两次快照里也确认没有变化。）
+
+### 7.5 未覆盖 / 后续
+
+- 本次只修了 `handleTrackChange`/`retryDurationFetch` 这两处已确认的"撕裂"点，加上一个通用自愈兜底。`MusicController.swift` 里还有 `LyricsView.swift` 三处 UI 触发的 `fetchLyrics` 调用（关闭中/重试按钮等）——已核实它们的字段都在"同一处、同一时刻"从 `musicController`/`title` 等来源一次性取出，不存在"捕获值+实时值混用"的结构，不需要同款修复，但未新增测试专门盯死这一点（超出本任务范围）。
+- 通用自愈（`shouldReissueLyricsFetchForStaleIdentity`）目前挂在 `applySnapshot` 尾部，即两秒一次的轮询心跳；没有验证过它在"电台在 5 秒内反复横跳好几次"这类极端场景下的行为细节（冷却桶按 title+artist 分，横跳到第三首歌会开新桶重发一次）——这是设计上刻意的行为（新目标不该被旧目标的冷却拖累），但没有专门写一条端到端测试去跑这个多首歌交替的场景。
+- 未做真机验证。按项目铁律，自动测试通过之后需要提醒创始人亲自终验（这条不是手感类问题，但仍是"页面到底出不出歌词"这类需要肉眼/真实电台确认的行为）。

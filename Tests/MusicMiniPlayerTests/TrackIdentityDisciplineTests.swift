@@ -176,4 +176,132 @@ final class TrackIdentityDisciplineTests: XCTestCase {
         XCTAssertFalse(sameSong(reqDur: 226))                      // Δ6s → not
         XCTAssertFalse(sameSong(reqStable: "other|artist"))        // stable differs → not
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Door 4: deferred lyrics-correction coherence (2026-09-22)
+    //
+    // MusicController.swift:1531/:1580 each fire a "duration correction"
+    // fetchLyrics call from a closure created at track-change time but not
+    // executed until after an async SB read + queue hop (up to ~1.5s+ later).
+    // Root fix: re-check BOTH the artwork/lyrics generation and the live
+    // current title/artist against what the closure captured, immediately
+    // before firing — see research/diagnosis-2026-09-22-blank-lyrics-page.md.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    func test_deferredLyricsCorrection_firesWhenGenerationAndIdentityStillMatch() {
+        XCTAssertTrue(MusicController.shouldFireDeferredLyricsCorrection(
+            capturedGeneration: 5, currentGeneration: 5,
+            capturedTitle: "Song", currentTitle: "Song",
+            capturedArtist: "Artist", currentArtist: "Artist"
+        ), "a legitimate same-song duration correction must still fire")
+    }
+
+    func test_deferredLyricsCorrection_dropsOnGenerationMismatch() {
+        XCTAssertFalse(MusicController.shouldFireDeferredLyricsCorrection(
+            capturedGeneration: 5, currentGeneration: 6,
+            capturedTitle: "Song", currentTitle: "Song",
+            capturedArtist: "Artist", currentArtist: "Artist"
+        ))
+    }
+
+    func test_deferredLyricsCorrection_dropsOnLiveTitleDrift_evenIfGenerationStillMatches() {
+        // The real bug's exact shape (L52334): the closure captured "Mc's
+        // Road De Aimasho" — by the time it's ready to fire, the live
+        // identity has already moved on to "Roland Reve". Title/artist alone
+        // (not just generation) must be re-checked.
+        XCTAssertFalse(MusicController.shouldFireDeferredLyricsCorrection(
+            capturedGeneration: 5, currentGeneration: 5,
+            capturedTitle: "Mc's Road De Aimasho", currentTitle: "Roland Reve",
+            capturedArtist: "Kazuhito Murata", currentArtist: "Jacqueline Danno"
+        ))
+    }
+
+    func test_deferredLyricsCorrection_dropsOnArtistDriftAlone() {
+        XCTAssertFalse(MusicController.shouldFireDeferredLyricsCorrection(
+            capturedGeneration: 5, currentGeneration: 5,
+            capturedTitle: "Song", currentTitle: "Song",
+            capturedArtist: "Artist A", currentArtist: "Artist B"
+        ))
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Door 5: generic lyrics-identity self-heal (2026-09-22)
+    //
+    // Backstop for the whole bug class, not just the two races fixed above:
+    // reissue a clean fetch when LyricsService's own tracked full identity
+    // (title+artist+duration+album) disagrees with the controller's current
+    // track while the page is blank — bounded so it can never storm.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    func test_selfHeal_reissuesWhenBlankAndIdentityMismatched() {
+        XCTAssertTrue(MusicController.shouldReissueLyricsFetchForStaleIdentity(
+            lyricsRowsAreEmpty: true,
+            lyricsMatchesControllerIdentity: false,
+            lastReissueStableSongID: nil,
+            controllerStableSongID: "real song|real artist",
+            lastReissueAt: nil,
+            now: Date()
+        ))
+    }
+
+    func test_selfHeal_doesNothingWhenContentIsShowing() {
+        XCTAssertFalse(MusicController.shouldReissueLyricsFetchForStaleIdentity(
+            lyricsRowsAreEmpty: false,
+            lyricsMatchesControllerIdentity: false,
+            lastReissueStableSongID: nil,
+            controllerStableSongID: "real song|real artist",
+            lastReissueAt: nil,
+            now: Date()
+        ), "content on screen must never be interrupted by the self-heal, even if identity bookkeeping looks off")
+    }
+
+    func test_selfHeal_doesNothingWhenIdentitiesAlreadyMatch() {
+        XCTAssertFalse(MusicController.shouldReissueLyricsFetchForStaleIdentity(
+            lyricsRowsAreEmpty: true,
+            lyricsMatchesControllerIdentity: true,
+            lastReissueStableSongID: nil,
+            controllerStableSongID: "real song|real artist",
+            lastReissueAt: nil,
+            now: Date()
+        ), "a genuine, still-in-flight search for the right song must not be reissued")
+    }
+
+    func test_selfHeal_repeatedMismatchWithinCooldown_doesNotStorm() {
+        let now = Date()
+        XCTAssertFalse(MusicController.shouldReissueLyricsFetchForStaleIdentity(
+            lyricsRowsAreEmpty: true,
+            lyricsMatchesControllerIdentity: false,
+            lastReissueStableSongID: "real song|real artist",
+            controllerStableSongID: "real song|real artist",
+            lastReissueAt: now.addingTimeInterval(-1.0),
+            now: now,
+            cooldown: 5.0
+        ), "a just-reissued identity must not be reissued again inside the cooldown — no storm")
+    }
+
+    func test_selfHeal_reissuesAgainAfterCooldownElapses() {
+        let now = Date()
+        XCTAssertTrue(MusicController.shouldReissueLyricsFetchForStaleIdentity(
+            lyricsRowsAreEmpty: true,
+            lyricsMatchesControllerIdentity: false,
+            lastReissueStableSongID: "real song|real artist",
+            controllerStableSongID: "real song|real artist",
+            lastReissueAt: now.addingTimeInterval(-6.0),
+            now: now,
+            cooldown: 5.0
+        ))
+    }
+
+    func test_selfHeal_differentTargetIdentity_isNotBlockedByAnotherIdentitysCooldown() {
+        let now = Date()
+        XCTAssertTrue(MusicController.shouldReissueLyricsFetchForStaleIdentity(
+            lyricsRowsAreEmpty: true,
+            lyricsMatchesControllerIdentity: false,
+            lastReissueStableSongID: "some other song|some other artist",
+            controllerStableSongID: "real song|real artist",
+            lastReissueAt: now.addingTimeInterval(-1.0),
+            now: now,
+            cooldown: 5.0
+        ))
+    }
 }
