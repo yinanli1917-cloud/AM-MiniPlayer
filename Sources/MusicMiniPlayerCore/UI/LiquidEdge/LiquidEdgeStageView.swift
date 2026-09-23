@@ -28,11 +28,22 @@ import QuartzCore
 struct LiquidEdgeCapsuleContent: View {
     @ObservedObject var music = MusicController.shared
     var onTap: () -> Void
+    var onPlayPause: () -> Void = { MusicController.shared.togglePlayPause() }
+    var onNext: () -> Void = { MusicController.shared.nextTrack() }
 
     var body: some View {
         let t = LiquidEdgeTokens.self
         VStack(spacing: 0) {
-            Color.clear.frame(height: t.capsulePadding + t.capsuleArtwork + 8)
+            // The cover is drawn by the stage (it flies in from the drop);
+            // this clear square over it is the capsule's one expand target
+            // (founder 2026-09-23: expanding needs an explicit trigger, and
+            // the buttons must work).
+            Color.clear
+                .frame(width: t.capsuleArtwork, height: t.capsuleArtwork)
+                .contentShape(RoundedRectangle(cornerRadius: t.capsuleArtworkCorner))
+                .onTapGesture { onTap() }
+                .padding(.top, t.capsulePadding)
+                .padding(.bottom, 8)
             VStack(spacing: 2) {
                 Text(music.currentTrackTitle).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                 Text(music.currentArtist).font(.system(size: 10)).opacity(0.72).lineLimit(1)
@@ -46,8 +57,6 @@ struct LiquidEdgeCapsuleContent: View {
         }
         .foregroundStyle(.white)
         .frame(width: t.capsuleSize.width, height: t.capsuleSize.height)
-        .contentShape(Rectangle())
-        .onTapGesture { onTap() }
     }
 
     /// Pause/play inside a progress ring; next without a ring; same visual size.
@@ -60,12 +69,12 @@ struct LiquidEdgeCapsuleContent: View {
                 .stroke(ink, style: StrokeStyle(lineWidth: stroke, lineCap: .round))
                 .rotationEffect(.degrees(-90))
             PlayPauseControlButton(isPlaying: music.isPlaying, inkColor: ink, hoverFill: ink.opacity(0.18)) {
-                music.togglePlayPause()
+                onPlayPause()
             }
             .scaleEffect(0.72)
         }
         .frame(width: ring, height: ring)
-        SkipControlButton(action: { music.nextTrack() }, direction: 1, inkColor: ink, hoverFill: ink.opacity(0.18))
+        SkipControlButton(action: onNext, direction: 1, inkColor: ink, hoverFill: ink.opacity(0.18))
             .scaleEffect(1.15)
             .frame(width: 34, height: ring)
     }
@@ -80,6 +89,12 @@ struct LiquidEdgeCapsuleContent: View {
 
 class LiquidEdgeFlippedView: NSView {
     override var isFlipped: Bool { true }
+}
+
+/// The capsule's hosting view: the stage panel never becomes key, so
+/// without first-mouse the buttons would drop every click.
+final class LiquidEdgeCapsuleHostingView: NSHostingView<LiquidEdgeCapsuleContent> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 /// A full-bounds container transparent to clicks itself.
@@ -118,6 +133,9 @@ final class LiquidEdgeStageView: NSView {
     var onHoverChange: ((Bool) -> Void)?
     var onTap: (() -> Void)?
     var activeHitRegionProvider: (() -> CGRect)?
+    /// Test seams: replace the capsule buttons' player commands.
+    var playPauseOverride: (() -> Void)?
+    var nextOverride: (() -> Void)?
     private var trackingArea: NSTrackingArea?
 
     var side: LiquidEdgeSide = .right
@@ -136,15 +154,12 @@ final class LiquidEdgeStageView: NSView {
     private let heroLayer = CALayer()
     private let capsuleClip = LiquidEdgePassThroughView()
     private let capsuleMask = CAShapeLayer()
-    private let capsuleHost: NSHostingView<LiquidEdgeCapsuleContent>
-    private let rimTrack = CAShapeLayer()
+    private let capsuleHost: LiquidEdgeCapsuleHostingView
     private let rimHalo = CAShapeLayer()
     private let rimHalo2 = CAShapeLayer()
     private let rimLit = CAShapeLayer()
-    private let bead = CALayer()
-    private let beadGlow = CALayer()
-    private let beadBody = CAGradientLayer()
-    private let beadShine = CALayer()
+    /// The glow's three strokes, softened together so no hard line shows.
+    private let glowGroup = CALayer()
 
     private var lastPose: LiquidEdgePose?
     private var glowColor = NSColor.controlAccentColor
@@ -155,15 +170,24 @@ final class LiquidEdgeStageView: NSView {
 
     override init(frame: NSRect) {
         var tap: (() -> Void)?
-        capsuleHost = NSHostingView(rootView: LiquidEdgeCapsuleContent(onTap: { tap?() }))
+        var playPause: (() -> Void)?
+        var next: (() -> Void)?
+        capsuleHost = LiquidEdgeCapsuleHostingView(rootView: LiquidEdgeCapsuleContent(
+            onTap: { tap?() }, onPlayPause: { playPause?() }, onNext: { next?() }))
         super.init(frame: frame)
         tap = { [weak self] in self?.onTap?() }
+        playPause = { [weak self] in
+            if let o = self?.playPauseOverride { o() } else { MusicController.shared.togglePlayPause() }
+        }
+        next = { [weak self] in
+            if let o = self?.nextOverride { o() } else { MusicController.shared.nextTrack() }
+        }
         wantsLayer = true
         layer?.masksToBounds = true
 
         addSubview(glass)
 
-        let fillView = LiquidEdgeFlippedView(frame: bounds)
+        let fillView = LiquidEdgePassThroughView(frame: bounds)
         fillView.autoresizingMask = [.width, .height]
         fillView.wantsLayer = true
         liquidFill.mask = liquidMask
@@ -171,7 +195,7 @@ final class LiquidEdgeStageView: NSView {
         fillView.layer?.addSublayer(liquidFill)
         addSubview(fillView)
 
-        let heroView = LiquidEdgeFlippedView(frame: bounds)
+        let heroView = LiquidEdgePassThroughView(frame: bounds)
         heroView.autoresizingMask = [.width, .height]
         heroView.wantsLayer = true
         heroLayer.masksToBounds = true
@@ -187,27 +211,19 @@ final class LiquidEdgeStageView: NSView {
         capsuleClip.addSubview(capsuleHost)
         addSubview(capsuleClip)
 
-        let rimView = LiquidEdgeFlippedView(frame: bounds)
+        let rimView = LiquidEdgePassThroughView(frame: bounds)
         rimView.autoresizingMask = [.width, .height]
         rimView.wantsLayer = true
-        for l in [rimTrack, rimHalo2, rimHalo, rimLit] {
+        rimView.layerUsesCoreImageFilters = true
+        for l in [rimHalo2, rimHalo, rimLit] {
             l.fillColor = nil
             l.lineCap = .round
             l.lineJoin = .round
-            rimView.layer?.addSublayer(l)
+            glowGroup.addSublayer(l)
         }
-        rimTrack.lineWidth = 1.5
-        rimLit.lineWidth = 1.5
-        beadGlow.shadowOpacity = 1
-        beadGlow.shadowRadius = 5
-        beadGlow.shadowOffset = .zero
-        beadBody.masksToBounds = true
-        beadBody.startPoint = CGPoint(x: 0.5, y: 0)
-        beadBody.endPoint = CGPoint(x: 0.5, y: 1)
-        beadBody.borderWidth = 0.5
-        beadShine.backgroundColor = NSColor.white.withAlphaComponent(0.85).cgColor
-        for l in [beadGlow, beadBody, beadShine] { bead.addSublayer(l) }
-        rimView.layer?.addSublayer(bead)
+        rimLit.lineWidth = 2
+        glowGroup.filters = [CIFilter(name: "CIGaussianBlur", parameters: [kCIInputRadiusKey: 1.2])!]
+        rimView.layer?.addSublayer(glowGroup)
         addSubview(rimView)
 
         let music = MusicController.shared
@@ -230,7 +246,8 @@ final class LiquidEdgeStageView: NSView {
     override func layout() {
         super.layout()
         for l in [liquidFill, liquidMask] { l.frame = bounds }
-        for l in [rimTrack, rimHalo2, rimHalo, rimLit] { l.frame = bounds }
+        glowGroup.frame = bounds
+        for l in [rimHalo2, rimHalo, rimLit] { l.frame = bounds }
         capsuleMask.frame = bounds
     }
 
@@ -331,9 +348,10 @@ final class LiquidEdgeStageView: NSView {
         CATransaction.commit()
     }
 
-    /// The sliver's outline pushed out 1.5pt (concentric corners), lit from
-    /// the bottom where it meets the bezel = progress; a soft two-layer glow
-    /// on the lit part and a small rendered bead on the head.
+    /// Progress = a glow along the sliver's three inner sides, pushed out
+    /// 1.5pt (concentric corners), lit from where it meets the bezel; the
+    /// lit length is the played part. No track line, no knob (founder
+    /// 2026-09-23: only the glow).
     private func updateLight(_ p: LiquidEdgePose) {
         let t = LiquidEdgeTokens.self
         let music = MusicController.shared
@@ -342,47 +360,29 @@ final class LiquidEdgeStageView: NSView {
         let progress = music.duration > 0 ? CGFloat(min(max(music.lyricRenderTime() / music.duration, 0), 1)) : 0
         let level = Float(min(max(p.glow, 0), 1)) * (music.isPlaying ? 1 : 0.75)
         let len = CGFloat(max(p.glowLength, 0))
-        let midY = geometry.card.midY
-        let path = m(LiquidEdgeRim.path(sliverWidth: t.sliverSize.width, height: len, edge: geometry.edgeX, midY: midY))
-        for l in [rimTrack, rimHalo, rimHalo2, rimLit] { l.path = path; l.opacity = level }
-        rimHalo.strokeEnd = progress
-        rimHalo2.strokeEnd = progress
-        rimLit.strokeEnd = progress
-
-        let head = LiquidEdgeRim.point(atFraction: progress, sliverWidth: t.sliverSize.width, height: len,
-                                       edge: geometry.edgeX, midY: midY)
-        let onSide = abs(head.x - (geometry.edgeX - t.sliverSize.width - LiquidEdgeRim.gap)) < 0.75
-        let knob = onSide ? CGSize(width: 5, height: 8) : CGSize(width: 8, height: 5)
-        let knobRect = m(CGRect(x: head.x - knob.width / 2, y: head.y - knob.height / 2, width: knob.width, height: knob.height))
-        bead.frame = knobRect
-        let r = min(knob.width, knob.height) / 2
-        beadGlow.frame = bead.bounds
-        beadGlow.cornerRadius = r
-        beadGlow.shadowPath = CGPath(roundedRect: bead.bounds, cornerWidth: r, cornerHeight: r, transform: nil)
-        beadBody.frame = bead.bounds
-        beadBody.cornerRadius = r
-        beadShine.frame = CGRect(x: knobRect.width * 0.25, y: 0.8, width: knobRect.width * 0.5, height: max(knobRect.height * 0.26, 1))
-        beadShine.cornerRadius = beadShine.frame.height / 2
-        bead.opacity = level
-        bead.isHidden = level < 0.05 || len < 20
+        let path = m(LiquidEdgeRim.path(sliverWidth: t.sliverSize.width, height: len, edge: geometry.edgeX, midY: geometry.card.midY))
+        for l in [rimHalo, rimHalo2, rimLit] {
+            l.path = path
+            l.strokeEnd = progress
+        }
+        glowGroup.opacity = level
+        glowGroup.isHidden = level < 0.01 || progress <= 0
         applyLightStyle()
     }
 
     private func applyLightStyle() {
         let c = glowColor
-        rimTrack.strokeColor = NSColor(white: 0.9, alpha: 0.28).cgColor
-        rimLit.strokeColor = c.cgColor
-        rimHalo.strokeColor = c.withAlphaComponent(0.22 + 0.14 * hoverBoost).cgColor
-        rimHalo.lineWidth = 4 + 2 * hoverBoost
-        rimHalo2.strokeColor = c.withAlphaComponent(0.08 + 0.08 * hoverBoost).cgColor
-        rimHalo2.lineWidth = 9 + 3 * hoverBoost
-        let light = c.blended(withFraction: 0.45, of: .white) ?? c
-        let deep = c.blended(withFraction: 0.25, of: .black) ?? c
-        beadBody.colors = [light.cgColor, c.cgColor, deep.cgColor]
-        beadBody.borderColor = NSColor.white.withAlphaComponent(0.55).cgColor
-        beadGlow.backgroundColor = c.withAlphaComponent(0.01).cgColor
-        beadGlow.shadowColor = c.cgColor
-        beadGlow.shadowOpacity = Float(0.8 + 0.2 * hoverBoost)
+        let core = c.blended(withFraction: 0.35, of: .white) ?? c
+        rimLit.strokeColor = core.withAlphaComponent(0.75 + 0.2 * hoverBoost).cgColor
+        rimHalo.strokeColor = c.withAlphaComponent(0.30 + 0.14 * hoverBoost).cgColor
+        rimHalo.lineWidth = 4.5 + 2 * hoverBoost
+        rimHalo2.strokeColor = c.withAlphaComponent(0.12 + 0.08 * hoverBoost).cgColor
+        rimHalo2.lineWidth = 10 + 3 * hoverBoost
+    }
+
+    /// Test seam: what the progress light draws.
+    var debugProgressLight: (strokeEnds: [CGFloat], hidden: Bool, layerCount: Int) {
+        ([rimHalo, rimHalo2, rimLit].map(\.strokeEnd), glowGroup.isHidden, glowGroup.sublayers?.count ?? 0)
     }
 
     // MARK: Input
@@ -410,7 +410,14 @@ final class LiquidEdgeStageView: NSView {
 
     override func mouseEntered(with event: NSEvent) { onHoverChange?(true) }
     override func mouseExited(with event: NSEvent) { onHoverChange?(false) }
-    override func mouseDown(with event: NSEvent) { onTap?() }
+    /// A click on the sliver expands. Clicks on the capsule are the capsule's
+    /// own (its cover expands; buttons play/skip; the rest does nothing), so
+    /// ones SwiftUI passes up here are dropped.
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if !capsuleClip.isHidden, let p = lastPose, m(p.capsule).contains(point) { return }
+        onTap?()
+    }
 
     override func scrollWheel(with event: NSEvent) {
         guard event.momentumPhase == [] else { return }

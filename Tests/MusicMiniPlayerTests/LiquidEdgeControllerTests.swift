@@ -112,6 +112,12 @@ final class LiquidEdgeControllerTests: XCTestCase {
         XCTAssertEqual(card.alphaValue, 0, accuracy: 0.001)
         XCTAssertTrue(card.ignoresMouseEvents, "the invisible panel must not catch clicks")
 
+        // Resting on the capsule keeps the capsule (founder 2026-09-23).
+        controller.hoverEntered()
+        spin(0.3)
+        XCTAssertEqual(controller.state, .floating, "hovering the capsule must not expand it")
+        XCTAssertFalse(controller.isAnimating)
+
         controller.hoverExited()
         settle()
         XCTAssertEqual(controller.state, .tucked)
