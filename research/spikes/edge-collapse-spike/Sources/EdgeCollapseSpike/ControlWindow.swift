@@ -27,9 +27,16 @@ struct ControlPanelView: View {
                     Button("Expand") { model.requestExpand() }
                     Button("Next track") { model.nextTrack() }
                 }
-                Text("Two-finger swipe right: the panel follows your fingers; release to tuck or let go early to spring back. Rest the cursor on the edge light = a drop comes out and becomes the capsule. Click the capsule or the handle = back to the panel.")
+                Text("Two-finger swipe right on the panel = tuck at once; swipe left on the capsule or the edge sliver = back to the panel at once. Rest the cursor on the edge sliver = a drop comes out and becomes the capsule. Click the capsule or the handle = back to the panel.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Progress light") {
+                Picker("Style", selection: $model.progressStyle) {
+                    ForEach(EdgeCollapseProgressStyle.allCases) { s in Text(s.rawValue).tag(s) }
+                }
+                .pickerStyle(.segmented)
             }
 
             Section("Track change") {

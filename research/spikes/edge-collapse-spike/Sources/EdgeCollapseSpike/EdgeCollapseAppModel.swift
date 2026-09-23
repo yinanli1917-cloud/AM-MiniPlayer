@@ -67,6 +67,9 @@ public final class EdgeCollapseAppModel: ObservableObject {
     /// unless the player already posts its own song-change notification.
     /// No public API tells us whether Music/Spotify notifications are on, so
     /// the product needs a setting; the second switch simulates the answer.
+    @Published public var progressStyle: EdgeCollapseProgressStyle = .glass {
+        didSet { stage?.setProgressStyle(progressStyle) }
+    }
     @Published public var autoPeekEnabled = true
     @Published public var playerAlreadyNotifies = false
     private var hovering = false
@@ -74,9 +77,7 @@ public final class EdgeCollapseAppModel: ObservableObject {
     private var peekWork: DispatchWorkItem?
     private var cancellables = Set<AnyCancellable>()
 
-    // Two-finger swipe tracking (collapse follows the fingers).
     private var swipe: EdgeCollapseSwipe?
-    private var trackMotion: EdgeCollapseMotion?
 
     var hostingView: EdgeStageView? { stage }
 
@@ -173,67 +174,23 @@ public final class EdgeCollapseAppModel: ObservableObject {
     /// For the control window: behave as if the track just changed.
     public func simulateTrackChange() { trackChanged() }
 
-    // MARK: - Two-finger swipe: the collapse follows the fingers
+    // MARK: - Two-finger swipe: one swipe, one action, at once
 
-    private func restCardPose() -> EdgeCollapsePose {
-        EdgeCollapsePoses.pose(.card, page: page, style: tuckStyle)
-    }
-
-    public func swipeBegan() {
-        guard presentation == .card, motion == nil, !reduceMotion else { swipe = nil; return }
-        swipe = EdgeCollapseSwipe()
-        trackMotion = EdgeCollapseMotion(
-            from: restCardPose().vector(), velocity: Array(repeating: 0, count: EdgeCollapsePose.channelCount),
-            // The landing rebound starts at 0.24s, well past what the fingers
-            // drive (<= 0.08s), so the same motion carries it after release.
-            stages: EdgeCollapseChoreography.stages(kind: .collapse, fromTucked: false, page: page, style: tuckStyle,
-                                                    bounce: bounce, tempo: tempo))
-    }
+    public func swipeBegan() { swipe = EdgeCollapseSwipe() }
 
     public func swipeChanged(dx: Double, dy: Double) {
         if swipe == nil { swipeBegan() }
-        guard var s = swipe, let tm = trackMotion else { return }
-        let horizontal = s.add(dx: dx, dy: dy, at: CACurrentMediaTime())
+        guard var s = swipe else { return }
+        let action = s.add(dx: dx, dy: dy, presentation: presentation)
         swipe = s
-        guard horizontal else {
-            // A vertical scroll (lyrics, playlist): let it be.
-            swipe = nil; trackMotion = nil; pose = restCardPose(); return
+        switch action {
+        case .collapse: requestCollapse(edge: .right)
+        case .expand: requestExpand()
+        case nil: break
         }
-        pose = EdgeCollapsePose(vector: tm.sample(at: s.trackedMotionTime).value)
     }
 
-    public func swipeEnded() {
-        guard let s = swipe, let tm = trackMotion else { return }
-        swipe = nil; trackMotion = nil
-        let now = CACurrentMediaTime()
-        let tau = s.trackedMotionTime
-        if s.commits {
-            // Carry on with the very motion the fingers were driving, from
-            // where they left it: nothing is rebuilt, so nothing can jump.
-            EdgeCollapseLog.event(t0: now, from: presentation, to: .collapsing, anim: "collapse-swipe", event: "start")
-            flushRecorder()
-            motion = tm
-            motionKind = .collapse
-            motionStart = now - tau
-            pendingSettle = .settled
-            recorder.begin(kind: "collapse-swipe", start: now)
-            send(.collapseRequested(.right))
-            hostingView?.refreshHitRegion()
-            startLink()
-            tick()
-        } else if tau > 0 {
-            // Not far or fast enough: spring back to the card, no bounce.
-            flushRecorder()
-            motion = EdgeCollapseMotion(from: pose.vector(), velocity: Array(repeating: 0, count: EdgeCollapsePose.channelCount),
-                                        stages: EdgeCollapseChoreography.direct(to: restCardPose().vector(), tempo: tempo))
-            motionKind = .expand
-            motionStart = now
-            pendingSettle = nil
-            recorder.begin(kind: "swipe-cancel", start: now)
-            startLink()
-            tick()
-        }
-    }
+    public func swipeEnded() { swipe = nil }
 
     func activeHitRegion() -> CGRect {
         EdgeCollapseLayout.hitRegion(for: presentation, style: tuckStyle)

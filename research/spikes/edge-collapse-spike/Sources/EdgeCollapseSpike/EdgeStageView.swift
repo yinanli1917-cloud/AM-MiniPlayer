@@ -157,7 +157,14 @@ final class EdgeStageView: NSView {
     private let heroLayer = CALayer()
     private let capsuleClip = PassThroughView()
     private let capsuleHost: NSHostingView<CapsuleContentView>
+    private var progressStyle: EdgeCollapseProgressStyle = .glass
     private let rimTrack = CAShapeLayer()
+    private let rimHalo2 = CAShapeLayer()
+    /// Rendered bead (style A): glow rings, gradient body, specular highlight.
+    private let bead = CALayer()
+    private let beadGlow = CALayer()
+    private let beadBody = CAGradientLayer()
+    private let beadShine = CALayer()
     private let rimHalo = CAShapeLayer()
     private let rimLit = CAShapeLayer()
     /// A clear Liquid Glass lens riding on the progress head (founder's
@@ -234,16 +241,26 @@ final class EdgeStageView: NSView {
 
         let rimView = FlippedView(frame: bounds)
         rimView.wantsLayer = true
-        for l in [rimTrack, rimHalo, rimLit] {
+        for l in [rimTrack, rimHalo2, rimHalo, rimLit] {
             l.frame = bounds
             l.fillColor = nil
             l.lineCap = .round
             l.lineJoin = .round
             rimView.layer?.addSublayer(l)
         }
-        rimTrack.lineWidth = 2.5
-        rimHalo.lineWidth = 7
-        rimLit.lineWidth = 2.5
+        rimTrack.lineWidth = 1.5
+        rimLit.lineWidth = 1.5
+        // Rendered bead: a soft glow disc, a gradient pill, a shine on top.
+        beadGlow.shadowOpacity = 1
+        beadGlow.shadowRadius = 5
+        beadGlow.shadowOffset = .zero
+        beadBody.masksToBounds = true
+        beadBody.startPoint = CGPoint(x: 0.5, y: 0)
+        beadBody.endPoint = CGPoint(x: 0.5, y: 1)
+        beadBody.borderWidth = 0.5
+        beadShine.backgroundColor = NSColor.white.withAlphaComponent(0.85).cgColor
+        for l in [beadGlow, beadBody, beadShine] { bead.addSublayer(l) }
+        rimView.layer?.addSublayer(bead)
         if env["ECS_AB_NO_RIM"] == nil {
             addSubview(rimView)
             addSubview(rimKnob)
@@ -354,6 +371,7 @@ final class EdgeStageView: NSView {
     // MARK: Progress light around the sliver
 
     func setGlowColor(_ c: NSColor) { glowColor = c; refreshLight() }
+    func setProgressStyle(_ s: EdgeCollapseProgressStyle) { progressStyle = s; refreshLight() }
 
     func setHoverBoost(_ on: Bool) {
         hoverBoost = on ? 1 : 0
@@ -382,27 +400,59 @@ final class EdgeStageView: NSView {
         let level = Float(min(max(p.glow, 0), 1)) * (music.isPlaying ? 1 : 0.75)
         let len = CGFloat(max(p.glowLength, 0))
         let path = EdgeRimGeometry.path(sliverWidth: t.handleSize.width, height: len, edge: bounds.width, midY: bounds.height / 2)
-        for l in [rimTrack, rimHalo, rimLit] { l.path = path; l.opacity = level }
+        let rendered = progressStyle == .rendered
+        for l in [rimTrack, rimHalo, rimHalo2, rimLit] { l.path = path; l.opacity = level }
         rimHalo.strokeEnd = progress
+        rimHalo2.strokeEnd = progress
         rimLit.strokeEnd = progress
+        rimHalo.isHidden = !rendered
+        rimHalo2.isHidden = !rendered
         let head = EdgeRimGeometry.point(atFraction: progress, sliverWidth: t.handleSize.width, height: len,
                                          edge: bounds.width, midY: bounds.height / 2)
-        // Knob: tall on the inner side, wide on the top/bottom runs.
+        // Head: the reference's proportions scaled to a 1.5pt line — about
+        // 8x12, long along the line (tall on the inner side, wide on the
+        // top/bottom runs), sitting entirely outside the black so the lens
+        // has the line (not black) under it.
         let onSide = abs(head.x - (bounds.width - t.handleSize.width - EdgeRimGeometry.gap)) < 0.75
-        let knob = onSide ? CGSize(width: 9, height: 14) : CGSize(width: 14, height: 9)
-        rimKnob.frame = CGRect(x: head.x - knob.width / 2, y: head.y - knob.height / 2, width: knob.width, height: knob.height)
+        let knob = onSide ? CGSize(width: 8, height: 12) : CGSize(width: 12, height: 8)
+        let knobRect = CGRect(x: head.x - knob.width / 2, y: head.y - knob.height / 2, width: knob.width, height: knob.height)
+        rimKnob.frame = knobRect
         if #available(macOS 26.0, *) { (rimKnob as? NSGlassEffectView)?.cornerRadius = min(knob.width, knob.height) / 2 }
         rimKnob.alphaValue = CGFloat(level)
-        rimKnob.isHidden = level < 0.05 || len < 20
+        rimKnob.isHidden = rendered || level < 0.05 || len < 20
+        // Rendered bead (same size and place).
+        bead.frame = knobRect
+        let r = min(knob.width, knob.height) / 2
+        beadGlow.frame = bead.bounds
+        beadGlow.cornerRadius = r
+        beadGlow.shadowPath = CGPath(roundedRect: bead.bounds, cornerWidth: r, cornerHeight: r, transform: nil)
+        beadBody.frame = bead.bounds
+        beadBody.cornerRadius = r
+        beadShine.frame = CGRect(x: knob.width * 0.25, y: 1.2, width: knob.width * 0.5, height: max(knob.height * 0.28, 1.5))
+        beadShine.cornerRadius = beadShine.frame.height / 2
+        bead.opacity = level
+        bead.isHidden = !rendered || level < 0.05 || len < 20
         applyLightStyle()
     }
 
     private func applyLightStyle() {
         let c = glowColor
-        rimTrack.strokeColor = NSColor(white: 0.85, alpha: 0.45).cgColor
+        let rendered = progressStyle == .rendered
+        rimTrack.strokeColor = NSColor(white: 0.9, alpha: rendered ? 0.28 : 0.32).cgColor
         rimLit.strokeColor = c.cgColor
-        rimHalo.strokeColor = c.withAlphaComponent(0.14 + 0.16 * hoverBoost).cgColor
-        rimHalo.lineWidth = 7 + 3 * hoverBoost
+        // Style A halo: two soft layers on the lit part only.
+        rimHalo.strokeColor = c.withAlphaComponent(0.22 + 0.14 * hoverBoost).cgColor
+        rimHalo.lineWidth = 4 + 2 * hoverBoost
+        rimHalo2.strokeColor = c.withAlphaComponent(0.08 + 0.08 * hoverBoost).cgColor
+        rimHalo2.lineWidth = 9 + 3 * hoverBoost
+        // Style A bead colours.
+        let light = c.blended(withFraction: 0.45, of: .white) ?? c
+        let deep = c.blended(withFraction: 0.25, of: .black) ?? c
+        beadBody.colors = [light.cgColor, c.cgColor, deep.cgColor]
+        beadBody.borderColor = NSColor.white.withAlphaComponent(0.55).cgColor
+        beadGlow.backgroundColor = c.withAlphaComponent(0.01).cgColor
+        beadGlow.shadowColor = c.cgColor
+        beadGlow.shadowOpacity = Float(0.8 + 0.2 * hoverBoost)
     }
 
     // MARK: Gestures and hit testing
@@ -451,7 +501,9 @@ final class EdgeStageView: NSView {
 /// bezel, along the bottom, round the inner side, along the top, back to the
 /// bezel — 2pt outside the black.
 enum EdgeRimGeometry {
-    static let gap: CGFloat = 2
+    /// Line runs this far outside the black, so the 8pt-wide head sits
+    /// fully outside it (a lens over black shows nothing).
+    static let gap: CGFloat = 4.5
 
     static func path(sliverWidth w: CGFloat, height: CGFloat, edge: CGFloat, midY: CGFloat) -> CGPath {
         let p = CGMutablePath()

@@ -38,36 +38,30 @@ final class EdgeCollapseV12Tests: XCTestCase {
         XCTAssertEqual(pose(m, m.settledDuration).glow, 1, accuracy: 0.02)
     }
 
-    // MARK: Swipe follows the fingers
+    // MARK: Two-finger swipe: one swipe, one action, at once
 
-    func test_swipe_progressFollowsFingers_andRubberBands() {
+    func test_swipeRight_onPanel_collapsesAtOnce_once() {
         var s = EdgeCollapseSwipe()
-        s.add(dx: 40, dy: 0, at: 0)
-        XCTAssertEqual(s.progress, 40 / EdgeCollapseSwipe.fullDistance, accuracy: 1e-9)
-        s.add(dx: 400, dy: 0, at: 0.1)
-        XCTAssertGreaterThan(s.progress, 1)
-        XCTAssertLessThan(s.progress, 1.16, "resists past the end")
-        XCTAssertLessThan(s.trackedMotionTime, 0.09, "the landing stage is never driven by the fingers")
+        XCTAssertNil(s.add(dx: 6, dy: 0, presentation: .card))
+        XCTAssertEqual(s.add(dx: 6, dy: 0, presentation: .card), .collapse, "fires past 10pt, mid-gesture")
+        XCTAssertNil(s.add(dx: 30, dy: 0, presentation: .card), "only once per gesture")
+    }
+
+    func test_swipeLeft_onCapsuleOrSliver_expands_notOnPanel() {
+        for p in [EdgePresentation.tucked, .floating] {
+            var s = EdgeCollapseSwipe()
+            XCTAssertEqual(s.add(dx: -12, dy: 0, presentation: p), .expand)
+        }
+        var onPanel = EdgeCollapseSwipe()
+        XCTAssertNil(onPanel.add(dx: -40, dy: 0, presentation: .card))
+        var rightOnCapsule = EdgeCollapseSwipe()
+        XCTAssertNil(rightOnCapsule.add(dx: 40, dy: 0, presentation: .floating))
     }
 
     func test_swipe_verticalScrollIsIgnored() {
         var s = EdgeCollapseSwipe()
-        XCTAssertFalse(s.add(dx: 1, dy: 9, at: 0))
-        XCTAssertFalse(s.commits)
-    }
-
-    func test_swipe_commitByDistance_orByFlick_elseSpringBack() {
-        var slowShort = EdgeCollapseSwipe()
-        slowShort.add(dx: 10, dy: 0, at: 0); slowShort.add(dx: 10, dy: 0, at: 0.2)
-        XCTAssertFalse(slowShort.commits, "short slow drag springs back")
-
-        var slowFar = EdgeCollapseSwipe()
-        for i in 0..<10 { slowFar.add(dx: 9, dy: 0, at: Double(i) * 0.05) }
-        XCTAssertTrue(slowFar.commits, "dragged past 40% commits")
-
-        var flick = EdgeCollapseSwipe()
-        flick.add(dx: 8, dy: 0, at: 0); flick.add(dx: 16, dy: 0, at: 0.016); flick.add(dx: 16, dy: 0, at: 0.032)
-        XCTAssertTrue(flick.commits, "a short flick commits by projected momentum")
+        XCTAssertNil(s.add(dx: 1, dy: 9, presentation: .card))
+        XCTAssertNil(s.add(dx: 30, dy: 0, presentation: .card), "decided vertical: lyrics scrolling stays scrolling")
     }
 
     // MARK: Track change peek
