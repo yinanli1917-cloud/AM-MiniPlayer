@@ -23,6 +23,19 @@ public struct FluidGradientBackground: View {
     @State private var contrastResolution = ArtworkContrastPolicy.resolve(
         brightness: 0.5, params: .default, reduceTransparency: false
     )
+    // Backdrop legibility band (research/spec-2026-09-22-backdrop-legibility.md):
+    // resolved ONCE per artwork change in updateTone(), same cadence as `tone`/
+    // `contrastResolution` above — not a per-frame filter. Computed from the FULL
+    // existing pipeline's predicted output (tone map + C5 if active), so it only ever
+    // makes up the residual gap rather than double-darkening on top of C5.
+    @State private var legibilityCorrection = BackdropLegibilityBand.Correction.zero
+    // A floor-correction lift is FOLDED into the existing `.brightness(tone.textureBrightness)`
+    // call below (as an added delta) instead of an extra `.brightness()` modifier — this
+    // project has measured that the render server re-evaluates every resident compositing
+    // filter on each recomposite regardless of its value (CLAUDE.md Performance Traps,
+    // "Resident CIGaussianBlur"), so an always-present wrapper modifier would cost
+    // WindowServer time even at 0. Zero when no lift is needed (in-band or ceiling case).
+    @State private var legibilityInnerBrightnessDelta: Double = 0
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     private static let crossfade = Animation.easeInOut(duration: 0.6)
@@ -60,7 +73,7 @@ public struct FluidGradientBackground: View {
                         .blur(radius: legacyArtworkContrast ? 58 : contrastResolution.blurRadius)
                         .saturation(legacyArtworkContrast ? tone.textureSaturation : contrastResolution.saturation)
                         .contrast(tone.textureContrast)
-                        .brightness(tone.textureBrightness)
+                        .brightness(tone.textureBrightness + legibilityInnerBrightnessDelta)
 
                         Color.white
                             .opacity(tone.liftOpacity)
@@ -76,6 +89,16 @@ public struct FluidGradientBackground: View {
                             Color.black
                                 .opacity(contrastResolution.darkenOpacity)
                                 .animation(.smooth(duration: MicroInteractionFeel.Tokens.artworkContrastDarkenAnimationDuration), value: contrastResolution.darkenOpacity)
+                        }
+
+                        // Backdrop legibility band: tops up whatever the pipeline above
+                        // already produced so a white foreground always reads within
+                        // [4.5:1, 12:1] — only appears above the ceiling, in-band artwork
+                        // renders byte-identical.
+                        if legibilityCorrection.darkenOpacity > 0 {
+                            Color.black
+                                .opacity(legibilityCorrection.darkenOpacity)
+                                .animation(.smooth(duration: MicroInteractionFeel.Tokens.artworkContrastDarkenAnimationDuration), value: legibilityCorrection.darkenOpacity)
                         }
                     }
                     // Distinct identity per artwork: a REPLACEMENT crossfades old → new
@@ -145,6 +168,20 @@ public struct FluidGradientBackground: View {
             contrastResolution = ArtworkContrastPolicy.resolve(
                 brightness: 0.5, params: .default, reduceTransparency: reduceTransparency
             )
+            legibilityCorrection = BackdropLegibilityBand.resolveChannelCorrect(
+                preCorrection: BackdropLegibilityBand.fluidBackdropToneColor(
+                    artworkAverageColor: BackdropLegibilityBand.RGBColor(r: 0.5, g: 0.5, b: 0.5),
+                    tone: tone,
+                    contrastResolution: contrastResolution,
+                    applyContrastDarken: !legacyArtworkContrast
+                )
+            )
+            legibilityInnerBrightnessDelta = BackdropLegibilityBand.innerBrightnessDelta(
+                liftAmount: legibilityCorrection.liftAmount,
+                tone: tone,
+                contrastResolution: contrastResolution,
+                applyContrastDarken: !legacyArtworkContrast
+            )
             return
         }
         let metrics = artwork.artworkVisualMetrics()
@@ -153,6 +190,25 @@ public struct FluidGradientBackground: View {
             brightness: metrics.averageLuminance,
             params: MicroInteractionFeel.artworkContrastParams,
             reduceTransparency: reduceTransparency
+        )
+        // Channel-correct (research/spec-2026-09-22-backdrop-legibility.md colour sweep):
+        // the TEXTURE styling decisions above (tone/contrastResolution) stay keyed off the
+        // existing gamma-mixed `averageLuminance` — that tone map is a separately-tuned,
+        // already-tested system this fix does not touch. Only the LEGIBILITY correction
+        // itself (which must be WCAG-accurate) uses the artwork's real per-channel colour.
+        legibilityCorrection = BackdropLegibilityBand.resolveChannelCorrect(
+            preCorrection: BackdropLegibilityBand.fluidBackdropToneColor(
+                artworkAverageColor: BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue),
+                tone: tone,
+                contrastResolution: contrastResolution,
+                applyContrastDarken: !legacyArtworkContrast
+            )
+        )
+        legibilityInnerBrightnessDelta = BackdropLegibilityBand.innerBrightnessDelta(
+            liftAmount: legibilityCorrection.liftAmount,
+            tone: tone,
+            contrastResolution: contrastResolution,
+            applyContrastDarken: !legacyArtworkContrast
         )
     }
 }
@@ -163,6 +219,39 @@ struct ArtworkVisualMetrics: Equatable {
     let highlightLuminance: Double
     let luminanceSpread: Double
     let averageSaturation: Double
+    // Per-channel averages (research/spec-2026-09-22-backdrop-legibility.md, colour-sweep
+    // review): `averageLuminance` mixes R/G/B in GAMMA space via Rec.709 weights BEFORE any
+    // WCAG linearization, which is only exact for actually-gray content — for a saturated
+    // colour it can diverge from the artwork's TRUE relative luminance by an order of
+    // magnitude (pure blue: gamma-mixed 0.072 vs true 0.072 happens to coincide, but pure
+    // red's gamma-mixed 0.213 understates a channel-correct pipeline's resulting contrast
+    // by several points; see BackdropLegibilityBandTests colour sweep). Callers that need
+    // WCAG-correct contrast (BackdropLegibilityBand) use these per-channel averages instead
+    // of `averageLuminance`. Default 0.5/0.5/0.5 (matches `.neutral`) so every existing call
+    // site that only sets the luminance/saturation fields keeps compiling unchanged.
+    let averageRed: Double
+    let averageGreen: Double
+    let averageBlue: Double
+
+    init(
+        averageLuminance: Double,
+        shadowLuminance: Double,
+        highlightLuminance: Double,
+        luminanceSpread: Double,
+        averageSaturation: Double,
+        averageRed: Double = 0.5,
+        averageGreen: Double = 0.5,
+        averageBlue: Double = 0.5
+    ) {
+        self.averageLuminance = averageLuminance
+        self.shadowLuminance = shadowLuminance
+        self.highlightLuminance = highlightLuminance
+        self.luminanceSpread = luminanceSpread
+        self.averageSaturation = averageSaturation
+        self.averageRed = averageRed
+        self.averageGreen = averageGreen
+        self.averageBlue = averageBlue
+    }
 
     static let neutral = ArtworkVisualMetrics(
         averageLuminance: 0.5,

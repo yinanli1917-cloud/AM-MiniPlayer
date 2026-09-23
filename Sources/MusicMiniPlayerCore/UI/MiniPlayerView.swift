@@ -31,6 +31,14 @@ public struct MiniPlayerView: View {
     @State private var topLeftLuminance: CGFloat = 0.5
     @State private var topRightLuminance: CGFloat = 0.5
     @State private var artworkTone: ArtworkBackgroundToneMap = .neutral
+    // Backdrop legibility band (research/spec-2026-09-22-backdrop-legibility.md, point B):
+    // the fullscreen album page's bottom control band background prediction inputs,
+    // refreshed alongside `artworkTone` from the same `artworkVisualMetrics()` call.
+    // Per-channel colour (not just luminance) — channel-correct WCAG contrast needs the
+    // real hue, not a gamma-mixed scalar (colour-sweep review found a scalar model can
+    // claim a saturated background is safely within the band when it is actually not).
+    @State private var artworkAverageColor = BackdropLegibilityBand.RGBColor(r: 0.5, g: 0.5, b: 0.5)
+    @State private var artworkBottomRowColor = BackdropLegibilityBand.RGBColor(r: 0.5, g: 0.5, b: 0.5)
     @State private var effectArtwork: NSImage?
     @State private var effectArtworkSignature: String = ""
 
@@ -210,13 +218,19 @@ public struct MiniPlayerView: View {
             if newArtwork != nil {
                 syncArtworkLuminance()
                 if let artwork = newArtwork {
-                    artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
+                    let metrics = artwork.artworkVisualMetrics()
+                    artworkTone = ArtworkBackgroundToneMap.forMetrics(metrics)
+                    artworkAverageColor = BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue)
+                    let bottomColor = artwork.controlAreaMaxColor()
+                    artworkBottomRowColor = BackdropLegibilityBand.RGBColor(r: bottomColor.r, g: bottomColor.g, b: bottomColor.b)
                 }
             } else {
                 artworkBrightness = 0.5
                 topLeftLuminance = 0.5
                 topRightLuminance = 0.5
                 artworkTone = .neutral
+                artworkAverageColor = BackdropLegibilityBand.RGBColor(r: 0.5, g: 0.5, b: 0.5)
+                artworkBottomRowColor = BackdropLegibilityBand.RGBColor(r: 0.5, g: 0.5, b: 0.5)
             }
         }
         .onChange(of: musicController.artworkLuminance) { _, _ in
@@ -251,7 +265,11 @@ public struct MiniPlayerView: View {
             refreshEffectArtwork()
             syncArtworkLuminance()
             if let artwork = musicController.currentArtwork {
-                artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
+                let metrics = artwork.artworkVisualMetrics()
+                artworkTone = ArtworkBackgroundToneMap.forMetrics(metrics)
+                artworkAverageColor = BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue)
+                let bottomColor = artwork.controlAreaMaxColor()
+                artworkBottomRowColor = BackdropLegibilityBand.RGBColor(r: bottomColor.r, g: bottomColor.g, b: bottomColor.b)
             }
         }
         // Keep hover state coherent when returning to the album page.
@@ -308,6 +326,22 @@ public struct MiniPlayerView: View {
         topRightLuminance = musicController.topRightArtworkLuminance
     }
 
+    // Backdrop legibility band, point B (research/spec-2026-09-22-backdrop-legibility.md):
+    // the fullscreen album page's bottom control band (title/artist/shuffle-repeat/
+    // SharedBottomControls) sits over the hero cover fading into the Layer-1 blurred
+    // backing image — conservatively the worse (brighter) of the two, per
+    // `fullscreenBottomBandToneColor`. Channel-correct (colour-sweep review): a saturated
+    // cover's gamma-mixed luminance can look "safely dark" while its true WCAG relative
+    // luminance is not, so this resolves against the real per-channel colour, not a scalar.
+    private var bottomBandLegibilityCorrection: BackdropLegibilityBand.Correction {
+        let preCorrection = BackdropLegibilityBand.fullscreenBottomBandToneColor(
+            coverBottomRowColor: artworkBottomRowColor,
+            artworkAverageColor: artworkAverageColor,
+            tone: artworkTone
+        )
+        return BackdropLegibilityBand.resolveChannelCorrect(preCorrection: preCorrection)
+    }
+
     private func refreshEffectArtwork() {
         let signature = ArtworkDisplayImageFactory.signature(
             for: musicController.currentArtwork,
@@ -345,6 +379,37 @@ extension MiniPlayerView {
             let artLeftX = (geo.size.width - artSize) / 2
 
             ZStack {
+                // Backdrop legibility band, point B (research/spec-2026-09-22-backdrop-legibility.md):
+                // fullscreen album cover only — a bottom scrim behind the
+                // title/artist/shuffle-repeat/controls band, appearing only when the
+                // sharp cover behind it is too bright for the white foreground to read at
+                // >= 4.5:1. FULL darkenOpacity across the flat zone nearest the bottom
+                // (every real foreground element sits inside it, not at the very bottom
+                // pixel — see BackdropLegibilityBand.bottomBandScrimOpacity), fading
+                // linearly to clear across the fade zone above it. Never a hard edge.
+                if fullscreenAlbumCover && bottomBandLegibilityCorrection.darkenOpacity > 0 {
+                    let bandDarken = bottomBandLegibilityCorrection.darkenOpacity
+                    let flatHeight = MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFlatHeight
+                    let fadeHeight = MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFadeHeight
+                    let totalHeight = flatHeight + fadeHeight
+                    let fadeFraction = Double(fadeHeight / totalHeight)
+                    VStack(spacing: 0) {
+                        Spacer()
+                        LinearGradient(
+                            stops: [
+                                .init(color: Color.black.opacity(0), location: 0),
+                                .init(color: Color.black.opacity(bandDarken), location: fadeFraction),
+                                .init(color: Color.black.opacity(bandDarken), location: 1.0)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: totalHeight)
+                    }
+                    .allowsHitTesting(false)
+                    .animation(.smooth(duration: MicroInteractionFeel.Tokens.artworkContrastDarkenAnimationDuration), value: bandDarken)
+                }
+
                 // ═══════════════════════════════════════════
                 // 🎨 歌曲信息：使用 matchedGeometryEffect 实现丝滑过渡
                 // ═══════════════════════════════════════════

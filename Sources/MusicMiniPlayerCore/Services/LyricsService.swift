@@ -255,6 +255,47 @@ public class LyricsService: ObservableObject {
     #if DEBUG
     var debugCurrentSongID: String? { currentSongID }
     #endif
+
+    /// The (title, artist) identity this service is CURRENTLY fetching/showing
+    /// lyrics for — the same normalized unit `isLikelySameSongMetadataCorrection`
+    /// already keys on. Exposed (not `private`) so MusicController's generic
+    /// identity self-heal can bucket reissue-cooldown by target song, and log
+    /// it as evidence. NOT sufficient on its own to detect a torn composite
+    /// (title/artist can still agree while album/duration are torn) — see
+    /// `matchesCurrentFetchIdentity` for the precise check.
+    var currentFetchStableSongID: String? { currentStableSongID }
+
+    /// Whether (title, artist, duration, album[, persistentID]) would be
+    /// treated as the SAME song this service is currently fetching/showing —
+    /// the exact same test `fetchLyrics`'s own stability guard uses (exact
+    /// songID match OR `isLikelySameSongMetadataCorrection`'s tolerant
+    /// metadata-correction check, :674/:685). This is deliberately NOT a
+    /// stricter, parallel reimplementation: exact `songID` string equality
+    /// alone would flag an ordinary independent-rounding disagreement (two
+    /// callers computing `Int(duration.rounded())` from slightly different
+    /// raw doubles that straddle a .5 boundary) as a "mismatch" even though
+    /// this service would treat it as the same song — which is exactly the
+    /// false-positive a self-heal built on top of this must not have (2026-09-22,
+    /// see research/diagnosis-2026-09-22-blank-lyrics-page.md §8). Still
+    /// catches a torn album/duration even when title/artist still agree (the
+    /// MusicController.swift:1533/:1580 bug class), because that case fails
+    /// BOTH the exact match and the metadata-correction tolerance (album
+    /// incompatible and/or duration drift beyond 2.0s).
+    func isCurrentFetchIdentity(title: String, artist: String, duration: TimeInterval, album: String, persistentID: String? = nil) -> Bool {
+        let songID = Self.songIdentity(title: title, artist: artist, duration: duration, album: album)
+        if songID == currentSongID { return true }
+        let stableSongID = Self.stableSongIdentity(title: title, artist: artist)
+        return Self.isLikelySameSongMetadataCorrection(
+            currentStableSongID: currentStableSongID,
+            requestStableSongID: stableSongID,
+            currentDuration: currentSongDuration,
+            requestDuration: duration,
+            currentAlbum: currentSongAlbum,
+            requestAlbum: album,
+            requestPersistentID: persistentID,
+            currentPersistentID: currentSongPersistentID
+        )
+    }
     private var currentSongTitle: String = ""
     private var currentSongArtist: String = ""
     private var currentSongDuration: TimeInterval = 0
@@ -2814,7 +2855,10 @@ public class LyricsService: ObservableObject {
         return "\(normalizedTitle)|\(normalizedArtist)|\(normalizedAlbum)|\(roundedDuration)"
     }
 
-    private static func stableSongIdentity(title: String, artist: String) -> String {
+    /// Not `private`: MusicController's generic identity self-heal needs to
+    /// compute the SAME normalized (title, artist) unit for its own current
+    /// track to compare against `currentFetchStableSongID`.
+    static func stableSongIdentity(title: String, artist: String) -> String {
         let normalizedTitle = MetadataDiskCache.normalize(title)
         let normalizedArtist = MetadataDiskCache.normalize(artist)
         return "\(normalizedTitle)|\(normalizedArtist)"

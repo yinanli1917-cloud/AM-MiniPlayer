@@ -486,6 +486,29 @@ public enum MicroInteractionFeel {
         /// text over any artwork (accessibility floor, not tunable).
         public static let artworkContrastReduceTransparencyDarken: Double = 0.35
         public static let artworkContrastDarkenAnimationDuration: TimeInterval = 0.31
+
+        // Backdrop legibility band (research/spec-2026-09-22-backdrop-legibility.md):
+        // WCAG contrast bounds for a white foreground over any artwork-derived
+        // background. Below the ceiling contrast the background is darkened up
+        // to it; above the floor contrast it is lifted down to it. Tunable so
+        // the founder can dial the band after the fact without touching code.
+        public static let backdropLegibilityCeilingContrast: Double = 4.5
+        public static let backdropLegibilityFloorContrast: Double = 12.0
+        /// Height of the FULLY-opaque flat zone at the bottom of the fullscreen album
+        /// page's control band (point B) — the scrim must sit at FULL `darkenOpacity`
+        /// everywhere a real foreground element can be, not a partial ramp value, or the
+        /// modelled contrast (>= 4.5:1) is not what's actually delivered on screen.
+        /// Derived from `MiniPlayerView.albumOverlayContent`'s own layout constants: the
+        /// highest protected element is the shuffle/repeat row, whose top sits at
+        /// `controlsHeight (80) + row bottom padding (4) + row height (24)` = 108pt above
+        /// the bottom edge; the hover-mode title lands within a point of that (its
+        /// baseline offset uses the same `controlsHeight + 4 + 16` = 100pt, plus roughly
+        /// half a 12pt bold line's height). +8pt safety margin for text
+        /// ascent/line-height that isn't captured by a layout constant.
+        public static let backdropLegibilityBottomBandFlatHeight: CGFloat = 80 + 4 + 24 + 8
+        /// Height of the fade-to-clear zone ABOVE the flat zone (point B) — the scrim
+        /// ramps from full `darkenOpacity` down to 0 across this band, never a hard edge.
+        public static let backdropLegibilityBottomBandFadeHeight: CGFloat = 44
     }
 }
 
