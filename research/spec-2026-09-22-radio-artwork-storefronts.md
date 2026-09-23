@@ -180,3 +180,51 @@ curl -m5 "https://itunes.apple.com/search?term=test&media=music&entity=song&limi
 NANOPOD_LIVE_ARTWORK_EVAL=1 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter ArtworkLiveStorefrontEvalTests
 ```
 跑完后终端会打印同样格式的 Markdown 表格（含命中率、店面、匹配到的 trackName/artistName/collectionName、错配标记），可直接贴回本节替换上面这张"诊断表"。本次未能提供真实命中率对比（之前 0/18、之后 ?/18），如实标注为待创始人本机复核项，不编造数字。
+
+---
+
+## 结果补充（2026-09-22 三轮：coordinator 现场跑通后的复核）
+
+创始人在 iTunes 解封后跑了一次（间隔改到 15 秒）：26 首里 5 命中、0 错配，5 个命中里 4 个正是今天报告过的失败曲目（Tell Me Oh Mama→TW、Time After Time→JP、Roland Reve→JP、Oceanside Café→US）；但跑完后 itunes.apple.com 很快又开始返回 403，且不少"未命中"耗时只有 130–400ms——和被限流拒绝的耗时区间完全重叠，光看 hit/miss 分不清哪些未命中是真的没有、哪些是被拒绝。三处要求：表格要能看清每次店面请求的具体结果并把"疑似被限流的未命中"单独标出且不进分母；间隔做成环境变量且改默认值；核查换歌路径本身的请求预算是否也会撑到限流线，需要的话让正在播路径也遵守熔断器。**本轮不跑真实网络**（创始人明确要求 do NOT run the live eval yourself），只改测试代码 + 复核既有实现。
+
+### 1）表格改造——每次店面请求的真实结果都要看得见
+
+`ArtworkLiveStorefrontEvalTests.swift` 改为：包一层"观察者" transport，内部直接调用生产用的 `MusicController.ITunesArtworkTransport.live`（不是另起一套网络路径，避免和生产行为跑偏），把每次店面请求的结果分类记录：`hit (N)` / `empty` / `HTTP <code>`（含 403/429）/ `non-JSON`（`HTTPError.decodingFailed`）/ `timeout`（`URLError.timedOut`）/ `error(类型): 描述`（兜底），外加该次请求发生时熔断器是否已经打开。每首歌一行，`Storefront requests (country:outcome)` 一栏把这首歌本次调用涉及的**每一次**店面请求（可能横跨 round1+round2，最多 8 次）都列出来，不再只看最终 hit/miss。
+
+判定规则：
+- 最终拿到图 → **HIT**（哪怕同一首歌的某个店面请求恰好被限流，只要另一个店面给出了确定的正结果，这首歌的判定仍是 HIT，不算「不确定」）。
+- 没拿到图，且这首歌的请求里**任意一次**命中限流特征（`MusicController.isITunesRateLimitSignal`：HTTP 403/429 或非 JSON）→ **INVALID (rate-limited)**，不计入命中率分母。
+- 没拿到图，且全程没有限流特征 → 真实 **miss**，计入分母。
+
+### 2）间隔改环境变量 + 连续限流两次自动收工
+
+`NANOPOD_LIVE_ARTWORK_EVAL_SPACING`（秒，默认 **60**，取代原来写死的 4 秒——创始人这次手动改到 15 秒实测出的问题正是间隔不够，默认值直接抬到 60）。曲目间用这个值 `Task.sleep`。同时维护一个"连续判定为限流"的计数器（复用上面第 1 条的判定：没拿到图 且 命中限流特征），只要连续 **2** 首都是这个状态就立即跳出循环，把已经收集到的行打印成表格（不打印"跑完整 26 首"的假象），并在汇总里标注 `Aborted early (2 consecutive rate-limited): true/false`。一首歌哪怕某个店面被限流、只要它自己命中了别的店面拿到图，也会把连续计数清零——这是"主机仍然在正常应答，不是全面拒绝"的信号。
+
+### 3）换歌路径本身的请求预算——复核，未改代码
+
+复核结论：**正在播（nowPlaying）路径在熔断器打开时已经只查 1 个店面**——这是上一轮（commit a03a535）`fetchArtworkViaITunesAPIRound` 里就写好的（`case .nowPlaying: storefronts = Array(storefronts.prefix(1))`），`ArtworkPriorityAndCircuitBreakerTests.test_breakerOpen_nowPlayingPriority_stillTriesExactlyOneStorefront` 已经钉死这一行为。本轮**没有再改这部分代码**——协调者要求"如果 >~15 就让正在播也遵守熔断器"，读代码确认这一条已经成立，不需要新改动；下面把预算数字算清楚。
+
+**熔断器全程关闭（还没被真正限流过）时，单曲换歌的 iTunes 请求数：**
+- 单次 `fetchArtworkResult` 调用（nowPlaying）：round1 最多 4 个店面并行；只有 round1 全不可靠才发 round2，再 4 个；命中即停 +1 张图。所以一次调用最多 9 次（round1 全灭 + round2 命中），全灭 8 次（两轮都没有），round1 命中只要 5 次。
+- `fetchArtwork` 首次调用若彻底失败，会在 250ms（无保留封面）或 1.2s（保留了上一首封面，常见情形）后触发一次 `retryArtworkFetch`——也是 nowPlaying，再跑一次上面同样的逻辑。
+- **单曲最坏：9+9=18 次**；**单曲最好（round1 直接命中，不触发 retry）：5 次**。
+
+**5 首歌 30 秒内连续跳曲（约 6 秒/首），假设熔断器全程未被真实限流触发：**
+- 最坏情况：5×18 = **90 次**。
+- 最好情况（每首都 round1 秒中）：5×5 = **25 次**。
+- 协调者给的判断线是"> ~15"——**连最好情况都已经超过（25 > 15）**，换算成"次/分钟"约 50 次/分钟，是今天实测阈值（约 30 次/2 分钟 ≈ 15 次/分钟）的 3 倍多。也就是说哪怕每次都是干净利落的 round1 秒中，正常跳曲习惯本身就足以把 iTunes 打到限流线之上，不需要任何"全灭重试"的坏情况配合。
+
+**假设熔断器在这 5 首歌的过程中被真实触发（更贴近今天实测：请求发出没多久 iTunes 就 403 了）之后的预算：**
+以"第 1 首歌的 round1 那 4 个并行请求里，有一个先一步收到限流响应"为起点估算（并行发出去的另外 3 个请求已经在路上，无法回头取消，round1 本身的花费按 4 算）：
+- 第 1 首：round1(4，已发出无法收回) + round2(此时熔断器已打开→限 1 店面=1) + retry（熔断器仍开着，round1(1)+round2(1)=2）≈ **7 次**。
+- 第 2–5 首（熔断器全程保持打开，每轮都被压到 1 店面）：每首最坏 round1(1)+round2(1)=2，若还要 retry 则再翻倍=4；4 首 × 4 ≈ **16 次**。
+- 合计约 **23 次**——比"熔断器完全没生效"的最坏情况 90 次降了将近 4 倍，但仍然高于协调者给的 15 这条线。差距的原因是：熔断器只能压低"以后每一轮"的店面并发数（1 个而不是 4 个），压不掉"轮数本身"（round1+round2+retry 最多仍是 4 轮尝试）；要把 23 进一步压到 15 以下，需要在熔断器打开时额外跳过 round2 或跳过 retry——这已经超出协调者这次"让正在播也遵守熔断器（打开时只查 1 个店面即可）"的原话范围，本轮按要求"不改其他任何东西"未动这部分，留在这里作为如实记录的残留数字，是否值得再收紧交由创始人裁定。
+
+### 改动文件（本轮）
+- `Tests/MusicMiniPlayerTests/ArtworkLiveStorefrontEvalTests.swift`：重写——观察者 transport 包装生产 `.live` transport 记录每次店面请求的真实结果（HTTP 状态/empty/non-JSON/timeout/hit + 该请求发生时熔断器是否已开）；判定 HIT / miss / INVALID (rate-limited) 三态，INVALID 不计入分母；间隔改 `NANOPOD_LIVE_ARTWORK_EVAL_SPACING` 环境变量（默认 60s）；连续 2 首判定为限流即提前收工并打印部分表格。
+- 生产代码（`MusicController+Artwork.swift`）**本轮未改动**——第 3 条要求的行为（正在播在熔断器打开时限 1 店面）在上一轮已经实现并有测试钉死，复核后确认无需变动。
+
+### 测试结果（本轮）
+- `ArtworkLiveStorefrontEvalTests`：未设 `NANOPOD_LIVE_ARTWORK_EVAL` 时确认 `XCTSkip`（本轮**没有**打真网络，遵照"不许自己跑 live eval"的要求）。
+- `swift build`：通过。
+- `ArtworkStorefrontSelectionTests` 17/17、`ArtworkPriorityAndCircuitBreakerTests` 16/16、`RowArtworkFetchPolicyTests` 12/12、`RowArtworkStoreTests` 7/7、`TrackIdentityDisciplineTests` 19/19——均无回归（本轮未改生产代码，符合预期）。
