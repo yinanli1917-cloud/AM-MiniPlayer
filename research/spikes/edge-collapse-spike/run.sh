@@ -37,4 +37,11 @@ PLIST
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true
 pkill -x EdgeCollapseSpike 2>/dev/null
 echo "Launching $APP"
-(nohup "$APP/Contents/MacOS/EdgeCollapseSpike" > /tmp/ecs.log 2>&1 &)
+# Isolate from the real app's data: the spike links this worktree's
+# MusicMiniPlayerCore, whose cache schemas can differ from the installed app,
+# and the two would wipe each other's ~/Library/Application Support/nanoPod
+# caches (2026-09-22: lyrics_cache.json shrank 149 -> 24 entries). This
+# redirects Application Support, Caches and Preferences for the spike only.
+SPIKE_HOME="$DIR/.build/spike-home"
+mkdir -p "$SPIKE_HOME/Library"
+(CFFIXED_USER_HOME="$SPIKE_HOME" nohup "$APP/Contents/MacOS/EdgeCollapseSpike" > /tmp/ecs.log 2>&1 &)
