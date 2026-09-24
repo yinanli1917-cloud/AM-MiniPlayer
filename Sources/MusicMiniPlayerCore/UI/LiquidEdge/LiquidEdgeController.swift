@@ -125,16 +125,12 @@ public final class LiquidEdgeController {
 
     // MARK: - Stage
 
-    /// The panel as drawn, in screen coordinates. The panel window is
-    /// titled with full-size content, and the panel draws only inside its
-    /// content view's safe area (below the 32pt title bar; MiniPlayerView
-    /// clips to that rect), so the window frame is taller than the panel
-    /// (founder recording 2026-09-23: the liquid expanded 32pt too tall).
-    static func drawnPanelFrame(_ card: NSWindow) -> CGRect {
-        guard let content = card.contentView else { return card.frame }
-        let rect = card.convertToScreen(content.convert(content.safeAreaRect, to: nil))
-        return rect.width > 0 && rect.height > 0 ? rect : card.frame
-    }
+    /// The panel as drawn, in screen coordinates: the window itself. The
+    /// panel window is exactly the panel (PanelWindowMetrics, founder
+    /// 2026-09-23). Not the content view's safe area: the hidden title bar
+    /// still reports a 32pt AppKit safe area that the panel draws under, so
+    /// deriving from it landed the liquid 32pt short.
+    static func drawnPanelFrame(_ card: NSWindow) -> CGRect { card.frame }
 
     private func prepareStage(card: SnappablePanel, screen: NSScreen) {
         let visible = screen.visibleFrame

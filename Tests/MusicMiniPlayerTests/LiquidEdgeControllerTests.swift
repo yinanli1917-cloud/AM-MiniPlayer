@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import SwiftUI
 @testable import MusicMiniPlayerCore
 
 /// The liquid edge on real windows: a SnappablePanel next to a screen edge,
@@ -110,22 +111,23 @@ final class LiquidEdgeControllerTests: XCTestCase {
         }
     }
 
-    /// Founder 2026-09-23 (recording Screen-2026-09-23-171622): the app's
-    /// panel window is titled + full-size content, and the panel draws only
-    /// below the 32pt title-bar safe area (MiniPlayerView clips to its
-    /// safe-area layout rect). The liquid used the whole window frame, so it
-    /// expanded 32pt taller than the panel. It must land on the drawn panel.
-    func test_liquidCard_coincidesWithDrawnPanel_inTitledWindow() throws {
+    /// Founder 2026-09-23 (recording Screen-2026-09-23-171622): the liquid
+    /// expanded to a shape that was not the panel. The panel window is now
+    /// exactly the panel (PanelWindowMetrics); the title bar still reports a
+    /// 32pt AppKit safe area over it, which the panel draws under. The
+    /// liquid must land on the window = the drawn panel, not the safe area.
+    func test_liquidCard_coincidesWithDrawnPanel_inAppWindow() throws {
         try makeCard(edge: .right)
         let frame = card.frame
         card.orderOut(nil)
-        card = SnappablePanel(contentRect: frame, styleMask: [.titled, .resizable, .fullSizeContentView, .nonactivatingPanel],
+        card = SnappablePanel(contentRect: NSRect(origin: frame.origin, size: PanelWindowMetrics.defaultSize),
+                              styleMask: [.titled, .resizable, .fullSizeContentView, .nonactivatingPanel],
                               backing: .buffered, defer: false)
         card.titlebarAppearsTransparent = true
         card.titleVisibility = .hidden
         card.isOpaque = false
         card.backgroundColor = .clear
-        card.contentView = NSView()
+        card.contentView = PanelWindowMetrics.makeContentView(root: Color.red)
         card.orderFront(nil)
         controller = LiquidEdgeController(card: card)
         controller.clock = { [unowned self] in self.now }
@@ -133,16 +135,16 @@ final class LiquidEdgeControllerTests: XCTestCase {
         controller.reduceMotionOverride = false
 
         let content = try XCTUnwrap(card.contentView)
-        let drawn = card.convertToScreen(content.convert(content.safeAreaRect, to: nil))
-        XCTAssertLessThan(drawn.height, card.frame.height, "precondition: the title bar leaves a safe-area inset")
+        XCTAssertLessThan(content.safeAreaRect.height, content.bounds.height,
+                          "precondition: the title bar still reports a safe area the panel draws under")
 
         XCTAssertTrue(controller.collapse(to: .right))
         let stage = try XCTUnwrap(controller.stageWindow).frame
         let c = controller.geometry.card
         let onScreen = CGRect(x: stage.minX + c.minX, y: stage.maxY - c.maxY, width: c.width, height: c.height)
-        XCTAssertEqual(onScreen, drawn, "the liquid's card must be the drawn panel, not the window frame")
+        XCTAssertEqual(onScreen, card.frame, "the liquid's card must be the panel = the window")
 
-        // And the expand ends exactly on it: the last mask is the drawn panel.
+        // The expand ends exactly on it: the last mask is the whole panel.
         settle()
         controller.expand()
         var last = CGRect.zero
@@ -151,9 +153,7 @@ final class LiquidEdgeControllerTests: XCTestCase {
             controller.tick(at: now)
             if let p = controller.panelMask.path { last = p.boundingBox }
         }
-        let drawnInContent = content.safeAreaRect
-        XCTAssertEqual(last.minY, drawnInContent.minY, accuracy: 0.5)
-        XCTAssertEqual(last.height, drawnInContent.height, accuracy: 0.5)
+        XCTAssertEqual(last, content.bounds)
     }
 
     func test_leftEdge_isMirrored() throws {
