@@ -110,6 +110,19 @@ struct RoundedCornerSlideModifier: ViewModifier {
     }
 }
 
+/// Per-icon `ButtonIconLegibility` override for `SharedBottomControls` (founder
+/// 2026-09-24: measure the pixels directly under EACH button). `nil` fields fall back to
+/// `controlInk` (today's plain white) — only the album page (`MiniPlayerView`) passes
+/// this; the lyrics/playlist pages' `SharedBottomControls(...)` call sites are untouched
+/// and keep rendering byte-identical to today.
+struct SharedBottomControlsIconTones {
+    var lyricsNav: Color?
+    var backward: Color?
+    var play: Color?
+    var forward: Color?
+    var playlistNav: Color?
+}
+
 // MARK: - Shared Bottom Controls
 struct SharedBottomControls: View {
     @EnvironmentObject var musicController: MusicController
@@ -121,6 +134,7 @@ struct SharedBottomControls: View {
     @Binding var dragPosition: CGFloat?
     var onControlsHoverChanged: ((Bool) -> Void)? = nil
     var translationButton: AnyView? = nil
+    var iconTones: SharedBottomControlsIconTones? = nil
     @State private var isControlAreaHovering: Bool = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -191,7 +205,7 @@ struct SharedBottomControls: View {
         NavigationIconButton(
             iconName: currentPage == .lyrics ? "quote.bubble.fill" : "quote.bubble",
             isActive: currentPage == .lyrics,
-            inkColor: controlInk,
+            inkColor: iconTones?.lyricsNav ?? controlInk,
             hoverFill: controlInk.opacity(lightControlSurface ? 0.12 : 0.22)
         ) {
             let animation: Animation? = reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 1.0)
@@ -214,7 +228,7 @@ struct SharedBottomControls: View {
         let buttons = HStack(spacing: 10) {
             SkipControlButton(action: {
                 musicController.previousTrack()
-            }, direction: -1, inkColor: controlInk, hoverFill: controlInk.opacity(lightControlSurface ? 0.10 : 0.18), beginDiagnostics: {
+            }, direction: -1, inkColor: iconTones?.backward ?? controlInk, hoverFill: controlInk.opacity(lightControlSurface ? 0.10 : 0.18), beginDiagnostics: {
                 beginPlaybackInteraction(.previousTrack)
             }, finishDiagnostics: { id, status, detail in
                 finishPlaybackInteraction(id, status: status, detail: detail)
@@ -224,7 +238,7 @@ struct SharedBottomControls: View {
 
             PlayPauseControlButton(
                 isPlaying: musicController.isPlaying,
-                inkColor: controlInk,
+                inkColor: iconTones?.play ?? controlInk,
                 hoverFill: controlInk.opacity(lightControlSurface ? 0.12 : 0.22)
             ) {
                 musicController.togglePlayPause()
@@ -234,7 +248,7 @@ struct SharedBottomControls: View {
 
             SkipControlButton(action: {
                 musicController.nextTrack()
-            }, direction: 1, inkColor: controlInk, hoverFill: controlInk.opacity(lightControlSurface ? 0.10 : 0.18), beginDiagnostics: {
+            }, direction: 1, inkColor: iconTones?.forward ?? controlInk, hoverFill: controlInk.opacity(lightControlSurface ? 0.10 : 0.18), beginDiagnostics: {
                 beginPlaybackInteraction(.nextTrack)
             }, finishDiagnostics: { id, status, detail in
                 finishPlaybackInteraction(id, status: status, detail: detail)
@@ -256,7 +270,7 @@ struct SharedBottomControls: View {
         NavigationIconButton(
             iconName: currentPage == .playlist ? "play.square.stack.fill" : "play.square.stack",
             isActive: currentPage == .playlist,
-            inkColor: controlInk,
+            inkColor: iconTones?.playlistNav ?? controlInk,
             hoverFill: controlInk.opacity(lightControlSurface ? 0.12 : 0.22)
         ) {
             let animation: Animation? = reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 1.0)

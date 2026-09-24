@@ -4,6 +4,7 @@ import SwiftUI
 struct AudioOutputSwitcherView: View {
     var artworkBrightness: CGFloat = 0.5
     var isAlbumPage: Bool = false
+    var iconTone: ButtonIconTone? = nil
     var onMenuPresentedChanged: ((Bool) -> Void)?
 
     @StateObject private var outputService = AudioOutputDeviceService.shared
@@ -81,7 +82,8 @@ struct AudioOutputSwitcherView: View {
             helpText: "Switch audio output",
             accessibilityText: "Switch audio output",
             artworkBrightness: artworkBrightness,
-            isAlbumPage: isAlbumPage
+            isAlbumPage: isAlbumPage,
+            iconTone: iconTone
         )
         .modifier(AudioOutputNonDraggable())
         .onHover { hovering in

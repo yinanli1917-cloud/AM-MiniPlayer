@@ -34,6 +34,12 @@ public struct MiniPlayerView: View {
     @State private var effectArtwork: NSImage?
     @State private var effectArtworkSignature: String = ""
 
+    // Per-button icon legibility (founder 2026-09-24): black icon when the pixels
+    // directly under that button are too bright, else today's white. Recomputed once
+    // per artwork change / fullscreen-cover toggle — never per frame (ButtonIconLegibility.swift).
+    @State private var buttonIconTones: [ButtonIconID: ButtonIconTone] = [:]
+    @State private var lastKnownPanelSize: CGSize = CGSize(width: PanelWindowMetrics.defaultSize.width, height: PanelWindowMetrics.defaultSize.height)
+
     // Shuffle/repeat feedback animation progress.
     @State private var repeatFlow: Double = 0
 
@@ -129,6 +135,11 @@ public struct MiniPlayerView: View {
                 reduceTransparency: reduceTransparency,
                 reduceMotion: reduceMotion
             ))
+            // Cache the panel's live size for the next artwork-change legibility
+            // recompute (ButtonIconLegibility). This itself never triggers a
+            // recompute — only currentArtwork/fullscreenAlbumCover changes do.
+            .onAppear { lastKnownPanelSize = geometry.size }
+            .onChange(of: geometry.size) { _, newSize in lastKnownPanelSize = newSize }
         }
         // Fill the window so resizing keeps the same layout rules.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -141,7 +152,7 @@ public struct MiniPlayerView: View {
         .overlay(alignment: .topLeading) {
             if (showControls || isAudioOutputMenuPresented) && musicController.currentPage == .album {
                 let lum = topLeftLuminance
-                MusicButtonView(artworkBrightness: lum, isAlbumPage: true)
+                MusicButtonView(artworkBrightness: lum, isAlbumPage: true, iconTone: buttonIconTones[.musicCapsule])
                     .padding(12)
                     .transition(.opacity)
             }
@@ -150,13 +161,14 @@ public struct MiniPlayerView: View {
             if (showControls || isAudioOutputMenuPresented) && musicController.currentPage == .album {
                 let lum = topRightLuminance
                 if onExpand != nil {
-                    ExpandButtonView(onExpand: onExpand!, artworkBrightness: lum, isAlbumPage: true)
+                    ExpandButtonView(onExpand: onExpand!, artworkBrightness: lum, isAlbumPage: true, iconTone: buttonIconTones[.airplay])
                         .padding(12)
                         .transition(.opacity)
                 } else {
                     AudioOutputSwitcherView(
                         artworkBrightness: lum,
                         isAlbumPage: true,
+                        iconTone: buttonIconTones[.airplay],
                         onMenuPresentedChanged: { isAudioOutputMenuPresented = $0 }
                     )
                         .padding(12)
@@ -202,6 +214,9 @@ public struct MiniPlayerView: View {
                 withAnimation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.3, dampingFraction: 0.82)) {
                     fullscreenAlbumCover = newValue
                 }
+                // The composite behind every button (hero vs fluid backdrop) just
+                // changed — recompute icon tones for the new mode.
+                refreshButtonIconTones()
             }
         }
         // Artwork changes update luminance and the smaller effect-only render image.
@@ -218,6 +233,7 @@ public struct MiniPlayerView: View {
                 topRightLuminance = 0.5
                 artworkTone = .neutral
             }
+            refreshButtonIconTones()
         }
         .onChange(of: musicController.artworkLuminance) { _, _ in
             syncArtworkLuminance()
@@ -253,6 +269,7 @@ public struct MiniPlayerView: View {
             if let artwork = musicController.currentArtwork {
                 artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
             }
+            refreshButtonIconTones()
         }
         // Keep hover state coherent when returning to the album page.
         .onChange(of: musicController.currentPage) { oldPage, newPage in
@@ -306,6 +323,26 @@ public struct MiniPlayerView: View {
         artworkBrightness = musicController.artworkLuminance
         topLeftLuminance = musicController.topLeftArtworkLuminance
         topRightLuminance = musicController.topRightArtworkLuminance
+    }
+
+    /// Recomputes every album-page button's icon tone (founder 2026-09-24). Called once
+    /// per artwork change / fullscreen-cover toggle (see the call sites above) — never
+    /// per frame. `artworkTone` must already reflect the current artwork when this runs.
+    private func refreshButtonIconTones() {
+        buttonIconTones = ButtonIconLegibility.resolveAll(
+            fullscreen: fullscreenAlbumCover,
+            artwork: musicController.currentArtwork,
+            tone: artworkTone,
+            panelSize: lastKnownPanelSize,
+            reduceTransparency: reduceTransparency,
+            previous: buttonIconTones
+        )
+    }
+
+    /// `buttonIconTones[id]` as a `Color`, defaulting to white (today's colour) when this
+    /// button has not been resolved yet.
+    private func iconColor(for id: ButtonIconID) -> Color {
+        buttonIconTones[id] == .black ? .black : .white
     }
 
     private func refreshEffectArtwork() {
@@ -431,13 +468,23 @@ extension MiniPlayerView {
                         isHovering: $isHovering,
                         showControls: $showControls,
                         isProgressBarHovering: $isProgressBarHovering,
-                        dragPosition: $dragPosition
+                        dragPosition: $dragPosition,
+                        iconTones: SharedBottomControlsIconTones(
+                            lyricsNav: iconColor(for: .lyricsNav),
+                            backward: iconColor(for: .backward),
+                            play: iconColor(for: .play),
+                            forward: iconColor(for: .forward),
+                            playlistNav: iconColor(for: .playlistNav)
+                        )
                     )
                     .blur(radius: controlsBlurAmount)
                     .offset(y: controlsOffsetY)
                 }
                 .opacity(showOverlayContent ? 1 : 0)
                 .allowsHitTesting(showOverlayContent)
+                // Short cross-fade when a button's icon tone flips (founder 2026-09-24) —
+                // never a hard snap.
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: buttonIconTones)
             }
             // 🔑 动画时长：全屏模式 0.5s，非全屏模式 0.4s
             .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
@@ -453,7 +500,7 @@ extension MiniPlayerView {
         HStack(spacing: 4) {
             Button(action: { musicController.toggleShuffle() }) {
                 AnimatedShuffleIcon(
-                    color: musicController.shuffleEnabled ? themeColor : .white,
+                    color: musicController.shuffleEnabled ? themeColor : iconColor(for: .shuffle),
                     isEnabled: musicController.shuffleEnabled
                 )
                 .frame(width: 24, height: 24)
@@ -471,7 +518,7 @@ extension MiniPlayerView {
                 Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
                     .contentTransition(.symbolEffect(.replace))
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(musicController.repeatMode > 0 ? themeColor : .white)
+                    .foregroundStyle(musicController.repeatMode > 0 ? themeColor : iconColor(for: .repeatButton))
                     .rotationEffect(.degrees(repeatFlow * 10))
                     .scaleEffect(1 - repeatFlow * 0.1)
                     .frame(width: 24, height: 24)
