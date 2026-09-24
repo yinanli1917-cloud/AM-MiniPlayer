@@ -31,12 +31,6 @@ public struct MiniPlayerView: View {
     @State private var topLeftLuminance: CGFloat = 0.5
     @State private var topRightLuminance: CGFloat = 0.5
     @State private var artworkTone: ArtworkBackgroundToneMap = .neutral
-    // Fullscreen album page bottom-band legibility (research/spec-2026-09-22-backdrop-
-    // legibility.md point B, extended research/progressive-blur-2026-09-23.md round 3):
-    // resolved ONCE per artwork change alongside `artworkTone` above, not per frame — see
-    // FullscreenBottomBandLegibility.swift. `needsCorrection == false` (in-band/dark covers)
-    // reproduces the original 62877a4 rendering exactly.
-    @State private var fullscreenBottomBandCorrection: FullscreenBottomBandLegibility.Correction = .unchanged(tone: .neutral)
     @State private var effectArtwork: NSImage?
     @State private var effectArtworkSignature: String = ""
 
@@ -216,16 +210,13 @@ public struct MiniPlayerView: View {
             if newArtwork != nil {
                 syncArtworkLuminance()
                 if let artwork = newArtwork {
-                    let metrics = artwork.artworkVisualMetrics()
-                    artworkTone = ArtworkBackgroundToneMap.forMetrics(metrics)
-                    updateFullscreenBottomBandCorrection(artwork: artwork, metrics: metrics, tone: artworkTone)
+                    artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
                 }
             } else {
                 artworkBrightness = 0.5
                 topLeftLuminance = 0.5
                 topRightLuminance = 0.5
                 artworkTone = .neutral
-                fullscreenBottomBandCorrection = .unchanged(tone: artworkTone)
             }
         }
         .onChange(of: musicController.artworkLuminance) { _, _ in
@@ -260,9 +251,7 @@ public struct MiniPlayerView: View {
             refreshEffectArtwork()
             syncArtworkLuminance()
             if let artwork = musicController.currentArtwork {
-                let metrics = artwork.artworkVisualMetrics()
-                artworkTone = ArtworkBackgroundToneMap.forMetrics(metrics)
-                updateFullscreenBottomBandCorrection(artwork: artwork, metrics: metrics, tone: artworkTone)
+                artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
             }
         }
         // Keep hover state coherent when returning to the album page.
@@ -317,20 +306,6 @@ public struct MiniPlayerView: View {
         artworkBrightness = musicController.artworkLuminance
         topLeftLuminance = musicController.topLeftArtworkLuminance
         topRightLuminance = musicController.topRightArtworkLuminance
-    }
-
-    // Fullscreen album bottom-band legibility (FullscreenBottomBandLegibility.swift): resolved
-    // alongside `artworkTone`, same cadence (once per artwork change, not per frame). Reuses
-    // the already-computed `metrics` for the average colour and calls `controlAreaMaxColor()`
-    // once for a conservative estimate of the sharp cover's own colour near the bottom edge —
-    // the same helper the (now-removed) point-B design used, no new image scan added.
-    private func updateFullscreenBottomBandCorrection(artwork: NSImage, metrics: ArtworkVisualMetrics, tone: ArtworkBackgroundToneMap) {
-        let bottomColor = artwork.controlAreaMaxColor()
-        fullscreenBottomBandCorrection = FullscreenBottomBandLegibility.resolve(
-            artworkAverageColor: BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue),
-            coverBottomRowColor: BackdropLegibilityBand.RGBColor(r: bottomColor.r, g: bottomColor.g, b: bottomColor.b),
-            tone: tone
-        )
     }
 
     private func refreshEffectArtwork() {
@@ -574,14 +549,7 @@ extension MiniPlayerView {
             if musicController.currentPage != .lyrics {
                 if fullscreenAlbumCover {
                     let coverSize = geo.size.width
-                    // Bright covers only: the fade's height/position and Layer 1's own
-                    // brightness/dim extend beyond the founder-tuned baseline (100pt,
-                    // artworkTone unchanged) just enough that the real title/shuffle-repeat/
-                    // controls sit over Layer 1 instead of the sharp cover — see
-                    // FullscreenBottomBandLegibility.swift. In-band/dark covers reproduce the
-                    // baseline exactly (`needsCorrection == false`).
-                    let bandCorrection = fullscreenBottomBandCorrection
-                    let blendHeight = bandCorrection.blendHeight
+                    let blendHeight: CGFloat = 100
 
                     let isAlbumPage = musicController.currentPage == .album
                     let displaySize = isAlbumPage ? coverSize : artSize
@@ -590,12 +558,6 @@ extension MiniPlayerView {
                     let displayY = isAlbumPage ? coverSize / 2 : yPosition
 
                     let animatedBlendHeight: CGFloat = isAlbumPage ? blendHeight : 0
-                    // Same pure curve the pure-function tests pin — sampling a straight line
-                    // this densely reproduces it exactly, so `needsCorrection == false` renders
-                    // byte-identically to the original 2-stop gradient without a branch here.
-                    let maskStops: [Gradient.Stop] = FullscreenBottomBandLegibility.maskGradientStops(correction: bandCorrection).map {
-                        Gradient.Stop(color: Color.black.opacity($0.coverVisibility), location: $0.location)
-                    }
 
                     // Layer 1: blurred full-window backing image.
                     Image(nsImage: effectArtwork)
@@ -606,8 +568,8 @@ extension MiniPlayerView {
                         .blur(radius: 50, opaque: true)
                         .saturation(artworkTone.textureSaturation)
                         .contrast(artworkTone.textureContrast)
-                        .brightness(bandCorrection.layer1Brightness)
-                        .overlay(Color.black.opacity(bandCorrection.layer1DimOpacity))
+                        .brightness(artworkTone.textureBrightness)
+                        .overlay(Color.black.opacity(artworkTone.textureDimmingOpacity))
                         .opacity(isAlbumPage ? 1 : 0)
                         .accessibilityHidden(true)
 
@@ -621,7 +583,10 @@ extension MiniPlayerView {
                             VStack(spacing: 0) {
                                 Rectangle().fill(Color.black)
                                 LinearGradient(
-                                    stops: maskStops,
+                                    stops: [
+                                        .init(color: .black, location: 0),
+                                        .init(color: .clear, location: 1.0)
+                                    ],
                                     startPoint: .top,
                                     endPoint: .bottom
                                 )
