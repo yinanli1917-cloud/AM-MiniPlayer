@@ -2389,21 +2389,101 @@ public struct LyricsView: View {
     /// Hash of every input that determines the committed rows. Same inputs ⇒
     /// same rows ⇒ a commit would be a no-op reconcile that still re-pokes the
     /// native surface. LyricLine.id is a fresh UUID per object, so we hash the
-    /// content (text + translation) explicitly, never the line identity.
-    private func displayLineInputFingerprint() -> Int {
+    /// content (text + translation + word-level sync) explicitly, never the
+    /// line identity.
+    ///
+    /// 2026-09-24 fix (founder repro: Teresa Teng "The Way We Were" / Michael
+    /// Jackson "Off the Wall" -- word-level lyrics degrading to line-level on
+    /// screen): this fingerprint used to hash only `text` + `translation`,
+    /// never `words`/`hasSyllableSync`. `LyricsService.applyLyrics` performs
+    /// an intentional, tested line→word-level hot-switch
+    /// (`applyFetchedLyricsIfCurrent`'s `upgradedLineToWord`,
+    /// `LyricsWordLevelPriorityTests`) whenever a later, better source
+    /// resolves for the SAME song -- and when that source transcribes the
+    /// identical line text (the common case: different providers of the same
+    /// real lyrics), `text`/`translation` are unchanged and ONLY `words`
+    /// differs. The old fingerprint was blind to that, so
+    /// `refreshDisplayLineCache`'s dedup guard silently discarded the
+    /// upgrade: `lyricsService.lyrics` had the word-level data (pipeline
+    /// applied it correctly), but `cachedDisplayLyrics`/`cachedLayerRows`
+    /// stayed frozen at the earlier line-level split forever, so the native
+    /// renderer kept drawing a whole-line sweep. See
+    /// `LyricsDisplayLineFingerprintTests` for the repro (red on the old
+    /// hash, green with `words.count` included) and
+    /// `research/diagnosis-2026-09-24-word-level-display-freeze.md`.
+    static func displayLineInputFingerprint(
+        trackKey: String,
+        showTranslation: Bool,
+        firstRealLyricIndex: Int,
+        interludeAfterIndex: Int?,
+        lyrics: [LyricLine]
+    ) -> Int {
         var hasher = Hasher()
-        hasher.combine(Self.layerRowsTrackKey(for: musicController))
-        hasher.combine(lyricsService.showTranslation)
-        hasher.combine(lyricsService.firstRealLyricIndex)
-        hasher.combine(lyricsService.interludeAfterIndex)
-        let lyrics = lyricsService.lyrics
+        hasher.combine(trackKey)
+        hasher.combine(showTranslation)
+        hasher.combine(firstRealLyricIndex)
+        hasher.combine(interludeAfterIndex)
         hasher.combine(lyrics.count)
         for line in lyrics {
             hasher.combine(line.text)
             hasher.combine(line.translation)
+            // words.count alone is sufficient: it flips whenever
+            // hasSyllableSync (words.isEmpty) transitions, and also catches
+            // a backfill that changes the per-line word count without
+            // flipping the boolean (rare, but the same class of change the
+            // renderer's word-run plan reacts to).
+            hasher.combine(line.words.count)
         }
         return hasher.finalize()
     }
+
+    private func displayLineInputFingerprint() -> Int {
+        Self.displayLineInputFingerprint(
+            trackKey: Self.layerRowsTrackKey(for: musicController),
+            showTranslation: lyricsService.showTranslation,
+            firstRealLyricIndex: lyricsService.firstRealLyricIndex,
+            interludeAfterIndex: lyricsService.interludeAfterIndex,
+            lyrics: lyricsService.lyrics
+        )
+    }
+
+    #if DEBUG
+    /// 2026-09-24 defensive invariant (founder rule: "先复现再修" -- once
+    /// fixed, guard against a regression reintroducing the same class of
+    /// bug through a different path than the fingerprint dedup guard, e.g.
+    /// a future edit to `makeDisplayLyricLines` that drops `words` for some
+    /// split piece). Every display row built from a word-level SOURCE line
+    /// must itself be word-level -- background/prelude rows are exempt (they
+    /// carry the source line's `words` through unsplit already, but are not
+    /// what this invariant is about), and a genuinely-empty word source
+    /// naturally has no words to lose. DEBUG-only. Pure so
+    /// `LyricsDisplayLineFingerprintTests` can assert on the violation list
+    /// directly, without intercepting `DebugLogger`'s file output.
+    static func wordLevelDowngradeViolations(
+        sourceLines: [LyricLine],
+        displayLines: [DisplayLyricLine]
+    ) -> [DisplayLyricLine] {
+        displayLines.filter { displayLine in
+            guard sourceLines.indices.contains(displayLine.sourceIndex) else { return false }
+            return sourceLines[displayLine.sourceIndex].hasSyllableSync && !displayLine.line.hasSyllableSync
+        }
+    }
+
+    static func logWordLevelDowngradeInvariantViolations(
+        sourceLines: [LyricLine],
+        displayLines: [DisplayLyricLine],
+        trackTitle: String
+    ) {
+        for displayLine in wordLevelDowngradeViolations(sourceLines: sourceLines, displayLines: displayLines) {
+            DebugLogger.log(
+                "LyricsView",
+                "🚨 INVARIANT VIOLATION: word-level source line \(displayLine.sourceIndex) " +
+                "('\(trackTitle)') lost words at display piece \(displayLine.segmentIndex)/" +
+                "\(displayLine.segmentCount) (id=\(displayLine.id))"
+            )
+        }
+    }
+    #endif
 
     /// Evidence log (2026-09-22, research/diagnosis-2026-09-22-blank-lyrics-page.md):
     /// the stale-rows gate at the `cacheIsCurrentTrack` call site is exactly
@@ -2451,6 +2531,13 @@ public struct LyricsView: View {
         cachedDisplayLines = displayLines
         cachedDisplayLyrics = displayLines.map(\.line)
         cachedFirstRealDisplayIndex = firstRealDisplayIndex
+        #if DEBUG
+        Self.logWordLevelDowngradeInvariantViolations(
+            sourceLines: lyricsService.lyrics,
+            displayLines: displayLines,
+            trackTitle: musicController.currentTrackTitle
+        )
+        #endif
         let layerRows = makeLayerBackedRows(from: displayLines).filter { row in
             row.index == 0 || row.index >= firstRealDisplayIndex
         }
