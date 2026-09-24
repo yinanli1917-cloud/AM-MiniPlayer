@@ -1386,9 +1386,10 @@ public final class LyricsParser {
             }
 
             guard let text = matchText, !text.trimmingCharacters(in: .whitespaces).isEmpty else { return line }
+            let cleanedText = TranslatorNoteStripper.stripTrailingTranslatorNote(translation: text, original: line.text)
             return LyricLine(
                 text: line.text, startTime: line.startTime, endTime: line.endTime,
-                words: line.words, translation: text
+                words: line.words, translation: cleanedText
             )
         }
     }
@@ -1424,12 +1425,13 @@ public final class LyricsParser {
             guard index < translated.count else { return line }
             let text = translated[index].text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return line }
+            let cleanedText = TranslatorNoteStripper.stripTrailingTranslatorNote(translation: text, original: line.text)
             return LyricLine(
                 text: line.text,
                 startTime: line.startTime,
                 endTime: line.endTime,
                 words: line.words,
-                translation: text
+                translation: cleanedText
             )
         }
     }

@@ -797,6 +797,24 @@ public struct LyricsView: View {
                 cache.heightCacheInvalidated = true
             }
             updateHeightCache()
+            // 2026-09-23 fix (see LyricsTranslationSessionTrigger.swift's
+            // header): this was the missing retry. Before this, a
+            // translation session-config resolution attempt only ran on
+            // page-appear/language-change/showTranslation-on -- none of
+            // which fire on an ordinary track change. Real new lyric
+            // content arriving (this event) is exactly the signal a track
+            // change eventually produces, so it must retry the attempt too,
+            // or `resolvedSongTranslationSourceLanguage` stays nil for
+            // every song reached by normal playback advance while the user
+            // stays on the lyrics page (the founder's real listening
+            // pattern and log evidence).
+            if #available(macOS 15.0, *),
+               LyricsTranslationSessionTrigger.shouldScheduleConfigUpdate(
+                   newLineCount: newCount,
+                   isTranslationOnlyWriteback: translationOnly
+               ) {
+                scheduleTranslationSessionConfigUpdate(after: lyricPageSwitchTranslationDeferDuration)
+            }
             guard newCount > 0, !translationOnly else { return }
             updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
             scheduleNextLineAdvanceTimer()
