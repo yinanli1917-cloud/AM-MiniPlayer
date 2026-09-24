@@ -3519,7 +3519,14 @@ public final class LyricsFetcher {
                 state.setContinuation(continuation)
                 let worker = Task {
                     await operation { value in
-                        state.resume(value)
+                        // deliver() is the worker's own synchronous ack that
+                        // it has a verdict — not an external cancellation.
+                        // It must not flip Task.isCancelled for the very
+                        // task that is calling it, or the worker's own
+                        // post-verdict code (teardown + persistence) that
+                        // runs right after deliver() sees itself as
+                        // cancelled and bails before it can execute.
+                        state.resume(value, cancelWorker: false)
                     }
                 }
                 state.setWorker(worker)
@@ -3584,6 +3591,11 @@ private final class Box<T>: @unchecked Sendable {
 final class TimeoutState<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var didResume = false
+    // Whether the resume that already happened (or a not-yet-arrived
+    // `setWorker` should apply) wants the worker cancelled. Defaults to true
+    // so an unlabelled resume (e.g. the belated-setWorker race below, before
+    // any resume has actually happened) keeps the original safe behavior.
+    private var resumeWantsWorkerCancelled = true
     private var continuation: CheckedContinuation<T?, Never>?
     private var worker: Task<T?, Never>?
 
@@ -3601,7 +3613,7 @@ final class TimeoutState<T: Sendable>: @unchecked Sendable {
     func setWorker(_ worker: Task<T?, Never>) {
         lock.lock()
         self.worker = worker
-        let shouldCancel = didResume
+        let shouldCancel = didResume && resumeWantsWorkerCancelled
         lock.unlock()
 
         if shouldCancel {
@@ -3616,20 +3628,35 @@ final class TimeoutState<T: Sendable>: @unchecked Sendable {
         worker?.cancel()
     }
 
-    func resume(_ value: T?) {
+    /// Resumes the caller's continuation with `value`. `cancelWorker`
+    /// controls whether the (possibly still-running) worker task is
+    /// cancelled as part of this resume:
+    /// - `true` (default): an external event — the wall-clock deadline or
+    ///   outer-task cancellation — made the worker's eventual result moot,
+    ///   so it is cancelled.
+    /// - `false`: the worker itself is the caller (apply-on-select's
+    ///   `deliver` closure) — it has a verdict to hand the awaiting caller,
+    ///   but it is NOT done: it still has post-verdict work to finish
+    ///   (structured-concurrency teardown, `persistTrustedForegroundLyrics`).
+    ///   Cancelling it here would make `Task.isCancelled` true for that same
+    ///   worker the instant `deliver` returns, silently skipping that work.
+    func resume(_ value: T?, cancelWorker: Bool = true) {
         lock.lock()
         guard !didResume else {
             lock.unlock()
             return
         }
         didResume = true
+        resumeWantsWorkerCancelled = cancelWorker
         let continuation = self.continuation
         self.continuation = nil
         let worker = self.worker
         self.worker = nil
         lock.unlock()
 
-        worker?.cancel()
+        if cancelWorker {
+            worker?.cancel()
+        }
         continuation?.resume(returning: value)
     }
 }
