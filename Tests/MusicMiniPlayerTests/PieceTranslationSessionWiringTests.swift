@@ -35,6 +35,20 @@
  * `LanguageAvailability().status(from: en, to: zh-Hans)`) is on-device only
  * (NaturalLanguage/Translation frameworks), never the network — the SAME
  * call the shipping app already makes for this exact language pair.
+ *
+ * 2026-09-23 update (founder rule: a HUMAN-origin line's split pieces are
+ * NEVER machine-translated — see LyricPieceTranslation.swift's header): this
+ * file's `LyricPieceTranslation.pieceTranslations` calls now pass
+ * `isHumanTranslation: false` EXPLICITLY. The seeded line here (a lyrics-
+ * source Chinese translation) would, in the real app, be human-origin and
+ * resolve via tier `.humanSplit` instead — synchronously, never touching
+ * `registerPendingPieceTranslations`/`performPendingPieceTranslations` at
+ * all (see LyricPieceTranslationTests / piece_translation_eval.json for
+ * that path). This file's actual subject — `silentSystemTranslationConfiguration`
+ * still resolving a source language when the lyrics source already supplies
+ * a complete translation — remains real production code that matters for
+ * genuinely MACHINE-origin split lines, so the `isHumanTranslation: false`
+ * override keeps this file testing that machinery in isolation.
  */
 
 import XCTest
@@ -139,7 +153,8 @@ final class PieceTranslationSessionWiringTests: XCTestCase {
             return PieceTranslationCache.shared.translation(for: text, source: sourceCode, target: targetCode)
         }
         let (beforeTranslations, beforeTiers) = LyricPieceTranslation.pieceTranslations(
-            originalPieces: pieces, fullTranslation: fullTranslation, cache: pieceCache
+            originalPieces: pieces, fullTranslation: fullTranslation,
+            isHumanTranslation: false, cache: pieceCache
         )
         XCTAssertEqual(beforeTiers, [.fallbackFirstPiece, .none])
         XCTAssertNotNil(beforeTranslations[0])
@@ -181,7 +196,8 @@ final class PieceTranslationSessionWiringTests: XCTestCase {
         // ---- Mechanism check #3 (the founder's acceptance bar) ------------
         // After servicing, EVERY piece has its own translation.
         let (afterTranslations, afterTiers) = LyricPieceTranslation.pieceTranslations(
-            originalPieces: pieces, fullTranslation: fullTranslation, cache: pieceCache
+            originalPieces: pieces, fullTranslation: fullTranslation,
+            isHumanTranslation: false, cache: pieceCache
         )
         XCTAssertEqual(afterTiers[1], .perPieceCache, "piece 1 must now be served by the tier-2 cache")
         XCTAssertNotNil(afterTranslations[0])

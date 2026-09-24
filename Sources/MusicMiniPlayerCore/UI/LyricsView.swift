@@ -2132,6 +2132,14 @@ public struct LyricsView: View {
             guard let pieceSourceCode else { return nil }
             return PieceTranslationCache.shared.translation(for: text, source: pieceSourceCode, target: pieceTargetCode)
         }
+        // 2026-09-23 founder rule: a line whose whole-line translation came
+        // from the lyrics source (human -- NetEase/QQ/AMLL/Apple TTML etc.)
+        // must NEVER have its split pieces machine-translated -- the human
+        // translation is split across the pieces itself instead
+        // (LyricPieceTranslation.humanTranslationSplit, tier `.humanSplit`).
+        // `isSystemTranslationSource` is a per-CURRENT-SONG flag, constant
+        // for this whole pass.
+        let isHumanTranslation = !lyricsService.isSystemTranslationSource
         var pendingPieceTranslationTexts: [String] = []
         // Per-song tier summary (2026-09-23, founder-requested diagnostic):
         // one DebugLogger line per `makeDisplayLyricLines` pass (bounded by
@@ -2173,9 +2181,20 @@ public struct LyricsView: View {
                 }
                 let segmentCount = wordGroups.count
                 let groupTexts = wordGroups.map { LyricDisplaySegmenter.displayText(forWords: $0) }
+                // Word-level lines: humanSplit shares are TIMING shares (real
+                // per-group duration), per the founder's rule -- exact, no
+                // estimation, unlike the character-count proxy line-level
+                // pieces use below.
+                let groupWeights: [Double] = wordGroups.map { group in
+                    let start = group.first?.startTime ?? line.startTime
+                    let end = group.last?.endTime ?? line.endTime
+                    return max(0, end - start)
+                }
                 let (pieceTranslations, pieceTiers) = LyricPieceTranslation.pieceTranslations(
                     originalPieces: groupTexts,
+                    pieceWeights: groupWeights,
                     fullTranslation: line.translation,
+                    isHumanTranslation: isHumanTranslation,
                     cache: pieceCacheLookup
                 )
                 tallySplitLine(pieceTiers)
@@ -2185,7 +2204,10 @@ public struct LyricsView: View {
                     // own real word timestamps, never estimated.
                     let start = group.first?.startTime ?? line.startTime
                     let end = group.last?.endTime ?? line.endTime
-                    if pieceTiers[segmentIndex] == .none {
+                    // Human-origin pieces left at tier `.none` ran out of
+                    // humanSplit candidates -- they are NEVER queued for
+                    // machine translation (founder rule 2026-09-23).
+                    if pieceTiers[segmentIndex] == .none, !isHumanTranslation {
                         pendingPieceTranslationTexts.append(groupTexts[segmentIndex])
                     }
                     let segmentLine = LyricLine(
@@ -2220,14 +2242,25 @@ public struct LyricsView: View {
                 continue
             }
             let segmentCount = timedPieces.count
+            // Line-level pieces: humanSplit shares are DISPLAY-LENGTH shares
+            // (character count) per the founder's rule -- these pieces'
+            // own timing is already an ESTIMATE (proportionalTiming), so
+            // riding that estimate a second time for the translation split
+            // would compound error rather than measuring anything real.
+            let pieceLengthWeights: [Double] = timedPieces.map { Double($0.text.count) }
             let (pieceTranslations, pieceTiers) = LyricPieceTranslation.pieceTranslations(
                 originalPieces: timedPieces.map(\.text),
+                pieceWeights: pieceLengthWeights,
                 fullTranslation: line.translation,
+                isHumanTranslation: isHumanTranslation,
                 cache: pieceCacheLookup
             )
             tallySplitLine(pieceTiers)
             for (segmentIndex, piece) in timedPieces.enumerated() {
-                if pieceTiers[segmentIndex] == .none {
+                // Human-origin pieces left at tier `.none` ran out of
+                // humanSplit candidates -- never queued for machine
+                // translation (founder rule 2026-09-23).
+                if pieceTiers[segmentIndex] == .none, !isHumanTranslation {
                     pendingPieceTranslationTexts.append(piece.text)
                 }
                 let segmentLine = LyricLine(
@@ -2248,23 +2281,33 @@ public struct LyricsView: View {
             }
         }
 
-        // 2026-09-23 fix (founder repro: Raveena "Mystery"): registering a
-        // split piece for tier-2 translation used to also require
-        // `lyricsService.isSystemTranslationSource` -- but that flag reports
-        // where the WHOLE-LINE translation came from, not whether the split
-        // PIECE'S original text has a resolvable source language. A line
-        // whose whole-line translation came from the lyrics source
-        // (NetEase/QQ) still needs its pieces registered once
-        // `pieceSourceCode` resolves (LyricsService now resolves it in that
-        // case too -- see `silentSystemTranslationConfiguration`). The only
-        // real precondition is that a source language resolved at all.
-        if pieceSourceCode != nil, !pendingPieceTranslationTexts.isEmpty {
+        // Registration is now GATED on `!isHumanTranslation` (2026-09-23
+        // founder rule) -- `pendingPieceTranslationTexts` is only ever
+        // populated for machine-origin lines in the first place (see the
+        // `!isHumanTranslation` guards above), so this condition is mostly
+        // documentation at this point, but keeps the call unreachable for a
+        // human-origin song even if a future edit forgot one of those
+        // guards. 2026-09-23 fix (founder repro: Raveena "Mystery"):
+        // registering a split piece for tier-2 translation used to also
+        // require `lyricsService.isSystemTranslationSource` on the WHOLE
+        // gate -- that flag now decides which pipeline runs at all
+        // (`isHumanTranslation` above), not just whether to register.
+        if !isHumanTranslation, pieceSourceCode != nil, !pendingPieceTranslationTexts.isEmpty {
             lyricsService.registerPendingPieceTranslations(pendingPieceTranslationTexts)
         }
 
         if splitLineCount > 0 {
             let tier3Reason: String
-            if pieceSourceCode == nil {
+            if isHumanTranslation {
+                // humanSplit is pure text logic -- it never needs a
+                // Translation-framework session or a resolved source
+                // language. A `.none` piece here means humanTranslationSplit
+                // ran out of usable break candidates (short translation,
+                // heavy bracket/quote protection), not a pending async op.
+                tier3Reason = (splitLineTierCounts[.none] ?? 0) > 0
+                    ? "humanSplit exhausted candidates (no machine fallback by design)"
+                    : "n/a"
+            } else if pieceSourceCode == nil {
                 tier3Reason = "no session (\(lyricsService.lastTranslationSessionGapReason ?? "source not resolved yet"))"
             } else if !pendingPieceTranslationTexts.isEmpty {
                 tier3Reason = "pending (registered, awaiting async translation)"
@@ -2283,8 +2326,9 @@ public struct LyricsView: View {
             // bool) means a song that genuinely moves tiers across several
             // rebuilds still gets one fresh line per distinct state, so the
             // log reflects the FINAL settled state, not only the first one.
-            let signature = "\(musicController.currentTrackTitle)|\(splitLineCount)|" +
+            let signature = "\(musicController.currentTrackTitle)|\(isHumanTranslation)|\(splitLineCount)|" +
                 "\(splitLineTierCounts[.clauseAligned] ?? 0)|" +
+                "\(splitLineTierCounts[.humanSplit] ?? 0)|" +
                 "\(splitLineTierCounts[.perPieceCache] ?? 0)|" +
                 "\(splitLineTierCounts[.fallbackFirstPiece] ?? 0)|" +
                 "\(splitLineTierCounts[.none] ?? 0)|\(tier3Reason)"
@@ -2292,9 +2336,11 @@ public struct LyricsView: View {
                 lastLoggedPieceTierSummarySignature = signature
                 DebugLogger.log(
                     "Translation",
-                    "🧩 piece-translation tiers for '\(musicController.currentTrackTitle)': " +
+                    "🧩 piece-translation tiers for '\(musicController.currentTrackTitle)' " +
+                    "(origin=\(isHumanTranslation ? "human" : "machine")): " +
                     "lines_split=\(splitLineCount) " +
                     "tier1_clauseAligned=\(splitLineTierCounts[.clauseAligned] ?? 0) " +
+                    "tier2_humanSplit=\(splitLineTierCounts[.humanSplit] ?? 0) " +
                     "tier2_perPieceCache=\(splitLineTierCounts[.perPieceCache] ?? 0) " +
                     "tier3_fallbackFirstPiece=\(splitLineTierCounts[.fallbackFirstPiece] ?? 0) " +
                     "pendingNone=\(splitLineTierCounts[.none] ?? 0) " +
