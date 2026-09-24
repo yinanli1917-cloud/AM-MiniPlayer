@@ -35,9 +35,11 @@ let package = Package(
             exclude: [
                 "Models/CLAUDE.md"
             ],
+            // DEBUG-preview images only; release code never touches Bundle.module, so
+            // the release binary references no MusicMiniPlayerCore resource bundle
+            // (build_app.sh ships exactly the bundles the binary references).
             resources: [
-                .process("Resources"),
-                .process("Shaders")
+                .process("Resources")
             ],
             linkerSettings: [
                 .linkedLibrary("sqlite3")

@@ -415,11 +415,10 @@ public enum BackdropLegibilityBand {
     // MARK: - Point B: pure-SwiftUI progressive blur recipe (research/progressive-blur-2026-09-23.md,
     // round 2 — NOT the Metal `.layerEffect` shader: this machine's Xcode has no Metal
     // Toolchain (`xcrun metal` fails with "missing Metal Toolchain"), so `.metal` files
-    // never compile to a usable .metallib — `.process("Shaders")` in Package.swift just
-    // copies the raw source into the resource bundle — and `build_app.sh` never copies
-    // MusicMiniPlayerCore's resource bundle into nanoPod.app, so `ShaderLibrary.bundle
-    // (Bundle.module)` would fail at runtime in the shipped app even though `swift build`
-    // looks clean. Instead: a small stack of blurred image copies, radii increasing toward
+    // never compile to a usable .metallib (the unused ProgressiveBlur.metal and its
+    // `ShaderLibrary.bundle(Bundle.module)` modifiers were removed 2026-09-23), and a
+    // SwiftPM `Bundle.module` in the shipped app resolves only via build_app.sh's
+    // resource-bundle gate. Instead: a small stack of blurred image copies, radii increasing toward
     // the bottom, each one revealed only within its OWN smoothstep-shaped band (reusing
     // `bottomBandScrimOpacity`'s envelope math) — drawn back-to-front from weakest (widest
     // reveal, all the way from the top of the band down to the bottom edge) to strongest
