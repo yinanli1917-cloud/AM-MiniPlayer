@@ -1,9 +1,13 @@
 /**
- * [INPUT]: Foundation + NaturalLanguage (NLTokenizer(unit: .word) for the
- *          tier-3 word-boundary fallback in `humanTranslationSplit`). Pure
- *          text logic -- no Translation framework, no LyricsService. The
- *          punctuation sets mirror LyricDisplaySegmenter's strong/weak
- *          boundary characters on purpose (same notion of "clause").
+ * [INPUT]: Foundation + NaturalLanguage (NLTagger(.lexicalClass) for the
+ *          phrase-aware tokenizer tier in `humanTranslationSplit`, gated per
+ *          translation language via `NLTagger.availableTagSchemes`) +
+ *          `Utils/DebugLogger.swift` (same-module; a single diagnostic line
+ *          when the tokenizer tier is disabled for an unsupported
+ *          language). Otherwise pure text logic -- no Translation
+ *          framework, no LyricsService. The punctuation sets mirror
+ *          LyricDisplaySegmenter's strong/weak boundary characters on
+ *          purpose (same notion of "clause").
  * [OUTPUT]: Exports LyricPieceTranslation.clauses/clauseAlignedTranslations/
  *           humanTranslationSplit/pieceTranslations and
  *           LyricPieceTranslationTier.
@@ -29,16 +33,17 @@
  *    splits into the same clause count -> pair in order.
  * 2. Tier `.humanSplit` (NEW, human-origin only): the translation is split
  *    at ITS OWN natural boundaries -- clause punctuation, then spaces
- *    (Chinese fan translations often separate clauses with spaces), then
- *    `NLTokenizer(unit: .word)` boundaries -- choosing, for each original
- *    piece boundary, the candidate whose cumulative position best matches
- *    that piece's share of the line (timing share for word-level lines,
- *    display-length share otherwise). Never breaks inside a word, never
- *    leaves an orphan piece of <=2 glyphs, never breaks inside
- *    brackets/quotes. When there are fewer usable candidates than needed,
- *    the remainder merges into the last piece that got a real segment
- *    (documented in `humanTranslationSplit`'s own comment) -- pieces past
- *    that stay nil, never silently duplicating machine-translated text.
+ *    (Chinese fan translations often separate clauses with spaces), then a
+ *    PHRASE-AWARE word-boundary tier -- choosing, for each original piece
+ *    boundary, the candidate whose cumulative position best matches that
+ *    piece's share of the line (timing share for word-level lines,
+ *    display-length share otherwise). Never breaks inside a word or a
+ *    grammatical phrase, never leaves an orphan piece relative to its
+ *    ORIGINAL piece's own length, never breaks inside brackets/quotes. When
+ *    there are fewer usable candidates than needed, the remainder merges
+ *    into the last piece that got a real segment (documented in
+ *    `humanTranslationSplit`'s own comment) -- pieces past that stay nil,
+ *    never silently duplicating machine-translated text.
  * 3. Tier `.fallbackFirstPiece`: only when neither of the above produced
  *    anything (e.g. no translation at all, or `humanTranslationSplit`
  *    itself found zero usable candidates -- which degrades to exactly this
@@ -49,6 +54,57 @@
  * unchanged: clause-aligned (WITH the length-rank guard), then an async
  * per-piece on-device translation cached by the caller (tier
  * `.perPieceCache`), then the tier-3 fallback.
+ *
+ * 2026-09-23-afternoon-2 founder review of the first landing (459cd98)
+ * found two remaining defects, both fixed in this revision:
+ *
+ * (A) The word-boundary tier's "0 mid-word breaks" self-check was
+ *     CIRCULAR: it verified breaks against the SAME `NLTokenizer` that
+ *     proposed them, so it could never catch the tokenizer's own mistakes
+ *     -- e.g. Japanese "待っている" (a single te-iru verb form) got split
+ *     "待っ|ている", and Chinese "每一次" ("every single time") got split
+ *     "每|一次", both reported as clean. Fixed by gating the word-boundary
+ *     tier on `NLTagger.availableTagSchemes(for:.word,language:)` actually
+ *     containing `.lexicalClass` for the TRANSLATION's language (queried
+ *     per call, never assumed) -- see `lexicalClassIsAvailable(for:)`.
+ *     EMPIRICALLY VERIFIED on this SDK (Xcode 26, see
+ *     LyricPieceTranslationTests' `test_nlTaggerSupportProbe_...` which
+ *     prints the exact scheme lists): `.lexicalClass` is available for
+ *     `zh-Hans` but NOT for `ja`, `zh-Hant`, or `ko` -- so for those three
+ *     languages this tier is DISABLED entirely (never falls back to a bare
+ *     `NLTokenizer` word boundary, which is exactly the mechanism that
+ *     produced 待っ|ている), one `DebugLogger` line is emitted, and
+ *     `humanTranslationSplit` relies on clause-punctuation/space candidates
+ *     only -- degrading gracefully to fewer pieces (or the whole
+ *     translation on piece 0) rather than guessing. Where `.lexicalClass`
+ *     IS available (zh-Hans on this SDK), candidates come from
+ *     `NLTagger.enumerateTags(unit:.word,scheme:.lexicalClass)` boundaries,
+ *     filtered: a break is rejected if the token STARTING the new segment
+ *     is `.particle` or `.classifier` (Apple's public `NLTag` scheme has no
+ *     distinct "auxiliary" or "suffix" case -- verified via the same probe
+ *     -- `.particle` is the closest available tag and covers Chinese
+ *     aspect/structural particles 的/了/着 directly), OR if the token
+ *     ENDING the old segment is `.determiner` or `.number` (no distinct
+ *     "prefix" case either). An ADDITIONAL rule beyond the founder's
+ *     literal list, found necessary by this revision's own probe of the
+ *     每一次 example: either side tagged `.otherWord` (the tagger's own "I
+ *     don't know" bucket) ALSO vetoes the break -- `一`/`次` in 每一次 come
+ *     back `.otherWord` rather than the ideal Number/Classifier tags on
+ *     this SDK's Chinese model, so trusting a low-confidence tag is exactly
+ *     the same mistake as trusting the raw tokenizer; treating `.otherWord`
+ *     as "insufficient evidence, don't break here" closes that gap.
+ * (B) The orphan floor (originally a flat "<=2 glyphs is always an orphan")
+ *     was NOT relative to the ORIGINAL piece it would become: a genuinely
+ *     short original piece (an ad-lib like "oh"/"yeah"/"mmm") deserves a
+ *     genuinely short translation segment, but the flat floor rejected that
+ *     short segment as an "orphan" and merged the NEXT piece's leading
+ *     characters into it instead (founder repro: "oh"=>"哦" was being
+ *     reported as "哦 我 | 从来没想过…", stealing "我" from the second
+ *     piece). Fixed by `perPieceFloor(_:)`: a piece whose ORIGINAL text is
+ *     `<=3` characters or `<=1` word gets floor 1 (any non-empty segment is
+ *     acceptable); every other piece keeps the `humanSplitMinSegmentGlyphs`
+ *     (3) floor. Applied identically during candidate selection AND the
+ *     post-merge orphan sweep, so the two stay consistent.
  */
 
 import Foundation
@@ -181,28 +237,125 @@ public enum LyricPieceTranslation {
         ("(", ")"), ("[", "]"), ("{", "}"),
         ("（", "）"), ("【", "】"), ("《", "》"), ("〈", "〉"), ("「", "」"), ("『", "』"),
     ]
-    /// Minimum glyphs (Characters) a segment must have to avoid being
-    /// treated as an orphan -- "<=2 glyphs" per the founder's rule, so the
-    /// floor for an acceptable segment is 3.
+    /// Default minimum glyphs (Characters) a segment must have to avoid
+    /// being treated as an orphan. Used for any piece whose ORIGINAL text
+    /// is NOT itself short -- see `perPieceFloor(_:originalPieces:)`.
     private static let humanSplitMinSegmentGlyphs = 3
+
+    /// True when `piece` is short enough (an ad-lib like "oh"/"yeah"/"mmm",
+    /// or any <=3-character/<=1-word original piece) that its OWN
+    /// translation segment is allowed to be equally short -- see this
+    /// file's header, defect (B). The threshold is deliberately the
+    /// founder's own stated proxy ("<=1 word / <=3 characters"), an OR: a
+    /// single long word (e.g. a 5-character CJK word) does not count as
+    /// short even though it's "1 word", so the character-count arm alone
+    /// still applies as a ceiling for CJK originals; the word-count arm
+    /// exists for short Latin ad-libs whose character count alone might
+    /// exceed 3 (e.g. none in practice for single ad-lib words, but a
+    /// 2-word ad-lib like "oh oh" would still want an equally short
+    /// translation and IS caught by the character-count arm at that
+    /// length; the word-count arm is the fallback for the rare case a
+    /// short piece is exactly 4 ASCII characters, e.g. "yeah").
+    private static func originalPieceIsShort(_ piece: String) -> Bool {
+        let trimmed = piece.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count <= 3 { return true }
+        let wordCount = trimmed.split(separator: " ", omittingEmptySubsequences: true).count
+        return wordCount <= 1
+    }
 
     private struct BreakCandidate {
         /// Number of Characters of `text` BEFORE this break point (i.e. the
         /// break falls between index `charIndex - 1` and `charIndex`).
         let charIndex: Int
         /// 0 = clause punctuation (highest priority), 1 = space,
-        /// 2 = NLTokenizer word boundary (lowest priority / densest).
+        /// 2 = phrase-aware word boundary (lowest priority / densest; only
+        /// generated when the translation's language has NLTagger
+        /// `.lexicalClass` support -- see `lexicalClassIsAvailable(for:)`).
         let tier: Int
     }
+
+    /// Lexical-class tags that must never START a new displayed segment
+    /// (the break lands right before them) -- grammatical "glue" that
+    /// binds BACKWARD to what precedes it. `.otherWord` is included
+    /// defensively: it is the tagger's own "could not classify this token"
+    /// bucket, and this file's header documents the empirical case
+    /// (Chinese 每一次) where trusting an `.otherWord` tag as "safe" would
+    /// have reproduced the exact mid-phrase-split bug this revision fixes.
+    private static let forbiddenFollowingLexicalTags: Set<NLTag> = [.particle, .classifier, .otherWord]
+
+    /// Tags that must never END a segment (the break lands right after
+    /// them) -- forward-binding modifiers. See `forbiddenFollowingLexicalTags`
+    /// for why `.otherWord` is included on both sides.
+    private static let forbiddenPrecedingLexicalTags: Set<NLTag> = [.determiner, .number, .otherWord]
+
+    /// Per-language cache of whether `NLTagger` actually has a
+    /// `.lexicalClass` model on THIS system (`NLTagger.availableTagSchemes`
+    /// is a real capability query, not a static list -- this file never
+    /// assumes support). A plain dictionary behind an `NSLock` (the same
+    /// pattern `PieceTranslationCache` uses) since this can be queried from
+    /// more than one call site.
+    private final class LexicalClassSupportMemo {
+        static let shared = LexicalClassSupportMemo()
+        private let lock = NSLock()
+        private var cache: [String: Bool] = [:]
+
+        func isAvailable(for languageCode: String) -> Bool {
+            lock.lock()
+            if let cached = cache[languageCode] {
+                lock.unlock()
+                return cached
+            }
+            lock.unlock()
+            let supported = NLTagger.availableTagSchemes(for: .word, language: NLLanguage(languageCode))
+                .contains(.lexicalClass)
+            lock.lock()
+            cache[languageCode] = supported
+            lock.unlock()
+            return supported
+        }
+
+        #if DEBUG
+        func debugReset() {
+            lock.lock()
+            cache.removeAll()
+            lock.unlock()
+        }
+        #endif
+    }
+
+    /// Public only so `LyricPieceTranslationTests` can print the REAL,
+    /// on-device support table for the languages this app actually
+    /// translates into/from, rather than asserting from documentation.
+    public static func lexicalClassIsAvailable(for languageCode: String) -> Bool {
+        LexicalClassSupportMemo.shared.isAvailable(for: languageCode)
+    }
+
+    #if DEBUG
+    public static func debugResetLexicalClassSupportMemo() {
+        LexicalClassSupportMemo.shared.debugReset()
+    }
+    #endif
 
     /// Scans `text` once, tracking bracket/quote nesting, and returns every
     /// valid break candidate (deduplicated by position, sorted by position)
     /// across all three priority tiers. A candidate is never generated
-    /// inside brackets/quotes. Never breaks inside a word: punctuation/space
-    /// candidates fall immediately after a punctuation/space character
-    /// (never mid-word by construction), and tokenizer candidates fall
-    /// exactly at `NLTokenizer(unit: .word)` token boundaries.
-    private static func breakCandidates(in text: String) -> [BreakCandidate] {
+    /// inside brackets/quotes.
+    ///
+    /// Tier 0/1 (punctuation/space) candidates fall immediately after a
+    /// punctuation/space character -- never mid-word by construction, and
+    /// unaffected by language/tagger support (a comma or a space IS a
+    /// genuine boundary in any script).
+    ///
+    /// Tier 2 (phrase-aware word boundary) is gated by
+    /// `lexicalClassIsAvailable(for: translationLanguageCode)`. When
+    /// UNAVAILABLE, this tier contributes ZERO candidates -- this file no
+    /// longer falls back to a bare `NLTokenizer(unit: .word)` boundary
+    /// (which is exactly the mechanism that split Japanese 待っている
+    /// mid-morpheme; see this file's header). When available, candidates
+    /// come from `NLTagger.enumerateTags(unit:.word,scheme:.lexicalClass)`
+    /// token boundaries, filtered by `forbiddenFollowingLexicalTags`/
+    /// `forbiddenPrecedingLexicalTags`.
+    private static func breakCandidates(in text: String, translationLanguageCode: String) -> [BreakCandidate] {
         let chars = Array(text)
         guard chars.count > humanSplitMinSegmentGlyphs else { return [] }
 
@@ -232,16 +385,48 @@ public enum LyricPieceTranslation {
             }
         }
 
-        let tokenizer = NLTokenizer(unit: .word)
-        tokenizer.string = text
-        tokenizer.enumerateTokens(in: text.startIndex..<text.endIndex) { range, _ in
-            let offset = text.distance(from: text.startIndex, to: range.upperBound)
-            if offset > 0, offset < chars.count, !protectedAfter[offset - 1] {
-                if !candidates.contains(where: { $0.charIndex == offset }) {
-                    candidates.append(BreakCandidate(charIndex: offset, tier: 2))
-                }
+        guard lexicalClassIsAvailable(for: translationLanguageCode) else {
+            // 2026-09-23-afternoon-2 fix: do NOT fall back to a bare
+            // NLTokenizer word boundary here -- that is the exact
+            // mechanism that produced 待っ|ている. Log once per call (not
+            // per-frame -- this runs at most once per split-line rebuild,
+            // already debounced by LyricsView) only when it could actually
+            // have mattered (a translation long enough that the punctuation
+            // candidates it can generate below may not be enough).
+            if chars.count > humanSplitMinSegmentGlyphs * 2 {
+                DebugLogger.log(
+                    "Translation",
+                    "🈳 humanSplit: NLTagger.lexicalClass unsupported for '\(translationLanguageCode)' " +
+                    "-- word-boundary tier disabled, relying on punctuation/space candidates only"
+                )
             }
+            candidates.sort { $0.charIndex < $1.charIndex }
+            return candidates
+        }
+
+        let language = NLLanguage(translationLanguageCode)
+        let tagger = NLTagger(tagSchemes: [.lexicalClass])
+        tagger.string = text
+        tagger.setLanguage(language, range: text.startIndex..<text.endIndex)
+
+        var tokens: [(range: Range<String.Index>, tag: NLTag?)] = []
+        tagger.enumerateTags(in: text.startIndex..<text.endIndex, unit: .word, scheme: .lexicalClass, options: [.omitWhitespace, .omitPunctuation]) { tag, range in
+            tokens.append((range, tag))
             return true
+        }
+
+        for index in 0..<tokens.count {
+            guard index + 1 < tokens.count else { continue }
+            let precedingTag = tokens[index].tag
+            let followingTag = tokens[index + 1].tag
+            if let p = precedingTag, forbiddenPrecedingLexicalTags.contains(p) { continue }
+            if let f = followingTag, forbiddenFollowingLexicalTags.contains(f) { continue }
+
+            let offset = text.distance(from: text.startIndex, to: tokens[index].range.upperBound)
+            guard offset > 0, offset < chars.count, !protectedAfter[offset - 1] else { continue }
+            if !candidates.contains(where: { $0.charIndex == offset }) {
+                candidates.append(BreakCandidate(charIndex: offset, tier: 2))
+            }
         }
 
         candidates.sort { $0.charIndex < $1.charIndex }
@@ -257,31 +442,45 @@ public enum LyricPieceTranslation {
     /// otherwise -- the caller decides which by what it passes). Selection
     /// proceeds left-to-right, STRICT-TIER-FALLBACK (punctuation candidates
     /// considered first; only if NONE are usable does a space candidate
-    /// even enter consideration; only if neither exist does a tokenizer
-    /// candidate) then nearest-share WITHIN that tier; each chosen break
-    /// must land at least `humanSplitMinSegmentGlyphs` characters past the
-    /// previous one. A separate post-pass then verifies the ACTUAL trimmed
-    /// segments (trimming can shrink a segment by the boundary whitespace a
-    /// space-tier break consumed) and merges away any orphan (<=2 glyphs)
-    /// wherever it lands, not just at the very end.
+    /// even enter consideration; only if neither exist does a phrase-aware
+    /// word-boundary candidate) then nearest-share WITHIN that tier.
+    ///
+    /// `translationLanguageCode`: the translation's own language (the
+    /// app's configured target language, e.g. "zh-Hans" -- NOT the
+    /// original line's source language). Gates whether tier 2 candidates
+    /// are generated at all; see `breakCandidates`.
+    ///
+    /// The orphan floor is PER-PIECE (2026-09-23-afternoon-2 fix, defect
+    /// B): `perPieceFloor(pieceIndex:)` returns 1 when
+    /// `originalPieces[pieceIndex]` is itself short
+    /// (`originalPieceIsShort`), else the standard `humanSplitMinSegmentGlyphs`
+    /// (3). Applied both during candidate selection (so a short-original
+    /// piece's boundary can land close to its tiny target share) and in the
+    /// post-merge sweep below (trimming can shrink a segment by the
+    /// boundary whitespace a space-tier break consumed, so the raw
+    /// charIndex gap checked during selection is not the final word --
+    /// this pass verifies the ACTUAL trimmed segments and merges away any
+    /// orphan wherever it lands, not just at the very end).
     ///
     /// Returns one optional segment per original piece. When there are
     /// FEWER usable candidates than boundaries needed (short translation,
-    /// heavy bracket/quote protection, etc.), the pieces that DID get a
-    /// resolved break each carry their own segment; the remainder of the
-    /// translation (from the last resolved break to the end) is NOT handed
-    /// out piecemeal -- it merges into the next piece in line (the "last
-    /// piece that has one"), and any pieces after THAT stay nil. This falls
-    /// out of the algorithm without a special case: with zero usable
-    /// candidates at all, `selected` is empty, there is exactly one segment
-    /// (the whole trimmed translation), and it lands on piece 0 -- the
-    /// same shape as the old tier-3 fallback, but reached in this tier
-    /// rather than falling through to it (a human-origin line's `.none`
-    /// pieces are simply "less lucky splits", never machine-translated).
+    /// heavy bracket/quote protection, an unsupported language disabling
+    /// tier 2, etc.), the pieces that DID get a resolved break each carry
+    /// their own segment; the remainder of the translation (from the last
+    /// resolved break to the end) is NOT handed out piecemeal -- it merges
+    /// into the next piece in line (the "last piece that has one"), and any
+    /// pieces after THAT stay nil. This falls out of the algorithm without
+    /// a special case: with zero usable candidates at all, `selected` is
+    /// empty, there is exactly one segment (the whole trimmed translation),
+    /// and it lands on piece 0 -- the same shape as the old tier-3
+    /// fallback, but reached in this tier rather than falling through to it
+    /// (a human-origin line's `.none` pieces are simply "less lucky
+    /// splits", never machine-translated).
     public static func humanTranslationSplit(
         originalPieces: [String],
         pieceWeights: [Double],
-        fullTranslation: String
+        fullTranslation: String,
+        translationLanguageCode: String
     ) -> [String?]? {
         guard originalPieces.count > 1 else { return nil }
         let trimmed = fullTranslation.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -307,14 +506,22 @@ public enum LyricPieceTranslation {
             targetShares.append(cumulative / totalWeight)
         }
 
+        // Per-ORIGINAL-piece orphan floor -- see this function's doc
+        // comment and this file's header, defect (B). `pieceIndex` is
+        // clamped defensively; callers always pass a valid range.
+        func perPieceFloor(_ pieceIndex: Int) -> Int {
+            guard pieceIndex >= 0, pieceIndex < originalPieces.count else { return humanSplitMinSegmentGlyphs }
+            return originalPieceIsShort(originalPieces[pieceIndex]) ? 1 : humanSplitMinSegmentGlyphs
+        }
+
         let chars = Array(trimmed)
-        let allCandidates = breakCandidates(in: trimmed)
+        let allCandidates = breakCandidates(in: trimmed, translationLanguageCode: translationLanguageCode)
 
         // Selection is STRICT-TIER-FALLBACK, not "globally nearest
         // regardless of tier": for each break, only candidates from the
         // HIGHEST tier that has ANY usable candidate are even considered --
         // a natural clause-punctuation or space boundary always wins over a
-        // numerically closer tokenizer boundary, exactly the founder's
+        // numerically closer word-boundary candidate, exactly the founder's
         // stated "priority" ordering. (An earlier version picked whichever
         // candidate was numerically nearest across ALL tiers and used tier
         // only as an exact-distance tie-break -- ties are rare, so in
@@ -324,25 +531,27 @@ public enum LyricPieceTranslation {
         // eval, see piece_translation_human_split_eval.json's hs-002.)
         var selected: [Int] = []
         var lastBreak = 0
-        for targetShare in targetShares {
+        for (boundaryIndex, targetShare) in targetShares.enumerated() {
             let targetOffset = targetShare * Double(chars.count)
             var best: BreakCandidate?
             for tier in 0...2 {
                 // Both sides matter: a candidate must leave at least
-                // `humanSplitMinSegmentGlyphs` characters BEHIND it (since
-                // the last break) AND at least that many characters of the
-                // translation REMAINING ahead of it -- a candidate sitting
-                // right before the string's end (e.g. a lone trailing
-                // period) would otherwise "win" tier 0 purely by tier
-                // priority while producing a degenerate empty/orphan final
-                // segment, starving a MUCH better-fitting lower-tier
-                // candidate (a mid-string space) of any consideration at
-                // all. Caught by this module's own eval, see
+                // `perPieceFloor(boundaryIndex)` characters BEHIND it (the
+                // piece it would close out) AND at least
+                // `perPieceFloor(boundaryIndex + 1)` characters of the
+                // translation REMAINING ahead of it (the piece that would
+                // start there) -- a candidate sitting right before the
+                // string's end (e.g. a lone trailing period) would
+                // otherwise "win" tier 0 purely by tier priority while
+                // producing a degenerate empty/orphan final segment,
+                // starving a MUCH better-fitting lower-tier candidate (a
+                // mid-string space) of any consideration at all. Caught by
+                // this module's own eval, see
                 // piece_translation_human_split_eval.json's hs-006.
                 let usable = allCandidates.filter {
                     $0.tier == tier
-                        && $0.charIndex - lastBreak >= humanSplitMinSegmentGlyphs
-                        && chars.count - $0.charIndex >= humanSplitMinSegmentGlyphs
+                        && $0.charIndex - lastBreak >= perPieceFloor(boundaryIndex)
+                        && chars.count - $0.charIndex >= perPieceFloor(boundaryIndex + 1)
                 }
                 if let nearest = usable.min(by: {
                     abs(Double($0.charIndex) - targetOffset) < abs(Double($1.charIndex) - targetOffset)
@@ -358,13 +567,6 @@ public enum LyricPieceTranslation {
             lastBreak = best.charIndex
         }
 
-        // Trimming (below) can shrink a segment by exactly the boundary
-        // whitespace character a space-tier break consumed, so the RAW
-        // charIndex gap checked during selection above is not the final
-        // word on orphan-avoidance -- verify the ACTUAL trimmed segments
-        // and merge away any orphan (<=2 glyphs) wherever it lands (start,
-        // middle, or end), re-checking after each merge. Bounded by
-        // `selected.count` (each iteration removes exactly one break).
         func buildSegments(_ breaks: [Int]) -> [String] {
             var segs: [String] = []
             var cursor = 0
@@ -378,7 +580,11 @@ public enum LyricPieceTranslation {
 
         var breaks = selected
         var segments = buildSegments(breaks)
-        while segments.count > 1, let orphanIndex = segments.firstIndex(where: { !$0.isEmpty && $0.count <= 2 }) {
+        while segments.count > 1 {
+            guard let orphanIndex = segments.indices.first(where: { idx in
+                let segment = segments[idx]
+                return !segment.isEmpty && segment.count < perPieceFloor(idx)
+            }) else { break }
             if orphanIndex == segments.count - 1 {
                 breaks.removeLast()
             } else {
@@ -410,6 +616,13 @@ public enum LyricPieceTranslation {
     ///   origin, the pre-2026-09-23 behavior) so existing call sites that
     ///   only ever exercised the machine pipeline keep compiling and keep
     ///   their exact prior behavior unless they opt in.
+    /// - `translationLanguageCode`: only consulted for `.humanSplit` --
+    ///   the translation's OWN language (e.g. the app's configured target
+    ///   language), used to gate the phrase-aware word-boundary tier.
+    ///   Defaults to `"und"` (undetermined), which `NLTagger` never reports
+    ///   `.lexicalClass` support for -- the safest possible default
+    ///   (fail-closed: no language specified means no risky bare-tokenizer
+    ///   tier, same as an explicitly-unsupported language).
     /// - `cache`: a synchronous lookup (piece text -> already-translated
     ///   text). Used ONLY on the machine-origin path (tier `.perPieceCache`)
     ///   -- a human-origin line's pieces are NEVER looked up here, because
@@ -421,6 +634,7 @@ public enum LyricPieceTranslation {
         pieceWeights: [Double] = [],
         fullTranslation: String?,
         isHumanTranslation: Bool = false,
+        translationLanguageCode: String = "und",
         cache: (String) -> String?
     ) -> (translations: [String?], tiers: [LyricPieceTranslationTier]) {
         guard !originalPieces.isEmpty else { return ([], []) }
@@ -444,7 +658,8 @@ public enum LyricPieceTranslation {
                   let split = humanTranslationSplit(
                     originalPieces: originalPieces,
                     pieceWeights: pieceWeights,
-                    fullTranslation: fullTranslation
+                    fullTranslation: fullTranslation,
+                    translationLanguageCode: translationLanguageCode
                   )
             else {
                 return (

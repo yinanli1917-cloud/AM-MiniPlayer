@@ -365,20 +365,22 @@ final class LyricPieceTranslationTests: XCTestCase {
         let result = LyricPieceTranslation.humanTranslationSplit(
             originalPieces: ["a", "b"],
             pieceWeights: [1, 1],
-            fullTranslation: "你好呀 世界很大"
+            fullTranslation: "你好呀 世界很大",
+            translationLanguageCode: "zh-Hans"
         )
         XCTAssertEqual(result, ["你好呀", "世界很大"])
     }
 
     func test_humanTranslationSplit_neverBreaksInsideBracketsOrQuotes() {
         // The only comma sits INSIDE parentheses -- must not be used as a
-        // break; falls back to a tokenizer/space candidate outside the
+        // break; falls back to a word-boundary/space candidate outside the
         // brackets, or to a single unsplit segment if none exists.
         let translation = "他说了一句话（你好，世界）然后就走了"
         let result = LyricPieceTranslation.humanTranslationSplit(
             originalPieces: ["a", "b"],
             pieceWeights: [1, 1],
-            fullTranslation: translation
+            fullTranslation: translation,
+            translationLanguageCode: "zh-Hans"
         )
         // Whatever the split (or non-split) is, no piece may contain a
         // dangling unmatched bracket -- the break, if any, was not taken
@@ -392,11 +394,17 @@ final class LyricPieceTranslationTests: XCTestCase {
     func test_humanTranslationSplit_neverLeavesOrphanBelowThreeGlyphs() {
         // "你好 x" -- a 2-character tail after the space is an orphan (< 3
         // glyphs); the trailing-orphan trim must drop that break rather than
-        // hand out a 1-character piece.
+        // hand out a 1-character piece. Original pieces are deliberately
+        // NOT short (2026-09-23-afternoon-2 per-piece floor: a short
+        // original piece gets a relaxed floor of 1 -- see the dedicated
+        // `test_humanTranslationSplit_shortOriginalPieceRelaxesOrphanFloor`
+        // test below for THAT behavior) so this test exercises the
+        // STANDARD 3-glyph floor.
         let result = LyricPieceTranslation.humanTranslationSplit(
-            originalPieces: ["a", "b"],
+            originalPieces: ["first original piece here", "second original piece here"],
             pieceWeights: [1, 1],
-            fullTranslation: "你好世界啊 x"
+            fullTranslation: "你好世界啊 x",
+            translationLanguageCode: "zh-Hans"
         )
         // Either no split happened (nil) or, if one did, no non-nil segment
         // is an orphan.
@@ -407,21 +415,43 @@ final class LyricPieceTranslationTests: XCTestCase {
         }
     }
 
+    /// 2026-09-23-afternoon-2 founder fix (defect B): a SHORT original
+    /// piece (<=3 characters or <=1 word -- an ad-lib) gets a relaxed
+    /// orphan floor of 1, so its translation segment can legitimately be
+    /// just as short, WITHOUT stealing the next piece's leading
+    /// characters. Founder repro: "oh"=>"哦" was being reported as
+    /// "哦 我 | 从来没想过…" (>=3-glyph floor forced the break past "我",
+    /// which belongs to the second piece).
+    func test_humanTranslationSplit_shortOriginalPieceRelaxesOrphanFloor() {
+        let result = LyricPieceTranslation.humanTranslationSplit(
+            originalPieces: ["oh", "I never thought that we would end up here together like this"],
+            pieceWeights: [0.3, 4.7],
+            fullTranslation: "哦 我从来没想过我们会在经历了这么多之后像这样走到一起",
+            translationLanguageCode: "zh-Hans"
+        )
+        XCTAssertEqual(result?[0], "哦", "the short original piece ('oh') must get its own short segment")
+        XCTAssertEqual(
+            result?[1], "我从来没想过我们会在经历了这么多之后像这样走到一起",
+            "the second piece must start at '我', not have it stolen by the first piece's relaxed floor"
+        )
+    }
+
     func test_humanTranslationSplit_tooShortTranslation_wholeTextOnFirstPieceOnly() {
         let result = LyricPieceTranslation.humanTranslationSplit(
             originalPieces: ["a", "b"],
             pieceWeights: [1, 1],
-            fullTranslation: "好的"
+            fullTranslation: "好的",
+            translationLanguageCode: "zh-Hans"
         )
         XCTAssertEqual(result, ["好的", nil])
     }
 
     func test_humanTranslationSplit_singlePieceReturnsNil() {
-        XCTAssertNil(LyricPieceTranslation.humanTranslationSplit(originalPieces: ["only one"], pieceWeights: [1], fullTranslation: "只有一个"))
+        XCTAssertNil(LyricPieceTranslation.humanTranslationSplit(originalPieces: ["only one"], pieceWeights: [1], fullTranslation: "只有一个", translationLanguageCode: "zh-Hans"))
     }
 
     func test_humanTranslationSplit_emptyTranslationReturnsNil() {
-        XCTAssertNil(LyricPieceTranslation.humanTranslationSplit(originalPieces: ["a", "b"], pieceWeights: [1, 1], fullTranslation: "   "))
+        XCTAssertNil(LyricPieceTranslation.humanTranslationSplit(originalPieces: ["a", "b"], pieceWeights: [1, 1], fullTranslation: "   ", translationLanguageCode: "zh-Hans"))
     }
 
     func test_humanTranslationSplit_mismatchedWeightsFallsBackToEqualShares() {
@@ -430,9 +460,30 @@ final class LyricPieceTranslationTests: XCTestCase {
         let result = LyricPieceTranslation.humanTranslationSplit(
             originalPieces: ["a", "b"],
             pieceWeights: [1],
-            fullTranslation: "你好呀 世界很大"
+            fullTranslation: "你好呀 世界很大",
+            translationLanguageCode: "zh-Hans"
         )
         XCTAssertEqual(result, ["你好呀", "世界很大"])
+    }
+
+    /// 2026-09-23-afternoon-2 founder fix (defect A): when NLTagger has NO
+    /// `.lexicalClass` model for the translation's language (empirically
+    /// Japanese on this SDK -- see the probe test below), the word-boundary
+    /// tier must contribute ZERO candidates -- never fall back to a bare
+    /// NLTokenizer boundary. With no spaces/punctuation in this Japanese
+    /// translation either, that means NO usable candidate exists at all:
+    /// the whole translation stays on piece 0.
+    func test_humanTranslationSplit_unsupportedLanguage_disablesWordBoundaryTier() {
+        let result = LyricPieceTranslation.humanTranslationSplit(
+            originalPieces: ["I keep waiting here for you", "even when the rain won't stop"],
+            pieceWeights: [1, 1],
+            fullTranslation: "あなたをずっとここで待っている雨がやまなくても",
+            translationLanguageCode: "ja"
+        )
+        XCTAssertEqual(
+            result, ["あなたをずっとここで待っている雨がやまなくても", nil],
+            "with no .lexicalClass model for ja, and no spaces/punctuation in the translation, there must be zero usable candidates"
+        )
     }
 
     // ------------------------------------------------------------------
@@ -451,6 +502,16 @@ final class LyricPieceTranslationTests: XCTestCase {
         let weightMode: String // "displayLength" | "timing"
         let durations: [Double]?
         let allowNilBeyondFirst: Bool
+        let translationLanguage: String // e.g. "zh-Hans" | "ja"
+    }
+
+    /// Deliberately duplicated (not imported) copy of
+    /// `LyricPieceTranslation.originalPieceIsShort`'s rule -- see this
+    /// file's orphan check for why duplication (not reuse) is the point.
+    private func evalOriginalPieceIsShort(_ piece: String) -> Bool {
+        let trimmed = piece.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count <= 3 { return true }
+        return trimmed.split(separator: " ", omittingEmptySubsequences: true).count <= 1
     }
 
     private func loadHumanSplitEvalCases() throws -> [HumanSplitEvalCase] {
@@ -538,6 +599,7 @@ final class LyricPieceTranslationTests: XCTestCase {
                 pieceWeights: weights,
                 fullTranslation: testCase.fullTranslation,
                 isHumanTranslation: true,
+                translationLanguageCode: testCase.translationLanguage,
                 cache: forbiddenCache()
             )
             XCTAssertEqual(translations.count, testCase.originalPieces.count, "\(testCase.id): translation count must match piece count")
@@ -560,22 +622,42 @@ final class LyricPieceTranslationTests: XCTestCase {
 
             let nonNilSegments = translations.compactMap { $0 }
 
-            // Orphan check: skip when there is only ONE non-nil segment for
-            // the whole line (the "whole translation on piece 0" shape,
-            // legitimately short by design in the veryShort category).
+            // Orphan check, RELATIVE TO EACH PIECE'S OWN ORIGINAL TEXT
+            // (2026-09-23-afternoon-2 founder fix, defect B): a short
+            // original piece (<=3 characters or <=1 word -- an ad-lib like
+            // "oh") may legitimately get an equally short segment. This
+            // mirrors `LyricPieceTranslation`'s PRIVATE `originalPieceIsShort`
+            // rule, deliberately DUPLICATED (not imported) here so the
+            // eval's own judgment of "is this an orphan" stays independent
+            // of the implementation. Skipped entirely when there is only
+            // ONE non-nil segment for the whole line (the "whole
+            // translation on piece 0" shape, legitimately short by design
+            // in the veryShort category).
             if nonNilSegments.count > 1 {
-                for segment in nonNilSegments {
-                    if segment.count <= 2 {
+                for (pieceIndex, translation) in translations.enumerated() {
+                    guard let segment = translation else { continue }
+                    let floor = evalOriginalPieceIsShort(testCase.originalPieces[pieceIndex]) ? 1 : 3
+                    if segment.count < floor {
                         orphanViolations += 1
-                        XCTFail("\(testCase.id): orphan segment '\(segment)' (<=2 glyphs) among \(nonNilSegments.count) segments")
+                        XCTFail("\(testCase.id) piece \(pieceIndex): orphan segment '\(segment)' (< \(floor) glyphs floor; original piece = '\(testCase.originalPieces[pieceIndex])')")
                     }
                 }
             }
 
             // Mid-word-break + deviation check: only meaningful when a REAL
-            // split happened (>1 non-nil segment), verified via an
-            // INDEPENDENT NLTokenizer pass over the translation (not the
-            // implementation's own candidate scan).
+            // split happened (>1 non-nil segment). This is a WEAK sanity
+            // check only -- verified via an NLTokenizer pass over the
+            // translation, which shares its underlying word-segmentation
+            // algorithm with the production NLTagger path and therefore
+            // CANNOT catch a phrase-level mistake (a break between two
+            // genuine word tokens that together form one grammatical unit,
+            // e.g. Japanese 待っ|ている -- both are real word tokens). The
+            // STRONG, tokenizer-independent check the founder's
+            // 2026-09-23-afternoon-2 review demanded is
+            // `test_independentLinguisticIntegrityCheck_hardCodedForbiddenSplits`
+            // below (hand-labeled forbidden units + a script-based
+            // kanji/katakana-then-hiragana okurigana rule, neither derived
+            // from any tokenizer).
             if nonNilSegments.count > 1,
                let endOffsets = locateSegmentEndOffsets(nonNilSegments, in: testCase.fullTranslation) {
                 let spans = independentWordSpans(testCase.fullTranslation)
@@ -634,5 +716,199 @@ final class LyricPieceTranslationTests: XCTestCase {
         XCTAssertEqual(midWordBreakViolations, 0)
         XCTAssertEqual(orphanViolations, 0)
         XCTAssertEqual(emptyBeyondFirstUnexpected, 0)
+    }
+
+    // ------------------------------------------------------------------
+    // MARK: - 2026-09-23-afternoon-2: NLTagger support probe (don't assume)
+    // ------------------------------------------------------------------
+
+    /// The founder's review explicitly required NOT assuming
+    /// `.lexicalClass` support -- this probe queries the REAL, on-device
+    /// `NLTagger.availableTagSchemes(for:language:)` for every language
+    /// this app actually translates into/from, and prints the exact result
+    /// so it is part of the eval report (not asserted from documentation).
+    /// This is also what `LyricPieceTranslation.lexicalClassIsAvailable(for:)`
+    /// calls under the hood -- this test does NOT reimplement that logic,
+    /// it just makes the SDK's answer visible.
+    func test_nlTaggerSupportProbe_printsRealSchemeAvailability() {
+        let languages = ["ja", "zh-Hans", "zh-Hant", "ko", "en", "es", "fr", "pt", "de", "hi", "th", "ar"]
+        print("\n=== NLTagger.availableTagSchemes(for: .word, language:) -- REAL, on-device (Xcode/macOS SDK this ran on) ===")
+        var lexicalClassSupportedLanguages: [String] = []
+        var lexicalClassUnsupportedLanguages: [String] = []
+        for code in languages {
+            let schemes = NLTagger.availableTagSchemes(for: .word, language: NLLanguage(code))
+            let supportsLexicalClass = schemes.contains(.lexicalClass)
+            print("\(code): \(schemes.map(\.rawValue).sorted()) -- .lexicalClass=\(supportsLexicalClass)")
+            if supportsLexicalClass {
+                lexicalClassSupportedLanguages.append(code)
+            } else {
+                lexicalClassUnsupportedLanguages.append(code)
+            }
+            // Cross-check against the module's own memoized answer -- must
+            // agree (this asserts the memo isn't drifting from the SDK).
+            XCTAssertEqual(
+                LyricPieceTranslation.lexicalClassIsAvailable(for: code), supportsLexicalClass,
+                "LyricPieceTranslation.lexicalClassIsAvailable(for: \"\(code)\") must match the real SDK answer"
+            )
+        }
+        print("SUPPORTED (word-boundary tier active): \(lexicalClassSupportedLanguages)")
+        print("UNSUPPORTED (word-boundary tier disabled, punctuation/space only): \(lexicalClassUnsupportedLanguages)")
+        print("================================================================================\n")
+
+        // Pin the two facts this revision's design directly depends on, so
+        // a future SDK/OS update that silently adds/removes support is
+        // caught here rather than discovered as a live behavior change:
+        // Japanese has NO lexicalClass model on the SDK this was built
+        // against (motivating the fail-closed "disable tier 2 entirely"
+        // design), and Simplified Chinese DOES (motivating the tag-based
+        // filtering design at all -- without at least one supported
+        // language, that code path would be dead).
+        XCTAssertFalse(lexicalClassUnsupportedLanguages.isEmpty, "sanity: at least one language must lack .lexicalClass support on this SDK (ja, verified above) -- if this ever becomes empty, the fail-closed path this file's header documents is untested")
+        XCTAssertTrue(lexicalClassSupportedLanguages.contains("zh-Hans"), "sanity: zh-Hans must have .lexicalClass support on this SDK -- the tag-filtering design (forbiddenFollowingLexicalTags/forbiddenPrecedingLexicalTags) is otherwise never exercised")
+    }
+
+    // ------------------------------------------------------------------
+    // MARK: - 2026-09-23-afternoon-2: INDEPENDENT linguistic integrity
+    // check (hand-labeled, NOT produced by any tokenizer/tagger)
+    // ------------------------------------------------------------------
+    //
+    // The founder's review point 1: verifying "0 mid-word breaks" with the
+    // SAME NLTokenizer that proposes the breaks is circular. This section
+    // is written from the implementer's own knowledge of Japanese/Chinese
+    // grammar -- NOT derived from NLTokenizer or NLTagger output -- and
+    // checked against the REAL production split for every fixture case
+    // whose translation happens to contain one of these units.
+
+    /// Hand-labeled substrings that must NEVER be split apart by any break
+    /// point, wherever they occur in a fixture's `fullTranslation`. Each is
+    /// a single grammatical/lexical unit; splitting inside one produces
+    /// ungrammatical fragments. Labels and linguistic notes are the
+    /// implementer's own -- not sourced from any tokenizer's segmentation.
+    private static let handLabeledForbiddenUnits: [(text: String, note: String)] = [
+        ("待っている", "Japanese te-iru (progressive/resultative) form: 待つ (wait) conjugated to 待って + いる (auxiliary 'to be') -- one grammatical predicate, not two words"),
+        ("散っていく", "Japanese te-iku (continuing action) form: 散る (scatter/fall) conjugated to 散って + いく (auxiliary 'to go') -- one predicate"),
+        ("なっていく", "Japanese te-iku form: なる (become) conjugated to なって + いく auxiliary -- one predicate"),
+        ("覚えている", "Japanese te-iru form: 覚える (remember) conjugated to 覚えて + いる auxiliary -- one predicate, 'remembering' as an ongoing state"),
+        ("やまなくても", "Japanese negative te-mo (concessive) form of 止む (to stop): や(ま) + な(く) + て + も -- one conjugated clause, 'even if it doesn't stop'"),
+        ("每一次", "Chinese distributive phrase 'every single time': 每 (each/every, distributive determiner) + 一 (one, numeral) + 次 (classifier for occurrences) -- one adverbial phrase, not three independent words"),
+        ("不会结束", "Chinese negated-modal + verb 'will not end': 不会 (will-not, modal negation) + 结束 (end/conclude) -- one predicate"),
+        ("从不想", "Chinese adverb + modal + verb 'never wants to': 从不 (never) + 想 (want to) -- one predicate chain (appears in hs-017's translation, right after 每一次)"),
+    ]
+
+    /// Script classification via raw Unicode scalar ranges -- NOT derived
+    /// from NLTokenizer/NLTagger. Kanji = CJK Unified Ideographs (+ ext A);
+    /// katakana and hiragana are their own Unicode blocks. A kanji/katakana
+    /// character immediately followed by a hiragana character is, in real
+    /// Japanese orthography, virtually always a conjugation stem followed
+    /// by its okurigana (inflectional kana) -- e.g. 待っ(stem)+て(okurigana),
+    /// 散っ(stem)+て(okurigana) -- and must never be split apart.
+    private func isKanjiOrKatakana(_ c: Character) -> Bool {
+        guard let scalar = c.unicodeScalars.first, c.unicodeScalars.count == 1 else { return false }
+        let v = scalar.value
+        return (0x4E00...0x9FFF).contains(v) || (0x3400...0x4DBF).contains(v) || (0x30A0...0x30FF).contains(v)
+    }
+    private func isHiragana(_ c: Character) -> Bool {
+        guard let scalar = c.unicodeScalars.first, c.unicodeScalars.count == 1 else { return false }
+        return (0x3040...0x309F).contains(scalar.value)
+    }
+
+    /// Forbidden break OFFSETS (character count from the start of `text`)
+    /// per this section's two independent rules: (1) strictly inside any
+    /// `handLabeledForbiddenUnits` occurrence, (2) between a kanji/katakana
+    /// character and an immediately-following hiragana character.
+    private func independentlyForbiddenBreakOffsets(in text: String) -> Set<Int> {
+        var forbidden: Set<Int> = []
+        let chars = Array(text)
+
+        for (unit, _) in Self.handLabeledForbiddenUnits {
+            let unitChars = Array(unit)
+            guard !unitChars.isEmpty, unitChars.count <= chars.count else { continue }
+            var i = 0
+            while i + unitChars.count <= chars.count {
+                if Array(chars[i..<(i + unitChars.count)]) == unitChars {
+                    for offsetInsideUnit in 1..<unitChars.count {
+                        forbidden.insert(i + offsetInsideUnit)
+                    }
+                }
+                i += 1
+            }
+        }
+
+        for i in 0..<chars.count {
+            guard i + 1 < chars.count else { continue }
+            if isKanjiOrKatakana(chars[i]), isHiragana(chars[i + 1]) {
+                forbidden.insert(i + 1)
+            }
+        }
+
+        return forbidden
+    }
+
+    func test_independentLinguisticIntegrityCheck_hardCodedForbiddenSplits() throws {
+        let cases = try loadHumanSplitEvalCases()
+
+        var casesWithAnyForbiddenUnit = 0
+        var totalBreaksChecked = 0
+        var violations = 0
+        var okuriganaPairsScanned = 0
+
+        for testCase in cases {
+            let forbiddenOffsets = independentlyForbiddenBreakOffsets(in: testCase.fullTranslation)
+            let containedUnits = Self.handLabeledForbiddenUnits.filter { testCase.fullTranslation.contains($0.text) }
+            if !containedUnits.isEmpty {
+                casesWithAnyForbiddenUnit += 1
+            }
+            // Count kanji/katakana->hiragana adjacent pairs present, purely
+            // for the report (this rule applies regardless of whether a
+            // hand-labeled unit is present too).
+            let chars = Array(testCase.fullTranslation)
+            for i in 0..<chars.count where i + 1 < chars.count {
+                if isKanjiOrKatakana(chars[i]), isHiragana(chars[i + 1]) { okuriganaPairsScanned += 1 }
+            }
+            guard !forbiddenOffsets.isEmpty else { continue }
+
+            let weights: [Double]
+            switch testCase.weightMode {
+            case "timing": weights = testCase.durations ?? []
+            default: weights = testCase.originalPieces.map { Double($0.count) }
+            }
+            let (translations, _) = LyricPieceTranslation.pieceTranslations(
+                originalPieces: testCase.originalPieces,
+                pieceWeights: weights,
+                fullTranslation: testCase.fullTranslation,
+                isHumanTranslation: true,
+                translationLanguageCode: testCase.translationLanguage,
+                cache: forbiddenCache()
+            )
+            let nonNilSegments = translations.compactMap { $0 }
+            guard nonNilSegments.count > 1,
+                  let endOffsets = locateSegmentEndOffsets(nonNilSegments, in: testCase.fullTranslation)
+            else { continue }
+
+            for endOffset in endOffsets.dropLast() {
+                totalBreaksChecked += 1
+                if forbiddenOffsets.contains(endOffset) {
+                    violations += 1
+                    let matchedUnit = containedUnits.first { unit in
+                        guard let range = testCase.fullTranslation.range(of: unit.text) else { return false }
+                        let lower = testCase.fullTranslation.distance(from: testCase.fullTranslation.startIndex, to: range.lowerBound)
+                        let upper = testCase.fullTranslation.distance(from: testCase.fullTranslation.startIndex, to: range.upperBound)
+                        return endOffset > lower && endOffset < upper
+                    }
+                    XCTFail("\(testCase.id): break at offset \(endOffset) falls INSIDE a hand-labeled forbidden unit or an okurigana boundary -- \(matchedUnit?.note ?? "kanji/katakana->hiragana adjacency")")
+                }
+            }
+        }
+
+        print("\n=== Independent linguistic integrity check (hand-labeled, not tokenizer-derived) ===")
+        print("hand-labeled forbidden units: \(Self.handLabeledForbiddenUnits.map(\.text))")
+        print("fixture cases containing at least one forbidden unit: \(casesWithAnyForbiddenUnit) / \(cases.count)")
+        print("kanji/katakana->hiragana adjacent character pairs scanned across all translations: \(okuriganaPairsScanned)")
+        print("real production breaks checked against both rules: \(totalBreaksChecked)")
+        print("violations: \(violations) (must be 0)")
+        print("========================================================\n")
+
+        XCTAssertGreaterThan(casesWithAnyForbiddenUnit, 0, "sanity: the fixture set must actually exercise at least one hand-labeled forbidden unit, or this check verifies nothing")
+        XCTAssertEqual(violations, 0)
     }
 }

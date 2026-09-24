@@ -2195,6 +2195,7 @@ public struct LyricsView: View {
                     pieceWeights: groupWeights,
                     fullTranslation: line.translation,
                     isHumanTranslation: isHumanTranslation,
+                    translationLanguageCode: pieceTargetCode,
                     cache: pieceCacheLookup
                 )
                 tallySplitLine(pieceTiers)
@@ -2253,6 +2254,7 @@ public struct LyricsView: View {
                 pieceWeights: pieceLengthWeights,
                 fullTranslation: line.translation,
                 isHumanTranslation: isHumanTranslation,
+                translationLanguageCode: pieceTargetCode,
                 cache: pieceCacheLookup
             )
             tallySplitLine(pieceTiers)
