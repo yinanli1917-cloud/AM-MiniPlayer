@@ -43,9 +43,49 @@ public struct LyricWord: Identifiable, Equatable {
     public let endTime: TimeInterval    // 秒
 
     public init(word: String, startTime: TimeInterval, endTime: TimeInterval) {
-        self.word = word
+        self.word = LyricWord.normalizingWhitespace(word)
         self.startTime = startTime
         self.endTime = endTime
+    }
+
+    /// 2026-09-24 fix (founder repro: Teresa Teng "The Way We Were" radio --
+    /// word-level lyrics silently rendering as line-level): some lyric
+    /// sources (NetEase YRC, confirmed from the founder's own disk cache,
+    /// album 愛之世界) encode a word's trailing separator as U+00A0 NO-BREAK
+    /// SPACE instead of a plain space, e.g. word.word == "Memories\u{00A0}".
+    /// Two independent failures follow from that ONE non-standard character:
+    /// (1) U+00A0 is defined by Unicode to NOT be a line-break opportunity,
+    /// so `NSLayoutManager`'s `.byWordWrapping` cannot wrap between words at
+    /// all -- a long line becomes one unbreakable run. (2) Worse and more
+    /// direct: `LyricLine.init`'s words/text consistency invariant below
+    /// only strips plain ASCII space (`" "`) before comparing, never U+00A0
+    /// -- so any `LyricLine` reconstructed from a NORMALIZED text (e.g.
+    /// `LyricDisplaySegmenter.displayText(forWords:)`, which always emits
+    /// plain space) against these RAW NBSP-laden words fails the prefix
+    /// check and silently clears `words`. This is exactly what Plan A's
+    /// word-level split path (`LyricsView.makeDisplayLyricLines`'s
+    /// `hasSyllableSync` branch, 2026-09-22) does for every real-world line
+    /// long enough to need more than one display piece -- the common case,
+    /// not an edge case -- degrading a word-level (逐字) song to line-level
+    /// (逐行) rendering with no error, no log line, nothing to catch it.
+    ///
+    /// Fixing this ONCE, here, at the single choke point every `LyricWord`
+    /// is constructed through (every parser: YRC/TTML/LRC, `LyricsWordRepair`,
+    /// Traditional-Chinese conversion, the disk-cache decoder), generalizes
+    /// the fix to every current and future lyric source and every code path
+    /// that reconstructs a `LyricLine` from words, instead of special-casing
+    /// NetEase's YRC parser alone. It also self-heals stale disk-cache
+    /// entries written before this fix, since `LyricsDiskCache.lyricLines(from:)`
+    /// reconstructs `LyricWord` through this same initializer on every read.
+    /// Any Unicode whitespace character other than the plain ASCII space
+    /// (`Character.isWhitespace`, which covers NBSP and the rest of the
+    /// Unicode space-separator family) is normalized to `" "` -- a pure
+    /// whitespace-for-whitespace substitution that changes no visible glyph.
+    /// See `LyricsWordWhitespaceNormalizationTests` /
+    /// `research/diagnosis-2026-09-24-nbsp-word-level-freeze.md`.
+    fileprivate static func normalizingWhitespace(_ text: String) -> String {
+        guard text.contains(where: { $0.isWhitespace && $0 != " " }) else { return text }
+        return String(text.map { $0.isWhitespace && $0 != " " ? " " : $0 })
     }
 
     /// 计算当前时间对应的进度 (0.0 - 1.0)
@@ -81,7 +121,13 @@ public struct LyricLine: Identifiable, Equatable {
     public var hasTranslation: Bool { translation != nil && !translation!.isEmpty }
 
     public init(text: String, startTime: TimeInterval, endTime: TimeInterval, words: [LyricWord] = [], translation: String? = nil, isBackground: Bool = false) {
-        self.text = text
+        // 2026-09-24 fix (see LyricWord.normalizingWhitespace's doc comment
+        // for the full mechanism): `words` is now always plain-space at
+        // construction, so `text` must be too, or a caller that supplies a
+        // raw (un-normalized) line-level `text` alongside already-normalized
+        // `words` would reintroduce the exact same words/text mismatch this
+        // whole fix exists to close, just in the OTHER direction.
+        self.text = LyricWord.normalizingWhitespace(text)
         self.startTime = startTime
         self.endTime = endTime
         self.translation = translation
@@ -93,7 +139,7 @@ public struct LyricLine: Identifiable, Equatable {
         if !words.isEmpty {
             let wordsText = words.map(\.word).joined()
                 .replacingOccurrences(of: " ", with: "")
-            let normalizedText = text.replacingOccurrences(of: " ", with: "")
+            let normalizedText = self.text.replacingOccurrences(of: " ", with: "")
             self.words = normalizedText.hasPrefix(wordsText)
                 || wordsText.hasPrefix(normalizedText) ? words : []
         } else {
