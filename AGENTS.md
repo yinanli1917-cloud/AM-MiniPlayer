@@ -90,7 +90,7 @@ Sources/
 │   │   ├── LyricModels.swift          - Lyrics data structures + shared constants
 │   │   ├── LyricsSourceProfile.swift  - Typed source registry: 8 providers + declared trait profiles
 │   │   └── MusicQueueProvenance.swift - Queue provenance model
-│   └── Shaders/blur.metal
+│   └── Resources/                - DEBUG 预览图（release 二进制不引用 Core 资源包，不随 app 发布）
 └── LyricsVerifier/                - 歌词管线 CLI 测试工具
     ├── main.swift                 - CLI 入口 (run/check/library/benchmark + DEBUG-only --network-only)
     ├── TestRunner.swift           - 测试编排 + JSON 输出
@@ -147,6 +147,7 @@ Tests/MusicMiniPlayerTests/         - 999 个单元测试（2026-08-27 `swift te
     └── NativeLyricsHandoffClockTests.swift - 切行确定性时钟门：注入播放钟+墙钟锁步驱动真 surface（debugNowOverride/debugTick/debugPlaybackClockDateProvider），钉死上一行位移/opacity/亮层同帧退场（边界后 +150ms 错峰）；复现旧红测试=0.8s appear 窗内切行被冻结、余晖先暗的 harness 伪影
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix
+scripts/patch_keyboard_shortcuts_resources.py - build_app.sh 构建前改 KeyboardShortcuts 唯一的 Bundle.module 查找：先查 Contents/Resources（上游变了就 fail closed；`restore` 模式还原 checkout）
 scripts/e2e_smoke.sh               - 真 app 端到端冒烟（构建→启动→osascript 驱 Music→JSONL 断言；跑前静音、跑完恢复）
 
 docs/lyrics_test_cases.json        - 82 条预定义歌词测试用例（`LyricsVerifier run` 全量跑）
@@ -235,6 +236,8 @@ Pure ASCII input: Parallel queries to CN + inferred region (JP/KR), CN CJK title
   ✅ `LyricLine.isBackground` 数据模型字段，三路识别（x-bg / 整行括号 / 行首尾括号拆分），渲染为主行从属行（LyricsDiskCache schemaVersion 31）
 - ❌ 非生产进程（XCTest/LyricsVerifier/worktree 或 spike 构建）用默认构造共享 ~/Library/Application Support/nanoPod 缓存 + 版本不匹配时加载即丢弃、下次持久化直接覆盖对方 schema 的文件（09-22 一个 spike 跑 lyrics schema 30 把 app 的 schema 31 歌词缓存冲刷掉）
   ✅ `NanoPodCacheLocation` 四态归属仲裁（production|testRun|isolated|override）+ schema 版本化文件名，旧版本文件只读作一次性 seed 不回写
+- ❌ SwiftPM 资源包不进 app，或只拷进 Contents/Resources → 生成的 `Bundle.module` 只查 app 根目录（codesign 拒收根目录任何文件，含 symlink）和编译机的绝对 .build 路径，其他机器首次访问即 fatalError（KeyboardShortcuts 的 Recorder 在设置页，sindresorhus/KeyboardShortcuts#231）
+  ✅ build_app.sh 按二进制里嵌的 `<bin path>/<name>.bundle` 拷贝全部资源包到 Contents/Resources，并门禁：包在、且二进制含 `url(forResource: "<name>", withExtension: "bundle")` 的裸名（否则只能走默认 accessor）；KeyboardShortcuts 由 `scripts/patch_keyboard_shortcuts_resources.py` 改查找；Core 在 release 不许用 `Bundle.module`
 - Full records in `postmortem/` and `.claude/rules/banned-patterns.md`
 
 ### Matching Algorithm (Unified SearchCandidate)

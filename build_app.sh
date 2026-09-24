@@ -146,10 +146,67 @@ assert_no_local_update_staging() {
     fi
 }
 
+# SwiftPM resource bundles. The generated `Bundle.module` accessor only checks
+# `<app root>/<Pkg>_<Target>.bundle` (codesign refuses anything there, symlinks
+# included) and the absolute .build path of the compiling machine; otherwise it
+# calls fatalError. So every bundle the binary links must (a) ship sealed in
+# Contents/Resources and (b) be looked up from there by the code that uses it.
+# The accessor embeds "<bin path>/<name>.bundle" for each linked bundle, which
+# is exactly the list to ship. For (b), a Contents/Resources lookup names the
+# bundle as `url(forResource: "<name>", withExtension: "bundle")`, so the bare
+# "<name>" string must be in the binary too; SwiftPM's accessor alone never
+# emits it. Missing either → the shipped app crashes on first access → fail.
+resource_bundles_referenced_by_binary() {
+    local binary="$1"
+    local bin_path="$2"
+    # awk (not grep) so "no bundles" is a clean empty result under pipefail.
+    strings "$binary" | awk -v prefix="$bin_path/" \
+        'index($0, prefix) == 1 && /\.bundle$/ { n = split($0, parts, "/"); print parts[n] }' | sort -u
+}
+
+copy_resource_bundles() {
+    local bundle
+    while IFS= read -r bundle; do
+        [ -n "$bundle" ] || continue
+        if [ ! -d "$RELEASE_BIN_PATH/$bundle" ]; then
+            echo "❌ Release binary references $bundle but $RELEASE_BIN_PATH/$bundle does not exist"
+            exit 1
+        fi
+        COPYFILE_DISABLE=1 cp -R "$RELEASE_BIN_PATH/$bundle" nanoPod.app/Contents/Resources/
+        echo "📦 Resource bundle copied: $bundle"
+    done <<< "$(resource_bundles_referenced_by_binary "$RELEASE_BINARY" "$RELEASE_BIN_PATH")"
+}
+
+assert_resource_bundles_shipped() {
+    local bundle
+    while IFS= read -r bundle; do
+        [ -n "$bundle" ] || continue
+        if [ ! -f "nanoPod.app/Contents/Resources/$bundle/Info.plist" ]; then
+            echo "❌ Required resource bundle missing from nanoPod.app/Contents/Resources: $bundle"
+            echo "   The shipped app would fatalError on first Bundle.module access."
+            exit 1
+        fi
+        # No `grep -q`: its early exit SIGPIPEs `strings`, which pipefail reports as a miss.
+        if ! strings nanoPod.app/Contents/MacOS/nanoPod | grep -xF "${bundle%.bundle}" >/dev/null; then
+            echo "❌ $bundle is only reachable through SwiftPM's default Bundle.module accessor,"
+            echo "   which never looks in Contents/Resources. Resolve it via"
+            echo "   Bundle.main.url(forResource: \"${bundle%.bundle}\", withExtension: \"bundle\") first"
+            echo "   (see scripts/patch_keyboard_shortcuts_resources.py)."
+            exit 1
+        fi
+        echo "✅ Resource bundle shipped and resolvable: $bundle"
+    done <<< "$(resource_bundles_referenced_by_binary nanoPod.app/Contents/MacOS/nanoPod "$RELEASE_BIN_PATH")"
+}
+
 cleanup_local_update_staging
 assert_no_local_update_staging
 
 echo "🔨 Building nanoPod..."
+# KeyboardShortcuts reads its localized strings through Bundle.module (Settings →
+# shortcut recorder); reroute that one lookup to Contents/Resources. Idempotent;
+# fails closed if upstream changes the lookup.
+swift package resolve
+python3 scripts/patch_keyboard_shortcuts_resources.py apply .build/checkouts/KeyboardShortcuts
 /usr/libexec/PlistBuddy \
     -c "Set :CFBundleVersion $VERSION" \
     -c "Set :CFBundleShortVersionString $VERSION" \
@@ -163,6 +220,8 @@ echo "🔨 Building nanoPod..."
 # shellcheck disable=SC2086
 swift build -c release --product "$PRODUCT_NAME" ${NANOPOD_EXTRA_SWIFT_FLAGS:-}
 assert_binary_excludes_diagnostic_cache_mode "$RELEASE_BINARY"
+# shellcheck disable=SC2086
+RELEASE_BIN_PATH="$(swift build -c release --show-bin-path ${NANOPOD_EXTRA_SWIFT_FLAGS:-})"
 
 echo "📦 Creating app bundle..."
 if pgrep -x nanoPod >/dev/null 2>&1; then
@@ -341,6 +400,8 @@ if [ ! -f "nanoPod.app/Contents/Resources/AppIcon.icns" ]; then
     exit 1
 fi
 
+copy_resource_bundles
+
 cleanup_bundle_metadata
 assert_no_appledouble
 
@@ -356,6 +417,7 @@ cleanup_bundle_metadata
 assert_no_appledouble
 sign_bundle
 assert_codesign_valid
+assert_resource_bundles_shipped
 assert_local_build_identity
 assert_build_marker_hash_matches_release_binary
 if [ "$NANOPOD_EDITION" = "pure" ]; then
