@@ -494,37 +494,19 @@ public enum MicroInteractionFeel {
         // the founder can dial the band after the fact without touching code.
         public static let backdropLegibilityCeilingContrast: Double = 4.5
         public static let backdropLegibilityFloorContrast: Double = 12.0
-        /// Height of the FULLY-opaque flat zone at the bottom of the fullscreen album
-        /// page's control band (point B) — the scrim must sit at FULL `darkenOpacity`
-        /// everywhere a real foreground element can be, not a partial ramp value, or the
-        /// modelled contrast (>= 4.5:1) is not what's actually delivered on screen.
-        /// Derived from `MiniPlayerView.albumOverlayContent`'s own layout constants: the
-        /// highest protected element is the shuffle/repeat row, whose top sits at
-        /// `controlsHeight (80) + row bottom padding (4) + row height (24)` = 108pt above
-        /// the bottom edge; the hover-mode title lands within a point of that (its
-        /// baseline offset uses the same `controlsHeight + 4 + 16` = 100pt, plus roughly
-        /// half a 12pt bold line's height). +8pt safety margin for text
-        /// ascent/line-height that isn't captured by a layout constant.
-        public static let backdropLegibilityBottomBandFlatHeight: CGFloat = 80 + 4 + 24 + 8
-        /// Height of the fade-to-clear zone ABOVE the flat zone (point B) — the scrim
-        /// ramps from full `darkenOpacity` down to 0 across this band, never a hard edge.
-        /// The ramp itself is smoothstep-eased (zero slope at both the flat-zone and the
-        /// clear-zone boundary), not linear — see `BackdropLegibilityBand.bottomBandScrimOpacity`.
-        public static let backdropLegibilityBottomBandFadeHeight: CGFloat = 44
-        /// research/progressive-blur-2026-09-23.md — point B's scrim tint is the cover's
-        /// own average colour darkened by this factor (hue-preserving "shadow" colour),
-        /// never a flat neutral black. Visual-feel tunable, like the heights above.
-        public static let backdropLegibilityBottomBandTintShadeFactor: Double = 0.16
-        /// research/progressive-blur-2026-09-23.md — max radius of the progressive blur
-        /// applied to the hero cover's bottom band (ramped 0→max toward the bottom by
-        /// `BackdropLegibilityBand.heroBottomBandBlurLayers`' stacked `.blur()` layers — a
-        /// pure-SwiftUI construction, NOT the (dead, non-functional on this toolchain) Metal
-        /// shader path). Visual-feel tunable.
-        public static let backdropLegibilityBottomBandBlurRadius: CGFloat = 28
-        /// research/progressive-blur-2026-09-23.md — number of stacked blur layers
-        /// approximating the continuous ramp. Visual-feel tunable (more layers = smoother
-        /// ramp, more resident `.blur()` filters).
-        public static let backdropLegibilityBottomBandBlurLayerCount: Int = 5
+
+        // Fullscreen album page bottom-band legibility (research/spec-2026-09-22-backdrop-
+        // legibility.md point B; the black/tinted-scrim + stacked-blur design that used to
+        // live here was rejected by the founder and removed 2026-09-23, see commit b58b4e6
+        // and research/progressive-blur-2026-09-23.md). The replacement extends the
+        // existing hero-cover fade + Layer-1 tone instead of adding a scrim — see
+        // FullscreenBottomBandLegibility.swift.
+
+        /// Height of the additional fade-to-clear zone ABOVE the hidden-cover flat zone
+        /// when the fullscreen album page's hero fade needs lengthening (bright covers
+        /// only) — the mask ramps from fully hiding the sharp cover to fully showing it
+        /// across this many points, never a hard edge. Visual-feel tunable.
+        public static let fullscreenHeroFadeExtensionHeight: CGFloat = 44
     }
 }
 
