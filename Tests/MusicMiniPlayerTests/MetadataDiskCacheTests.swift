@@ -84,4 +84,34 @@ final class MetadataDiskCacheTests: XCTestCase {
             "v4 rows carry no admission evidence and must be flushed by the schema bump"
         )
     }
+
+    /// The debounced-persist timer promotes `[weak self]` to a strong
+    /// reference on the cache's own serial queue. If the caller drops its
+    /// last reference while that closure runs, the instance deallocates on
+    /// that queue; a deinit that `queue.sync`s back onto it traps (SIGTRAP,
+    /// "dispatch_sync called on queue already owned by current thread").
+    /// A trap kills the process, so reaching the end is the pass signal.
+    func testLastReleaseInsideOwnQueueClosureDoesNotTrap() {
+        var urls: [URL] = []
+        defer { urls.forEach { try? FileManager.default.removeItem(at: $0) } }
+
+        for iteration in 0..<300 {
+            let url = temporaryFileURL()
+            urls.append(url)
+            var cache: MetadataDiskCache? = MetadataDiskCache(fileURL: url, persistDebounce: 0)
+            for row in 0..<20 {
+                cache?.set(title: "Song \(row)", artist: "Artist", duration: 200,
+                           resolvedTitle: "歌 \(row)", resolvedArtist: "歌手",
+                           region: "CN", durationDiff: 0.1)
+            }
+            usleep(useconds_t(iteration % 7) * 40)
+            cache = nil
+        }
+
+        let settle = expectation(description: "queued closures drain")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { settle.fulfill() }
+        wait(for: [settle], timeout: 2.0)
+        let written = urls.filter { FileManager.default.fileExists(atPath: $0.path) }.count
+        XCTAssertEqual(written, urls.count, "sync sets are dirty before release; every instance must persist")
+    }
 }

@@ -84,6 +84,40 @@ final class TranslationDiskCacheTests: XCTestCase {
         XCTAssertNil(cache.get(songKey: "song", targetLanguage: "en", fingerprint: fp))
     }
 
+    /// The cache's own queue closures (`set`, the debounced persist timer)
+    /// promote `[weak self]` to a strong reference. When the caller drops its
+    /// last reference while such a closure is running, the instance
+    /// deallocates ON its own serial queue; a deinit that `queue.sync`s back
+    /// onto it traps ("dispatch_sync called on queue already owned by current
+    /// thread", SIGTRAP — seen crashing LyricsServiceTranslationSessionReuseTests).
+    /// Stress the release race; a trap kills the whole process, so reaching
+    /// the assertions at all is the pass signal.
+    func test_lastReleaseInsideOwnQueueClosure_doesNotTrap() {
+        let fp = TranslationDiskCache.fingerprint(firstRealLineSHA256: "race", lineCount: 1)
+        var lines: [Int: String] = [:]
+        for index in 0..<2_000 { lines[index] = "line \(index)" }
+        var urls: [URL] = []
+        defer { urls.forEach { try? FileManager.default.removeItem(at: $0) } }
+
+        for iteration in 0..<300 {
+            let url = tempURL()
+            urls.append(url)
+            var cache: TranslationDiskCache? = TranslationDiskCache(fileURL: url, persistDebounce: 0)
+            cache?.set(songKey: "s\(iteration)", targetLanguage: "zh-Hans", fingerprint: fp, lines: lines)
+            // Let the queue closure (sometimes) promote self before we drop ours.
+            usleep(useconds_t(iteration % 7) * 40)
+            cache = nil
+        }
+
+        // Instances whose last release landed on the queue flushed there;
+        // at least some iterations must have exercised that path.
+        let settle = expectation(description: "queued closures drain")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { settle.fulfill() }
+        wait(for: [settle], timeout: 2.0)
+        let written = urls.filter { FileManager.default.fileExists(atPath: $0.path) }.count
+        XCTAssertGreaterThan(written, 0, "the race never reached the queue-side release path")
+    }
+
     func test_expiredRow_isTreatedAsMiss() {
         // TTL correctness is exercised structurally: an entry written with a
         // timestamp older than ttlSeconds must not be returned. We can't
