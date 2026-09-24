@@ -2407,10 +2407,16 @@ public class LyricsService: ObservableObject {
               lyrics.count == lyricsCountBeforeSourceAwait else {
             return nil
         }
-        guard let sourceLanguage = LyricsTranslationSourceDetection.songLevelSource(
+        // .diagnostics (not the plain .songLevelSource) so a successful
+        // resolution below can log HOW it decided (item 5, 2026-09-23
+        // founder-requested visibility into whether/when source resolution
+        // actually runs) -- `songLevelSource` itself just discards this and
+        // stays the single source of truth other call sites keep using.
+        let sourceDiagnostics = LyricsTranslationSourceDetection.diagnostics(
             eligibleLineTexts: eligibleLineTexts,
             supportedLanguageCodes: supportedLanguageCodes
-        ) else {
+        )
+        guard let sourceLanguage = sourceDiagnostics.language else {
             currentSongTranslationID = translationID
             if !sourceAlreadyComplete { translationFailed = true }
             recordDiagnosticsSystemTranslationGap(
@@ -2448,6 +2454,18 @@ public class LyricsService: ObservableObject {
             if resolvedSongTranslationSourceLanguage != sourceLanguage {
                 resolvedSongTranslationSourceLanguage = sourceLanguage
                 pieceTranslationSourceVersion += 1
+                // Item 5 (2026-09-23 founder-requested): a DEBUG log line
+                // every time the song-level source actually resolves, so
+                // daily use shows whether/when this ever happens without
+                // needing a debugger — the missing counterpart to the
+                // existing "no session (...)" tier-3 diagnostic, which only
+                // ever reported the GAP, never the success.
+                DebugLogger.log(
+                    "Translation",
+                    "🈶 translation source resolved for '\(currentSongTitle)': " +
+                    "language=\(sourceLanguage.languageCode?.identifier ?? "?") " +
+                    "method=\(sourceDiagnostics.method.rawValue)"
+                )
             }
             // When there was no whole-line work to do (source already
             // complete), record this resolution so repeated calls for the
