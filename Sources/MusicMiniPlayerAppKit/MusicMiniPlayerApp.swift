@@ -356,7 +356,9 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
     // MARK: - Floating Window
 
     func createFloatingWindow() {
-        let windowSize = NSSize(width: 250, height: 316)
+        // The window is exactly the panel (founder 2026-09-23; it used to
+        // carry an invisible 32pt title-bar strip on top).
+        let windowSize = PanelWindowMetrics.defaultSize
         let screenFrame = NSScreen.main?.visibleFrame ?? .zero
         let windowRect = NSRect(
             x: screenFrame.maxX - windowSize.width - 20,
@@ -387,9 +389,9 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         snappableWindow.becomesKeyOnlyIfNeeded = false
 
         // Window aspect ratio and size limits.
-        snappableWindow.aspectRatio = NSSize(width: 250, height: 316)
-        snappableWindow.minSize = NSSize(width: 180, height: 228)
-        snappableWindow.maxSize = NSSize(width: 400, height: 506)
+        snappableWindow.aspectRatio = PanelWindowMetrics.aspectRatio
+        snappableWindow.minSize = PanelWindowMetrics.minSize
+        snappableWindow.maxSize = PanelWindowMetrics.maxSize
 
         // Current page provider, used to decide whether two-finger dragging applies.
         snappableWindow.currentPageProvider = { [weak self] in
@@ -462,12 +464,8 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         .environmentObject(musicController)
         .environmentObject(edgePresentationModel)
 
-        let hostingView = NSHostingView(rootView: contentView)
-        hostingView.autoresizingMask = [.width, .height]
-        hostingView.wantsLayer = true
-        hostingView.layer?.cornerRadius = 16
-        hostingView.layer?.masksToBounds = true
-        snappableWindow.contentView = hostingView
+        // Pages keep the exact layout they were tuned in (PanelWindowMetrics).
+        snappableWindow.contentView = MainActor.assumeIsolated { PanelWindowMetrics.makeContentView(root: contentView) }
 
         MainActor.assumeIsolated {
             let liquidEdge = LiquidEdgeController(card: snappableWindow)

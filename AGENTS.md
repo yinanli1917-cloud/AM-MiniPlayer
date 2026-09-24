@@ -60,6 +60,8 @@ Sources/
 │   │   ├── HoverableButtons.swift - Button components + Tab Bar + corner radius utilities
 │   │   ├── PlaylistView.swift     - Playlist queue + artwork loading
 │   │   ├── SnappablePanel.swift   - Snappable floating panel + gestures
+│   │   ├── PanelWindowMetrics.swift - 面板窗口=面板本身（默认 250×284，比例锁/min/max 按比例）；托管视图比窗口高 32pt 伸出上沿 + SwiftUI 补 32pt 顶部安全区，各页排版与旧 250×316 窗口逐像素一致（09-23）
+│   │   ├── LiquidEdge/            - 液态贴边：Model/Choreography/Outline(纯逻辑) + StageView(面板下方透明舞台窗口) + Controller(状态机+逐帧弹簧+面板窗口透明度/遮罩) + Gestures
 │   │   ├── Components/           - Reusable UI components
 │   │   │   ├── SharedControls.swift   - Bottom controls
 │   │   │   ├── WindowResizeHandler.swift
@@ -144,6 +146,8 @@ Tests/MusicMiniPlayerTests/         - 999 个单元测试（2026-08-27 `swift te
     └── NativeLyricsOrphanAvoidanceTests.swift - CJK/短拉丁孤字折行：仅当尾巴≤2字且放宽 24pt 能少一行时放宽容器宽度
     └── NativeLyricsWordFloatGateTests.swift - 入场行逐字上浮从本行波浪触发帧起算
     └── LyricsPipelineTestIsolation.swift - 测试沙箱（非测试）：凡调真 `LyricsService.fetchLyrics` 的测试必须用——两份磁盘缓存改指临时目录、HTTP 全拒（记录 URL）、census 关、tearDown 先排空抓取任务再还原
+    └── PanelWindowLayoutParityTests.swift - 面板窗口去 32pt 透明条：真实 MiniPlayerView 新旧窗口四页逐字节一致（含对照组）+ 顶角吸附 16pt
+    └── LiquidEdgeTests / LiquidEdgeControllerTests / LiquidEdgeCapsuleInputTests - 液态贴边：pose 数学、真窗口假时钟全流程、液体落在面板上、胶囊按钮点击
     └── NativeLyricsHandoffClockTests.swift - 切行确定性时钟门：注入播放钟+墙钟锁步驱动真 surface（debugNowOverride/debugTick/debugPlaybackClockDateProvider），钉死上一行位移/opacity/亮层同帧退场（边界后 +150ms 错峰）；复现旧红测试=0.8s appear 窗内切行被冻结、余晖先暗的 harness 伪影
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix
