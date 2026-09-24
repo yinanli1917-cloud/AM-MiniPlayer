@@ -42,6 +42,9 @@ public final class LiquidEdgeController {
     private(set) var geometry = LiquidEdgeGeometry.reference
     /// The card's rect in stage coordinates as it is on screen (not mirrored).
     private var cardInStage = CGRect.zero
+    /// The panel window's whole frame in stage coordinates (its content
+    /// view, which the mask lives on, spans all of it).
+    private var windowInStage = CGRect.zero
 
     private var pose = LiquidEdgePoses(.reference).pose(.card)
     private var motion: LiquidEdgeMotion?
@@ -122,9 +125,20 @@ public final class LiquidEdgeController {
 
     // MARK: - Stage
 
+    /// The panel as drawn, in screen coordinates. The panel window is
+    /// titled with full-size content, and the panel draws only inside its
+    /// content view's safe area (below the 32pt title bar; MiniPlayerView
+    /// clips to that rect), so the window frame is taller than the panel
+    /// (founder recording 2026-09-23: the liquid expanded 32pt too tall).
+    static func drawnPanelFrame(_ card: NSWindow) -> CGRect {
+        guard let content = card.contentView else { return card.frame }
+        let rect = card.convertToScreen(content.convert(content.safeAreaRect, to: nil))
+        return rect.width > 0 && rect.height > 0 ? rect : card.frame
+    }
+
     private func prepareStage(card: SnappablePanel, screen: NSScreen) {
         let visible = screen.visibleFrame
-        let f = card.frame
+        let f = Self.drawnPanelFrame(card)
         let m = LiquidEdgeTokens.stageMargin
         // The screen edge the liquid joins.
         let edgeScreenX = side == .right ? max(visible.maxX, f.maxX) : min(visible.minX, f.minX)
@@ -160,6 +174,8 @@ public final class LiquidEdgeController {
         // sits exactly on the panel whatever the window server did.
         let a = window.frame
         cardInStage = CGRect(x: f.minX - a.minX, y: a.maxY - f.maxY, width: f.width, height: f.height)
+        let w = card.frame
+        windowInStage = CGRect(x: w.minX - a.minX, y: a.maxY - w.maxY, width: w.width, height: w.height)
         let canonicalCard = side == .right ? cardInStage
             : CGRect(x: a.width - cardInStage.maxX, y: cardInStage.minY, width: f.width, height: f.height)
         let edgeInStage = edgeScreenX - a.minX
@@ -187,7 +203,7 @@ public final class LiquidEdgeController {
         let clip = LiquidEdgeStageView.largerPart(p)
         var r = clip.rect
         if side == .left, let w = stage?.bounds.width { r.origin.x = w - r.maxX }
-        r = r.offsetBy(dx: -cardInStage.minX, dy: -cardInStage.minY)
+        r = r.offsetBy(dx: -windowInStage.minX, dy: -windowInStage.minY)
         if !content.isFlipped { r.origin.y = content.bounds.height - r.maxY }
         let corner = min(max(clip.corner, 0), min(r.width, r.height) / 2)
         panelMask.frame = content.bounds
