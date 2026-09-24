@@ -31,14 +31,6 @@ public struct MiniPlayerView: View {
     @State private var topLeftLuminance: CGFloat = 0.5
     @State private var topRightLuminance: CGFloat = 0.5
     @State private var artworkTone: ArtworkBackgroundToneMap = .neutral
-    // Backdrop legibility band (research/spec-2026-09-22-backdrop-legibility.md, point B):
-    // the fullscreen album page's bottom control band background prediction inputs,
-    // refreshed alongside `artworkTone` from the same `artworkVisualMetrics()` call.
-    // Per-channel colour (not just luminance) — channel-correct WCAG contrast needs the
-    // real hue, not a gamma-mixed scalar (colour-sweep review found a scalar model can
-    // claim a saturated background is safely within the band when it is actually not).
-    @State private var artworkAverageColor = BackdropLegibilityBand.RGBColor(r: 0.5, g: 0.5, b: 0.5)
-    @State private var artworkBottomRowColor = BackdropLegibilityBand.RGBColor(r: 0.5, g: 0.5, b: 0.5)
     @State private var effectArtwork: NSImage?
     @State private var effectArtworkSignature: String = ""
 
@@ -218,19 +210,13 @@ public struct MiniPlayerView: View {
             if newArtwork != nil {
                 syncArtworkLuminance()
                 if let artwork = newArtwork {
-                    let metrics = artwork.artworkVisualMetrics()
-                    artworkTone = ArtworkBackgroundToneMap.forMetrics(metrics)
-                    artworkAverageColor = BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue)
-                    let bottomColor = artwork.controlAreaMaxColor()
-                    artworkBottomRowColor = BackdropLegibilityBand.RGBColor(r: bottomColor.r, g: bottomColor.g, b: bottomColor.b)
+                    artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
                 }
             } else {
                 artworkBrightness = 0.5
                 topLeftLuminance = 0.5
                 topRightLuminance = 0.5
                 artworkTone = .neutral
-                artworkAverageColor = BackdropLegibilityBand.RGBColor(r: 0.5, g: 0.5, b: 0.5)
-                artworkBottomRowColor = BackdropLegibilityBand.RGBColor(r: 0.5, g: 0.5, b: 0.5)
             }
         }
         .onChange(of: musicController.artworkLuminance) { _, _ in
@@ -265,11 +251,7 @@ public struct MiniPlayerView: View {
             refreshEffectArtwork()
             syncArtworkLuminance()
             if let artwork = musicController.currentArtwork {
-                let metrics = artwork.artworkVisualMetrics()
-                artworkTone = ArtworkBackgroundToneMap.forMetrics(metrics)
-                artworkAverageColor = BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue)
-                let bottomColor = artwork.controlAreaMaxColor()
-                artworkBottomRowColor = BackdropLegibilityBand.RGBColor(r: bottomColor.r, g: bottomColor.g, b: bottomColor.b)
+                artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
             }
         }
         // Keep hover state coherent when returning to the album page.
@@ -326,29 +308,6 @@ public struct MiniPlayerView: View {
         topRightLuminance = musicController.topRightArtworkLuminance
     }
 
-    // Backdrop legibility band, point B (research/spec-2026-09-22-backdrop-legibility.md):
-    // the fullscreen album page's bottom control band (title/artist/shuffle-repeat/
-    // SharedBottomControls) sits over the hero cover fading into the Layer-1 blurred
-    // backing image — conservatively the worse (brighter) of the two, per
-    // `fullscreenBottomBandToneColor`. Channel-correct (colour-sweep review): a saturated
-    // cover's gamma-mixed luminance can look "safely dark" while its true WCAG relative
-    // luminance is not, so this resolves against the real per-channel colour, not a scalar.
-    // Point B's tint: the cover's own average colour darkened by a fixed shade factor
-    // (research/progressive-blur-2026-09-23.md) — "this cover's own shadow", never a flat
-    // neutral Color.black.
-    private var bottomBandTint: BackdropLegibilityBand.RGBColor {
-        BackdropLegibilityBand.pointBTint(from: artworkAverageColor)
-    }
-
-    private var bottomBandLegibilityCorrection: BackdropLegibilityBand.TintedCorrection {
-        let preCorrection = BackdropLegibilityBand.fullscreenBottomBandToneColor(
-            coverBottomRowColor: artworkBottomRowColor,
-            artworkAverageColor: artworkAverageColor,
-            tone: artworkTone
-        )
-        return BackdropLegibilityBand.resolveTinted(preCorrection: preCorrection, tint: bottomBandTint)
-    }
-
     private func refreshEffectArtwork() {
         let signature = ArtworkDisplayImageFactory.signature(
             for: musicController.currentArtwork,
@@ -386,41 +345,6 @@ extension MiniPlayerView {
             let artLeftX = (geo.size.width - artSize) / 2
 
             ZStack {
-                // Backdrop legibility band, point B (research/progressive-blur-2026-09-23.md):
-                // fullscreen album cover only — a bottom scrim behind the
-                // title/artist/shuffle-repeat/controls band, appearing only when the
-                // sharp cover behind it is too bright for the white foreground to read at
-                // >= 4.5:1. The scrim tints toward the cover's OWN darkened average colour
-                // (never Color.black — bottomBandTint) at FULL blendOpacity across the flat
-                // zone nearest the bottom (every real foreground element sits inside it, not
-                // at the very bottom pixel), smoothstep-easing to clear across the fade zone
-                // above it (BackdropLegibilityBand.bottomBandScrimGradientStops) — a curve
-                // with zero slope at both zone boundaries, so there is no visible edge. The
-                // hero cover itself is progressively blurred over the same band in
-                // `floatingArtwork` — blur alone cannot lower luminance, so this tint still
-                // carries the whole WCAG contrast requirement; blur only kills texture/detail.
-                if fullscreenAlbumCover && bottomBandLegibilityCorrection.blendOpacity > 0 {
-                    let correction = bottomBandLegibilityCorrection
-                    let bandColor = Color(
-                        red: correction.tint.r, green: correction.tint.g, blue: correction.tint.b
-                    )
-                    let flatHeight = MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFlatHeight
-                    let fadeHeight = MicroInteractionFeel.Tokens.backdropLegibilityBottomBandFadeHeight
-                    let totalHeight = flatHeight + fadeHeight
-                    let stops = BackdropLegibilityBand.bottomBandScrimGradientStops(
-                        flatHeight: Double(flatHeight), fadeHeight: Double(fadeHeight)
-                    ).map { sample in
-                        Gradient.Stop(color: bandColor.opacity(correction.blendOpacity * sample.opacityFraction), location: sample.location)
-                    }
-                    VStack(spacing: 0) {
-                        Spacer()
-                        LinearGradient(stops: stops, startPoint: .top, endPoint: .bottom)
-                            .frame(height: totalHeight)
-                    }
-                    .allowsHitTesting(false)
-                    .animation(.smooth(duration: MicroInteractionFeel.Tokens.artworkContrastDarkenAnimationDuration), value: correction.blendOpacity)
-                }
-
                 // ═══════════════════════════════════════════
                 // 🎨 歌曲信息：使用 matchedGeometryEffect 实现丝滑过渡
                 // ═══════════════════════════════════════════
@@ -684,39 +608,6 @@ extension MiniPlayerView {
                         .position(x: displayX, y: displayY)
                         .allowsHitTesting(false)
                         .accessibilityLabel("专辑封面")
-
-                    // Layer 2b: bottom-band progressive blur (research/progressive-blur-2026-09-23.md,
-                    // round 2 — pure SwiftUI, NOT the Metal `.layerEffect` shader: this machine's
-                    // Xcode has no Metal Toolchain, so `.metal` files never compile to a usable
-                    // .metallib, and build_app.sh does not copy MusicMiniPlayerCore's resource
-                    // bundle into nanoPod.app, so the Metal shader's runtime lookup would fail
-                    // at runtime in the shipped app even though `swift build` looks clean — see
-                    // BackdropLegibilityBand.swift's own note for the exact APIs this avoids). A small
-                    // stack of `effectArtwork` copies (the same cheap pre-downsampled render Layer 1
-                    // uses) with increasing blur radii, each one revealed only within its OWN
-                    // smoothstep-shaped band (`BackdropLegibilityBand.heroBottomBandBlurLayers` —
-                    // reuses the exact same `bottomBandScrimOpacity` envelope math as the tint scrim
-                    // below, just reused per-layer) — drawn back-to-front from weakest (widest reveal)
-                    // to strongest (narrowest, right at the bottom edge), so the effective on-screen
-                    // blur step-approximates a continuous 0-at-top-of-band -> max-at-bottom-edge ramp.
-                    // Drawn ON TOP of Layer 2, gated on the SAME `blendOpacity > 0` condition as the
-                    // tint scrim in `albumOverlayContent` — an in-band cover gets neither, unchanged
-                    // appearance. Static: this whole subtree only re-evaluates on hover/page/artwork
-                    // change (no continuous frame loop drives this page), so the resident `.blur()`
-                    // filters on these layers cost WindowServer time only at those few moments, not
-                    // while idle — see the research doc for the full argument.
-                    if isAlbumPage && bottomBandLegibilityCorrection.blendOpacity > 0 {
-                        ZStack {
-                            ForEach(Array(BackdropLegibilityBand.heroBottomBandBlurLayers().enumerated()), id: \.offset) { _, layer in
-                                heroBottomBandBlurLayer(effectArtwork: effectArtwork, displaySize: displaySize, layer: layer)
-                            }
-                        }
-                        .frame(width: displaySize, height: displaySize)
-                        .cornerRadius(displayCornerRadius)
-                        .position(x: displayX, y: displayY)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                    }
                 } else {
                     ZStack {
                         Image(nsImage: artwork)
@@ -777,34 +668,6 @@ extension MiniPlayerView {
                     startPoint: .top,
                     endPoint: .bottom
                 )
-            )
-    }
-
-    // MARK: - Point B bottom-band progressive blur layer (research/progressive-blur-2026-09-23.md)
-    // One layer of `heroBottomBandBlurLayers`'s pure-SwiftUI recipe — see the call site's
-    // comment in `floatingArtwork` for why this is not the Metal shader path.
-    @ViewBuilder
-    private func heroBottomBandBlurLayer(effectArtwork: NSImage, displaySize: CGFloat, layer: BackdropLegibilityBand.HeroBlurLayer) -> some View {
-        Image(nsImage: effectArtwork)
-            .resizable()
-            .scaledToFill()
-            .frame(width: displaySize, height: displaySize)
-            .clipped()
-            .blur(radius: layer.radius)
-            .mask(
-                VStack(spacing: 0) {
-                    Spacer()
-                    LinearGradient(
-                        stops: BackdropLegibilityBand.bottomBandScrimGradientStops(
-                            flatHeight: layer.flatHeight, fadeHeight: layer.fadeHeight
-                        ).map { sample in
-                            Gradient.Stop(color: .black.opacity(sample.opacityFraction), location: sample.location)
-                        },
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: layer.flatHeight + layer.fadeHeight)
-                }
             )
     }
 
