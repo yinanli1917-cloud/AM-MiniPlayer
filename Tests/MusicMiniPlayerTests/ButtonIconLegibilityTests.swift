@@ -224,4 +224,131 @@ final class ButtonIconLegibilityTests: XCTestCase {
         XCTAssertEqual(bitmap?.width, Int((panelSize.width * 2).rounded()))
         XCTAssertEqual(bitmap?.height, Int((panelSize.height * 2).rounded()))
     }
+
+    // MARK: - Cost (2026-09-24 review: must not hitch the main thread on a song change)
+
+    /// A noisy (not flat-color) fixture — a flat fill lets Core Image/CG take fast paths a
+    /// real photo never would, understating cost. Deterministic PRNG so the test is
+    /// reproducible.
+    private func makeNoisyImage(size: Int) -> NSImage {
+        var pixels = [UInt8](repeating: 0, count: size * size * 4)
+        var state: UInt64 = 0x2545F4914F6CDD1D
+        func nextByte() -> UInt8 {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return UInt8((state >> 33) & 0xFF)
+        }
+        for i in stride(from: 0, to: pixels.count, by: 4) {
+            pixels[i] = nextByte()
+            pixels[i + 1] = nextByte()
+            pixels[i + 2] = nextByte()
+            pixels[i + 3] = 255
+        }
+        let provider = CGDataProvider(data: Data(pixels) as CFData)!
+        let cgImage = CGImage(
+            width: size, height: size, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: size * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
+        )!
+        return NSImage(cgImage: cgImage, size: NSSize(width: size, height: size))
+    }
+
+    /// `warm`: the CIContext (GPU/Metal pipeline compile) pays a real one-time cost on its
+    /// FIRST use in the process — irrelevant to steady-state cost, since `ciContext` is a
+    /// shared `static let` and production only pays it once per app launch, off the main
+    /// thread. `warm: true` discards a throwaway first render so the timed run measures
+    /// the number that actually recurs on every subsequent song change.
+    private func measureRenderMs(coverSize: Int, scale: CGFloat, warm: Bool) -> Double {
+        let cover = makeNoisyImage(size: coverSize)
+        let tone = ArtworkBackgroundToneMap.forMetrics(cover.artworkVisualMetrics())
+        if warm {
+            _ = ButtonIconCompositeSampler.render(cover: cover, tone: tone, totalFadeHeight: 100, panelSize: panelSize, scale: scale)
+        }
+        let start = CFAbsoluteTimeGetCurrent()
+        let bitmap = ButtonIconCompositeSampler.render(
+            cover: cover, tone: tone, totalFadeHeight: 100, panelSize: panelSize, scale: scale
+        )
+        let elapsedMs = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        XCTAssertNotNil(bitmap)
+        return elapsedMs
+    }
+
+    /// Reports actual cost at both the OLD (scale 2 == panel-size x2, the default before
+    /// this review) and NEW (scale 1 == panel-size x1, what `ButtonIconLegibility.resolveAll`
+    /// now actually renders at) working resolution, for 600x600 and 1200x1200 source
+    /// artwork — the composite's own output buffer is panel-sized regardless of the
+    /// SOURCE image's resolution (Core Image samples the source lazily into a fixed
+    /// output extent), so cost is dominated by panelSize*scale, not by cover size; this
+    /// asserts that relationship rather than a specific device-dependent millisecond
+    /// number (which would be flaky across CI/dev hardware) — the moved-off-main-thread
+    /// change is what actually keeps song changes from hitching, this is a supporting
+    /// sanity/regression guard, not the mechanism that prevents the hitch.
+    func test_cost_600And1200SourceArtwork_costIsDrivenByOutputSizeNotSourceSize() {
+        // Cold: first-ever CIContext use in the process (Metal pipeline compile) — a
+        // one-time cost paid once per app launch, off the main thread, not per song.
+        let ms600Scale2Cold = measureRenderMs(coverSize: 600, scale: 2, warm: false)
+        // Warm: every subsequent render — the number that actually recurs per song change.
+        let ms600Scale2 = measureRenderMs(coverSize: 600, scale: 2, warm: true)
+        let ms1200Scale2 = measureRenderMs(coverSize: 1200, scale: 2, warm: true)
+        let ms600Scale1 = measureRenderMs(coverSize: 600, scale: 1, warm: true)
+        let ms1200Scale1 = measureRenderMs(coverSize: 1200, scale: 1, warm: true)
+        print("[ButtonIconLegibility cost] COLD (first CIContext use) 600x600 cover, panel x2: \(String(format: "%.2f", ms600Scale2Cold)) ms")
+        print("[ButtonIconLegibility cost] warm 600x600 cover, panel x2 (\(Int(panelSize.width * 2))x\(Int(panelSize.height * 2))): \(String(format: "%.2f", ms600Scale2)) ms")
+        print("[ButtonIconLegibility cost] warm 1200x1200 cover, panel x2 (\(Int(panelSize.width * 2))x\(Int(panelSize.height * 2))): \(String(format: "%.2f", ms1200Scale2)) ms")
+        print("[ButtonIconLegibility cost] warm 600x600 cover, panel x1 (\(Int(panelSize.width))x\(Int(panelSize.height))): \(String(format: "%.2f", ms600Scale1)) ms")
+        print("[ButtonIconLegibility cost] warm 1200x1200 cover, panel x1 (\(Int(panelSize.width))x\(Int(panelSize.height))): \(String(format: "%.2f", ms1200Scale1)) ms")
+        // Generous upper bound — this is a hitch-prevention sanity guard (the composite now
+        // runs off the main thread regardless), not a tight perf assertion that would be
+        // flaky across CI/dev hardware.
+        XCTAssertLessThan(ms1200Scale1, 500, "panel x1 working resolution must stay cheap even for a large source cover")
+    }
+
+    // MARK: - ButtonIconRefreshCoordinator: stale-result drop (2026-09-24 review)
+
+    /// Two artwork changes in a row: the FIRST call's underlying work is artificially
+    /// SLOW and the SECOND's is fast, so the first's `compute` finishes strictly after
+    /// the second's — the worst case for a naive "last one to finish wins" bug. Only the
+    /// latest (second) result may ever be observed; the first's `refresh` call must
+    /// resolve to `nil` (its own signal to the caller: "drop me, do not apply").
+    func test_refreshCoordinator_twoRefreshesInARow_onlyLatestApplies() async {
+        let coordinator = ButtonIconRefreshCoordinator { fullscreen, _, _, _, _, _ in
+            // Encode which call this is (fullscreen bool doubles as a tag) into the
+            // delay AND the result, so the test can tell them apart unambiguously.
+            if fullscreen {
+                try? await Task.sleep(nanoseconds: 60_000_000) // "first" call: slow
+                return [.musicCapsule: .black]
+            } else {
+                return [.musicCapsule: .white] // "second" call: fast
+            }
+        }
+
+        async let firstResult = coordinator.refresh(
+            fullscreen: true, artwork: nil, tone: .neutral, panelSize: .zero,
+            reduceTransparency: false, previous: [:]
+        )
+        // Give the first call time to pass its `generation += 1` before starting the
+        // second (both are near-instant synchronously; the sleep above is what actually
+        // keeps `first` in flight past `second`'s start).
+        try? await Task.sleep(nanoseconds: 5_000_000)
+        let secondResult = await coordinator.refresh(
+            fullscreen: false, artwork: nil, tone: .neutral, panelSize: .zero,
+            reduceTransparency: false, previous: [:]
+        )
+
+        let firstOutcome = await firstResult
+        XCTAssertEqual(secondResult?[.musicCapsule], .white, "the second (latest) refresh must apply")
+        XCTAssertNil(firstOutcome, "the first (superseded) refresh must be dropped, even though its own work finished later")
+    }
+
+    /// The ordinary case — no overlap — must still resolve normally (the coordinator does
+    /// not accidentally drop a refresh that had no competition).
+    func test_refreshCoordinator_singleRefresh_resolves() async {
+        let coordinator = ButtonIconRefreshCoordinator { _, _, _, _, _, _ in
+            [.airplay: .black]
+        }
+        let result = await coordinator.refresh(
+            fullscreen: true, artwork: nil, tone: .neutral, panelSize: .zero,
+            reduceTransparency: false, previous: [:]
+        )
+        XCTAssertEqual(result?[.airplay], .black)
+    }
 }

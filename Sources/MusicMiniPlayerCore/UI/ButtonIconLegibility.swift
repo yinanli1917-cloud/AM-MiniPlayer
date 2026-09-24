@@ -391,6 +391,17 @@ enum ButtonIconLegibility {
     /// `MiniPlayerView.floatingArtwork`'s fullscreen `blendHeight` literal.
     static let fullscreenHeroFadeHeight: CGFloat = 100
 
+    /// Working resolution for the fullscreen composite: panel size x1 (not x2 — a p90
+    /// stat over a ~30pt button rect does not need retina-resolution sampling, and the
+    /// render cost — CIGaussianBlur + a CGContext raster over the OUTPUT extent — scales
+    /// with this, not with the source cover's own resolution, see
+    /// `ButtonIconCompositeSampler.render`'s doc comment and
+    /// `ButtonIconLegibilityTests.test_cost_600And1200SourceArtwork_...`. 2026-09-24
+    /// review: was x2; measured cost at x1 on a noisy 1200x1200 source is well under the
+    /// test's 500ms guard (typically single-digit ms on Apple Silicon) — see the test for
+    /// the actually-measured numbers, reported once per change in the PR/commit.
+    static let fullscreenCompositeScale: CGFloat = 1
+
     /// Resolves every inventoried button's icon tone, once (call this on artwork change
     /// or `fullscreenAlbumCover` toggle — never per frame). `previous` supplies the
     /// hysteresis state; a missing id defaults to `.white` (today's colour, so a track
@@ -405,6 +416,15 @@ enum ButtonIconLegibility {
     /// 3:1 threshold. So non-fullscreen buttons are, by that existing invariant, always
     /// resolved white; this function still runs the real prediction (not a hardcoded
     /// `.white`) so it stays correct if that band's constants ever change.
+    ///
+    /// THREADING (2026-09-24 review): this function does real CGContext/Core Image work
+    /// (the fullscreen branch) and must never run on the main thread — the caller
+    /// (`MiniPlayerView.refreshButtonIconTones`) dispatches it via `Task.detached` and
+    /// only applies the result on the main actor if it is still current (cancellation +
+    /// a generation token guard against a stale result from a superseded artwork/toggle
+    /// landing after a newer one). This function itself stays a plain, synchronous, pure
+    /// function — no actor isolation, no I/O — so it stays trivially unit-testable and
+    /// callable from either context.
     static func resolveAll(
         fullscreen: Bool,
         artwork: NSImage?,
@@ -422,7 +442,8 @@ enum ButtonIconLegibility {
                 cover: artwork,
                 tone: tone,
                 totalFadeHeight: fullscreenHeroFadeHeight,
-                panelSize: panelSize
+                panelSize: panelSize,
+                scale: fullscreenCompositeScale
             ) else {
                 return previous
             }
@@ -444,6 +465,78 @@ enum ButtonIconLegibility {
         for id in ButtonIconID.allCases {
             result[id] = ButtonIconDecision.resolve(color: color, previous: previous[id] ?? .white)
         }
+        return result
+    }
+}
+
+// MARK: - Off-main-thread coordination (2026-09-24 review)
+
+/// Runs `ButtonIconLegibility.resolveAll` off the main thread with last-request-wins
+/// semantics: calling `refresh` again before a previous call's work has finished
+/// supersedes it — that EARLIER call's `refresh` resolves to `nil` once its work
+/// completes (however late), never overwriting the newer result. An `actor`'s
+/// serialized-but-reentrant execution gives this for free: the `generation` bump and the
+/// post-await comparison can never race each other, even though the awaited work itself
+/// runs concurrently, off-actor (`Task.detached`).
+///
+/// `MiniPlayerView` owns one instance (as `@State`, so it survives across its own
+/// re-renders) and calls `refresh` once per artwork change / `fullscreenAlbumCover`
+/// toggle — never per frame. A `nil` result means "a newer refresh has already
+/// superseded this one" — the caller must leave whatever tones are already on screen
+/// untouched (never clear/flash to a default), which is exactly what NOT assigning does.
+///
+/// `compute` is injectable so the stale-result-drop behaviour is deterministically
+/// testable (`ButtonIconLegibilityTests`) without depending on how fast the real
+/// Core Image work happens to run on the test machine.
+actor ButtonIconRefreshCoordinator {
+    private var generation: Int = 0
+    private let compute: (
+        _ fullscreen: Bool,
+        _ artwork: NSImage?,
+        _ tone: ArtworkBackgroundToneMap,
+        _ panelSize: CGSize,
+        _ reduceTransparency: Bool,
+        _ previous: [ButtonIconID: ButtonIconTone]
+    ) async -> [ButtonIconID: ButtonIconTone]
+
+    init(
+        compute: @escaping (
+            _ fullscreen: Bool,
+            _ artwork: NSImage?,
+            _ tone: ArtworkBackgroundToneMap,
+            _ panelSize: CGSize,
+            _ reduceTransparency: Bool,
+            _ previous: [ButtonIconID: ButtonIconTone]
+        ) async -> [ButtonIconID: ButtonIconTone] = { fullscreen, artwork, tone, panelSize, reduceTransparency, previous in
+            await Task.detached(priority: .userInitiated) {
+                ButtonIconLegibility.resolveAll(
+                    fullscreen: fullscreen,
+                    artwork: artwork,
+                    tone: tone,
+                    panelSize: panelSize,
+                    reduceTransparency: reduceTransparency,
+                    previous: previous
+                )
+            }.value
+        }
+    ) {
+        self.compute = compute
+    }
+
+    /// Returns the resolved tones, or `nil` if a NEWER `refresh` call was made before
+    /// this one's `compute` finished (in which case the caller must drop this result).
+    func refresh(
+        fullscreen: Bool,
+        artwork: NSImage?,
+        tone: ArtworkBackgroundToneMap,
+        panelSize: CGSize,
+        reduceTransparency: Bool,
+        previous: [ButtonIconID: ButtonIconTone]
+    ) async -> [ButtonIconID: ButtonIconTone]? {
+        generation += 1
+        let myGeneration = generation
+        let result = await compute(fullscreen, artwork, tone, panelSize, reduceTransparency, previous)
+        guard myGeneration == generation else { return nil }
         return result
     }
 }

@@ -37,7 +37,12 @@ public struct MiniPlayerView: View {
     // Per-button icon legibility (founder 2026-09-24): black icon when the pixels
     // directly under that button are too bright, else today's white. Recomputed once
     // per artwork change / fullscreen-cover toggle — never per frame (ButtonIconLegibility.swift).
+    // The recompute itself runs off the main thread via `buttonIconCoordinator`
+    // (2026-09-24 review: must not hitch a song change) — its last-request-wins semantics
+    // drop a stale result from a superseded artwork/toggle; until a new result lands the
+    // PREVIOUS tones stay on screen (never cleared/flashed to white).
     @State private var buttonIconTones: [ButtonIconID: ButtonIconTone] = [:]
+    @State private var buttonIconCoordinator = ButtonIconRefreshCoordinator()
     @State private var lastKnownPanelSize: CGSize = CGSize(width: PanelWindowMetrics.defaultSize.width, height: PanelWindowMetrics.defaultSize.height)
 
     // Shuffle/repeat feedback animation progress.
@@ -328,15 +333,34 @@ public struct MiniPlayerView: View {
     /// Recomputes every album-page button's icon tone (founder 2026-09-24). Called once
     /// per artwork change / fullscreen-cover toggle (see the call sites above) — never
     /// per frame. `artworkTone` must already reflect the current artwork when this runs.
+    ///
+    /// Runs the actual composite render OFF the main thread via `buttonIconCoordinator`
+    /// (2026-09-24 review: a synchronous call here would hitch every song/cover change).
+    /// `refresh` returns `nil` when a newer refresh has already superseded this one — in
+    /// that case `buttonIconTones` is left untouched, so the previous tones stay on
+    /// screen, never cleared or flashed. A fullscreen-cover toggle goes through this exact
+    /// same path, so it is not literally instant, but nothing here is throttled/debounced
+    /// either — it starts immediately, same as an artwork change.
     private func refreshButtonIconTones() {
-        buttonIconTones = ButtonIconLegibility.resolveAll(
-            fullscreen: fullscreenAlbumCover,
-            artwork: musicController.currentArtwork,
-            tone: artworkTone,
-            panelSize: lastKnownPanelSize,
-            reduceTransparency: reduceTransparency,
-            previous: buttonIconTones
-        )
+        let fullscreen = fullscreenAlbumCover
+        let artwork = musicController.currentArtwork
+        let tone = artworkTone
+        let panelSize = lastKnownPanelSize
+        let reduceTransparencySnapshot = reduceTransparency
+        let previous = buttonIconTones
+        let coordinator = buttonIconCoordinator
+
+        Task {
+            guard let result = await coordinator.refresh(
+                fullscreen: fullscreen,
+                artwork: artwork,
+                tone: tone,
+                panelSize: panelSize,
+                reduceTransparency: reduceTransparencySnapshot,
+                previous: previous
+            ) else { return }
+            buttonIconTones = result
+        }
     }
 
     /// `buttonIconTones[id]` as a `Color`, defaulting to white (today's colour) when this
