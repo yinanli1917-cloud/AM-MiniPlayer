@@ -110,6 +110,52 @@ final class LiquidEdgeControllerTests: XCTestCase {
         }
     }
 
+    /// Founder 2026-09-23 (recording Screen-2026-09-23-171622): the app's
+    /// panel window is titled + full-size content, and the panel draws only
+    /// below the 32pt title-bar safe area (MiniPlayerView clips to its
+    /// safe-area layout rect). The liquid used the whole window frame, so it
+    /// expanded 32pt taller than the panel. It must land on the drawn panel.
+    func test_liquidCard_coincidesWithDrawnPanel_inTitledWindow() throws {
+        try makeCard(edge: .right)
+        let frame = card.frame
+        card.orderOut(nil)
+        card = SnappablePanel(contentRect: frame, styleMask: [.titled, .resizable, .fullSizeContentView, .nonactivatingPanel],
+                              backing: .buffered, defer: false)
+        card.titlebarAppearsTransparent = true
+        card.titleVisibility = .hidden
+        card.isOpaque = false
+        card.backgroundColor = .clear
+        card.contentView = NSView()
+        card.orderFront(nil)
+        controller = LiquidEdgeController(card: card)
+        controller.clock = { [unowned self] in self.now }
+        controller.drivesFrames = false
+        controller.reduceMotionOverride = false
+
+        let content = try XCTUnwrap(card.contentView)
+        let drawn = card.convertToScreen(content.convert(content.safeAreaRect, to: nil))
+        XCTAssertLessThan(drawn.height, card.frame.height, "precondition: the title bar leaves a safe-area inset")
+
+        XCTAssertTrue(controller.collapse(to: .right))
+        let stage = try XCTUnwrap(controller.stageWindow).frame
+        let c = controller.geometry.card
+        let onScreen = CGRect(x: stage.minX + c.minX, y: stage.maxY - c.maxY, width: c.width, height: c.height)
+        XCTAssertEqual(onScreen, drawn, "the liquid's card must be the drawn panel, not the window frame")
+
+        // And the expand ends exactly on it: the last mask is the drawn panel.
+        settle()
+        controller.expand()
+        var last = CGRect.zero
+        while controller.isAnimating {
+            now += 1.0 / 120
+            controller.tick(at: now)
+            if let p = controller.panelMask.path { last = p.boundingBox }
+        }
+        let drawnInContent = content.safeAreaRect
+        XCTAssertEqual(last.minY, drawnInContent.minY, accuracy: 0.5)
+        XCTAssertEqual(last.height, drawnInContent.height, accuracy: 0.5)
+    }
+
     func test_leftEdge_isMirrored() throws {
         try makeCard(edge: .left)
         XCTAssertTrue(controller.collapse(to: .left))
