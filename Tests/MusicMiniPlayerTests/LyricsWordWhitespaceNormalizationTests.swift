@@ -57,21 +57,48 @@
  * valid line-break opportunity, so `NSLayoutManager`'s `.byWordWrapping`
  * cannot wrap between NBSP-separated words at all.
  *
- * Fix: `LyricWord.init`/`LyricLine.init` now normalize every Unicode
- * whitespace character other than plain space (`Character.isWhitespace`,
- * covering NBSP and the rest of the Unicode space-separator family) to
- * `" "` at construction -- the single choke point every `LyricWord`/
- * `LyricLine` in the app is built through (every parser, `LyricsWordRepair`,
- * Traditional-Chinese conversion, `LyricsDiskCache.lyricLines(from:)` on
- * every disk-cache read -- so this also self-heals stale cached entries
- * written before the fix, without a schema bump).
+ * Fix (v1, this session): `LyricWord.init`/`LyricLine.init` normalized
+ * every Unicode whitespace character other than plain space
+ * (`Character.isWhitespace`) to `" "` at construction.
  *
- * Red-before-fix verified manually: temporarily reverted `LyricWord.init`/
- * `LyricLine.init` to plain assignment (no `normalizingWhitespace` call),
- * reran `test_splitPieceFromNBSPWords_keepsWordLevelSync` -- failed
+ * Fix (v2, coordinator scope correction, same day): v1 was too broad -- it
+ * silently rewrote U+3000 IDEOGRAPHIC SPACE, a DELIBERATE full-width clause
+ * separator in CJK lyrics/translations (founder-tuned spacing, not a data
+ * artifact), and would have turned a literal tab/newline into a space too.
+ * Storage-level normalization (`LyricWord.normalizingNonBreakingSpaces`) is
+ * now narrowed to exactly: (1) the non-breaking family that actually causes
+ * the wrap/consistency failure -- U+00A0 NO-BREAK SPACE, U+202F NARROW
+ * NO-BREAK SPACE, U+2007 FIGURE SPACE -- mapped to a plain space; (2) the
+ * zero-width formatting characters U+200B ZERO WIDTH SPACE, U+2060 WORD
+ * JOINER, U+FEFF ZERO WIDTH NO-BREAK SPACE (BOM), which are DROPPED
+ * entirely (they render as nothing). U+3000, tabs, newlines, and every
+ * other whitespace variant are left completely untouched. Because that
+ * narrower set can still leave SOME whitespace mismatch between `words`
+ * and `text` unresolved (e.g. U+3000 on one side only), the words/text
+ * consistency invariant in `LyricLine.init` no longer compares the raw
+ * stored strings at all -- it compares through
+ * `LyricWord.whitespaceStrippedComparisonKey`, which strips ALL whitespace
+ * (`Character.isWhitespace`, not just the narrowed family) for the
+ * comparison ONLY, leaving the stored text/words exactly as constructed.
+ * That comparison-only key is the actual belt-and-suspenders fix for the
+ * words-silently-cleared class of bug; the storage-level normalization
+ * only prevents the U+00A0 wrap failure and keeps display text free of
+ * invisible zero-width characters.
+ *
+ * This is the single choke point every `LyricWord`/`LyricLine` in the app
+ * is built through (every parser, `LyricsWordRepair`, Traditional-Chinese
+ * conversion, `LyricsDiskCache.lyricLines(from:)` on every disk-cache
+ * read), so it also self-heals stale cached entries written before the
+ * fix, without a schema bump.
+ *
+ * Red-before-fix verified manually (v1): temporarily reverted
+ * `LyricWord.init`/`LyricLine.init` to plain assignment, reran
+ * `test_splitPieceFromNBSPWords_keepsWordLevelSync` -- failed
  * (`hasSyllableSync` was `false`, `words.isEmpty` was `true`, reproducing
- * the founder's screenshot exactly). Restored immediately after, reran
- * green.
+ * the founder's screenshot exactly). Restored, reran green. v2's narrowed
+ * scope re-verified against the same fixture (all fixture words are ASCII
+ * with NBSP separators, unaffected by narrowing the normalized set) plus
+ * the new U+3000/zero-width/comparison-key tests added for v2.
  *
  * Safety: pure value-type tests, no network, no LyricsService/disk-cache
  * access, no ~/Library/Application Support/nanoPod/ I/O.
@@ -90,13 +117,49 @@ final class LyricsWordWhitespaceNormalizationTests: XCTestCase {
         XCTAssertFalse(word.word.contains("\u{00A0}"))
     }
 
-    func test_lyricWord_normalizesOtherUnicodeSpaceVariants() {
-        // EM SPACE (U+2003), IDEOGRAPHIC SPACE (U+3000, sometimes present in
-        // scraped CJK lyric data), NARROW NO-BREAK SPACE (U+202F).
-        for scalar in ["\u{2003}", "\u{3000}", "\u{202F}"] {
+    /// 2026-09-24 coordinator scope correction: only the NON-BREAKING space
+    /// family (the actual cause of the wrap/consistency failures) normalizes
+    /// to a plain space. NARROW NO-BREAK SPACE (U+202F) and FIGURE SPACE
+    /// (U+2007) join U+00A0 in that family.
+    func test_lyricWord_normalizesNonBreakingSpaceFamilyToPlainSpace() {
+        for scalar in ["\u{00A0}", "\u{202F}", "\u{2007}"] {
             let word = LyricWord(word: "word\(scalar)", startTime: 0, endTime: 1)
-            XCTAssertEqual(word.word, "word ", "scalar U+\(String(format: "%04X", scalar.unicodeScalars.first!.value)) must normalize to plain space")
+            XCTAssertEqual(word.word, "word ", "U+\(String(format: "%04X", scalar.unicodeScalars.first!.value)) must normalize to plain space")
         }
+    }
+
+    /// 2026-09-24 coordinator scope correction: U+3000 IDEOGRAPHIC SPACE is
+    /// a DELIBERATE full-width clause separator in CJK lyrics/translations
+    /// (founder-tuned spacing), not a data artifact -- it must survive
+    /// untouched, in both `LyricWord.word` and `LyricLine.text`. EM SPACE
+    /// (U+2003) is likewise outside the non-breaking family and must also
+    /// be left alone.
+    func test_ideographicAndOtherGeneralSpacesAreNeverTouched() {
+        for scalar in ["\u{3000}", "\u{2003}"] {
+            let word = LyricWord(word: "word\(scalar)", startTime: 0, endTime: 1)
+            XCTAssertEqual(word.word, "word\(scalar)", "U+\(String(format: "%04X", scalar.unicodeScalars.first!.value)) must be left untouched in LyricWord.word")
+        }
+        let line = LyricLine(text: "你好\u{3000}世界", startTime: 0, endTime: 1)
+        XCTAssertEqual(line.text, "你好\u{3000}世界", "U+3000 must be left untouched in LyricLine.text")
+    }
+
+    /// Zero-width formatting characters render as nothing -- folding them to
+    /// a VISIBLE space would be wrong (they never were a separator). They
+    /// must be dropped entirely, not replaced.
+    func test_zeroWidthFormattingCharactersAreDropped() {
+        for scalar in ["\u{200B}", "\u{2060}", "\u{FEFF}"] {
+            let word = LyricWord(word: "wo\(scalar)rd", startTime: 0, endTime: 1)
+            XCTAssertEqual(word.word, "word", "U+\(String(format: "%04X", scalar.unicodeScalars.first!.value)) must be dropped, not replaced with a space")
+        }
+        let line = LyricLine(text: "hi\u{FEFF}there", startTime: 0, endTime: 1)
+        XCTAssertEqual(line.text, "hithere")
+    }
+
+    /// Tabs/newlines are neither the non-breaking family nor zero-width --
+    /// left completely untouched (the coordinator's explicit scope bound).
+    func test_tabsAndNewlinesAreNeverTouched() {
+        let word = LyricWord(word: "a\tb\nc", startTime: 0, endTime: 1)
+        XCTAssertEqual(word.word, "a\tb\nc")
     }
 
     func test_lyricWord_plainSpaceAndNonWhitespaceUnaffected() {
@@ -114,6 +177,43 @@ final class LyricsWordWhitespaceNormalizationTests: XCTestCase {
     func test_lyricLine_normalizesTextWhitespaceToo() {
         let line = LyricLine(text: "hi\u{00A0}there", startTime: 0, endTime: 1)
         XCTAssertEqual(line.text, "hi there")
+    }
+
+    // MARK: - Comparison-only invariant: ANY residual whitespace mismatch must not clear words
+
+    /// The narrowed storage-level normalization deliberately leaves U+3000
+    /// (and other non-family whitespace) untouched, so `words` and `text`
+    /// CAN still disagree on whitespace after construction -- e.g. a
+    /// caller's `text` uses U+3000 as a clause separator where the
+    /// underlying `words` array happens to use a plain space at the same
+    /// position (or vice versa). The consistency invariant must still keep
+    /// `words` in that case: only a REAL (non-whitespace) content mismatch
+    /// may clear it.
+    func test_wordsSurviveConsistencyCheck_whenOnlyOtherWhitespaceDiffers() {
+        let words = [
+            LyricWord(word: "你好", startTime: 0, endTime: 0.4),
+            LyricWord(word: "世界", startTime: 0.4, endTime: 0.8),
+        ]
+        // `text` inserts an IDEOGRAPHIC SPACE between the two words where
+        // `words`' own concatenation has none at all -- a pure whitespace
+        // discrepancy, no character content differs.
+        let line = LyricLine(text: "你好\u{3000}世界", startTime: 0, endTime: 0.8, words: words)
+        XCTAssertTrue(line.hasSyllableSync, "a whitespace-only (U+3000) mismatch between text and words must not clear words")
+        XCTAssertEqual(line.words.count, 2)
+        // The stored text keeps its own U+3000 verbatim -- the fix does not
+        // rewrite it away.
+        XCTAssertEqual(line.text, "你好\u{3000}世界")
+    }
+
+    /// Same invariant, tab variant.
+    func test_wordsSurviveConsistencyCheck_whenOnlyTabDiffers() {
+        let words = [
+            LyricWord(word: "one", startTime: 0, endTime: 0.4),
+            LyricWord(word: "two", startTime: 0.4, endTime: 0.8),
+        ]
+        let line = LyricLine(text: "one\ttwo", startTime: 0, endTime: 0.8, words: words)
+        XCTAssertTrue(line.hasSyllableSync)
+        XCTAssertEqual(line.words.count, 2)
     }
 
     // MARK: - The regression itself: NBSP words must survive LyricLine's consistency invariant

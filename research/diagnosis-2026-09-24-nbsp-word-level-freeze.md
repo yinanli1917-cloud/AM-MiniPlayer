@@ -102,7 +102,7 @@ only one is this bug's proximate cause:
 ## Repro (red → green)
 
 `Tests/MusicMiniPlayerTests/LyricsWordWhitespaceNormalizationTests.swift`,
-9 tests. The end-to-end fixture tests build the founder's exact reported
+14 tests. The end-to-end fixture tests build the founder's exact reported
 lines (all six) with realistic NBSP-separated word timings, mirror
 `LyricsView.makeDisplayLyricLines`'s word-level split branch exactly
 (`realWrapWordPieces` → one `LyricLine` per group, `words: group` verbatim,
@@ -119,21 +119,67 @@ sites), and assert at BOTH 250pt and 180pt widths that:
   glyphs, none merged or dropped
   (`test_fixture_sweepLayout_locatesEveryWordAsARun_forRepresentativeLine`)
 
-Confirmed RED against the pre-fix code: temporarily reverted `LyricWord.init`/
-`LyricLine.init` to plain assignment (no whitespace normalization) and
-reran -- 8 of 9 tests failed, reproducing the founder's symptom across
-every fixture line at both widths (e.g. `width=250.0 line=0 piece=0
-('Memories light the') lost word-level sync`, word counts collapsing to 0
-across every split). Restored the fix, reran green.
+Confirmed RED against the pre-fix code (v1, before the scope correction
+below): temporarily reverted `LyricWord.init`/`LyricLine.init` to plain
+assignment (no whitespace normalization) and reran -- 8 of 9 tests then in
+the file failed, reproducing the founder's symptom across every fixture
+line at both widths (e.g. `width=250.0 line=0 piece=0 ('Memories light
+the') lost word-level sync`, word counts collapsing to 0 across every
+split). Restored the fix, reran green.
 
-## Fix
+## Fix (v1)
 
 `Sources/MusicMiniPlayerCore/Models/LyricModels.swift`: `LyricWord.init`
-and `LyricLine.init` now normalize every Unicode whitespace character other
-than the plain ASCII space (`Character.isWhitespace`, which covers U+00A0
-and the rest of the Unicode space-separator family -- em space, ideographic
-space, narrow no-break space, etc.) to `" "` at construction, via a shared
-`LyricWord.normalizingWhitespace(_:)` helper.
+and `LyricLine.init` normalized every Unicode whitespace character other
+than the plain ASCII space (`Character.isWhitespace`) to `" "` at
+construction.
+
+## Fix (v2, coordinator scope correction, same day)
+
+v1 was too broad: `Character.isWhitespace` also matches U+3000 IDEOGRAPHIC
+SPACE, which is a DELIBERATE full-width clause separator in CJK
+lyrics/translations (founder-tuned spacing, not a data artifact) -- v1
+would have silently rewritten it, and would have turned a literal tab or
+newline inside a word into a space too.
+
+Storage-level normalization (`LyricWord.normalizingNonBreakingSpaces`) is
+now narrowed to exactly two things: (1) map the non-breaking space FAMILY
+that actually causes the U+00A0 wrap failure -- U+00A0 NO-BREAK SPACE,
+U+202F NARROW NO-BREAK SPACE, U+2007 FIGURE SPACE -- to a plain space; (2)
+DROP (not replace) the zero-width formatting characters U+200B ZERO WIDTH
+SPACE, U+2060 WORD JOINER, U+FEFF ZERO WIDTH NO-BREAK SPACE (BOM), since
+they render as nothing and folding them to a visible space would be wrong.
+U+3000, tabs, newlines, and every other whitespace variant are left
+completely untouched, in both `LyricWord.word` and `LyricLine.text`.
+
+Because that narrower set can still leave OTHER whitespace mismatches
+between `words` and `text` unresolved (e.g. a caller's `text` uses U+3000
+where the underlying `words` concatenation has a plain space, or none, at
+the same position), the words/text consistency invariant in `LyricLine.init`
+no longer compares the raw stored strings at all. It now compares through
+a NEW `LyricWord.whitespaceStrippedComparisonKey(_:)` helper, which strips
+EVERY `Character.isWhitespace` character (not just the narrowed
+non-breaking family) for the COMPARISON ONLY -- the stored `text`/`words`
+are never touched by it. This is the actual belt-and-suspenders fix for
+the words-silently-cleared class of bug: any future whitespace variant
+that shows up in a lyric source, known or not, can no longer trip this
+invariant, while the narrower storage-level normalization only handles the
+specific U+00A0 wrap-and-clear mechanism and keeps rendered text free of
+invisible zero-width characters.
+
+Confirmed RED for the v2-specific tests by two separate temporary reverts:
+(a) storage normalization reverted to v1's blanket
+`Character.isWhitespace` substitution -- `test_ideographicAndOtherGeneral
+SpacesAreNeverTouched`, `test_zeroWidthFormattingCharactersAreDropped`,
+and `test_tabsAndNewlinesAreNeverTouched` failed (U+3000/EM SPACE got
+rewritten to plain space, zero-width characters got rewritten to a VISIBLE
+space instead of dropped, tabs/newlines got rewritten to space); (b)
+comparison invariant reverted to the pre-v2 raw-string
+`.replacingOccurrences(of: " ", with: "")` compare (with storage
+normalization restored) -- `test_wordsSurviveConsistencyCheck_whenOnly
+OtherWhitespaceDiffers` and `..._whenOnlyTabDiffers` failed
+(`hasSyllableSync` false, `words` cleared). Both restored, full file green
+(14/14).
 
 This is the single choke point every `LyricWord`/`LyricLine` in the app is
 built through -- every parser (YRC/TTML/LRC), `LyricsWordRepair`,
@@ -145,11 +191,6 @@ NetEase's YRC parser, and it self-heals stale disk-cache entries written
 before this fix (no schema bump needed) since the disk-cache decoder
 reconstructs `LyricWord` through this same initializer on every read.
 
-`LyricLine.text` is normalized too (not just `LyricWord.word`): with
-`words` now always plain-space, a caller that supplied a raw un-normalized
-line-level `text` alongside already-normalized `words` would otherwise
-reintroduce the exact same mismatch in the OTHER direction.
-
 Renderer files (`NativeLyricsRowView.swift`, `NativeLyricsTextSweepLayout.swift`,
 `NativeLyricsActiveLineDrawLayer.swift`) were read in full during this
 investigation and confirmed to correctly locate per-word glyph geometry
@@ -160,7 +201,7 @@ renderer file was touched.
 
 ## Tests run (all serial, DEVELOPER_DIR=Xcode, no network)
 
-- `LyricsWordWhitespaceNormalizationTests` (new) -- 9/9 pass
+- `LyricsWordWhitespaceNormalizationTests` (new/updated for v2) -- 14/14 pass
 - `LyricsParserTests` -- 57/57 pass
 - `LongLineEvalTests` -- 8/8 pass
 - `LyricsWordLevelPriorityTests` -- 8/8 pass
