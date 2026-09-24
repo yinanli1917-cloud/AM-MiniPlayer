@@ -16,6 +16,19 @@ import AppKit
 // (250pt) widths, plus a before/after comparison table against the OLD
 // (equal-division, unit-estimate-triggered) behavior.
 //
+// 2026-09-24 founder update: Plan A's splitting was too aggressive -- a line
+// that only wrapped to 3 visual lines was still being cut in half (the old
+// design used ONE token, `maxVisualLinesPerPiece` == 2, as BOTH the split
+// trigger and the per-piece budget). `LyricRealWrapSplitOptions` now carries
+// two explicit tokens: `splitTriggerVisualLines` (4 -- a line stays whole
+// unless it wraps to >= 4 visual lines) and `maxVisualLinesPerPiece` (3 --
+// once triggered, split into the fewest pieces that each fit <= 3 visual
+// lines). Acceptance (a) now checks the <= 3 per-piece budget; the new
+// acceptance (a2) checks the >= 4 trigger (a line that wraps to <= 3 visual
+// lines must produce exactly one, unsplit piece). Break-point priorities,
+// word-level exact timing, duration-floor merging, and per-piece translation
+// are unchanged.
+//
 // No Sources/ changes beyond the Plan A feature itself were made to
 // accommodate testing. `makeDisplayLyricLines`, `shouldKeepDisplayLineUnsplit`,
 // and `displayTiming` remain `private` methods on the `LyricsView` SwiftUI
@@ -504,7 +517,10 @@ final class LongLineEvalTests: XCTestCase {
         fixture.filter { !$0.isBackground }
     }
 
-    // MARK: (a) every piece <= 2 visual lines unless a single unbreakable token
+    // MARK: (a) every piece <= 3 visual lines unless a single unbreakable token
+    // (founder 2026-09-24: split-trigger raised to 4 visual lines, per-piece
+    // budget lowered from the old single-token 2 to 3 -- see
+    // LyricRealWrapSplitOptions.splitTriggerVisualLines / .maxVisualLinesPerPiece)
 
     func test_acceptance_a_pieceVisualLineBound_at180And250() throws {
         let fixture = try loadFixture()
@@ -528,6 +544,32 @@ final class LongLineEvalTests: XCTestCase {
             }
         }
         XCTAssertTrue(violations.isEmpty, "piece visual-line bound violated:\n" + violations.joined(separator: "\n"))
+    }
+
+    // MARK: (a2) a line that wraps to <= 3 visual lines whole stays a single, unsplit piece
+
+    /// Founder 2026-09-24 rule: splitting was too aggressive -- a line that
+    /// only wraps to 3 visual lines at the current width must NOT be split
+    /// at all (only lines of >= 4 visual lines are split). Measures the
+    /// WHOLE, unsplit line the same way production does (word-level lines
+    /// via `displayText(forWords:)`, line-level via the raw text) so this
+    /// check is independent of whatever `PlanADisplaySegmentation` itself
+    /// decided.
+    func test_acceptance_a2_shortLinesStayWhole_at180And250() throws {
+        let fixture = try loadFixture()
+        var violations: [String] = []
+        for eval in splittableLines(fixture) {
+            let line = EvalFixtureLoader.lyricLine(from: eval)
+            for width in EvalWidth.all {
+                let wholeLineText = line.hasSyllableSync ? LyricDisplaySegmenter.displayText(forWords: line.words) : line.text
+                let wholeLineCount = LyricDisplayLineMeasurement.visualLineCount(for: wholeLineText, rowWidth: width, isBackground: eval.isBackground)
+                guard wholeLineCount <= LyricRealWrapSplitOptions.default.maxVisualLinesPerPiece else { continue }
+                let pieces = PlanADisplaySegmentation.makeDisplayPieces(from: eval, rowWidth: width)
+                guard pieces.count != 1 else { continue }
+                violations.append("\(eval.id) @\(Int(width))pt: whole line is only \(wholeLineCount) visual lines (<= \(LyricRealWrapSplitOptions.default.maxVisualLinesPerPiece)) but was split into \(pieces.count) pieces")
+            }
+        }
+        XCTAssertTrue(violations.isEmpty, "short line was split despite being under the trigger:\n" + violations.joined(separator: "\n"))
     }
 
     /// Diagnostic listing (not an assertion): every row still >= 4 visual
@@ -735,6 +777,7 @@ final class LongLineEvalTests: XCTestCase {
         print("\n=== \(title) ===  n=\(metrics.count)")
         let avgMax = Double(metrics.reduce(0) { $0 + $1.maxVisualLinesNarrow }) / Double(max(1, metrics.count))
         let fourPlus = metrics.filter(\.stillFourPlusNarrow).count
+        let linesSplit = metrics.filter { $0.pieceCount > 1 }.count
         let totalBreaks = metrics.reduce(0) { $0 + $1.breakQuality.total }
         let punct = metrics.reduce(0) { $0 + $1.breakQuality.punctuation }
         let ws = metrics.reduce(0) { $0 + $1.breakQuality.whitespaceGap }
@@ -742,7 +785,7 @@ final class LongLineEvalTests: XCTestCase {
         let compact = metrics.reduce(0) { $0 + $1.breakQuality.compactScriptBoundary }
         let midWord = metrics.reduce(0) { $0 + $1.breakQuality.midWord }
         let orphans = metrics.reduce(0) { $0 + $1.orphanTranslationPieces }
-        print("  avgMaxVisualLines(narrow)=\(fmt(avgMax)) stillFourPlus(narrow)=\(fourPlus)/\(metrics.count) orphanTranslationPieces=\(orphans)")
+        print("  linesSplit=\(linesSplit)/\(metrics.count) avgMaxVisualLines(narrow)=\(fmt(avgMax)) stillFourPlus(narrow)=\(fourPlus)/\(metrics.count) orphanTranslationPieces=\(orphans)")
         if totalBreaks > 0 {
             let pct: (Int) -> String = { String(format: "%.0f%%", 100 * Double($0) / Double(totalBreaks)) }
             print("  breaks[punct=\(pct(punct)) ws=\(pct(ws)) scriptBoundary=\(pct(script)) compactScript=\(pct(compact)) midWord=\(pct(midWord))] (n=\(totalBreaks))")
