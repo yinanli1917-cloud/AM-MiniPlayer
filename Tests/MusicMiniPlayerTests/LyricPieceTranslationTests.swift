@@ -506,12 +506,20 @@ final class LyricPieceTranslationTests: XCTestCase {
     }
 
     /// Deliberately duplicated (not imported) copy of
-    /// `LyricPieceTranslation.originalPieceIsShort`'s rule -- see this
-    /// file's orphan check for why duplication (not reuse) is the point.
+    /// `LyricPieceTranslation.perPieceFloor`'s "is this piece allowed a
+    /// relaxed floor" rule -- see this file's orphan check for why
+    /// duplication (not reuse) is the point. 2026-09-23-afternoon-3: ALSO
+    /// checks `isVocableLine` (the codebase's existing, independently
+    /// authored vocable/onomatopoeia detector, reused here exactly as
+    /// production now reuses it -- not a re-implementation of this file's
+    /// own logic) since a multi-word ad-lib like "yeah yeah"/"la la la" is
+    /// legitimately short even though it fails the plain character/word
+    /// count proxy.
     private func evalOriginalPieceIsShort(_ piece: String) -> Bool {
         let trimmed = piece.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.count <= 3 { return true }
-        return trimmed.split(separator: " ", omittingEmptySubsequences: true).count <= 1
+        if trimmed.split(separator: " ", omittingEmptySubsequences: true).count <= 1 { return true }
+        return isVocableLine(trimmed)
     }
 
     private func loadHumanSplitEvalCases() throws -> [HumanSplitEvalCase] {

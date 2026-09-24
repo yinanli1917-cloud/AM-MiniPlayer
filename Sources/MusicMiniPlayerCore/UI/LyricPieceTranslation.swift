@@ -275,18 +275,62 @@ public enum LyricPieceTranslation {
     }
 
     /// Lexical-class tags that must never START a new displayed segment
-    /// (the break lands right before them) -- grammatical "glue" that
-    /// binds BACKWARD to what precedes it. `.otherWord` is included
-    /// defensively: it is the tagger's own "could not classify this token"
-    /// bucket, and this file's header documents the empirical case
-    /// (Chinese 每一次) where trusting an `.otherWord` tag as "safe" would
-    /// have reproduced the exact mid-phrase-split bug this revision fixes.
+    /// (the break lands right before them), REGARDLESS of what precedes
+    /// them -- grammatical "glue" words that always bind backward.
+    /// `.otherWord` is included: it is the tagger's own "could not classify
+    /// this token" bucket, and this file's header documents the empirical
+    /// case (Chinese 每一次) where trusting an `.otherWord` tag as "safe"
+    /// reproduces a mid-phrase split.
     private static let forbiddenFollowingLexicalTags: Set<NLTag> = [.particle, .classifier, .otherWord]
 
     /// Tags that must never END a segment (the break lands right after
-    /// them) -- forward-binding modifiers. See `forbiddenFollowingLexicalTags`
-    /// for why `.otherWord` is included on both sides.
+    /// them) -- forward-binding modifiers, REGARDLESS of what follows.
     private static let forbiddenPrecedingLexicalTags: Set<NLTag> = [.determiner, .number, .otherWord]
+
+    // 2026-09-23-afternoon-3 TESTED AND REVERTED (coordinator review of
+    // 36c029e/459cd98) -- documented honestly rather than silently
+    // dropped: the coordinator asked to narrow the two sets above so
+    // `.otherWord`/`.number`/`.determiner` only veto a break when BOTH
+    // sides are members (their diagnosis: either-side vetoing was "too
+    // broad", citing "走吧我 | 已经…"). Implemented literally and measured
+    // against this file's own eval + the independent hand-labeled check:
+    // it did NOT fix the cited case -- 走(Verb)|吧(OtherWord) is only weak
+    // on ONE side, so narrowing UNVETOES that boundary too, and the real
+    // production split became "走 | 吧我已经…" (WORSE: 走吧, a single
+    // cohesive "let's go" unit, torn apart, with the stray 吧 glued onto
+    // the wrong piece) -- AND it reopened the 每一次 regression this module
+    // was built to fix (每=Pronoun, not a member of the weak family, so
+    // 每|一 is no longer vetoed by a both-sides rule either; confirmed via
+    // `test_independentLinguisticIntegrityCheck_hardCodedForbiddenSplits`
+    // failing at "追逐每 | 一次日落…"). Since the narrowing regressed BOTH of
+    // its own target cases, it is reverted here to the either-side rule
+    // from the previous revision; 走吧我 | 已经… (awkward, not
+    // grammar-broken, not content-misattributed) remains an OPEN, reported
+    // limitation -- Apple's `.lexicalClass` model has no tag that
+    // distinguishes "走吧" (idiomatic verb+particle, should stay whole)
+    // from "每一次" (idiomatic determiner+numeral+classifier, should also
+    // stay whole) from ordinary isolated `.otherWord` tokens, so a
+    // tag-arithmetic rule alone cannot resolve both without inventing a
+    // per-phrase list (which the founder's review explicitly ruled out:
+    // "by lexical class, not by listing words"). No both-sides constant is
+    // kept in code -- this comment is the record of the experiment.
+
+    /// True when `precedingTag`/`followingTag` describe a break this file
+    /// must reject, beyond the unconditional `forbiddenFollowingLexicalTags`/
+    /// `forbiddenPrecedingLexicalTags` checks (which the caller applies
+    /// separately). Possessive particle (2026-09-23-afternoon-3,
+    /// coordinator review, KEPT -- orthogonal to the reverted narrowing
+    /// above, no regression found): a segment must not END with `.particle`
+    /// when the very next token is `.noun` -- Chinese 的/之/等
+    /// possessive/attributive particles attach FORWARD to the noun they
+    /// introduce (我的|手 -> "my" torn from "hand"), unlike a clause-final
+    /// particle (了/着/吧) that is perfectly fine to end a segment right
+    /// before an unrelated new clause starts (which is why plain
+    /// `.particle` is NOT in `forbiddenPrecedingLexicalTags` unconditionally
+    /// -- only this noun-specific case is banned).
+    private static func lexicalPairIsForbidden(preceding: NLTag?, following: NLTag?) -> Bool {
+        preceding == .particle && following == .noun
+    }
 
     /// Per-language cache of whether `NLTagger` actually has a
     /// `.lexicalClass` model on THIS system (`NLTagger.availableTagSchemes`
@@ -353,8 +397,8 @@ public enum LyricPieceTranslation {
     /// (which is exactly the mechanism that split Japanese 待っている
     /// mid-morpheme; see this file's header). When available, candidates
     /// come from `NLTagger.enumerateTags(unit:.word,scheme:.lexicalClass)`
-    /// token boundaries, filtered by `forbiddenFollowingLexicalTags`/
-    /// `forbiddenPrecedingLexicalTags`.
+    /// token boundaries, filtered by `forbiddenFollowingLexicalTags` and
+    /// `lexicalPairIsForbidden`.
     private static func breakCandidates(in text: String, translationLanguageCode: String) -> [BreakCandidate] {
         let chars = Array(text)
         guard chars.count > humanSplitMinSegmentGlyphs else { return [] }
@@ -421,6 +465,7 @@ public enum LyricPieceTranslation {
             let followingTag = tokens[index + 1].tag
             if let p = precedingTag, forbiddenPrecedingLexicalTags.contains(p) { continue }
             if let f = followingTag, forbiddenFollowingLexicalTags.contains(f) { continue }
+            if lexicalPairIsForbidden(preceding: precedingTag, following: followingTag) { continue }
 
             let offset = text.distance(from: text.startIndex, to: tokens[index].range.upperBound)
             guard offset > 0, offset < chars.count, !protectedAfter[offset - 1] else { continue }
@@ -450,32 +495,39 @@ public enum LyricPieceTranslation {
     /// original line's source language). Gates whether tier 2 candidates
     /// are generated at all; see `breakCandidates`.
     ///
-    /// The orphan floor is PER-PIECE (2026-09-23-afternoon-2 fix, defect
-    /// B): `perPieceFloor(pieceIndex:)` returns 1 when
-    /// `originalPieces[pieceIndex]` is itself short
-    /// (`originalPieceIsShort`), else the standard `humanSplitMinSegmentGlyphs`
-    /// (3). Applied both during candidate selection (so a short-original
-    /// piece's boundary can land close to its tiny target share) and in the
-    /// post-merge sweep below (trimming can shrink a segment by the
-    /// boundary whitespace a space-tier break consumed, so the raw
-    /// charIndex gap checked during selection is not the final word --
-    /// this pass verifies the ACTUAL trimmed segments and merges away any
-    /// orphan wherever it lands, not just at the very end).
+    /// The orphan floor is PER-PIECE: `perPieceFloor(pieceIndex:)` returns
+    /// 1 when `originalPieces[pieceIndex]` is itself short
+    /// (`originalPieceIsShort`) OR is a pure vocable/onomatopoeia line
+    /// (`isVocableLine`, the SAME detector `LyricsService` already uses to
+    /// skip translating "la la la"/"woo" lines -- 2026-09-23-afternoon-3
+    /// fix: a multi-word ad-lib like "yeah yeah" or "la la la" is not
+    /// "<=1 word" by the character/word-count proxy alone, but it IS a
+    /// vocable, and its natural translation is just as short), else the
+    /// standard `humanSplitMinSegmentGlyphs` (3).
     ///
-    /// Returns one optional segment per original piece. When there are
-    /// FEWER usable candidates than boundaries needed (short translation,
-    /// heavy bracket/quote protection, an unsupported language disabling
-    /// tier 2, etc.), the pieces that DID get a resolved break each carry
-    /// their own segment; the remainder of the translation (from the last
-    /// resolved break to the end) is NOT handed out piecemeal -- it merges
-    /// into the next piece in line (the "last piece that has one"), and any
-    /// pieces after THAT stay nil. This falls out of the algorithm without
-    /// a special case: with zero usable candidates at all, `selected` is
-    /// empty, there is exactly one segment (the whole trimmed translation),
-    /// and it lands on piece 0 -- the same shape as the old tier-3
-    /// fallback, but reached in this tier rather than falling through to it
-    /// (a human-origin line's `.none` pieces are simply "less lucky
-    /// splits", never machine-translated).
+    /// SELECTION AND ASSIGNMENT (2026-09-23-afternoon-3 rewrite, defect:
+    /// misplaced remainder). The previous implementation picked ALL
+    /// `originalPieces.count - 1` breaks first, then repaired any orphan
+    /// segment by deleting a break and letting `buildSegments` re-slice --
+    /// but removing break `i` always merges segment `i` FORWARD into
+    /// segment `i+1` and keeps the merged blob at index `i`, so a LATER
+    /// piece's real content silently landed under an EARLIER piece's slot
+    /// (founder repro: "yeah yeah"'s slot absorbed "I keep telling
+    /// myself..."'s translation while that piece itself went empty). This
+    /// version is a single FORWARD walk instead: for each boundary in
+    /// order, it tries to close off THAT boundary's own piece from
+    /// `lastGoodBreak` (nearest-share, tier-fallback, same as before); if
+    /// no candidate survives the floor check for either side, that piece
+    /// is left `nil` and `lastGoodBreak` does NOT advance -- so the next
+    /// boundary's attempt naturally absorbs the unclaimed range too,
+    /// keeping the flow forward, never backward. After the walk, whatever
+    /// remains from `lastGoodBreak` to the end of the string goes to the
+    /// LAST original piece (not wherever the walk happened to stop) --
+    /// UNLESS no boundary ever succeeded at all (`lastGoodBreak == 0`), in
+    /// which case the whole translation goes to piece 0 instead (the same
+    /// shape as the old tier-3 fallback, preserved for the
+    /// "translation too short/impossible to split at all" case -- see
+    /// `test_humanTranslationSplit_tooShortTranslation_wholeTextOnFirstPieceOnly`).
     public static func humanTranslationSplit(
         originalPieces: [String],
         pieceWeights: [Double],
@@ -507,99 +559,72 @@ public enum LyricPieceTranslation {
         }
 
         // Per-ORIGINAL-piece orphan floor -- see this function's doc
-        // comment and this file's header, defect (B). `pieceIndex` is
-        // clamped defensively; callers always pass a valid range.
+        // comment. `pieceIndex` is clamped defensively; callers always pass
+        // a valid range.
         func perPieceFloor(_ pieceIndex: Int) -> Int {
             guard pieceIndex >= 0, pieceIndex < originalPieces.count else { return humanSplitMinSegmentGlyphs }
-            return originalPieceIsShort(originalPieces[pieceIndex]) ? 1 : humanSplitMinSegmentGlyphs
+            let piece = originalPieces[pieceIndex]
+            return (originalPieceIsShort(piece) || isVocableLine(piece)) ? 1 : humanSplitMinSegmentGlyphs
         }
 
         let chars = Array(trimmed)
         let allCandidates = breakCandidates(in: trimmed, translationLanguageCode: translationLanguageCode)
+
+        var result: [String?] = Array(repeating: nil, count: originalPieces.count)
+        var lastGoodBreak = 0
 
         // Selection is STRICT-TIER-FALLBACK, not "globally nearest
         // regardless of tier": for each break, only candidates from the
         // HIGHEST tier that has ANY usable candidate are even considered --
         // a natural clause-punctuation or space boundary always wins over a
         // numerically closer word-boundary candidate, exactly the founder's
-        // stated "priority" ordering. (An earlier version picked whichever
-        // candidate was numerically nearest across ALL tiers and used tier
-        // only as an exact-distance tie-break -- ties are rare, so in
-        // practice it almost always ignored the priority entirely and
-        // sometimes broke mid-phrase 1-2 characters from an obviously
-        // better space/punctuation boundary; caught by this module's own
-        // eval, see piece_translation_human_split_eval.json's hs-002.)
-        var selected: [Int] = []
-        var lastBreak = 0
-        for (boundaryIndex, targetShare) in targetShares.enumerated() {
-            let targetOffset = targetShare * Double(chars.count)
-            var best: BreakCandidate?
-            for tier in 0...2 {
-                // Both sides matter: a candidate must leave at least
-                // `perPieceFloor(boundaryIndex)` characters BEHIND it (the
-                // piece it would close out) AND at least
-                // `perPieceFloor(boundaryIndex + 1)` characters of the
-                // translation REMAINING ahead of it (the piece that would
-                // start there) -- a candidate sitting right before the
-                // string's end (e.g. a lone trailing period) would
-                // otherwise "win" tier 0 purely by tier priority while
-                // producing a degenerate empty/orphan final segment,
-                // starving a MUCH better-fitting lower-tier candidate (a
-                // mid-string space) of any consideration at all. Caught by
-                // this module's own eval, see
-                // piece_translation_human_split_eval.json's hs-006.
-                let usable = allCandidates.filter {
-                    $0.tier == tier
-                        && $0.charIndex - lastBreak >= perPieceFloor(boundaryIndex)
-                        && chars.count - $0.charIndex >= perPieceFloor(boundaryIndex + 1)
-                }
-                if let nearest = usable.min(by: {
-                    abs(Double($0.charIndex) - targetOffset) < abs(Double($1.charIndex) - targetOffset)
-                }) {
-                    best = nearest
-                    break
+        // stated "priority" ordering. Within a tier, candidates are tried
+        // NEAREST-SHARE FIRST, but a candidate whose ACTUAL TRIMMED segment
+        // would violate either side's floor is skipped in favor of the
+        // next-nearest candidate in the SAME tier before falling to a
+        // lower tier (trimming can shrink a segment by the boundary
+        // whitespace a space-tier break consumed, so the raw distance
+        // alone is not the final word -- see hs-006's history).
+        for boundaryIndex in 0..<targetShares.count {
+            let targetOffset = targetShares[boundaryIndex] * Double(chars.count)
+            var committed: Int?
+            tierSearch: for tier in 0...2 {
+                let candidatesInTier = allCandidates
+                    .filter { $0.tier == tier && $0.charIndex > lastGoodBreak }
+                    .sorted {
+                        abs(Double($0.charIndex) - targetOffset) < abs(Double($1.charIndex) - targetOffset)
+                    }
+                for candidate in candidatesInTier {
+                    guard chars.count - candidate.charIndex >= perPieceFloor(boundaryIndex + 1) else { continue }
+                    let segment = String(chars[lastGoodBreak..<candidate.charIndex]).trimmingCharacters(in: .whitespaces)
+                    guard segment.count >= perPieceFloor(boundaryIndex) else { continue }
+                    result[boundaryIndex] = segment
+                    committed = candidate.charIndex
+                    break tierSearch
                 }
             }
-            guard let best else {
-                break // Out of usable candidates at every tier -- remainder merges below.
+            if let committed {
+                lastGoodBreak = committed
             }
-            selected.append(best.charIndex)
-            lastBreak = best.charIndex
+            // Else: piece `boundaryIndex` stays nil (never populated with a
+            // LATER piece's content) and `lastGoodBreak` is unchanged, so
+            // the NEXT boundary's attempt -- or, if none succeed, the
+            // final remainder assignment below -- naturally absorbs this
+            // piece's unclaimed range too. The flow is always FORWARD.
         }
 
-        func buildSegments(_ breaks: [Int]) -> [String] {
-            var segs: [String] = []
-            var cursor = 0
-            for breakPoint in breaks {
-                segs.append(String(chars[cursor..<breakPoint]).trimmingCharacters(in: .whitespaces))
-                cursor = breakPoint
-            }
-            segs.append(String(chars[cursor...]).trimmingCharacters(in: .whitespaces))
-            return segs
-        }
-
-        var breaks = selected
-        var segments = buildSegments(breaks)
-        while segments.count > 1 {
-            guard let orphanIndex = segments.indices.first(where: { idx in
-                let segment = segments[idx]
-                return !segment.isEmpty && segment.count < perPieceFloor(idx)
-            }) else { break }
-            if orphanIndex == segments.count - 1 {
-                breaks.removeLast()
+        let remainder = String(chars[lastGoodBreak...]).trimmingCharacters(in: .whitespaces)
+        if !remainder.isEmpty {
+            if lastGoodBreak > 0 {
+                result[originalPieces.count - 1] = remainder
             } else {
-                breaks.remove(at: orphanIndex)
+                // No boundary ever succeeded -- degrade exactly like the
+                // old tier-3 fallback: the whole translation on piece 0.
+                result[0] = remainder
             }
-            segments = buildSegments(breaks)
         }
 
-        segments = segments.filter { !$0.isEmpty }
-        guard !segments.isEmpty else { return nil }
-
-        var result: [String?] = Array(repeating: nil, count: originalPieces.count)
-        for (index, segment) in segments.enumerated() where index < originalPieces.count {
-            result[index] = segment
-        }
+        guard result.contains(where: { $0 != nil }) else { return nil }
         return result
     }
 
