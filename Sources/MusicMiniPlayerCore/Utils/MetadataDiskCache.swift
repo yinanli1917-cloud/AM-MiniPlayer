@@ -45,8 +45,9 @@
  * DEBOUNCED — a set marks the state dirty and schedules a single coalesced
  * atomic write (`persistDebounce` seconds later) on the SAME serial queue,
  * so there is no second synchronization domain. `flush()` forces the pending
- * write synchronously; the app calls it from applicationWillTerminate and
- * deinit calls it as a safety net for short-lived instances.
+ * write synchronously; the app calls it from applicationWillTerminate. deinit
+ * persists a dirty state directly (no queue hop) as a safety net for
+ * short-lived instances.
  * ---------------------------------------------------------------------------
  */
 
@@ -212,7 +213,12 @@ public final class MetadataDiskCache {
     deinit {
         // Safety net for short-lived instances (tests, tools). The app
         // singleton never deinits — applicationWillTerminate flushes it.
-        flush()
+        // Never hop onto `queue` here: the last release can land INSIDE one of
+        // our own queue closures (they promote `[weak self]` to strong), and a
+        // queue.sync onto the queue we are already running on traps. No hop is
+        // needed either — deinit only runs once no closure holds `self` (weak
+        // captures are already nil), so this is the sole accessor of state.
+        if dirty { persistNow() }
     }
 
     /// Default location: NanoPodCacheLocation-scoped directory (production:
@@ -494,7 +500,7 @@ public final class MetadataDiskCache {
     // ------------------------------------------------------------------------
 
     /// Forces the pending debounced write to disk NOW. Called from the app's
-    /// applicationWillTerminate and from deinit; safe to call repeatedly —
+    /// applicationWillTerminate; safe to call repeatedly —
     /// a clean cache is a no-op.
     public func flush() {
         queue.sync {
@@ -566,7 +572,7 @@ public final class MetadataDiskCache {
         }
     }
 
-    /// Must be called inside `queue`.
+    /// Must be called inside `queue` (or from deinit, which is exclusive).
     private func persistNow() {
         dirty = false
         #if DEBUG

@@ -95,7 +95,12 @@ public final class TranslationDiskCache {
     }
 
     deinit {
-        flush()
+        // Never hop onto `queue` here: the last release can land INSIDE one of
+        // our own queue closures (they promote `[weak self]` to strong), and a
+        // queue.sync onto the queue we are already running on traps. No hop is
+        // needed either — deinit only runs once no closure holds `self` (weak
+        // captures are already nil), so this is the sole accessor of state.
+        if dirty { persistNow() }
     }
 
     /// Default location: NanoPodCacheLocation-scoped directory (production:
@@ -199,7 +204,7 @@ public final class TranslationDiskCache {
         }
     }
 
-    /// Must be called inside `queue`.
+    /// Must be called inside `queue` (or from deinit, which is exclusive).
     private func persistNow() {
         dirty = false
         #if DEBUG
