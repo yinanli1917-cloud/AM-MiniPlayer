@@ -687,6 +687,15 @@ public final class LyricsParser {
     /// A line already marked `isBackground` (from TTML x-bg parsing) passes
     /// through untouched. A parenthetical in the MIDDLE of a line is left
     /// alone — only whole-line or edge-anchored brackets qualify.
+    ///
+    /// 2026-09-24 fix (founder question: "和声有没有逐字歌词？如果都是逐字
+    /// 歌词" — this bracket-driven split used to construct BOTH resulting
+    /// lines with `words: []`, unconditionally dropping word-level timing
+    /// even when the source line was word-level, so a word-level song
+    /// degraded to line-level rendering on every bracket-marked harmony row.
+    /// `partitionWords` now carries each original `LyricWord` onto whichever
+    /// side (melody/background) its character position lands in, so a
+    /// word-level input stays word-level on both resulting lines.
     func splitBackgroundVocalLines(_ lines: [LyricLine]) -> [LyricLine] {
         var result: [LyricLine] = []
         result.reserveCapacity(lines.count)
@@ -702,21 +711,30 @@ public final class LyricsParser {
             }
 
             if let inner = wholeLineBracketedInner(trimmed) {
+                // Whole line IS the background part — every word (if the line
+                // is word-level) belongs to it. `partitionWords` with a
+                // full-string range degrades to "assign everything", so this
+                // reuses the same generic machinery as the edge-split case
+                // below instead of a special-cased branch.
+                let backgroundWords = partitionWords(
+                    line.words, sourceText: trimmed, backgroundRange: trimmed.startIndex..<trimmed.endIndex
+                ).background
                 result.append(LyricLine(
                     text: inner, startTime: line.startTime, endTime: line.endTime,
-                    words: [], translation: line.translation, isBackground: true
+                    words: backgroundWords, translation: line.translation, isBackground: true
                 ))
                 continue
             }
 
-            if let (melody, background) = splitEdgeParenthetical(trimmed) {
+            if let (melody, background, backgroundRange) = splitEdgeParenthetical(trimmed) {
+                let partitioned = partitionWords(line.words, sourceText: trimmed, backgroundRange: backgroundRange)
                 result.append(LyricLine(
                     text: melody, startTime: line.startTime, endTime: line.endTime,
-                    words: [], translation: line.translation, isBackground: false
+                    words: partitioned.melody, translation: line.translation, isBackground: false
                 ))
                 result.append(LyricLine(
                     text: background, startTime: line.startTime, endTime: line.endTime,
-                    words: [], translation: nil, isBackground: true
+                    words: partitioned.background, translation: nil, isBackground: true
                 ))
                 continue
             }
@@ -741,7 +759,12 @@ public final class LyricsParser {
     /// (melody: "A", background: "B") when the bracket is anchored at the
     /// very start or end of the line (not the whole line — that is handled
     /// by `wholeLineBracketedInner`) and both sides are non-empty.
-    private func splitEdgeParenthetical(_ text: String) -> (melody: String, background: String)? {
+    ///
+    /// `backgroundRange` is the span of `text` (BEFORE trimming, brackets
+    /// included) that the background side occupies, so a caller can
+    /// partition a word-level line's `[LyricWord]` array by position without
+    /// re-deriving the bracket boundary itself.
+    private func splitEdgeParenthetical(_ text: String) -> (melody: String, background: String, backgroundRange: Range<String.Index>)? {
         guard let first = text.first, let last = text.last else { return nil }
 
         // Trailing: "... (B)"
@@ -752,7 +775,7 @@ public final class LyricsParser {
                 let melody = String(text[text.startIndex..<openIndex]).trimmingCharacters(in: .whitespaces)
                 let background = String(text[text.index(after: openIndex)..<lastIndex]).trimmingCharacters(in: .whitespaces)
                 if !melody.isEmpty, letterCount(background) >= 2 {
-                    return (melody, background)
+                    return (melody, background, openIndex..<text.endIndex)
                 }
             }
         }
@@ -765,12 +788,75 @@ public final class LyricsParser {
                 let afterIndex = text.index(after: closeIndex)
                 let melody = String(text[afterIndex...]).trimmingCharacters(in: .whitespaces)
                 if !melody.isEmpty, letterCount(background) >= 2 {
-                    return (melody, background)
+                    return (melody, background, text.startIndex..<afterIndex)
                 }
             }
         }
 
         return nil
+    }
+
+    /// Marker characters that only ever appear at the edge of a background
+    /// span to delimit it. Stripped from any word that carries one (a source
+    /// may attach the delimiter to its neighboring token's own text, e.g. a
+    /// per-word span literally spelled "(love") so the returned words stay
+    /// consistent with the bracket-free melody/background display text —
+    /// `LyricLine.init`'s words/text invariant would otherwise silently drop
+    /// them again, reproducing the exact bug this fixes.
+    private static let backgroundMarkerCharacters: Set<Character> = ["(", ")", "（", "）"]
+
+    private func strippingBackgroundMarkers(_ word: LyricWord) -> LyricWord? {
+        guard word.word.contains(where: { Self.backgroundMarkerCharacters.contains($0) }) else { return word }
+        let stripped = String(word.word.filter { !Self.backgroundMarkerCharacters.contains($0) })
+        guard !stripped.isEmpty else { return nil }
+        return LyricWord(word: stripped, startTime: word.startTime, endTime: word.endTime)
+    }
+
+    /// Partitions a word-level line's `words` (assumed positionally locatable,
+    /// in order, within `sourceText`) into the words landing inside
+    /// `backgroundRange` versus outside it, so a bracket-driven melody/
+    /// background split (`splitBackgroundVocalLines`) can carry per-word
+    /// timing onto BOTH resulting lines instead of discarding it.
+    ///
+    /// A word whose located span straddles the boundary (rare — the bracket
+    /// normally sits at a token edge, not mid-word) is assigned to whichever
+    /// side holds the MAJORITY of its characters; an exact tie falls to
+    /// melody. A word that cannot be located verbatim at/after the running
+    /// cursor (should not happen for well-formed input) is kept on the
+    /// melody side rather than silently dropped. `words: []` in → `([], [])`
+    /// out, so line-level (non-word-level) lines are unaffected.
+    private func partitionWords(
+        _ words: [LyricWord], sourceText: String, backgroundRange: Range<String.Index>
+    ) -> (melody: [LyricWord], background: [LyricWord]) {
+        guard !words.isEmpty else { return ([], []) }
+
+        var melody: [LyricWord] = []
+        var background: [LyricWord] = []
+        var cursor = sourceText.startIndex
+
+        for word in words {
+            guard !word.word.isEmpty else { continue }
+            guard let range = sourceText.range(of: word.word, range: cursor..<sourceText.endIndex) else {
+                if let kept = strippingBackgroundMarkers(word) { melody.append(kept) }
+                continue
+            }
+            let overlap = overlapLength(range, backgroundRange, in: sourceText)
+            let total = sourceText.distance(from: range.lowerBound, to: range.upperBound)
+            let landsInBackground = total > 0 && overlap * 2 > total
+            if let kept = strippingBackgroundMarkers(word) {
+                if landsInBackground { background.append(kept) } else { melody.append(kept) }
+            }
+            cursor = range.upperBound
+        }
+        return (melody, background)
+    }
+
+    /// Character-count overlap between two `String.Index` ranges of the same string.
+    private func overlapLength(_ a: Range<String.Index>, _ b: Range<String.Index>, in text: String) -> Int {
+        let lower = max(a.lowerBound, b.lowerBound)
+        let upper = min(a.upperBound, b.upperBound)
+        guard lower < upper else { return 0 }
+        return text.distance(from: lower, to: upper)
     }
 
     /// Depth-counted scan forward from an opening bracket to find its match.
