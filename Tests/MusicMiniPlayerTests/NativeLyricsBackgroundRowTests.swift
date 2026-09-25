@@ -3,12 +3,14 @@ import AppKit
 @testable import MusicMiniPlayerCore
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Founder decision (2026-09-20): backing vocals (和声) render as their own
-// row directly under their melody line — 0.8x font size, one dim tier lower
-// than the melody row's own tier in the same state, no active-line scale-up,
-// half the normal inter-row gap, never a blur-focus centre — while the
-// melody row's own geometry stays byte-identical whether or not a
-// background row follows it.
+// Founder decision (2026-09-20, brightness reversed 2026-09-25): backing
+// vocals (和声) render as their own row directly under their melody line —
+// 0.8x font size, SAME brightness tier as the melody row's own tier in the
+// same state (2026-09-20 originally called for one tier lower; the founder
+// reversed that on 2026-09-25 — font size is the only thing that still sets
+// a background row apart), no active-line scale-up, half the normal
+// inter-row gap, never a blur-focus centre — while the melody row's own
+// geometry stays byte-identical whether or not a background row follows it.
 //
 // These are code-level / geometry-level checks per project rule (手感类验证
 // 2026-08-21): unit assertions on the pure measurement + visual-target
@@ -81,9 +83,9 @@ final class NativeLyricsBackgroundRowTests: XCTestCase {
         XCTAssertEqual(plan.constants.mainFontSize, 24 * 0.8, accuracy: 0.001)
     }
 
-    // MARK: - Dim tier
+    // MARK: - Dim tier (founder 2026-09-25: SAME tier as melody, not one lower)
 
-    func test_backgroundRow_dimTier_isOneStepLowerThanMelody_whileActive() {
+    func test_backgroundRow_dimTier_matchesMelody_whileActive() {
         let melody = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 0, currentIndex: 0, scrollTargetIndex: 0,
             hotActiveIndices: [0, 1], isManualScrolling: false
@@ -92,14 +94,10 @@ final class NativeLyricsBackgroundRowTests: XCTestCase {
             displayIndex: 1, currentIndex: 0, scrollTargetIndex: 0,
             hotActiveIndices: [0, 1], isManualScrolling: false, isBackground: true
         )
-        XCTAssertLessThan(background.dimBaseBrightness, melody.dimBaseBrightness)
-        XCTAssertEqual(
-            background.dimBaseBrightness,
-            NativeLyricsVisualTarget.nextLowerBrightnessTier(melody.dimBaseBrightness)
-        )
+        XCTAssertEqual(background.dimBaseBrightness, melody.dimBaseBrightness)
     }
 
-    func test_backgroundRow_opacityTier_isOneStepLowerThanMelody_duringManualScroll() {
+    func test_backgroundRow_opacityTier_matchesMelody_duringManualScroll() {
         let melody = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 0, currentIndex: 0, scrollTargetIndex: 0,
             hotActiveIndices: [], isManualScrolling: true
@@ -109,8 +107,47 @@ final class NativeLyricsBackgroundRowTests: XCTestCase {
             hotActiveIndices: [], isManualScrolling: true, isBackground: true
         )
         XCTAssertEqual(melody.opacity, 0.6)
-        XCTAssertLessThan(background.opacity, melody.opacity)
-        XCTAssertEqual(background.opacity, NativeLyricsVisualTarget.nextLowerBrightnessTier(0.6))
+        XCTAssertEqual(background.opacity, melody.opacity)
+    }
+
+    /// Every state this ladder is exercised in (hot-active w/ fold, harmony
+    /// tier, plain inactive at various distances, manual-scroll all-clear)
+    /// must produce an identical opacity AND dimBaseBrightness for a
+    /// background row vs. its melody row — the founder's 2026-09-25 reversal
+    /// applies across the whole state space, not just the two states the
+    /// narrower tests above pin.
+    func test_backgroundRow_brightnessTier_matchesMelody_acrossAllStates() {
+        struct Scenario { let displayIndex: Int; let currentIndex: Int; let hotActiveIndices: Set<Int>; let isManualScrolling: Bool; let interludeBlend: CGFloat; let gapRecedeBlend: CGFloat }
+        let scenarios: [Scenario] = [
+            // Hot-active, no fold.
+            Scenario(displayIndex: 0, currentIndex: 0, hotActiveIndices: [0], isManualScrolling: false, interludeBlend: 0, gapRecedeBlend: 0),
+            // Hot-active, mid-interlude fold.
+            Scenario(displayIndex: 0, currentIndex: 0, hotActiveIndices: [0], isManualScrolling: false, interludeBlend: 0.5, gapRecedeBlend: 0),
+            // Hot-active, mid ordinary-gap fold.
+            Scenario(displayIndex: 0, currentIndex: 0, hotActiveIndices: [0], isManualScrolling: false, interludeBlend: 0, gapRecedeBlend: 0.5),
+            // Harmony tier (co-starting with the current line, not itself current).
+            Scenario(displayIndex: 1, currentIndex: 0, hotActiveIndices: [0, 1], isManualScrolling: false, interludeBlend: 0, gapRecedeBlend: 0),
+            // Plain inactive, near.
+            Scenario(displayIndex: 2, currentIndex: 0, hotActiveIndices: [], isManualScrolling: false, interludeBlend: 0, gapRecedeBlend: 0),
+            // Plain inactive, far beyond the taper start.
+            Scenario(displayIndex: 20, currentIndex: 0, hotActiveIndices: [], isManualScrolling: false, interludeBlend: 0, gapRecedeBlend: 0),
+            // Manual scroll all-clear tier.
+            Scenario(displayIndex: 3, currentIndex: 0, hotActiveIndices: [], isManualScrolling: true, interludeBlend: 0, gapRecedeBlend: 0)
+        ]
+        for scenario in scenarios {
+            let melody = NativeLyricsVisualTarget.amllTarget(
+                displayIndex: scenario.displayIndex, currentIndex: scenario.currentIndex, scrollTargetIndex: scenario.currentIndex,
+                hotActiveIndices: scenario.hotActiveIndices, isManualScrolling: scenario.isManualScrolling,
+                interludeBlend: scenario.interludeBlend, gapRecedeBlend: scenario.gapRecedeBlend
+            )
+            let background = NativeLyricsVisualTarget.amllTarget(
+                displayIndex: scenario.displayIndex, currentIndex: scenario.currentIndex, scrollTargetIndex: scenario.currentIndex,
+                hotActiveIndices: scenario.hotActiveIndices, isManualScrolling: scenario.isManualScrolling,
+                interludeBlend: scenario.interludeBlend, gapRecedeBlend: scenario.gapRecedeBlend, isBackground: true
+            )
+            XCTAssertEqual(background.opacity, melody.opacity, "opacity mismatch for \(scenario)")
+            XCTAssertEqual(background.dimBaseBrightness, melody.dimBaseBrightness, "dimBaseBrightness mismatch for \(scenario)")
+        }
     }
 
     // MARK: - Active with melody, sweep carries through
