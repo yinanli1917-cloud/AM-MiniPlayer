@@ -74,8 +74,14 @@ public struct MiniPlayerView: View {
     var mainBody: some View {
         GeometryReader { geometry in
             ZStack {
-                // Background: defaults-switched fluid gradient / native glass experiment
-                PanelBackdrop(artwork: effectArtwork ?? musicController.currentArtwork)
+                // Background: defaults-switched fluid gradient / native glass experiment.
+                // Founder 2026-09-25: glass/clear only show on the non-fullscreen album
+                // page — PanelBackdrop reads no page state itself, so that condition is
+                // computed here and passed in as a plain Bool.
+                PanelBackdrop(
+                    artwork: effectArtwork ?? musicController.currentArtwork,
+                    isAlbumPageNonFullscreen: musicController.currentPage == .album && !fullscreenAlbumCover
+                )
                     .ignoresSafeArea()
                     .accessibilityHidden(true)
 

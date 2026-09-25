@@ -73,7 +73,7 @@ Sources/
 │   │   └── Background/           - Background views
 │   │       ├── FluidGradientBackground.swift
 │   │       ├── LiquidBackgroundView.swift
-│   │       └── PanelBackdrop.swift   - 面板底材切换（fluid 默认 | macOS 26 原生 NSGlassEffectView：glass=Regular 实验臂、clear=Clear 透桌面+封面主色单色染色），nanopod://backdrop/<fluid|glass|clear> 运行时切换（release 可用）
+│   │       └── PanelBackdrop.swift   - 面板底材切换（fluid 默认 | macOS 26 原生 NSGlassEffectView：glass=Regular 实验臂、clear=Clear 透桌面+封面主色单色染色），nanopod://backdrop/<fluid|glass|clear> 运行时切换（release 可用）；09-25 起 glass/clear 仅作用于非全屏专辑页，歌词页/播放列表页恒为 fluid，两者随专辑页切入/切出用 pageSwitch material 时钟交叉淡入淡出
 │   ├── Utils/
 │   │   ├── HTTPClient.swift           - HTTP requests + retry + connection warmup + NetworkOutcomeLedger (protocol vs transport)
 │   │   ├── LanguageUtils.swift        - Language detection + S/T Chinese conversion + Japanese reading (CFStringTokenizer) + two-lane romanized-title corroboration
