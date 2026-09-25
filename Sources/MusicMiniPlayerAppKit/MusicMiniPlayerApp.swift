@@ -182,8 +182,10 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         case "settings":
             openSettingsPage(named: url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
         case "backdrop":
-            // nanopod://backdrop/<fluid|glass> — live-switch the panel backdrop
-            // (glass = native Tahoe glass experiment; unknown values clamp to fluid).
+            // nanopod://backdrop/<fluid|glass|clear> — live-switch the panel backdrop
+            // (glass = native Tahoe glass .regular style; clear = native Tahoe glass
+            // .clear style, desktop shows through with a single solid tint;
+            // unknown values clamp to fluid).
             let style = PanelBackdropStyle.resolve(from: url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
             UserDefaults.standard.set(style.rawValue, forKey: PanelBackdropStyle.defaultsKey)
         #if DEBUG || LOCAL_DEVELOPER_BUILD

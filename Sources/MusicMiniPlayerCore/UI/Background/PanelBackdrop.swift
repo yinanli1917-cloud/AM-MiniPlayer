@@ -3,12 +3,15 @@ import AppKit
 
 // =============================================================================
 // [INPUT]: FluidGradientBackground (fluid arm), AppKit NSGlassEffectView
-//          (glass arm, macOS 26), NSImage.dominantColor() for the tint
+//          (glass + clear arms, macOS 26), NSImage.dominantColor() for the tint
 // [OUTPUT]: PanelBackdropStyle (defaults-driven switch), PanelBackdrop (the
 //           single mount point for the panel's base background)
 // [POS]: Backdrop-cost experiment. The glass arm revives the pre-b9b6657
 //        translucent panel (LiquidBackgroundView, deprecated for overexposure)
 //        on the native Tahoe glass API instead of stacked NSVisualEffectViews.
+//        The clear arm is the founder-requested real Liquid Glass "Clear"
+//        style — desktop shows through the panel with a single solid tint on
+//        top, replacing the artwork-derived fluid gradient.
 //        Switch at runtime via nanopod://debug/backdrop/<style>; default stays
 //        fluid so the shipping look is unchanged until the user opts in.
 // =============================================================================
@@ -16,6 +19,7 @@ import AppKit
 public enum PanelBackdropStyle: String, CaseIterable {
     case fluid
     case glass
+    case clear
 
     public static let defaultsKey = "panelBackdropStyle"
 
@@ -67,7 +71,18 @@ public struct PanelBackdrop: View {
                 if #available(macOS 26.0, *) {
                     switch role {
                     case .base:
-                        GlassBackdropView(artwork: artwork)
+                        GlassBackdropView(artwork: artwork, glassStyle: .regular)
+                    case .pageOverlay:
+                        Color.clear
+                    }
+                } else {
+                    FluidGradientBackground(artwork: artwork)
+                }
+            case .clear:
+                if #available(macOS 26.0, *) {
+                    switch role {
+                    case .base:
+                        GlassBackdropView(artwork: artwork, glassStyle: .clear)
                     case .pageOverlay:
                         Color.clear
                     }
@@ -83,14 +98,19 @@ public struct PanelBackdrop: View {
 // MARK: - Native glass arm (macOS 26)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+/// Tint alpha for the tuned glass arms (`.regular` and `.clear`). Same value
+/// for both today; tune here if the two styles need to diverge.
+private let panelGlassTintAlpha: CGFloat = 0.35
+
 @available(macOS 26.0, *)
 private struct GlassBackdropView: View {
     let artwork: NSImage?
+    var glassStyle: NSGlassEffectView.Style
     @State private var tint: NSColor?
     @State private var tintedArtworkHash: Int = 0
 
     var body: some View {
-        NativeGlassSurface(tint: tint)
+        NativeGlassSurface(tint: tint, glassStyle: glassStyle)
             .onAppear { updateTint() }
             .onChange(of: artwork) { updateTint() }
     }
@@ -107,7 +127,7 @@ private struct GlassBackdropView: View {
             let dominant = artwork.dominantColor()
             DispatchQueue.main.async {
                 tintedArtworkHash = hash
-                tint = dominant?.withAlphaComponent(0.35)
+                tint = dominant?.withAlphaComponent(panelGlassTintAlpha)
             }
         }
     }
@@ -116,15 +136,18 @@ private struct GlassBackdropView: View {
 @available(macOS 26.0, *)
 private struct NativeGlassSurface: NSViewRepresentable {
     var tint: NSColor?
+    var glassStyle: NSGlassEffectView.Style
 
     func makeNSView(context: Context) -> NSGlassEffectView {
         let view = NSGlassEffectView()
         view.cornerRadius = 16
+        view.style = glassStyle
         view.tintColor = tint
         return view
     }
 
     func updateNSView(_ view: NSGlassEffectView, context: Context) {
+        view.style = glassStyle
         view.tintColor = tint
     }
 }

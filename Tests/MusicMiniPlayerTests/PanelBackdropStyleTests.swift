@@ -33,5 +33,7 @@ final class PanelBackdropStyleTests: XCTestCase {
         XCTAssertEqual(PanelBackdropStyle.resolve(from: "GLASS"), .glass)
         XCTAssertEqual(PanelBackdropStyle.resolve(from: "Fluid"), .fluid)
         XCTAssertEqual(PanelBackdropStyle.resolve(from: "fluid"), .fluid)
+        XCTAssertEqual(PanelBackdropStyle.resolve(from: "clear"), .clear)
+        XCTAssertEqual(PanelBackdropStyle.resolve(from: "CLEAR"), .clear)
     }
 }
