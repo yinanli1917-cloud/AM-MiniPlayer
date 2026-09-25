@@ -2,7 +2,7 @@
  * [INPUT]: LyricsParser, LyricsScorer, MetadataResolver, HTTPClient, LanguageUtils, LyricsSourceProfile (typed source registry)
  * [OUTPUT]: fetchAllSources parallel source requests with direct-title and native-alias identity evidence kept separate; LyricsFetchResult.source is typed LyricsSource; every result carries a write-once LyricsSelectionMemo (identity tokens + solo verdict + DrainExitFacts computed once per result, reused across drain-loop events — the exit closures keep only pool composition, elapsed time and branch flags event-side)
  * [POS]: Lyrics fetch sub-module; owns HTTP requests and result aggregation for all lyric sources
- * [NOTE]: NetEase/QQ share the searchAndSelectCandidate template and generic buildCandidates flow; album hints may fall back to exact title/artist/duration disk hits; ASCII punctuation variants run as metadata branches; per-source gates read declared profile traits and disk-cache source strings map once at the boundary; 24h availability verdicts are gated on NetworkOutcomeLedger quorum (no transport failures) — default-allow when unbound; the authoritative backfill is hard-bounded by AuthoritativeBackfillBudget (every child via addBoundedSourceTask, 9s overall sentinel, witness = 3s parallel discovery + 6s probe) and marker-only foreground sets take the empty fast exit with unclamped evidence windows (review #6+#7)
+ * [NOTE]: NetEase/QQ share the searchAndSelectCandidate template and generic buildCandidates flow; album hints may fall back to exact title/artist/duration disk hits; ASCII punctuation variants run as metadata branches; per-source gates read declared profile traits and disk-cache source strings map once at the boundary; 24h availability verdicts are gated on NetworkOutcomeLedger quorum (no transport failures) — default-allow when unbound; the authoritative backfill is hard-bounded by AuthoritativeBackfillBudget (every child via addBoundedSourceTask, 9s overall sentinel, witness = 3s parallel discovery + 6s probe) and marker-only foreground sets take the empty fast exit with unclamped evidence windows (review #6+#7); the qqWitnessComposite child (2.6s discovery + 5.0s probe) bridges a QQ-confirmed bilingual title to sibling providers when NetEase's own catalog carries no such annotation and the iTunes/LRCLIB catalog-alias bridges have no coverage (2026-09-25, "Damn" by Bad Sweetheart)
  * [SPLIT]: LyricsResultSelection.swift, LyricsCandidateSelection.swift, LyricsSourceFetchers.swift
  * [PROTOCOL]: Update this header when changing the module, then check Services/Lyrics/CLAUDE.md
  */
@@ -365,12 +365,21 @@ public final class LyricsFetcher {
         static let witnessProbe: TimeInterval = 6.0
         static var witnessComposite: TimeInterval { witnessDiscovery + witnessProbe }
 
+        // QQ-witnessed native-title composite: one QQ search (no lyric
+        // download) to witness the alias, then the resolved-title-keyed
+        // multi-source probe. Discovery is a single bounded HTTP round trip
+        // (unlike the CJK-artist witness above, no serial catalog fan-out),
+        // so its own cap can stay well under the QQ source child's cap.
+        static let qqWitnessDiscovery: TimeInterval = 2.6
+        static let qqWitnessProbe: TimeInterval = 5.0
+        static var qqWitnessComposite: TimeInterval { qqWitnessDiscovery + qqWitnessProbe }
+
         /// Longest single child the group can legally wait for. The sentinel
         /// must never undercut this, or it would clip legitimate work.
         static var longestChildCeiling: TimeInterval {
             max(lrclibChild, lrclibSearchChild, netEaseChild, qqChild,
                 appleMusicChild, amllChild, albumTitleEchoChild, albumScopedComposite,
-                resolvedComposite, witnessComposite)
+                resolvedComposite, witnessComposite, qqWitnessComposite)
         }
 
         /// Concurrency width for the parallel alias-discovery searches:
@@ -2102,6 +2111,28 @@ public final class LyricsFetcher {
                     album: cleanAlbum
                 )
             }
+            // QQ-witnessed native-title bridge: QQ often annotates a
+            // bilingual title as "<native> (<input>)" even when NetEase's
+            // own catalog carries no such annotation for the same song. When
+            // the iTunes-storefront catalog-alias bridge above has no
+            // coverage for an obscure release (or hits its negative-evidence
+            // cache) and LRCLIB's own bridge is gated off for short titles,
+            // this is a THIRD, independent source for the same evidence —
+            // reused from a search QQ's own child already runs, not a
+            // speculative external probe.
+            addBoundedChild(seconds: AuthoritativeBackfillBudget.qqWitnessComposite) {
+                guard let alias = await self.withHardMetadataTimeout(seconds: AuthoritativeBackfillBudget.qqWitnessDiscovery, operation: {
+                    await self.discoverQQWitnessedNativeTitleAlias(
+                        title: cleanTitle, artist: cleanArtist, duration: duration, album: cleanAlbum
+                    )
+                }) else { return nil }
+                DebugLogger.log("QQMusic", "🧭 QQ-witnessed native-title alias: '\(cleanTitle)' -> '\(alias.title)'")
+                return await self.fetchResolvedTitleKeyedSources(
+                    title: alias.title, artist: alias.artist,
+                    originalTitle: cleanTitle, originalArtist: cleanArtist,
+                    duration: duration, translationEnabled: translationEnabled, album: cleanAlbum
+                )
+            }
 
             // Overall sentinel (review #6): an alarm-clock child that wakes
             // the drain loop at the overall budget so it can cancel the whole
@@ -3519,7 +3550,14 @@ public final class LyricsFetcher {
                 state.setContinuation(continuation)
                 let worker = Task {
                     await operation { value in
-                        state.resume(value)
+                        // deliver() is the worker's own synchronous ack that
+                        // it has a verdict — not an external cancellation.
+                        // It must not flip Task.isCancelled for the very
+                        // task that is calling it, or the worker's own
+                        // post-verdict code (teardown + persistence) that
+                        // runs right after deliver() sees itself as
+                        // cancelled and bails before it can execute.
+                        state.resume(value, cancelWorker: false)
                     }
                 }
                 state.setWorker(worker)
@@ -3584,6 +3622,11 @@ private final class Box<T>: @unchecked Sendable {
 final class TimeoutState<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var didResume = false
+    // Whether the resume that already happened (or a not-yet-arrived
+    // `setWorker` should apply) wants the worker cancelled. Defaults to true
+    // so an unlabelled resume (e.g. the belated-setWorker race below, before
+    // any resume has actually happened) keeps the original safe behavior.
+    private var resumeWantsWorkerCancelled = true
     private var continuation: CheckedContinuation<T?, Never>?
     private var worker: Task<T?, Never>?
 
@@ -3601,7 +3644,7 @@ final class TimeoutState<T: Sendable>: @unchecked Sendable {
     func setWorker(_ worker: Task<T?, Never>) {
         lock.lock()
         self.worker = worker
-        let shouldCancel = didResume
+        let shouldCancel = didResume && resumeWantsWorkerCancelled
         lock.unlock()
 
         if shouldCancel {
@@ -3616,20 +3659,35 @@ final class TimeoutState<T: Sendable>: @unchecked Sendable {
         worker?.cancel()
     }
 
-    func resume(_ value: T?) {
+    /// Resumes the caller's continuation with `value`. `cancelWorker`
+    /// controls whether the (possibly still-running) worker task is
+    /// cancelled as part of this resume:
+    /// - `true` (default): an external event — the wall-clock deadline or
+    ///   outer-task cancellation — made the worker's eventual result moot,
+    ///   so it is cancelled.
+    /// - `false`: the worker itself is the caller (apply-on-select's
+    ///   `deliver` closure) — it has a verdict to hand the awaiting caller,
+    ///   but it is NOT done: it still has post-verdict work to finish
+    ///   (structured-concurrency teardown, `persistTrustedForegroundLyrics`).
+    ///   Cancelling it here would make `Task.isCancelled` true for that same
+    ///   worker the instant `deliver` returns, silently skipping that work.
+    func resume(_ value: T?, cancelWorker: Bool = true) {
         lock.lock()
         guard !didResume else {
             lock.unlock()
             return
         }
         didResume = true
+        resumeWantsWorkerCancelled = cancelWorker
         let continuation = self.continuation
         self.continuation = nil
         let worker = self.worker
         self.worker = nil
         lock.unlock()
 
-        worker?.cancel()
+        if cancelWorker {
+            worker?.cancel()
+        }
         continuation?.resume(returning: value)
     }
 }

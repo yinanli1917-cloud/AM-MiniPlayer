@@ -43,9 +43,103 @@ public struct LyricWord: Identifiable, Equatable {
     public let endTime: TimeInterval    // 秒
 
     public init(word: String, startTime: TimeInterval, endTime: TimeInterval) {
-        self.word = word
+        self.word = LyricWord.normalizingNonBreakingSpaces(word)
         self.startTime = startTime
         self.endTime = endTime
+    }
+
+    /// 2026-09-24 fix (founder repro: Teresa Teng "The Way We Were" radio --
+    /// word-level lyrics silently rendering as line-level): some lyric
+    /// sources (NetEase YRC, confirmed from the founder's own disk cache,
+    /// album 愛之世界) encode a word's trailing separator as U+00A0 NO-BREAK
+    /// SPACE instead of a plain space, e.g. word.word == "Memories\u{00A0}".
+    /// Two independent failures follow from that ONE non-standard character:
+    /// (1) U+00A0 is defined by Unicode to NOT be a line-break opportunity,
+    /// so `NSLayoutManager`'s `.byWordWrapping` cannot wrap between words at
+    /// all -- a long line becomes one unbreakable run. (2) Worse and more
+    /// direct: `LyricLine.init`'s words/text consistency invariant used to
+    /// only strip plain ASCII space (`" "`) before comparing, never U+00A0
+    /// -- so any `LyricLine` reconstructed from a NORMALIZED text (e.g.
+    /// `LyricDisplaySegmenter.displayText(forWords:)`, which always emits
+    /// plain space) against these RAW NBSP-laden words failed the prefix
+    /// check and silently cleared `words`. This is exactly what Plan A's
+    /// word-level split path (`LyricsView.makeDisplayLyricLines`'s
+    /// `hasSyllableSync` branch, 2026-09-22) does for every real-world line
+    /// long enough to need more than one display piece -- the common case,
+    /// not an edge case -- degrading a word-level (逐字) song to line-level
+    /// (逐行) rendering with no error, no log line, nothing to catch it.
+    ///
+    /// 2026-09-24 SCOPE CORRECTION (coordinator review): the first version of
+    /// this fix normalized EVERY `Character.isWhitespace` character (other
+    /// than plain space) to `" "`. That is too broad -- it silently rewrote
+    /// U+3000 IDEOGRAPHIC SPACE, which is a DELIBERATE full-width clause
+    /// separator in CJK lyrics/translations (a founder-tuned visual choice,
+    /// not a data artifact), and would have turned any literal tab/newline
+    /// inside a word into a space too. Storage-level normalization is now
+    /// narrowed to exactly the NON-BREAKING space family that actually
+    /// causes the wrap/consistency failures above -- U+00A0 NO-BREAK SPACE,
+    /// U+202F NARROW NO-BREAK SPACE, U+2007 FIGURE SPACE -- mapped to a
+    /// plain space, plus the zero-width formatting characters U+200B ZERO
+    /// WIDTH SPACE, U+2060 WORD JOINER, U+FEFF ZERO WIDTH NO-BREAK SPACE
+    /// (BOM), which are DROPPED entirely (they render as nothing; folding
+    /// them to a visible space would be wrong). U+3000, tabs, newlines, and
+    /// every other whitespace variant are left completely untouched.
+    ///
+    /// This narrower set can still, in principle, leave some OTHER
+    /// whitespace mismatch between `words` and `text` (e.g. one side has
+    /// U+3000, the other doesn't) that this storage-level pass does not
+    /// resolve -- so the invariant check in `LyricLine.init` below no
+    /// longer relies on the STORED strings matching at all; it compares
+    /// through `whitespaceStrippedComparisonKey`, which strips ALL
+    /// whitespace (`Character.isWhitespace`, not just the family normalized
+    /// here) for the comparison only, leaving the stored `text`/`words`
+    /// exactly as constructed. That is the actual belt-and-suspenders fix
+    /// for the words-silently-cleared class of bug; this narrower
+    /// normalization only prevents the U+00A0 WRAP failure (effect 1
+    /// above) and keeps display text clean of invisible zero-width
+    /// characters.
+    ///
+    /// Fixing this ONCE, here, at the single choke point every `LyricWord`
+    /// is constructed through (every parser: YRC/TTML/LRC, `LyricsWordRepair`,
+    /// Traditional-Chinese conversion, the disk-cache decoder), generalizes
+    /// the fix to every current and future lyric source and every code path
+    /// that reconstructs a `LyricLine` from words, instead of special-casing
+    /// NetEase's YRC parser alone. It also self-heals stale disk-cache
+    /// entries written before this fix, since `LyricsDiskCache.lyricLines(from:)`
+    /// reconstructs `LyricWord` through this same initializer on every read.
+    /// See `LyricsWordWhitespaceNormalizationTests` /
+    /// `research/diagnosis-2026-09-24-nbsp-word-level-freeze.md`.
+    fileprivate static let nonBreakingSpaceFamily: Set<Character> = ["\u{00A0}", "\u{202F}", "\u{2007}"]
+    fileprivate static let zeroWidthFormattingCharacters: Set<Character> = ["\u{200B}", "\u{2060}", "\u{FEFF}"]
+
+    fileprivate static func normalizingNonBreakingSpaces(_ text: String) -> String {
+        guard text.contains(where: { nonBreakingSpaceFamily.contains($0) || zeroWidthFormattingCharacters.contains($0) }) else {
+            return text
+        }
+        var result = ""
+        result.reserveCapacity(text.count)
+        for character in text {
+            if nonBreakingSpaceFamily.contains(character) {
+                result.append(" ")
+            } else if zeroWidthFormattingCharacters.contains(character) {
+                continue // dropped, not replaced -- these render as nothing
+            } else {
+                result.append(character)
+            }
+        }
+        return result
+    }
+
+    /// Comparison-only key for `LyricLine.init`'s words/text consistency
+    /// invariant: strips EVERY Unicode whitespace character
+    /// (`Character.isWhitespace` -- plain space, U+3000, tabs, newlines,
+    /// the non-breaking family, everything), so a whitespace-ONLY
+    /// discrepancy between `words` and `text` (of ANY kind, not just the
+    /// non-breaking family `normalizingNonBreakingSpaces` handles at
+    /// construction) can never again cause the invariant to silently clear
+    /// `words`. Comparison-only -- never used to build a stored value.
+    fileprivate static func whitespaceStrippedComparisonKey(_ text: String) -> String {
+        String(text.filter { !$0.isWhitespace })
     }
 
     /// 计算当前时间对应的进度 (0.0 - 1.0)
@@ -81,7 +175,13 @@ public struct LyricLine: Identifiable, Equatable {
     public var hasTranslation: Bool { translation != nil && !translation!.isEmpty }
 
     public init(text: String, startTime: TimeInterval, endTime: TimeInterval, words: [LyricWord] = [], translation: String? = nil, isBackground: Bool = false) {
-        self.text = text
+        // See LyricWord.normalizingNonBreakingSpaces's doc comment for the
+        // full mechanism. `words` only has the non-breaking-space family
+        // normalized at construction (U+3000 and other whitespace are left
+        // alone), so `text` gets the SAME narrow normalization here for
+        // symmetry -- but the invariant below no longer depends on this
+        // matching exactly; see `whitespaceStrippedComparisonKey`.
+        self.text = LyricWord.normalizingNonBreakingSpaces(text)
         self.startTime = startTime
         self.endTime = endTime
         self.translation = translation
@@ -90,12 +190,19 @@ public struct LyricLine: Identifiable, Equatable {
         // Invariant: words must be consistent with text.
         // If words exist but their concatenation doesn't match text,
         // they're stale (e.g., text was split/modified after parsing).
+        //
+        // 2026-09-24: compares through `whitespaceStrippedComparisonKey`
+        // (strips ALL whitespace, not just plain ASCII space) rather than
+        // the raw stored strings -- a whitespace-ONLY discrepancy of any
+        // kind (U+3000 present on one side and not the other, a stray tab,
+        // etc.) can no longer silently clear `words`; only a REAL content
+        // mismatch (different non-whitespace characters) does. The stored
+        // `self.text`/`words` are untouched by this comparison.
         if !words.isEmpty {
-            let wordsText = words.map(\.word).joined()
-                .replacingOccurrences(of: " ", with: "")
-            let normalizedText = text.replacingOccurrences(of: " ", with: "")
-            self.words = normalizedText.hasPrefix(wordsText)
-                || wordsText.hasPrefix(normalizedText) ? words : []
+            let wordsKey = LyricWord.whitespaceStrippedComparisonKey(words.map(\.word).joined())
+            let textKey = LyricWord.whitespaceStrippedComparisonKey(self.text)
+            self.words = textKey.hasPrefix(wordsKey)
+                || wordsKey.hasPrefix(textKey) ? words : []
         } else {
             self.words = words
         }

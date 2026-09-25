@@ -104,6 +104,88 @@ final class LyricsFetcherApplyOnSelectTests: XCTestCase {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - deliver() must not cancel its own worker (2026-09-23 regression)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// Root cause of the "Off the Wall" word-level→line-level degradation
+    /// (research/diagnosis-2026-09-23-off-the-wall-word-level.md): the doc
+    /// comment on `withHardTimeout` promises that after `deliver` resumes the
+    /// caller, "the worker keeps running to finish teardown and any
+    /// post-verdict persistence" — that's exactly what
+    /// `LyricsFetcher.fetchAllSourcesWithinForegroundBudget` relies on: it
+    /// calls `deliver(sortedResults)` for the UI, then falls through to
+    /// `guard !Task.isCancelled ... else { return [] }` before calling
+    /// `persistTrustedForegroundLyrics` (the ONLY call that writes a
+    /// fast/early-return verdict to the on-disk lyrics cache).
+    ///
+    /// `TimeoutState.resume(_:)` unconditionally calls `worker?.cancel()`
+    /// before resuming the continuation — including when `resume` is invoked
+    /// BY the worker's own `deliver` closure. That self-inflicted
+    /// cancellation makes `Task.isCancelled` true the moment `deliver`
+    /// returns, so the post-verdict persistence guard always bails. Real
+    /// debug-log evidence (2026-09-23, Off the Wall / Michael Jackson,
+    /// NetEase word-level 47/47 synced, selected + applied to the UI twice)
+    /// shows `[LyricsFetcher.swift:1707] cancelled before result
+    /// normalization` immediately after every successful apply-on-select
+    /// delivery, and the track never appears in lyrics_cache.v31.json —
+    /// confirmed by direct inspection of
+    /// ~/Library/Application Support/nanoPod/lyrics_cache.v31.json (34
+    /// entries, none for this title/artist). Every subsequent play re-races
+    /// all 8 sources from scratch instead of being served the known-good
+    /// word-level result, so a source race that goes the other way (NetEase
+    /// momentarily slow, a line-level source answers first) can display
+    /// line-level lyrics for a song nanoPod already proved has word-level
+    /// timing.
+    func test_deliverDoesNotCancelWorker_postVerdictWorkStillRuns() async {
+        let observedCancelledAfterDeliver = ManagedBox<Bool?>(nil)
+        let postVerdictWorkRan = ManagedBox<Bool>(false)
+        // The caller (this test, standing in for LyricsService) resumes the
+        // instant deliver() fires — same as production. The worker's
+        // post-verdict work keeps running in the background after that, so
+        // the test must wait for IT to finish, not just for the awaited
+        // call to return (that's the whole point of apply-on-select: the
+        // caller does NOT wait for this).
+        let (postVerdictDone, postVerdictContinuation) = AsyncStream<Void>.makeStream()
+
+        let result: Int? = await fetcher.withHardTimeout(seconds: 5.0) { deliver in
+            deliver(42)
+            // Give the cooperative executor a beat so a (buggy)
+            // worker.cancel() triggered by deliver() would already have
+            // taken effect by the time we check Task.isCancelled below.
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            observedCancelledAfterDeliver.value = Task.isCancelled
+            // Mirrors the real fetcher's shape at LyricsFetcher.swift:1706 —
+            // `guard !Task.isCancelled, let verdict = verdictBox.value else {
+            // ...; return [] }` — persistTrustedForegroundLyrics sits right
+            // after this guard.
+            guard !Task.isCancelled else {
+                postVerdictContinuation.finish()
+                return 42
+            }
+            postVerdictWorkRan.value = true
+            postVerdictContinuation.finish()
+            return 42
+        }
+
+        // Wait for the background worker to actually reach the post-verdict
+        // check, instead of asserting the instant the caller resumes —
+        // which would race the very background work under test. The stream
+        // finishes deterministically right after the operation closure's
+        // 50ms sleep, so this blocks only as long as that.
+        for await _ in postVerdictDone {}
+
+        XCTAssertEqual(result, 42)
+        XCTAssertEqual(
+            observedCancelledAfterDeliver.value, false,
+            "deliver() is the operation's own synchronous ack that a verdict shipped, not an external cancellation — it must not flip Task.isCancelled for the very task that called it"
+        )
+        XCTAssertTrue(
+            postVerdictWorkRan.value,
+            "post-verdict persistence never runs if deliver() cancels the worker — this is why fast/early-return word-level results never reach LyricsDiskCache"
+        )
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - Outer task cancellation
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

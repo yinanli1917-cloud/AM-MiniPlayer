@@ -38,6 +38,11 @@ final class AuthoritativeBackfillBudgetTests: XCTestCase {
             Budget.witnessDiscovery + Budget.witnessProbe,
             accuracy: 0.0001
         )
+        XCTAssertEqual(
+            Budget.qqWitnessComposite,
+            Budget.qqWitnessDiscovery + Budget.qqWitnessProbe,
+            accuracy: 0.0001
+        )
     }
 
     /// The corrected numbers themselves: album-scoped 7.7 (3.2 + 4.5),
@@ -53,6 +58,9 @@ final class AuthoritativeBackfillBudgetTests: XCTestCase {
         XCTAssertEqual(Budget.witnessDiscovery, 3.0, accuracy: 0.0001)
         XCTAssertEqual(Budget.witnessProbe, 6.0, accuracy: 0.0001)
         XCTAssertEqual(Budget.witnessComposite, 9.0, accuracy: 0.0001)
+        XCTAssertEqual(Budget.qqWitnessDiscovery, 2.6, accuracy: 0.0001)
+        XCTAssertEqual(Budget.qqWitnessProbe, 5.0, accuracy: 0.0001)
+        XCTAssertEqual(Budget.qqWitnessComposite, 7.6, accuracy: 0.0001)
     }
 
     /// The sentinel must sit ABOVE the longest legitimate chain (the

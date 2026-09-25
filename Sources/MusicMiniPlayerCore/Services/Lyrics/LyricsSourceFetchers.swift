@@ -1,7 +1,7 @@
 /**
  * [INPUT]: Song metadata (title, artist, duration) + SearchParams from candidate selection + LyricsSource typed registry
  * [OUTPUT]: LyricsFetchResult from each of the 8 sources (AppleMusic, AMLL, NetEase, QQ, LRCLIB, LRCLIB-Search, Genius, lyrics.ovh), stamped with typed LyricsSource cases
- * [POS]: Source fetcher sub-module of LyricsFetcher — HTTP calls + parsing for all 8 lyric sources; provider catalog aliases stay behind strict title/artist/duration/context evidence; AppleMusicCapabilityLatch skips MusicKit after the first developer-token failure (process-lifetime, capability not build flag)
+ * [POS]: Source fetcher sub-module of LyricsFetcher — HTTP calls + parsing for all 8 lyric sources; provider catalog aliases stay behind strict title/artist/duration/context evidence; AppleMusicCapabilityLatch skips MusicKit after the first developer-token failure (process-lifetime, capability not build flag); qqWitnessedNativeTitleAlias is a THIRD catalog-alias bridge (alongside MetadataResolver's iTunes bridge and discoverLibraryNativeTitleAlias's LRCLIB bridge) that reuses a bilingual title QQ's own search already confirmed within the same fetch, so a sibling provider with no such annotation (e.g. NetEase) can be searched under the native title directly
  * [PROTOCOL]: Changes here → update this header, then check Services/Lyrics/CLAUDE.md
  */
 
@@ -2594,13 +2594,23 @@ extension LyricsFetcher {
         return nil
     }
 
-    func fetchFromQQMusic(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool, album: String = "") async -> LyricsFetchResult? {
-        emitSourceRequestE2E(.qq, phase: "fetch")
-        DebugLogger.log("QQMusic", "🔍 搜索: '\(title)' by '\(artist)' (\(Int(duration))s) album='\(album)'")
+    /// Search QQ Music and select the best candidate, without fetching the
+    /// lyric body. Shared by `fetchFromQQMusic` (which continues on to
+    /// download lyrics) and `discoverQQWitnessedNativeTitleAlias` (which only
+    /// needs the matched candidate's own title text as alias evidence — see
+    /// that function for why).
+    private func qqSearchCandidate(
+        title: String,
+        artist: String,
+        originalTitle: String,
+        originalArtist: String,
+        duration: TimeInterval,
+        album: String
+    ) async -> SelectedSearchCandidate<String>? {
         let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration, album: album, disableCjkEscapeInP3: false)
         guard let apiURL = URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg") else { return nil }
 
-        guard let qqMatch: SelectedSearchCandidate<String> = await searchAndSelectCandidate(
+        return await searchAndSelectCandidate(
             params: params, source: .qq,
             extraKeywords: [(params.simplifiedTitle, "title only")],
             fetchSongs: { keyword in
@@ -2625,6 +2635,16 @@ extension LyricsFetcher {
                 let providerID = songID.map { "\(mid)|\($0)" } ?? mid
                 return (providerID, name, artist, dur, albumName)
             }
+        )
+    }
+
+    func fetchFromQQMusic(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool, album: String = "") async -> LyricsFetchResult? {
+        emitSourceRequestE2E(.qq, phase: "fetch")
+        DebugLogger.log("QQMusic", "🔍 搜索: '\(title)' by '\(artist)' (\(Int(duration))s) album='\(album)'")
+
+        guard let qqMatch: SelectedSearchCandidate<String> = await qqSearchCandidate(
+            title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist,
+            duration: duration, album: album
         ) else {
             DebugLogger.log("QQMusic", "❌ 未找到歌曲")
             return nil
@@ -3236,6 +3256,87 @@ extension LyricsFetcher {
                     && !disallowedMarkers.contains(where: { lower.contains($0) })
             }
             .map { LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName($0)) }
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Cross-provider title-alias bridge (QQ-witnessed).
+    //
+    // Independent of the iTunes-storefront bridge in MetadataResolver
+    // (`resolveAlbumScopedMetadata`/catalog-alias consensus) and of the
+    // LRCLIB-sourced `discoverLibraryNativeTitleAlias` above — a THIRD
+    // source for the same kind of evidence, used when the other two can't
+    // reach it (iTunes has no coverage for an obscure release, or records a
+    // negative-evidence cache hit; LRCLIB's own search is too speculative
+    // for short titles, see `shouldProbeLibraryNativeTitleAlias`).
+    //
+    // QQ Music formats bilingual titles as "<native title> (<input title>)"
+    // (e.g. Bad Sweetheart's "Damn" -> "该死的车站 (Damn)"). When QQ's OWN
+    // candidate search already proved that relation via the literal
+    // annotation on its OWN matched row, extract the native title so a
+    // sibling provider whose catalog carries no such annotation (typically
+    // NetEase, which had the same song under '该死的车站' with no English
+    // alias) can be searched under it directly — `candidate.titleMatch`
+    // then succeeds as an ordinary exact CJK match, the same as any other
+    // upstream-resolved title.
+    //
+    // This is NOT a hardcoded alias table (banned pattern) and does NOT
+    // accept an artist/duration-only match (the Love Lee / Dinner false-
+    // positive class): `libraryNativeTitleAlias` requires the CANDIDATE'S
+    // OWN title to literally carry the input title's Latin evidence, so an
+    // unrelated sibling track's title (no such annotation) can never
+    // qualify, regardless of how closely its artist/duration/album match.
+    // ────────────────────────────────────────────────────────────────────
+
+    func qqWitnessedNativeTitleAliasForTesting(
+        matchedTitle: String,
+        matchedArtist: String,
+        durationDiff: Double,
+        inputTitle: String
+    ) -> (title: String, artist: String)? {
+        qqWitnessedNativeTitleAlias(
+            matchedTitle: matchedTitle,
+            matchedArtist: matchedArtist,
+            durationDiff: durationDiff,
+            inputTitle: inputTitle
+        )
+    }
+
+    private func qqWitnessedNativeTitleAlias(
+        matchedTitle: String,
+        matchedArtist: String,
+        durationDiff: Double,
+        inputTitle: String
+    ) -> (title: String, artist: String)? {
+        // Same tight duration floor P1 uses elsewhere in this file — a
+        // defense-in-depth re-check independent of whichever tier won QQ's
+        // own candidate selection (P1/albumMatch promotion/etc).
+        guard durationDiff < 3.0,
+              let nativeTitle = libraryNativeTitleAlias(resultTitle: matchedTitle, inputTitle: inputTitle)
+        else {
+            return nil
+        }
+        return (nativeTitle, matchedArtist)
+    }
+
+    /// Runs QQ's own search (no lyric download) purely to witness a native
+    /// title alias for the backfill bridge below.
+    func discoverQQWitnessedNativeTitleAlias(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        album: String
+    ) async -> (title: String, artist: String)? {
+        guard LanguageUtils.isPureASCII(title), LanguageUtils.isPureASCII(artist) else { return nil }
+        guard let qqMatch = await qqSearchCandidate(
+            title: title, artist: artist, originalTitle: title, originalArtist: artist,
+            duration: duration, album: album
+        ) else { return nil }
+        return qqWitnessedNativeTitleAlias(
+            matchedTitle: qqMatch.title,
+            matchedArtist: qqMatch.artist,
+            durationDiff: qqMatch.durationDiff,
+            inputTitle: title
+        )
     }
 
     private static func jsonDouble(_ value: Any?) -> Double? {

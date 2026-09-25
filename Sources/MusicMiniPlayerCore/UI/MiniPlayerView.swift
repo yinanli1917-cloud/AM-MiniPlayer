@@ -31,14 +31,23 @@ public struct MiniPlayerView: View {
     @State private var topLeftLuminance: CGFloat = 0.5
     @State private var topRightLuminance: CGFloat = 0.5
     @State private var artworkTone: ArtworkBackgroundToneMap = .neutral
-    // Fullscreen album page bottom-band legibility (research/spec-2026-09-22-backdrop-
-    // legibility.md point B, extended research/progressive-blur-2026-09-23.md round 3):
-    // resolved ONCE per artwork change alongside `artworkTone` above, not per frame — see
-    // FullscreenBottomBandLegibility.swift. `needsCorrection == false` (in-band/dark covers)
-    // reproduces the original 62877a4 rendering exactly.
-    @State private var fullscreenBottomBandCorrection: FullscreenBottomBandLegibility.Correction = .unchanged(tone: .neutral)
     @State private var effectArtwork: NSImage?
     @State private var effectArtworkSignature: String = ""
+
+    // Shuffle/repeat icon legibility ONLY (founder 2026-09-24, narrowed same day after
+    // trying the whole-button-set version): gray icon — never black — when the pixels
+    // directly under shuffle/repeat are too bright, solved to land exactly on the WCAG
+    // 3:1 non-text contrast floor. Recomputed once per artwork change / fullscreen-cover
+    // toggle — never per frame (ButtonIconLegibility.swift). The two top buttons and the
+    // bottom play area (SharedBottomControls) went back to their pre-2026-09-24 rules and
+    // no longer read this. The recompute itself runs off the main thread via
+    // `buttonIconCoordinator` (2026-09-24 review: must not hitch a song change) — its
+    // last-request-wins semantics drop a stale result from a superseded artwork/toggle;
+    // until a new result lands the PREVIOUS tones stay on screen (never cleared/flashed
+    // to white).
+    @State private var buttonIconTones: [ButtonIconID: ButtonIconTone] = [:]
+    @State private var buttonIconCoordinator = ButtonIconRefreshCoordinator()
+    @State private var lastKnownPanelSize: CGSize = CGSize(width: PanelWindowMetrics.defaultSize.width, height: PanelWindowMetrics.defaultSize.height)
 
     // Shuffle/repeat feedback animation progress.
     @State private var repeatFlow: Double = 0
@@ -65,8 +74,14 @@ public struct MiniPlayerView: View {
     var mainBody: some View {
         GeometryReader { geometry in
             ZStack {
-                // Background: defaults-switched fluid gradient / native glass experiment
-                PanelBackdrop(artwork: effectArtwork ?? musicController.currentArtwork)
+                // Background: defaults-switched fluid gradient / native glass experiment.
+                // Founder 2026-09-25: glass/clear only show on the non-fullscreen album
+                // page — PanelBackdrop reads no page state itself, so that condition is
+                // computed here and passed in as a plain Bool.
+                PanelBackdrop(
+                    artwork: effectArtwork ?? musicController.currentArtwork,
+                    isAlbumPageNonFullscreen: musicController.currentPage == .album && !fullscreenAlbumCover
+                )
                     .ignoresSafeArea()
                     .accessibilityHidden(true)
 
@@ -135,6 +150,11 @@ public struct MiniPlayerView: View {
                 reduceTransparency: reduceTransparency,
                 reduceMotion: reduceMotion
             ))
+            // Cache the panel's live size for the next artwork-change legibility
+            // recompute (ButtonIconLegibility). This itself never triggers a
+            // recompute — only currentArtwork/fullscreenAlbumCover changes do.
+            .onAppear { lastKnownPanelSize = geometry.size }
+            .onChange(of: geometry.size) { _, newSize in lastKnownPanelSize = newSize }
         }
         // Fill the window so resizing keeps the same layout rules.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -208,6 +228,9 @@ public struct MiniPlayerView: View {
                 withAnimation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.3, dampingFraction: 0.82)) {
                     fullscreenAlbumCover = newValue
                 }
+                // The composite behind every button (hero vs fluid backdrop) just
+                // changed — recompute icon tones for the new mode.
+                refreshButtonIconTones()
             }
         }
         // Artwork changes update luminance and the smaller effect-only render image.
@@ -216,17 +239,15 @@ public struct MiniPlayerView: View {
             if newArtwork != nil {
                 syncArtworkLuminance()
                 if let artwork = newArtwork {
-                    let metrics = artwork.artworkVisualMetrics()
-                    artworkTone = ArtworkBackgroundToneMap.forMetrics(metrics)
-                    updateFullscreenBottomBandCorrection(artwork: artwork, metrics: metrics, tone: artworkTone)
+                    artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
                 }
             } else {
                 artworkBrightness = 0.5
                 topLeftLuminance = 0.5
                 topRightLuminance = 0.5
                 artworkTone = .neutral
-                fullscreenBottomBandCorrection = .unchanged(tone: artworkTone)
             }
+            refreshButtonIconTones()
         }
         .onChange(of: musicController.artworkLuminance) { _, _ in
             syncArtworkLuminance()
@@ -260,10 +281,9 @@ public struct MiniPlayerView: View {
             refreshEffectArtwork()
             syncArtworkLuminance()
             if let artwork = musicController.currentArtwork {
-                let metrics = artwork.artworkVisualMetrics()
-                artworkTone = ArtworkBackgroundToneMap.forMetrics(metrics)
-                updateFullscreenBottomBandCorrection(artwork: artwork, metrics: metrics, tone: artworkTone)
+                artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
             }
+            refreshButtonIconTones()
         }
         // Keep hover state coherent when returning to the album page.
         .onChange(of: musicController.currentPage) { oldPage, newPage in
@@ -319,18 +339,48 @@ public struct MiniPlayerView: View {
         topRightLuminance = musicController.topRightArtworkLuminance
     }
 
-    // Fullscreen album bottom-band legibility (FullscreenBottomBandLegibility.swift): resolved
-    // alongside `artworkTone`, same cadence (once per artwork change, not per frame). Reuses
-    // the already-computed `metrics` for the average colour and calls `controlAreaMaxColor()`
-    // once for a conservative estimate of the sharp cover's own colour near the bottom edge —
-    // the same helper the (now-removed) point-B design used, no new image scan added.
-    private func updateFullscreenBottomBandCorrection(artwork: NSImage, metrics: ArtworkVisualMetrics, tone: ArtworkBackgroundToneMap) {
-        let bottomColor = artwork.controlAreaMaxColor()
-        fullscreenBottomBandCorrection = FullscreenBottomBandLegibility.resolve(
-            artworkAverageColor: BackdropLegibilityBand.RGBColor(r: metrics.averageRed, g: metrics.averageGreen, b: metrics.averageBlue),
-            coverBottomRowColor: BackdropLegibilityBand.RGBColor(r: bottomColor.r, g: bottomColor.g, b: bottomColor.b),
-            tone: tone
-        )
+    /// Recomputes the shuffle/repeat buttons' icon tone (founder 2026-09-24, narrowed to
+    /// just these two the same day). Called once per artwork change / fullscreen-cover
+    /// toggle (see the call sites above) — never per frame. `artworkTone` must already
+    /// reflect the current artwork when this runs.
+    ///
+    /// Runs the actual composite render OFF the main thread via `buttonIconCoordinator`
+    /// (2026-09-24 review: a synchronous call here would hitch every song/cover change).
+    /// `refresh` returns `nil` when a newer refresh has already superseded this one — in
+    /// that case `buttonIconTones` is left untouched, so the previous tones stay on
+    /// screen, never cleared or flashed. A fullscreen-cover toggle goes through this exact
+    /// same path, so it is not literally instant, but nothing here is throttled/debounced
+    /// either — it starts immediately, same as an artwork change.
+    private func refreshButtonIconTones() {
+        let fullscreen = fullscreenAlbumCover
+        let artwork = musicController.currentArtwork
+        let tone = artworkTone
+        let panelSize = lastKnownPanelSize
+        let reduceTransparencySnapshot = reduceTransparency
+        let previous = buttonIconTones
+        let coordinator = buttonIconCoordinator
+
+        Task {
+            guard let result = await coordinator.refresh(
+                fullscreen: fullscreen,
+                artwork: artwork,
+                tone: tone,
+                panelSize: panelSize,
+                reduceTransparency: reduceTransparencySnapshot,
+                previous: previous
+            ) else { return }
+            buttonIconTones = result
+        }
+    }
+
+    /// `buttonIconTones[id]` as a `Color` — a solved neutral gray when the background is
+    /// too bright, else white (today's colour, including when this button has not been
+    /// resolved yet).
+    private func iconColor(for id: ButtonIconID) -> Color {
+        switch buttonIconTones[id] {
+        case .gray(let lightness): return Color(white: lightness)
+        case .white, .none: return .white
+        }
     }
 
     private func refreshEffectArtwork() {
@@ -463,6 +513,9 @@ extension MiniPlayerView {
                 }
                 .opacity(showOverlayContent ? 1 : 0)
                 .allowsHitTesting(showOverlayContent)
+                // Short cross-fade when shuffle/repeat's icon tone changes (founder
+                // 2026-09-24) — never a hard snap.
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: buttonIconTones)
             }
             // 🔑 动画时长：全屏模式 0.5s，非全屏模式 0.4s
             .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
@@ -478,7 +531,7 @@ extension MiniPlayerView {
         HStack(spacing: 4) {
             Button(action: { musicController.toggleShuffle() }) {
                 AnimatedShuffleIcon(
-                    color: musicController.shuffleEnabled ? themeColor : .white,
+                    color: musicController.shuffleEnabled ? themeColor : iconColor(for: .shuffle),
                     isEnabled: musicController.shuffleEnabled
                 )
                 .frame(width: 24, height: 24)
@@ -496,7 +549,7 @@ extension MiniPlayerView {
                 Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
                     .contentTransition(.symbolEffect(.replace))
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(musicController.repeatMode > 0 ? themeColor : .white)
+                    .foregroundStyle(musicController.repeatMode > 0 ? themeColor : iconColor(for: .repeatButton))
                     .rotationEffect(.degrees(repeatFlow * 10))
                     .scaleEffect(1 - repeatFlow * 0.1)
                     .frame(width: 24, height: 24)
@@ -574,14 +627,7 @@ extension MiniPlayerView {
             if musicController.currentPage != .lyrics {
                 if fullscreenAlbumCover {
                     let coverSize = geo.size.width
-                    // Bright covers only: the fade's height/position and Layer 1's own
-                    // brightness/dim extend beyond the founder-tuned baseline (100pt,
-                    // artworkTone unchanged) just enough that the real title/shuffle-repeat/
-                    // controls sit over Layer 1 instead of the sharp cover — see
-                    // FullscreenBottomBandLegibility.swift. In-band/dark covers reproduce the
-                    // baseline exactly (`needsCorrection == false`).
-                    let bandCorrection = fullscreenBottomBandCorrection
-                    let blendHeight = bandCorrection.blendHeight
+                    let blendHeight: CGFloat = 100
 
                     let isAlbumPage = musicController.currentPage == .album
                     let displaySize = isAlbumPage ? coverSize : artSize
@@ -590,12 +636,6 @@ extension MiniPlayerView {
                     let displayY = isAlbumPage ? coverSize / 2 : yPosition
 
                     let animatedBlendHeight: CGFloat = isAlbumPage ? blendHeight : 0
-                    // Same pure curve the pure-function tests pin — sampling a straight line
-                    // this densely reproduces it exactly, so `needsCorrection == false` renders
-                    // byte-identically to the original 2-stop gradient without a branch here.
-                    let maskStops: [Gradient.Stop] = FullscreenBottomBandLegibility.maskGradientStops(correction: bandCorrection).map {
-                        Gradient.Stop(color: Color.black.opacity($0.coverVisibility), location: $0.location)
-                    }
 
                     // Layer 1: blurred full-window backing image.
                     Image(nsImage: effectArtwork)
@@ -606,8 +646,8 @@ extension MiniPlayerView {
                         .blur(radius: 50, opaque: true)
                         .saturation(artworkTone.textureSaturation)
                         .contrast(artworkTone.textureContrast)
-                        .brightness(bandCorrection.layer1Brightness)
-                        .overlay(Color.black.opacity(bandCorrection.layer1DimOpacity))
+                        .brightness(artworkTone.textureBrightness)
+                        .overlay(Color.black.opacity(artworkTone.textureDimmingOpacity))
                         .opacity(isAlbumPage ? 1 : 0)
                         .accessibilityHidden(true)
 
@@ -621,7 +661,10 @@ extension MiniPlayerView {
                             VStack(spacing: 0) {
                                 Rectangle().fill(Color.black)
                                 LinearGradient(
-                                    stops: maskStops,
+                                    stops: [
+                                        .init(color: .black, location: 0),
+                                        .init(color: .clear, location: 1.0)
+                                    ],
                                     startPoint: .top,
                                     endPoint: .bottom
                                 )

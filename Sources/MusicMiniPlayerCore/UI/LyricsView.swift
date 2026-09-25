@@ -2132,6 +2132,14 @@ public struct LyricsView: View {
             guard let pieceSourceCode else { return nil }
             return PieceTranslationCache.shared.translation(for: text, source: pieceSourceCode, target: pieceTargetCode)
         }
+        // 2026-09-23 founder rule: a line whose whole-line translation came
+        // from the lyrics source (human -- NetEase/QQ/AMLL/Apple TTML etc.)
+        // must NEVER have its split pieces machine-translated -- the human
+        // translation is split across the pieces itself instead
+        // (LyricPieceTranslation.humanTranslationSplit, tier `.humanSplit`).
+        // `isSystemTranslationSource` is a per-CURRENT-SONG flag, constant
+        // for this whole pass.
+        let isHumanTranslation = !lyricsService.isSystemTranslationSource
         var pendingPieceTranslationTexts: [String] = []
         // Per-song tier summary (2026-09-23, founder-requested diagnostic):
         // one DebugLogger line per `makeDisplayLyricLines` pass (bounded by
@@ -2173,9 +2181,21 @@ public struct LyricsView: View {
                 }
                 let segmentCount = wordGroups.count
                 let groupTexts = wordGroups.map { LyricDisplaySegmenter.displayText(forWords: $0) }
+                // Word-level lines: humanSplit shares are TIMING shares (real
+                // per-group duration), per the founder's rule -- exact, no
+                // estimation, unlike the character-count proxy line-level
+                // pieces use below.
+                let groupWeights: [Double] = wordGroups.map { group in
+                    let start = group.first?.startTime ?? line.startTime
+                    let end = group.last?.endTime ?? line.endTime
+                    return max(0, end - start)
+                }
                 let (pieceTranslations, pieceTiers) = LyricPieceTranslation.pieceTranslations(
                     originalPieces: groupTexts,
+                    pieceWeights: groupWeights,
                     fullTranslation: line.translation,
+                    isHumanTranslation: isHumanTranslation,
+                    translationLanguageCode: pieceTargetCode,
                     cache: pieceCacheLookup
                 )
                 tallySplitLine(pieceTiers)
@@ -2185,7 +2205,10 @@ public struct LyricsView: View {
                     // own real word timestamps, never estimated.
                     let start = group.first?.startTime ?? line.startTime
                     let end = group.last?.endTime ?? line.endTime
-                    if pieceTiers[segmentIndex] == .none {
+                    // Human-origin pieces left at tier `.none` ran out of
+                    // humanSplit candidates -- they are NEVER queued for
+                    // machine translation (founder rule 2026-09-23).
+                    if pieceTiers[segmentIndex] == .none, !isHumanTranslation {
                         pendingPieceTranslationTexts.append(groupTexts[segmentIndex])
                     }
                     let segmentLine = LyricLine(
@@ -2220,14 +2243,26 @@ public struct LyricsView: View {
                 continue
             }
             let segmentCount = timedPieces.count
+            // Line-level pieces: humanSplit shares are DISPLAY-LENGTH shares
+            // (character count) per the founder's rule -- these pieces'
+            // own timing is already an ESTIMATE (proportionalTiming), so
+            // riding that estimate a second time for the translation split
+            // would compound error rather than measuring anything real.
+            let pieceLengthWeights: [Double] = timedPieces.map { Double($0.text.count) }
             let (pieceTranslations, pieceTiers) = LyricPieceTranslation.pieceTranslations(
                 originalPieces: timedPieces.map(\.text),
+                pieceWeights: pieceLengthWeights,
                 fullTranslation: line.translation,
+                isHumanTranslation: isHumanTranslation,
+                translationLanguageCode: pieceTargetCode,
                 cache: pieceCacheLookup
             )
             tallySplitLine(pieceTiers)
             for (segmentIndex, piece) in timedPieces.enumerated() {
-                if pieceTiers[segmentIndex] == .none {
+                // Human-origin pieces left at tier `.none` ran out of
+                // humanSplit candidates -- never queued for machine
+                // translation (founder rule 2026-09-23).
+                if pieceTiers[segmentIndex] == .none, !isHumanTranslation {
                     pendingPieceTranslationTexts.append(piece.text)
                 }
                 let segmentLine = LyricLine(
@@ -2248,23 +2283,33 @@ public struct LyricsView: View {
             }
         }
 
-        // 2026-09-23 fix (founder repro: Raveena "Mystery"): registering a
-        // split piece for tier-2 translation used to also require
-        // `lyricsService.isSystemTranslationSource` -- but that flag reports
-        // where the WHOLE-LINE translation came from, not whether the split
-        // PIECE'S original text has a resolvable source language. A line
-        // whose whole-line translation came from the lyrics source
-        // (NetEase/QQ) still needs its pieces registered once
-        // `pieceSourceCode` resolves (LyricsService now resolves it in that
-        // case too -- see `silentSystemTranslationConfiguration`). The only
-        // real precondition is that a source language resolved at all.
-        if pieceSourceCode != nil, !pendingPieceTranslationTexts.isEmpty {
+        // Registration is now GATED on `!isHumanTranslation` (2026-09-23
+        // founder rule) -- `pendingPieceTranslationTexts` is only ever
+        // populated for machine-origin lines in the first place (see the
+        // `!isHumanTranslation` guards above), so this condition is mostly
+        // documentation at this point, but keeps the call unreachable for a
+        // human-origin song even if a future edit forgot one of those
+        // guards. 2026-09-23 fix (founder repro: Raveena "Mystery"):
+        // registering a split piece for tier-2 translation used to also
+        // require `lyricsService.isSystemTranslationSource` on the WHOLE
+        // gate -- that flag now decides which pipeline runs at all
+        // (`isHumanTranslation` above), not just whether to register.
+        if !isHumanTranslation, pieceSourceCode != nil, !pendingPieceTranslationTexts.isEmpty {
             lyricsService.registerPendingPieceTranslations(pendingPieceTranslationTexts)
         }
 
         if splitLineCount > 0 {
             let tier3Reason: String
-            if pieceSourceCode == nil {
+            if isHumanTranslation {
+                // humanSplit is pure text logic -- it never needs a
+                // Translation-framework session or a resolved source
+                // language. A `.none` piece here means humanTranslationSplit
+                // ran out of usable break candidates (short translation,
+                // heavy bracket/quote protection), not a pending async op.
+                tier3Reason = (splitLineTierCounts[.none] ?? 0) > 0
+                    ? "humanSplit exhausted candidates (no machine fallback by design)"
+                    : "n/a"
+            } else if pieceSourceCode == nil {
                 tier3Reason = "no session (\(lyricsService.lastTranslationSessionGapReason ?? "source not resolved yet"))"
             } else if !pendingPieceTranslationTexts.isEmpty {
                 tier3Reason = "pending (registered, awaiting async translation)"
@@ -2283,8 +2328,9 @@ public struct LyricsView: View {
             // bool) means a song that genuinely moves tiers across several
             // rebuilds still gets one fresh line per distinct state, so the
             // log reflects the FINAL settled state, not only the first one.
-            let signature = "\(musicController.currentTrackTitle)|\(splitLineCount)|" +
+            let signature = "\(musicController.currentTrackTitle)|\(isHumanTranslation)|\(splitLineCount)|" +
                 "\(splitLineTierCounts[.clauseAligned] ?? 0)|" +
+                "\(splitLineTierCounts[.humanSplit] ?? 0)|" +
                 "\(splitLineTierCounts[.perPieceCache] ?? 0)|" +
                 "\(splitLineTierCounts[.fallbackFirstPiece] ?? 0)|" +
                 "\(splitLineTierCounts[.none] ?? 0)|\(tier3Reason)"
@@ -2292,9 +2338,11 @@ public struct LyricsView: View {
                 lastLoggedPieceTierSummarySignature = signature
                 DebugLogger.log(
                     "Translation",
-                    "🧩 piece-translation tiers for '\(musicController.currentTrackTitle)': " +
+                    "🧩 piece-translation tiers for '\(musicController.currentTrackTitle)' " +
+                    "(origin=\(isHumanTranslation ? "human" : "machine")): " +
                     "lines_split=\(splitLineCount) " +
                     "tier1_clauseAligned=\(splitLineTierCounts[.clauseAligned] ?? 0) " +
+                    "tier2_humanSplit=\(splitLineTierCounts[.humanSplit] ?? 0) " +
                     "tier2_perPieceCache=\(splitLineTierCounts[.perPieceCache] ?? 0) " +
                     "tier3_fallbackFirstPiece=\(splitLineTierCounts[.fallbackFirstPiece] ?? 0) " +
                     "pendingNone=\(splitLineTierCounts[.none] ?? 0) " +
@@ -2341,21 +2389,101 @@ public struct LyricsView: View {
     /// Hash of every input that determines the committed rows. Same inputs ⇒
     /// same rows ⇒ a commit would be a no-op reconcile that still re-pokes the
     /// native surface. LyricLine.id is a fresh UUID per object, so we hash the
-    /// content (text + translation) explicitly, never the line identity.
-    private func displayLineInputFingerprint() -> Int {
+    /// content (text + translation + word-level sync) explicitly, never the
+    /// line identity.
+    ///
+    /// 2026-09-24 fix (founder repro: Teresa Teng "The Way We Were" / Michael
+    /// Jackson "Off the Wall" -- word-level lyrics degrading to line-level on
+    /// screen): this fingerprint used to hash only `text` + `translation`,
+    /// never `words`/`hasSyllableSync`. `LyricsService.applyLyrics` performs
+    /// an intentional, tested line→word-level hot-switch
+    /// (`applyFetchedLyricsIfCurrent`'s `upgradedLineToWord`,
+    /// `LyricsWordLevelPriorityTests`) whenever a later, better source
+    /// resolves for the SAME song -- and when that source transcribes the
+    /// identical line text (the common case: different providers of the same
+    /// real lyrics), `text`/`translation` are unchanged and ONLY `words`
+    /// differs. The old fingerprint was blind to that, so
+    /// `refreshDisplayLineCache`'s dedup guard silently discarded the
+    /// upgrade: `lyricsService.lyrics` had the word-level data (pipeline
+    /// applied it correctly), but `cachedDisplayLyrics`/`cachedLayerRows`
+    /// stayed frozen at the earlier line-level split forever, so the native
+    /// renderer kept drawing a whole-line sweep. See
+    /// `LyricsDisplayLineFingerprintTests` for the repro (red on the old
+    /// hash, green with `words.count` included) and
+    /// `research/diagnosis-2026-09-24-word-level-display-freeze.md`.
+    static func displayLineInputFingerprint(
+        trackKey: String,
+        showTranslation: Bool,
+        firstRealLyricIndex: Int,
+        interludeAfterIndex: Int?,
+        lyrics: [LyricLine]
+    ) -> Int {
         var hasher = Hasher()
-        hasher.combine(Self.layerRowsTrackKey(for: musicController))
-        hasher.combine(lyricsService.showTranslation)
-        hasher.combine(lyricsService.firstRealLyricIndex)
-        hasher.combine(lyricsService.interludeAfterIndex)
-        let lyrics = lyricsService.lyrics
+        hasher.combine(trackKey)
+        hasher.combine(showTranslation)
+        hasher.combine(firstRealLyricIndex)
+        hasher.combine(interludeAfterIndex)
         hasher.combine(lyrics.count)
         for line in lyrics {
             hasher.combine(line.text)
             hasher.combine(line.translation)
+            // words.count alone is sufficient: it flips whenever
+            // hasSyllableSync (words.isEmpty) transitions, and also catches
+            // a backfill that changes the per-line word count without
+            // flipping the boolean (rare, but the same class of change the
+            // renderer's word-run plan reacts to).
+            hasher.combine(line.words.count)
         }
         return hasher.finalize()
     }
+
+    private func displayLineInputFingerprint() -> Int {
+        Self.displayLineInputFingerprint(
+            trackKey: Self.layerRowsTrackKey(for: musicController),
+            showTranslation: lyricsService.showTranslation,
+            firstRealLyricIndex: lyricsService.firstRealLyricIndex,
+            interludeAfterIndex: lyricsService.interludeAfterIndex,
+            lyrics: lyricsService.lyrics
+        )
+    }
+
+    #if DEBUG
+    /// 2026-09-24 defensive invariant (founder rule: "先复现再修" -- once
+    /// fixed, guard against a regression reintroducing the same class of
+    /// bug through a different path than the fingerprint dedup guard, e.g.
+    /// a future edit to `makeDisplayLyricLines` that drops `words` for some
+    /// split piece). Every display row built from a word-level SOURCE line
+    /// must itself be word-level -- background/prelude rows are exempt (they
+    /// carry the source line's `words` through unsplit already, but are not
+    /// what this invariant is about), and a genuinely-empty word source
+    /// naturally has no words to lose. DEBUG-only. Pure so
+    /// `LyricsDisplayLineFingerprintTests` can assert on the violation list
+    /// directly, without intercepting `DebugLogger`'s file output.
+    static func wordLevelDowngradeViolations(
+        sourceLines: [LyricLine],
+        displayLines: [DisplayLyricLine]
+    ) -> [DisplayLyricLine] {
+        displayLines.filter { displayLine in
+            guard sourceLines.indices.contains(displayLine.sourceIndex) else { return false }
+            return sourceLines[displayLine.sourceIndex].hasSyllableSync && !displayLine.line.hasSyllableSync
+        }
+    }
+
+    static func logWordLevelDowngradeInvariantViolations(
+        sourceLines: [LyricLine],
+        displayLines: [DisplayLyricLine],
+        trackTitle: String
+    ) {
+        for displayLine in wordLevelDowngradeViolations(sourceLines: sourceLines, displayLines: displayLines) {
+            DebugLogger.log(
+                "LyricsView",
+                "🚨 INVARIANT VIOLATION: word-level source line \(displayLine.sourceIndex) " +
+                "('\(trackTitle)') lost words at display piece \(displayLine.segmentIndex)/" +
+                "\(displayLine.segmentCount) (id=\(displayLine.id))"
+            )
+        }
+    }
+    #endif
 
     /// Evidence log (2026-09-22, research/diagnosis-2026-09-22-blank-lyrics-page.md):
     /// the stale-rows gate at the `cacheIsCurrentTrack` call site is exactly
@@ -2403,6 +2531,13 @@ public struct LyricsView: View {
         cachedDisplayLines = displayLines
         cachedDisplayLyrics = displayLines.map(\.line)
         cachedFirstRealDisplayIndex = firstRealDisplayIndex
+        #if DEBUG
+        Self.logWordLevelDowngradeInvariantViolations(
+            sourceLines: lyricsService.lyrics,
+            displayLines: displayLines,
+            trackTitle: musicController.currentTrackTitle
+        )
+        #endif
         let layerRows = makeLayerBackedRows(from: displayLines).filter { row in
             row.index == 0 || row.index >= firstRealDisplayIndex
         }

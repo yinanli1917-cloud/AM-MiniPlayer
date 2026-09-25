@@ -36,9 +36,22 @@ struct LyricTimedDisplayToken: Equatable {
 
 /// Options for `LyricDisplaySegmenter.realWrapPieces` / `realWrapWordPieces` / `proportionalTiming`.
 struct LyricRealWrapSplitOptions: Equatable {
-    /// Every displayed piece should fit within this many real visual lines. A
-    /// single unbreakable token that itself exceeds this is exempt (never
-    /// split inside a word).
+    /// A line strictly BELOW this many real visual lines stays whole -- never
+    /// split at all, no matter how `maxVisualLinesPerPiece` is set. Founder
+    /// 2026-09-24 decision: the previous single-token design (trigger ==
+    /// budget, both `maxVisualLinesPerPiece`) was too aggressive -- a line
+    /// that only wrapped to 3 visual lines was still being cut in half. The
+    /// decision "should this line split at all" (this field) and "how small
+    /// must each resulting piece be" (`maxVisualLinesPerPiece`) are now two
+    /// independent tokens, checked only at the TOP of `realWrapPieces` /
+    /// `realWrapWordPieces` -- the recursive cutting below still targets
+    /// `maxVisualLinesPerPiece` alone, so a triggered split still produces
+    /// the fewest pieces that each satisfy that budget (a 4-line line -> 2
+    /// pieces of ~2 lines; a 7-line line -> 3 pieces), not `splitTriggerVisualLines`-sized ones.
+    let splitTriggerVisualLines: Int
+    /// Once a line IS split, every resulting piece should fit within this
+    /// many real visual lines. A single unbreakable token that itself
+    /// exceeds this is exempt (never split inside a word).
     let maxVisualLinesPerPiece: Int
     /// A piece STRICTLY BELOW this glyph count (after trimming whitespace) is
     /// an orphan; the splitter avoids leaving one when a rebalance can
@@ -60,7 +73,8 @@ struct LyricRealWrapSplitOptions: Equatable {
     let minimumTwoPieceDuration: TimeInterval
 
     static let `default` = LyricRealWrapSplitOptions(
-        maxVisualLinesPerPiece: 2,
+        splitTriggerVisualLines: 4,
+        maxVisualLinesPerPiece: 3,
         minOrphanGlyphCount: 2,
         minimumPieceDuration: 1.2,
         minimumTwoPieceDuration: 0.6
@@ -752,7 +766,9 @@ enum LyricDisplaySegmenter {
 
     // MARK: - Plan A: line-level text splitting (real wrap, priority break points)
 
-    /// Splits `text` into pieces that each fit within
+    /// A line under `options.splitTriggerVisualLines` real visual lines at
+    /// `rowWidth` stays whole (returned as a single-element array). Otherwise
+    /// splits `text` into pieces that each fit within
     /// `options.maxVisualLinesPerPiece` real visual lines at `rowWidth`
     /// (measured via `LyricDisplayLineMeasurement`, the SAME NSLayoutManager
     /// recipe the native renderer measures with). Break points, in priority
@@ -772,6 +788,12 @@ enum LyricDisplaySegmenter {
     ) -> [String] {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
+        // Split-trigger gate (2026-09-24): a line that wraps to
+        // `splitTriggerVisualLines` - 1 or fewer real visual lines stays
+        // whole, full stop -- the recursive cutter below is never entered.
+        guard LyricDisplayLineMeasurement.visualLineCount(for: trimmed, rowWidth: rowWidth, isBackground: isBackground) >= options.splitTriggerVisualLines else {
+            return [trimmed]
+        }
         let pieces = splitRecursively(trimmed, rowWidth: rowWidth, isBackground: isBackground, options: options)
         return mergeOrphanTextPieces(pieces, minGlyphs: options.minOrphanGlyphCount)
     }
@@ -1076,7 +1098,9 @@ enum LyricDisplaySegmenter {
 
     // MARK: - Plan A: word-level splitting (exact timing; breath-gap break points)
 
-    /// Splits `words` (a syllable-synced line) into groups that each fit
+    /// A line under `options.splitTriggerVisualLines` real visual lines at
+    /// `rowWidth` stays whole (returned as a single-element array). Otherwise
+    /// splits `words` (a syllable-synced line) into groups that each fit
     /// within `options.maxVisualLinesPerPiece` real visual lines at
     /// `rowWidth`. Each group keeps its own `LyricWord`s verbatim -- the
     /// caller derives start/end from `group.first`/`group.last`, so timing
@@ -1093,6 +1117,22 @@ enum LyricDisplaySegmenter {
         options: LyricRealWrapSplitOptions = .default
     ) -> [[LyricWord]] {
         guard !words.isEmpty else { return [] }
+        // Split-trigger gate (2026-09-24), mirrors `realWrapPieces`: a line
+        // that wraps to fewer than `splitTriggerVisualLines` real visual
+        // lines stays whole -- the recursive cutter (targeting
+        // `maxVisualLinesPerPiece` alone) is never entered.
+        let text = displayText(forWords: words)
+        guard LyricDisplayLineMeasurement.visualLineCount(for: text, rowWidth: rowWidth) >= options.splitTriggerVisualLines else {
+            return [words]
+        }
+        return splitWordPiecesRecursively(words, rowWidth: rowWidth, options: options)
+    }
+
+    private static func splitWordPiecesRecursively(
+        _ words: [LyricWord],
+        rowWidth: CGFloat,
+        options: LyricRealWrapSplitOptions
+    ) -> [[LyricWord]] {
         let text = displayText(forWords: words)
         guard LyricDisplayLineMeasurement.visualLineCount(for: text, rowWidth: rowWidth) > options.maxVisualLinesPerPiece else {
             return [words]
@@ -1102,8 +1142,8 @@ enum LyricDisplaySegmenter {
         }
         let left = Array(words[..<cutIndex])
         let right = Array(words[cutIndex...])
-        return realWrapWordPieces(for: left, rowWidth: rowWidth, options: options)
-            + realWrapWordPieces(for: right, rowWidth: rowWidth, options: options)
+        return splitWordPiecesRecursively(left, rowWidth: rowWidth, options: options)
+            + splitWordPiecesRecursively(right, rowWidth: rowWidth, options: options)
     }
 
     private static func balancedWordSplitIndex(_ words: [LyricWord]) -> Int? {

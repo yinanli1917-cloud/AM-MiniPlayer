@@ -2523,24 +2523,32 @@ public class LyricsService: ObservableObject {
     /// resolved for the CURRENT song (2026-09-22 fix), as a BCP-47 language
     /// code (e.g. "ja", "ko", "en"). `nil` only when resolution hasn't run
     /// yet or genuinely failed (undetermined source / pair not installed) —
-    /// 2026-09-23 fix: this now resolves EVEN WHEN every eligible line
-    /// already carries a lyrics-source translation (`translationsAreFromLyricsSource
-    /// == true`), because tier 2 of split-piece translation
-    /// (`LyricPieceTranslation`) needs a source language for the original
-    /// line's OWN text regardless of where the WHOLE-line translation came
-    /// from. Read by LyricsView to key `PieceTranslationCache` lookups the
-    /// same way `performPendingPieceTranslations` writes them.
+    /// resolves EVEN WHEN every eligible line already carries a lyrics-source
+    /// translation (`translationsAreFromLyricsSource == true`); still read by
+    /// LyricsView to key `PieceTranslationCache` lookups for MACHINE-origin
+    /// lines. 2026-09-23-afternoon update: a HUMAN-origin line's pieces no
+    /// longer consult this at all -- `LyricPieceTranslation`'s tier
+    /// `.humanSplit` is pure text logic on the already-resolved WHOLE-line
+    /// translation and needs no source language. This value still matters
+    /// for mixed songs (some lines missing a lyrics-source translation still
+    /// get one filled in via system translation, `isFillingPartialSourceTranslations`)
+    /// and for genuinely machine-origin songs.
     public var resolvedTranslationSourceLanguageCode: String? {
         resolvedSongTranslationSourceLanguage?.languageCode?.identifier
     }
 
     /// True when the current WHOLE-LINE translation (if any) comes from
     /// on-device system translation rather than the lyrics provider's own
-    /// translation (NetEase/QQ). Diagnostic only — 2026-09-23 fix: no longer
-    /// gates per-piece tier-2 translation (see `resolvedTranslationSourceLanguageCode`
-    /// and `performPendingPieceTranslations`); a lyrics-source-translated
-    /// line's ORIGINAL text still has a detectable source language and still
-    /// benefits from per-piece translation when Plan A splits it.
+    /// translation (NetEase/QQ). 2026-09-23-afternoon founder decision: this
+    /// NOW gates which per-piece pipeline `LyricsView.makeDisplayLyricLines`
+    /// uses again -- `isHumanTranslation = !isSystemTranslationSource` picks
+    /// tier `.humanSplit` (split the human translation itself, NEVER
+    /// machine-translate its pieces -- per-piece MACHINE translation of an
+    /// already-human-translated line read "重复/生硬", repetitive/heavy) vs.
+    /// the pre-existing machine-origin tier-2 `.perPieceCache` pipeline this
+    /// property used to only be diagnostic for (see the 2026-09-23-morning
+    /// history in git blame / research/translation-popup-and-piece-translation-2026-09-22.md
+    /// for the brief window where it did NOT gate anything).
     public var isSystemTranslationSource: Bool { !translationsAreFromLyricsSource }
 
     /// Registers `texts` (already known to need a per-piece translation —

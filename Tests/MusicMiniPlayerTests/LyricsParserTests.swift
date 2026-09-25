@@ -310,6 +310,140 @@ final class LyricsParserTests: XCTestCase {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - 和声结构化拆分保留逐字时间轴 (2026-09-24 founder question:
+    // "和声有没有逐字歌词？如果都是逐字歌词" — splitBackgroundVocalLines used
+    // to construct BOTH resulting lines with `words: []` unconditionally,
+    // degrading a word-level line to line-level on every bracket split.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// Bracket characters attached to their neighboring token's own span text
+    /// (no isolated punctuation span) — the realistic shape for sources that
+    /// don't tokenize punctuation separately.
+    func testSplitBackgroundVocalLines_wordLevel_trailingParenthetical_bracketAttachedToWord() {
+        let words = [
+            LyricWord(word: "I", startTime: 0.0, endTime: 0.3),
+            LyricWord(word: "love", startTime: 0.3, endTime: 0.6),
+            LyricWord(word: "you", startTime: 0.6, endTime: 0.9),
+            LyricWord(word: "(love", startTime: 1.0, endTime: 1.3),
+            LyricWord(word: "you)", startTime: 1.3, endTime: 1.6),
+        ]
+        let line = LyricLine(text: "I love you (love you)", startTime: 0, endTime: 2, words: words)
+        let result = parser.splitBackgroundVocalLines([line])
+
+        XCTAssertEqual(result.count, 2)
+        let melody = result[0]
+        let background = result[1]
+        XCTAssertEqual(melody.text, "I love you")
+        XCTAssertEqual(melody.isBackground, false)
+        XCTAssertEqual(background.text, "love you")
+        XCTAssertEqual(background.isBackground, true)
+
+        // Word-level timing must survive the split, not collapse to [].
+        XCTAssertEqual(melody.words.map(\.word), ["I", "love", "you"])
+        XCTAssertEqual(melody.words.map(\.startTime), [0.0, 0.3, 0.6])
+        XCTAssertEqual(background.words.map(\.word), ["love", "you"])
+        XCTAssertEqual(background.words.map(\.startTime), [1.0, 1.3])
+        XCTAssertTrue(melody.hasSyllableSync)
+        XCTAssertTrue(background.hasSyllableSync)
+    }
+
+    /// A bracket carried as its OWN isolated word/token must be dropped
+    /// (not left behind as an empty `LyricWord`) once its marker character
+    /// is stripped.
+    func testSplitBackgroundVocalLines_wordLevel_bracketAsStandaloneToken_isDropped() {
+        let words = [
+            LyricWord(word: "I", startTime: 0.0, endTime: 0.3),
+            LyricWord(word: "love", startTime: 0.3, endTime: 0.6),
+            LyricWord(word: "you", startTime: 0.6, endTime: 0.9),
+            LyricWord(word: "(", startTime: 0.95, endTime: 1.0),
+            LyricWord(word: "love", startTime: 1.0, endTime: 1.3),
+            LyricWord(word: "you", startTime: 1.3, endTime: 1.6),
+            LyricWord(word: ")", startTime: 1.6, endTime: 1.6),
+        ]
+        let line = LyricLine(text: "I love you (love you)", startTime: 0, endTime: 2, words: words)
+        let result = parser.splitBackgroundVocalLines([line])
+
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result[0].words.map(\.word), ["I", "love", "you"])
+        XCTAssertEqual(result[1].words.map(\.word), ["love", "you"])
+    }
+
+    func testSplitBackgroundVocalLines_wordLevel_leadingParenthetical_preservesTiming() {
+        let words = [
+            LyricWord(word: "(It's", startTime: 0.0, endTime: 0.4),
+            LyricWord(word: "simple)", startTime: 0.4, endTime: 0.9),
+            LyricWord(word: "it's", startTime: 1.0, endTime: 1.3),
+            LyricWord(word: "like", startTime: 1.3, endTime: 1.5),
+            LyricWord(word: "biting", startTime: 1.5, endTime: 1.8),
+            LyricWord(word: "an", startTime: 1.8, endTime: 1.9),
+            LyricWord(word: "apple", startTime: 1.9, endTime: 2.2),
+        ]
+        let line = LyricLine(text: "(It's simple) it's like biting an apple", startTime: 0, endTime: 3, words: words)
+        let result = parser.splitBackgroundVocalLines([line])
+
+        XCTAssertEqual(result.count, 2)
+        // Melody is always appended before background regardless of whether
+        // the bracket sits at the leading or trailing edge of the source
+        // text (matches `testSplitBackgroundVocalLines_leadingParenthetical_
+        // splitsBackgroundAndMelody`'s existing line-level ordering).
+        let melody = result[0]
+        let background = result[1]
+        XCTAssertEqual(background.isBackground, true)
+        XCTAssertEqual(background.text, "It's simple")
+        XCTAssertEqual(background.words.map(\.word), ["It's", "simple"])
+        XCTAssertEqual(melody.isBackground, false)
+        XCTAssertEqual(melody.text, "it's like biting an apple")
+        XCTAssertEqual(melody.words.map(\.word), ["it's", "like", "biting", "an", "apple"])
+        XCTAssertTrue(background.hasSyllableSync)
+        XCTAssertTrue(melody.hasSyllableSync)
+    }
+
+    func testSplitBackgroundVocalLines_wordLevel_wholeLineBracket_asciiParens() {
+        let words = [
+            LyricWord(word: "(I", startTime: 10.0, endTime: 10.4),
+            LyricWord(word: "want", startTime: 10.4, endTime: 10.7),
+            LyricWord(word: "you)", startTime: 10.7, endTime: 11.0),
+        ]
+        let line = LyricLine(text: "(I want you)", startTime: 10, endTime: 14, words: words)
+        let result = parser.splitBackgroundVocalLines([line])
+
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result[0].isBackground, true)
+        XCTAssertEqual(result[0].text, "I want you")
+        XCTAssertEqual(result[0].words.map(\.word), ["I", "want", "you"])
+        XCTAssertTrue(result[0].hasSyllableSync)
+    }
+
+    func testSplitBackgroundVocalLines_wordLevel_wholeLineBracket_fullWidthCJK() {
+        let words = [
+            LyricWord(word: "（我", startTime: 5.0, endTime: 5.3),
+            LyricWord(word: "想", startTime: 5.3, endTime: 5.6),
+            LyricWord(word: "你）", startTime: 5.6, endTime: 5.9),
+        ]
+        let line = LyricLine(text: "（我想你）", startTime: 5, endTime: 6, words: words)
+        let result = parser.splitBackgroundVocalLines([line])
+
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result[0].isBackground, true)
+        XCTAssertEqual(result[0].text, "我想你")
+        XCTAssertEqual(result[0].words.map(\.word), ["我", "想", "你"])
+        XCTAssertEqual(result[0].words.map(\.startTime), [5.0, 5.3, 5.6])
+    }
+
+    /// A line-level (no word timing) input must be completely unaffected —
+    /// the fix only changes behavior when `words` is non-empty.
+    func testSplitBackgroundVocalLines_lineLevel_stillProducesEmptyWordsArrays() {
+        let line = LyricLine(text: "And don't you know how sweet it tastes? (How sweet it tastes)", startTime: 44.42, endTime: 48.38)
+        let result = parser.splitBackgroundVocalLines([line])
+
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result[0].words, [])
+        XCTAssertEqual(result[1].words, [])
+        XCTAssertFalse(result[0].hasSyllableSync)
+        XCTAssertFalse(result[1].hasSyllableSync)
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - YRC 解析
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

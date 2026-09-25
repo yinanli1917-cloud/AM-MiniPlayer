@@ -59,6 +59,26 @@
  * real system call (`TranslationAvailabilityMemo` / on-device
  * `LanguageAvailability().status(from: en, to: zh-Hans)`) is memoized
  * process-wide after the first call, so running this many times is cheap.
+ *
+ * 2026-09-23 update (founder rule: a HUMAN-origin line's split pieces are
+ * NEVER machine-translated -- see LyricPieceTranslation.swift's header and
+ * LyricPieceTranslationTests): this file's two `LyricPieceTranslation.
+ * pieceTranslations` calls now pass `isHumanTranslation: false` EXPLICITLY.
+ * That is a deliberate override of what the fixture's real-world origin
+ * would be (`Self.fixtureFullTranslation` reads exactly like a lyrics-source
+ * Chinese translation, and in the real app a line built this way WOULD be
+ * human-origin and WOULD instead resolve via tier `.humanSplit`,
+ * synchronously, with no registration/async wait at all -- see
+ * LyricPieceTranslationTests / piece_translation_eval.json for that path).
+ * This file's actual subject is the LyricsService-level async
+ * registration-ordering fix (`pieceTranslationSourceVersion`,
+ * `registerPendingPieceTranslations`, `performPendingPieceTranslations`),
+ * which remains real production code for genuinely MACHINE-origin split
+ * lines (a system-translated line, or a lyrics-source line with some
+ * eligible lines still missing a source translation). Forcing
+ * `isHumanTranslation: false` here keeps exercising exactly that machinery
+ * in isolation, regardless of what this specific fixture's real
+ * `translationsAreFromLyricsSource` would compute to.
  */
 
 import XCTest
@@ -145,7 +165,8 @@ final class PieceTranslationRebuildOrderingTests: XCTestCase {
             return PieceTranslationCache.shared.translation(for: text, source: pieceSourceCode, target: targetCode)
         }
         let (_, tiers) = LyricPieceTranslation.pieceTranslations(
-            originalPieces: originalPieces, fullTranslation: fullTranslation, cache: cache
+            originalPieces: originalPieces, fullTranslation: fullTranslation,
+            isHumanTranslation: false, cache: cache
         )
         let pending = zip(originalPieces, tiers).filter { $0.1 == .none }.map(\.0)
         if pieceSourceCode != nil, !pending.isEmpty {
@@ -170,7 +191,8 @@ final class PieceTranslationRebuildOrderingTests: XCTestCase {
             return PieceTranslationCache.shared.translation(for: text, source: pieceSourceCode, target: targetCode)
         }
         let (translations, tiers) = LyricPieceTranslation.pieceTranslations(
-            originalPieces: pieces, fullTranslation: fullTranslation, cache: cache
+            originalPieces: pieces, fullTranslation: fullTranslation,
+            isHumanTranslation: false, cache: cache
         )
         for index in pieces.indices where index > 0 {
             guard tiers[index] == .clauseAligned || tiers[index] == .perPieceCache,

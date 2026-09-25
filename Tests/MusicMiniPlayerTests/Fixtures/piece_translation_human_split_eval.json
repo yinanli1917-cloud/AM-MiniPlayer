@@ -1,0 +1,507 @@
+[
+  {
+    "id": "hs-001",
+    "category": "spaces",
+    "note": "founder's own repro shape (PieceTranslationRebuildOrderingTests fixture): 3 pieces, Chinese fan-translation separated by spaces, roughly matching lengths -- the space candidates should closely track the display-length shares.",
+    "originalPieces": [
+      "It just didn't seem fair,",
+      "wasn't going to be something",
+      "that were a part of me"
+    ],
+    "fullTranslation": "看起来世事不公 可世界本就如此 哪都一样",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-002",
+    "category": "spaces",
+    "note": "2 pieces, single space separator, translation has zero clause punctuation (tier 1 structurally excluded by clause-count mismatch).",
+    "originalPieces": [
+      "I called you up,",
+      "but you never answered"
+    ],
+    "fullTranslation": "我给你打了电话 但你没有接",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-003",
+    "category": "spaces",
+    "note": "4 pieces, 3 space separators, roughly even weights.",
+    "originalPieces": [
+      "The morning came too fast,",
+      "and I was not ready,",
+      "so I stayed in bed,",
+      "pretending it was still night"
+    ],
+    "fullTranslation": "早晨来得太快 我还没准备好 所以我赖在床上 假装夜还没过去",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-004",
+    "category": "spaces",
+    "note": "2026-09-23-afternoon-2 CONFIRMED FIXED (founder review point 3): after the per-piece orphan-floor fix (defect B -- a short original piece, 'Go.' <=3 chars, gets a relaxed floor of 1), this now genuinely SPLITS ('走吧' / the rest) instead of degrading to a single unsplit piece. Verified by actually running the real production split, not asserted -- see test_extendedHumanSplitDataset_invariantsAndDeviationStats's printed pairs.",
+    "originalPieces": [
+      "Go.",
+      "I have been waiting here for hours just thinking about everything we used to say to each other"
+    ],
+    "fullTranslation": "走吧 我在这里等了好几个小时一直想着我们以前互相说过的所有话",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-005",
+    "category": "spaces",
+    "note": "original pieces do NOT end at a clause boundary at all (tier 1 excluded unconditionally); translation mixes a space AND a trailing comma before the space.",
+    "originalPieces": [
+      "Every morning I wake up alone",
+      "wondering where you have gone"
+    ],
+    "fullTranslation": "每天早上我都是一个人醒来， 想着你到底去了哪里",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-006",
+    "category": "spaces",
+    "note": "space in the middle, a full-width period only at the very END of the translation (right before the natural end) -- exercises the orphan-floor trim on a trailing punctuation candidate that is too close to the string end to use.",
+    "originalPieces": [
+      "She smiled at me one last time,",
+      "before she walked away forever"
+    ],
+    "fullTranslation": "她最后一次对我笑了 然后她永远地走开了。",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-007",
+    "category": "punctuationOnly",
+    "note": "no spaces anywhere in the translation, two commas as the only separators; ORIGINAL pieces deliberately do NOT end at clause punctuation so tier 1 is structurally excluded and humanSplit's own punctuation-tier candidates are what get exercised.",
+    "originalPieces": [
+      "The morning came too fast",
+      "and I was not ready",
+      "so I stayed in bed"
+    ],
+    "fullTranslation": "早晨来得太快，我还没准备好，所以我赖在床上",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-008",
+    "category": "punctuationOnly",
+    "note": "2 pieces, single comma separator, no spaces.",
+    "originalPieces": [
+      "I wanted to tell you everything",
+      "but the words never came out right"
+    ],
+    "fullTranslation": "我想把一切都告诉你，但话到嘴边却怎么也说不好",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-009",
+    "category": "punctuationOnly",
+    "note": "3 pieces, 2 commas, no spaces, roughly even weights.",
+    "originalPieces": [
+      "We danced all night long",
+      "we laughed until the sun came up",
+      "and I never wanted it to end"
+    ],
+    "fullTranslation": "我们跳了一整晚的舞，我们笑到太阳升起，我从来不想让这一切结束",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-010",
+    "category": "punctuationOnly",
+    "note": "2 pieces, single comma, no spaces, uneven weights.",
+    "originalPieces": [
+      "Every single time you leave",
+      "a little piece of me goes with you"
+    ],
+    "fullTranslation": "每次你离开的时候，我的一部分也跟着你走了",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-011",
+    "category": "punctuationOnly",
+    "note": "translation uses the Chinese enumeration comma (、, a weak clause boundary) as its only separator.",
+    "originalPieces": [
+      "Coffee tea or something stronger",
+      "whatever gets us through tonight"
+    ],
+    "fullTranslation": "咖啡、茶、或者更烈的东西，只要能让我们撑过今晚就好",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-012",
+    "category": "punctuationOnly",
+    "note": "4 pieces, 3 commas, no spaces, near-identical per-piece weights (repeated parallel-structure phrasing).",
+    "originalPieces": [
+      "I remember the summer",
+      "I remember your laughter",
+      "I remember the ocean",
+      "I remember losing you"
+    ],
+    "fullTranslation": "我记得那个夏天，我记得你的笑声，我记得那片海，我记得失去你的那一刻",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-013",
+    "category": "continuous",
+    "note": "translation has ZERO spaces and ZERO clause punctuation -- humanSplit can only use NLTokenizer(unit: .word) boundaries (the densest, lowest-priority tier).",
+    "originalPieces": [
+      "Stay with me tonight",
+      "and never let me go"
+    ],
+    "fullTranslation": "今晚留在我身边永远不要放开我的手",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-014",
+    "category": "continuous",
+    "note": "continuous Chinese, 2 pieces, tokenizer-only path.",
+    "originalPieces": [
+      "Walking down this empty street",
+      "thinking of the days we shared"
+    ],
+    "fullTranslation": "走在这条空荡荡的街道想起我们共度的日子",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-015",
+    "category": "continuous",
+    "note": "continuous Chinese, 3 pieces, tokenizer-only path.",
+    "originalPieces": [
+      "Every star above us",
+      "reminds me of your eyes",
+      "shining in the dark"
+    ],
+    "fullTranslation": "头顶的每一颗星星都让我想起你的眼睛在黑暗中闪着光",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-016",
+    "category": "continuous",
+    "note": "continuous Chinese, 2 pieces, heavily uneven weights, tokenizer-only path.",
+    "originalPieces": [
+      "Go",
+      "I have been standing here in the rain for hours waiting for you to come back home to me"
+    ],
+    "fullTranslation": "走吧我已经在雨里站了好几个小时一直等着你回到我身边来",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-017",
+    "category": "continuous",
+    "note": "continuous Chinese, 4 pieces, tokenizer-only path.",
+    "originalPieces": [
+      "Summer nights felt endless",
+      "we ran along the shore",
+      "chasing every sunset",
+      "never wanting to go home"
+    ],
+    "fullTranslation": "夏天的夜晚仿佛永远不会结束我们沿着海岸奔跑追逐每一次日落从不想回家",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-018",
+    "category": "continuous",
+    "note": "continuous Chinese, 2 pieces, short overall translation, tokenizer-only path.",
+    "originalPieces": [
+      "Hold my hand",
+      "and never let it go again"
+    ],
+    "fullTranslation": "握住我的手再也不要松开了",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-019",
+    "category": "japanese",
+    "note": "Japanese translation, no spaces, no punctuation -- tokenizer-only path (kana + kanji mix). UPDATE 2026-09-23-afternoon-2 (founder review point 1): NLTagger has NO .lexicalClass model for Japanese on this SDK (empirically verified, see test_nlTaggerSupportProbe_printsRealSchemeAvailability), so the word-boundary tier is now DISABLED for ja -- never falls back to a bare NLTokenizer boundary (that was the exact mechanism that split 待っている mid-morpheme). This translation has zero spaces/punctuation, so once tier 2 is disabled there are zero usable candidates: the whole translation correctly stays on piece 0, later pieces nil. This is the intended, safe degradation -- not a bug.",
+    "originalPieces": [
+      "I keep waiting here for you",
+      "even when the rain won't stop"
+    ],
+    "fullTranslation": "あなたをずっとここで待っている雨がやまなくても",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": true,
+    "translationLanguage": "ja"
+  },
+  {
+    "id": "hs-020",
+    "category": "japanese",
+    "note": "Japanese, 3 pieces, no spaces/punctuation, tokenizer-only path. UPDATE 2026-09-23-afternoon-2 (founder review point 1): NLTagger has NO .lexicalClass model for Japanese on this SDK (empirically verified, see test_nlTaggerSupportProbe_printsRealSchemeAvailability), so the word-boundary tier is now DISABLED for ja -- never falls back to a bare NLTokenizer boundary (that was the exact mechanism that split 待っている mid-morpheme). This translation has zero spaces/punctuation, so once tier 2 is disabled there are zero usable candidates: the whole translation correctly stays on piece 0, later pieces nil. This is the intended, safe degradation -- not a bug.",
+    "originalPieces": [
+      "The city lights are shining",
+      "but I only see your face",
+      "reflected in the window"
+    ],
+    "fullTranslation": "街の明かりが光っているけど窓に映るあなたの顔しか見えない",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": true,
+    "translationLanguage": "ja"
+  },
+  {
+    "id": "hs-021",
+    "category": "japanese",
+    "note": "Japanese with a 、 (weak clause boundary) as the only separator; original pieces deliberately don't end at clause punctuation so tier 1 is excluded and humanSplit's punctuation-tier handles the 、.",
+    "originalPieces": [
+      "I want to see you again",
+      "even just for a moment"
+    ],
+    "fullTranslation": "もう一度あなたに会いたい、ほんの少しの時間でもいいから",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "ja"
+  },
+  {
+    "id": "hs-022",
+    "category": "japanese",
+    "note": "Japanese with a space (lyric-style formatting), no punctuation.",
+    "originalPieces": [
+      "Time keeps moving forward",
+      "but my heart stays here with you"
+    ],
+    "fullTranslation": "時間は前に進み続ける でも私の心はここであなたと一緒にいる",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "ja"
+  },
+  {
+    "id": "hs-023",
+    "category": "japanese",
+    "note": "Japanese, short overall translation, no spaces/punctuation, 2 pieces. UPDATE 2026-09-23-afternoon-2 (founder review point 1): NLTagger has NO .lexicalClass model for Japanese on this SDK (empirically verified, see test_nlTaggerSupportProbe_printsRealSchemeAvailability), so the word-boundary tier is now DISABLED for ja -- never falls back to a bare NLTokenizer boundary (that was the exact mechanism that split 待っている mid-morpheme). This translation has zero spaces/punctuation, so once tier 2 is disabled there are zero usable candidates: the whole translation correctly stays on piece 0, later pieces nil. This is the intended, safe degradation -- not a bug.",
+    "originalPieces": [
+      "Don't go",
+      "stay a little longer with me tonight"
+    ],
+    "fullTranslation": "行かないでもう少しだけ今夜私と一緒にいて",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": true,
+    "translationLanguage": "ja"
+  },
+  {
+    "id": "hs-024",
+    "category": "japanese",
+    "note": "Japanese, 4 pieces, no spaces/punctuation, tokenizer-only path, longer translation. UPDATE 2026-09-23-afternoon-2 (founder review point 1): NLTagger has NO .lexicalClass model for Japanese on this SDK (empirically verified, see test_nlTaggerSupportProbe_printsRealSchemeAvailability), so the word-boundary tier is now DISABLED for ja -- never falls back to a bare NLTokenizer boundary (that was the exact mechanism that split 待っている mid-morpheme). This translation has zero spaces/punctuation, so once tier 2 is disabled there are zero usable candidates: the whole translation correctly stays on piece 0, later pieces nil. This is the intended, safe degradation -- not a bug.",
+    "originalPieces": [
+      "Autumn leaves are falling",
+      "the wind is turning cold",
+      "I still remember your smile",
+      "warm against the winter sky"
+    ],
+    "fullTranslation": "紅葉が散っていく風が冷たくなっていくあなたの笑顔をまだ覚えている冬の空の下で温かかった",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": true,
+    "translationLanguage": "ja"
+  },
+  {
+    "id": "hs-025",
+    "category": "veryShort",
+    "note": "2-character translation, 2 pieces -- below the orphan floor entirely (chars.count=2, floor requires >3), so humanSplit finds ZERO candidates and the whole translation lands on piece 0 only; piece 1 stays nil. This is the 'not enough candidates' merge-into-last-piece-that-has-one case degrading to piece 0.",
+    "originalPieces": [
+      "Yes.",
+      "Forever and always"
+    ],
+    "fullTranslation": "好的",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": true,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-026",
+    "category": "veryShort",
+    "note": "2-character translation, 3 pieces -- same as hs-025, piece 0 gets everything, pieces 1/2 stay nil.",
+    "originalPieces": [
+      "Run.",
+      "Now.",
+      "Don't look back"
+    ],
+    "fullTranslation": "快跑",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": true,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-027",
+    "category": "veryShort",
+    "note": "3-character translation, exactly AT the orphan floor boundary (chars.count=3 is NOT > 3) -- must still degrade gracefully to piece 0 only, never crash or produce an empty/whitespace-only piece.",
+    "originalPieces": [
+      "Come back to me,",
+      "please"
+    ],
+    "fullTranslation": "回来吧",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": true,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-028",
+    "category": "veryShort",
+    "note": "6-character translation with one space, just ABOVE the orphan floor -- exercises the boundary where a short translation CAN still produce a real 2-way split.",
+    "originalPieces": [
+      "I love you,",
+      "always"
+    ],
+    "fullTranslation": "我爱你 永远",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": true,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-029",
+    "category": "translationLongerThanOriginal",
+    "note": "2 TINY original pieces, one long flowery Chinese translation -- weights are heavily skewed toward piece 0 being tiny (\"Stay.\" is 5 chars incl. period) so the single break should land very early in the long translation.",
+    "originalPieces": [
+      "Stay.",
+      "Please."
+    ],
+    "fullTranslation": "请你留下来吧，不要离开我，我真的没有办法一个人面对这一切",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-030",
+    "category": "translationLongerThanOriginal",
+    "note": "2 tiny original pieces (\"Wait\" / \"for me\"), long translation, no clause punctuation at all in the translation (tokenizer-only for the single break).",
+    "originalPieces": [
+      "Wait",
+      "for me"
+    ],
+    "fullTranslation": "请一定要在这里等着我回来，无论要花多长时间我都会赶回来找你",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-031",
+    "category": "translationLongerThanOriginal",
+    "note": "3 tiny original pieces, long translation with 2 commas -- 2 internal breaks needed from a translation many times longer than the sum of the original pieces.",
+    "originalPieces": [
+      "Go.",
+      "Now.",
+      "Please"
+    ],
+    "fullTranslation": "现在就走吧，趁着还来得及，请你千万不要再回头看我一眼",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-032",
+    "category": "translationLongerThanOriginal",
+    "note": "2 tiny original pieces, long translation, single comma near the start.",
+    "originalPieces": [
+      "No.",
+      "Not yet"
+    ],
+    "fullTranslation": "不行，现在还不是时候，请再给我一点点时间好好想清楚",
+    "weightMode": "displayLength",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-033",
+    "category": "wordLevelUnevenTiming",
+    "note": "word-level line, 2 groups, HEAVILY skewed real durations (a 0.3s vocable ad-lib followed by a 4.7s main phrase) -- the break must land close to the TIMING share (~6% in), not the display-length share of the ORIGINAL English pieces (which would suggest a much later break, since 'oh' is far shorter than the second piece in characters too -- this case is chosen so both signals roughly agree, see hs-034/035/036 for cases where they would disagree more).",
+    "originalPieces": [
+      "oh",
+      "I never thought that we would end up here together like this after everything"
+    ],
+    "durations": [
+      0.3,
+      4.7
+    ],
+    "fullTranslation": "哦 我从来没想过我们会在经历了这么多之后像这样走到一起",
+    "weightMode": "timing",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-034",
+    "category": "wordLevelUnevenTiming",
+    "note": "word-level line, 3 groups, durations [0.4, 0.6, 3.5] -- two short ad-lib groups then one long main phrase; 2 internal breaks both needing to land early. UPDATE 2026-09-23-afternoon-2: the per-piece floor fix (defect B) makes the FIRST ad-lib piece split correctly (e.g. 'yeah'=>'耶' / 'la'=>'啦'), but a LATER ad-lib piece (e.g. 'yeah yeah' / 'la la la') is 2+ words so it does NOT qualify as 'short' under the founder's own stated proxy (<=1 word / <=3 characters), keeping the standard 3-glyph floor -- yet its only nearby space-tier candidate trims down to exactly 2 characters (the same trimming-loses-the-boundary-space effect documented in hs-006's history), so the post-merge orphan sweep correctly rejects it and merges forward, costing that piece and the final piece their own segments. Never assigns WRONG content (no piece steals another's text) -- a safe, conservative degradation on this synthetic ad-lib-repetition pattern, not the founder's reported bug (which was about the FIRST short piece stealing text, now fixed -- see hs-033).",
+    "originalPieces": [
+      "yeah",
+      "yeah yeah",
+      "I keep telling myself it's gonna be alright somehow"
+    ],
+    "durations": [
+      0.4,
+      0.6,
+      3.5
+    ],
+    "fullTranslation": "耶 耶耶 我一直告诉自己这一切总会好起来的",
+    "weightMode": "timing",
+    "allowNilBeyondFirst": true,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-035",
+    "category": "wordLevelUnevenTiming",
+    "note": "word-level line, 2 groups, durations [0.25, 5.1] -- an even more extreme skew than hs-033, translation uses a comma instead of a space.",
+    "originalPieces": [
+      "mmm",
+      "I don't think I could ever let you go now that I know how it feels"
+    ],
+    "durations": [
+      0.25,
+      5.1
+    ],
+    "fullTranslation": "嗯，现在我知道这种感觉了，我想我再也没办法放你走",
+    "weightMode": "timing",
+    "allowNilBeyondFirst": false,
+    "translationLanguage": "zh-Hans"
+  },
+  {
+    "id": "hs-036",
+    "category": "wordLevelUnevenTiming",
+    "note": "word-level line, 4 groups, durations [0.2, 0.3, 0.4, 4.0] -- three short vocable ad-libs then one long main phrase, 3 internal breaks all clustering early. UPDATE 2026-09-23-afternoon-2: the per-piece floor fix (defect B) makes the FIRST ad-lib piece split correctly (e.g. 'yeah'=>'耶' / 'la'=>'啦'), but a LATER ad-lib piece (e.g. 'yeah yeah' / 'la la la') is 2+ words so it does NOT qualify as 'short' under the founder's own stated proxy (<=1 word / <=3 characters), keeping the standard 3-glyph floor -- yet its only nearby space-tier candidate trims down to exactly 2 characters (the same trimming-loses-the-boundary-space effect documented in hs-006's history), so the post-merge orphan sweep correctly rejects it and merges forward, costing that piece and the final piece their own segments. Never assigns WRONG content (no piece steals another's text) -- a safe, conservative degradation on this synthetic ad-lib-repetition pattern, not the founder's reported bug (which was about the FIRST short piece stealing text, now fixed -- see hs-033).",
+    "originalPieces": [
+      "la",
+      "la la",
+      "la la la",
+      "I keep singing this to forget about the pain that's still inside"
+    ],
+    "durations": [
+      0.2,
+      0.3,
+      0.4,
+      4.0
+    ],
+    "fullTranslation": "啦 啦啦 啦啦啦 我一直唱着这首歌想要忘记心里还留着的痛",
+    "weightMode": "timing",
+    "allowNilBeyondFirst": true,
+    "translationLanguage": "zh-Hans"
+  }
+]

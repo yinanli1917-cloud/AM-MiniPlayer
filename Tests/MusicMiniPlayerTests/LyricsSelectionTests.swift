@@ -2058,6 +2058,179 @@ final class LyricsSelectionTests: XCTestCase {
         ))
     }
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - QQ-witnessed native-title bridge (2026-09-25, "Damn")
+    //
+    // Bad Sweetheart's "Damn" (album "Bye Bye That's All", 292s) got no
+    // lyrics: QQ matched '该死的车站 (Damn)' with full title+artist+album
+    // identity but its own lyric download failed; NetEase had the same
+    // song under the bare title '该死的车站' (no English annotation) and
+    // rejected it because NetEase's own isTitleMatch has no textual
+    // relation to "Damn". The iTunes-storefront catalog-alias bridge
+    // (MetadataResolver) had no coverage for this obscure release and hit
+    // its negative-evidence cache; LRCLIB's own bridge is gated off for
+    // short titles (shouldProbeLibraryNativeTitleAlias). This is a THIRD
+    // bridge: reuse the alias QQ's own confirmed match already carries.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    func testQQWitnessedNativeTitleAliasExtractsBilingualParenthetical() {
+        let fetcher = LyricsFetcher.shared
+
+        let alias = fetcher.qqWitnessedNativeTitleAliasForTesting(
+            matchedTitle: "该死的车站 (Damn)",
+            matchedArtist: "Bad Sweetheart",
+            durationDiff: 0.0,
+            inputTitle: "Damn"
+        )
+
+        XCTAssertEqual(alias?.title, "该死的车站")
+        XCTAssertEqual(alias?.artist, "Bad Sweetheart")
+    }
+
+    /// False-positive guard: a parenthetical that is NOT the input title
+    /// (e.g. a version marker) carries no relation to "Damn" and must not
+    /// be treated as an alias.
+    func testQQWitnessedNativeTitleAliasRejectsUnrelatedParenthetical() {
+        let fetcher = LyricsFetcher.shared
+
+        XCTAssertNil(fetcher.qqWitnessedNativeTitleAliasForTesting(
+            matchedTitle: "该死的车站 (Live)",
+            matchedArtist: "Bad Sweetheart",
+            durationDiff: 0.0,
+            inputTitle: "Damn"
+        ))
+    }
+
+    /// False-positive guard (Love Lee / Dinner class): a sibling track on
+    /// the same album with a similar duration but a CN title that carries
+    /// NO textual relation to the input must still be rejected — matching
+    /// artist/album/duration alone is never sufficient evidence.
+    func testQQWitnessedNativeTitleAliasRejectsUnrelatedSiblingTrack() {
+        let fetcher = LyricsFetcher.shared
+
+        XCTAssertNil(fetcher.qqWitnessedNativeTitleAliasForTesting(
+            matchedTitle: "骑车去芬兰",
+            matchedArtist: "Bad Sweetheart",
+            durationDiff: 0.2,
+            inputTitle: "Damn"
+        ))
+    }
+
+    /// Duration guard: even with a matching parenthetical, a loose
+    /// duration match falls outside the tight P1-style floor this bridge
+    /// reuses and must not qualify.
+    func testQQWitnessedNativeTitleAliasRejectsLooseDuration() {
+        let fetcher = LyricsFetcher.shared
+
+        XCTAssertNil(fetcher.qqWitnessedNativeTitleAliasForTesting(
+            matchedTitle: "该死的车站 (Damn)",
+            matchedArtist: "Bad Sweetheart",
+            durationDiff: 5.0,
+            inputTitle: "Damn"
+        ))
+    }
+
+    /// Pins the actual gap this bridge exists to fill: NetEase's own row for
+    /// this song (real values from the 2026-09-25 incident log) carries NO
+    /// English annotation, so `candidate.titleMatch` is false; with the
+    /// album ALSO matching, `providerLocalizedTitleAlias`'s (P1d) escape
+    /// hatch — `inputWordCount <= 4 && !candidate.albumMatch` — is disabled
+    /// specifically BECAUSE the album matched, and `hasCrossScriptTitleEvidence`
+    /// unconditionally returns false for a plain-English input (that
+    /// evidence is meant to arrive pre-resolved via a catalog-alias bridge).
+    /// Without the QQ-witnessed bridge upstream, NetEase's own candidate
+    /// selection has no path to accept this row at all.
+    func testNetEaseOwnCandidateSelectionRejectsUnannotatedTitleEvenWithAlbumMatch() {
+        let fetcher = LyricsFetcher.shared
+        let params = LyricsFetcher.SearchParams(
+            title: "Damn",
+            artist: "Bad Sweetheart",
+            originalTitle: "Damn",
+            originalArtist: "Bad Sweetheart",
+            duration: 292,
+            album: "Bye Bye That's All"
+        )
+        let songs: [[String: Any]] = [[
+            "id": 1,
+            "name": "该死的车站",
+            "artist": "Bad Sweetheart",
+            "duration": 292.0,
+            "album": "今天就到这 Bye Bye That's All"
+        ]]
+        let candidates: [LyricsFetcher.SearchCandidate<Int>] = fetcher.buildCandidates(
+            songs: songs,
+            params: params,
+            searchDescriptor: "title+artist",
+            extractSong: { song in
+                guard let id = song["id"] as? Int,
+                      let name = song["name"] as? String,
+                      let artist = song["artist"] as? String,
+                      let duration = song["duration"] as? Double,
+                      let album = song["album"] as? String else { return nil }
+                return (id, name, artist, duration, album)
+            }
+        )
+
+        XCTAssertEqual(candidates.first?.albumMatch, true)
+        XCTAssertEqual(candidates.first?.titleMatch, false)
+        XCTAssertNil(fetcher.selectBestCandidate(
+            candidates,
+            source: .netEase,
+            inputTitle: "Damn",
+            inputArtist: "Bad Sweetheart",
+            hasAlbumHint: true,
+            allowNativeTitleAlias: true
+        ))
+    }
+
+    /// The other half of the bridge: once the QQ-witnessed native title
+    /// ("该死的车站") is used as the search input instead of "Damn", the
+    /// SAME NetEase row matches as an ordinary exact CJK title — no P1d/
+    /// cross-script evidence tier needed, because `candidate.titleMatch`
+    /// is now literally true.
+    func testNetEaseAcceptsSameRowOnceSearchedUnderQQWitnessedNativeTitle() {
+        let fetcher = LyricsFetcher.shared
+        let params = LyricsFetcher.SearchParams(
+            title: "该死的车站",
+            artist: "Bad Sweetheart",
+            originalTitle: "Damn",
+            originalArtist: "Bad Sweetheart",
+            duration: 292,
+            album: "Bye Bye That's All"
+        )
+        let songs: [[String: Any]] = [[
+            "id": 1,
+            "name": "该死的车站",
+            "artist": "Bad Sweetheart",
+            "duration": 292.0,
+            "album": "今天就到这 Bye Bye That's All"
+        ]]
+        let candidates: [LyricsFetcher.SearchCandidate<Int>] = fetcher.buildCandidates(
+            songs: songs,
+            params: params,
+            searchDescriptor: "title+artist",
+            extractSong: { song in
+                guard let id = song["id"] as? Int,
+                      let name = song["name"] as? String,
+                      let artist = song["artist"] as? String,
+                      let duration = song["duration"] as? Double,
+                      let album = song["album"] as? String else { return nil }
+                return (id, name, artist, duration, album)
+            }
+        )
+
+        XCTAssertEqual(candidates.first?.titleMatch, true)
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: .netEase,
+            inputTitle: "该死的车站",
+            inputArtist: "Bad Sweetheart",
+            hasAlbumHint: true
+        )
+        XCTAssertEqual(selected?.id, 1)
+        XCTAssertEqual(selected?.titleMatched, true)
+    }
+
     func testLibraryNativeTitleBridgeKeepsEmptyEnglishMissInsideForegroundBudget() {
         let fetcher = LyricsFetcher.shared
 

@@ -360,11 +360,18 @@ struct NativeLyricsVisualTarget: Equatable {
 
     /// Ordered brightness tiers this codebase uses across opacity AND
     /// dimBaseBrightness (1.0 sweeping-bright, 0.85 harmony/duet, 0.6
-    /// manual-scroll all-clear, 0.35 inactive dim base). A backing-vocal
-    /// (和声) row reads ONE STEP LOWER than its melody row's own tier in the
-    /// same state (founder 2026-09-20) — 0.22 extends the ladder one step
-    /// below the lowest existing tier for that case. Needs the founder's
-    /// on-device check like every other value on this ladder.
+    /// manual-scroll all-clear, 0.35 inactive dim base). 0.22 is kept as a
+    /// spare rung below the lowest existing tier — nothing currently targets
+    /// it (see `amllTarget`'s history below).
+    ///
+    /// Founder 2026-09-20 originally called for a backing-vocal (和声) row to
+    /// read ONE STEP LOWER than its melody row's own tier. Founder 2026-09-25
+    /// REVERSED that: a background row now reads at the SAME brightness tier
+    /// as its melody row in every state — only the 0.8× font scale
+    /// (`NativeLyricsTextConstants.backgroundRowFontScale`) still sets it
+    /// apart. `nextLowerBrightnessTier` itself is left in place as a generic
+    /// ladder-step helper even though `amllTarget` no longer calls it for
+    /// background rows — removing it is out of scope for this change.
     private static let brightnessTierLadder: [CGFloat] = [1.0, 0.85, 0.6, 0.35, 0.22]
 
     static func nextLowerBrightnessTier(_ value: CGFloat) -> CGFloat {
@@ -394,16 +401,19 @@ struct NativeLyricsVisualTarget: Equatable {
             gapRecedeBlend: gapRecedeBlend
         )
         guard isBackground else { return melody }
-        // Subordinate row (founder 2026-09-20): lights up alongside its melody
-        // (isActive carries through so the word sweep still runs when it has
-        // words) at one tier lower brightness, never scales up past the
-        // inactive scale, and is never itself a blur-focus centre.
+        // Subordinate row (founder 2026-09-20, brightness reversed 2026-09-25):
+        // lights up alongside its melody (isActive carries through so the word
+        // sweep still runs when it has words) at the SAME brightness tier as
+        // the melody row — never scales up past the inactive scale, and is
+        // never itself a blur-focus centre. Only the 0.8× font scale
+        // (applied elsewhere, via `NativeLyricsTextConstants.scale(forBackground:)`)
+        // still sets a background row apart from its melody.
         return NativeLyricsVisualTarget(
-            opacity: nextLowerBrightnessTier(melody.opacity),
+            opacity: melody.opacity,
             scale: min(melody.scale, 0.95),
             blur: 0,
             isActive: melody.isActive,
-            dimBaseBrightness: nextLowerBrightnessTier(melody.dimBaseBrightness)
+            dimBaseBrightness: melody.dimBaseBrightness
         )
     }
 
