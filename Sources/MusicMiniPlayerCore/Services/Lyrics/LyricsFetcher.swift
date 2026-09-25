@@ -2,7 +2,7 @@
  * [INPUT]: LyricsParser, LyricsScorer, MetadataResolver, HTTPClient, LanguageUtils, LyricsSourceProfile (typed source registry)
  * [OUTPUT]: fetchAllSources parallel source requests with direct-title and native-alias identity evidence kept separate; LyricsFetchResult.source is typed LyricsSource; every result carries a write-once LyricsSelectionMemo (identity tokens + solo verdict + DrainExitFacts computed once per result, reused across drain-loop events — the exit closures keep only pool composition, elapsed time and branch flags event-side)
  * [POS]: Lyrics fetch sub-module; owns HTTP requests and result aggregation for all lyric sources
- * [NOTE]: NetEase/QQ share the searchAndSelectCandidate template and generic buildCandidates flow; album hints may fall back to exact title/artist/duration disk hits; ASCII punctuation variants run as metadata branches; per-source gates read declared profile traits and disk-cache source strings map once at the boundary; 24h availability verdicts are gated on NetworkOutcomeLedger quorum (no transport failures) — default-allow when unbound; the authoritative backfill is hard-bounded by AuthoritativeBackfillBudget (every child via addBoundedSourceTask, 9s overall sentinel, witness = 3s parallel discovery + 6s probe) and marker-only foreground sets take the empty fast exit with unclamped evidence windows (review #6+#7)
+ * [NOTE]: NetEase/QQ share the searchAndSelectCandidate template and generic buildCandidates flow; album hints may fall back to exact title/artist/duration disk hits; ASCII punctuation variants run as metadata branches; per-source gates read declared profile traits and disk-cache source strings map once at the boundary; 24h availability verdicts are gated on NetworkOutcomeLedger quorum (no transport failures) — default-allow when unbound; the authoritative backfill is hard-bounded by AuthoritativeBackfillBudget (every child via addBoundedSourceTask, 9s overall sentinel, witness = 3s parallel discovery + 6s probe) and marker-only foreground sets take the empty fast exit with unclamped evidence windows (review #6+#7); the qqWitnessComposite child (2.6s discovery + 5.0s probe) bridges a QQ-confirmed bilingual title to sibling providers when NetEase's own catalog carries no such annotation and the iTunes/LRCLIB catalog-alias bridges have no coverage (2026-09-25, "Damn" by Bad Sweetheart)
  * [SPLIT]: LyricsResultSelection.swift, LyricsCandidateSelection.swift, LyricsSourceFetchers.swift
  * [PROTOCOL]: Update this header when changing the module, then check Services/Lyrics/CLAUDE.md
  */
@@ -365,12 +365,21 @@ public final class LyricsFetcher {
         static let witnessProbe: TimeInterval = 6.0
         static var witnessComposite: TimeInterval { witnessDiscovery + witnessProbe }
 
+        // QQ-witnessed native-title composite: one QQ search (no lyric
+        // download) to witness the alias, then the resolved-title-keyed
+        // multi-source probe. Discovery is a single bounded HTTP round trip
+        // (unlike the CJK-artist witness above, no serial catalog fan-out),
+        // so its own cap can stay well under the QQ source child's cap.
+        static let qqWitnessDiscovery: TimeInterval = 2.6
+        static let qqWitnessProbe: TimeInterval = 5.0
+        static var qqWitnessComposite: TimeInterval { qqWitnessDiscovery + qqWitnessProbe }
+
         /// Longest single child the group can legally wait for. The sentinel
         /// must never undercut this, or it would clip legitimate work.
         static var longestChildCeiling: TimeInterval {
             max(lrclibChild, lrclibSearchChild, netEaseChild, qqChild,
                 appleMusicChild, amllChild, albumTitleEchoChild, albumScopedComposite,
-                resolvedComposite, witnessComposite)
+                resolvedComposite, witnessComposite, qqWitnessComposite)
         }
 
         /// Concurrency width for the parallel alias-discovery searches:
@@ -2100,6 +2109,28 @@ public final class LyricsFetcher {
                     duration: duration,
                     translationEnabled: translationEnabled,
                     album: cleanAlbum
+                )
+            }
+            // QQ-witnessed native-title bridge: QQ often annotates a
+            // bilingual title as "<native> (<input>)" even when NetEase's
+            // own catalog carries no such annotation for the same song. When
+            // the iTunes-storefront catalog-alias bridge above has no
+            // coverage for an obscure release (or hits its negative-evidence
+            // cache) and LRCLIB's own bridge is gated off for short titles,
+            // this is a THIRD, independent source for the same evidence —
+            // reused from a search QQ's own child already runs, not a
+            // speculative external probe.
+            addBoundedChild(seconds: AuthoritativeBackfillBudget.qqWitnessComposite) {
+                guard let alias = await self.withHardMetadataTimeout(seconds: AuthoritativeBackfillBudget.qqWitnessDiscovery, operation: {
+                    await self.discoverQQWitnessedNativeTitleAlias(
+                        title: cleanTitle, artist: cleanArtist, duration: duration, album: cleanAlbum
+                    )
+                }) else { return nil }
+                DebugLogger.log("QQMusic", "🧭 QQ-witnessed native-title alias: '\(cleanTitle)' -> '\(alias.title)'")
+                return await self.fetchResolvedTitleKeyedSources(
+                    title: alias.title, artist: alias.artist,
+                    originalTitle: cleanTitle, originalArtist: cleanArtist,
+                    duration: duration, translationEnabled: translationEnabled, album: cleanAlbum
                 )
             }
 
