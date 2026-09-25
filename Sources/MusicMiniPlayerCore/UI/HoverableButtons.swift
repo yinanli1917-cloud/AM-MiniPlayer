@@ -14,23 +14,16 @@ import AppKit
 
 struct GlassButtonBackground: ViewModifier {
     var luminance: CGFloat = 0.5
-    /// Overrides the `luminance > 0.55` region-average threshold with a per-button
-    /// `ButtonIconLegibility` decision (founder 2026-09-24). `nil` (every call site this
-    /// mechanism does not drive) keeps today's exact region-average behaviour.
-    var toneOverride: ButtonIconTone? = nil
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
-        let adaptiveColor: Color = toneOverride.map { $0 == .black ? Color.black : Color.white } ?? (luminance > 0.55 ? .black : .white)
+        let adaptiveColor: Color = luminance > 0.55 ? .black : .white
         if #available(macOS 26.0, *) {
             content
                 .foregroundStyle(adaptiveColor)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: adaptiveColor)
                 .glassEffect(.clear, in: .capsule)
         } else {
             content
                 .foregroundStyle(adaptiveColor)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: adaptiveColor)
                 .background(Capsule().fill(.ultraThinMaterial))
         }
     }
@@ -161,8 +154,6 @@ struct HoverableActionButton: View {
     var accessibilityText: String = ""  // 🔑 无障碍标签，独立于 helpText
     var artworkBrightness: CGFloat = 0.5
     var isAlbumPage: Bool = false
-    /// See `GlassButtonBackground.toneOverride`.
-    var iconTone: ButtonIconTone? = nil
 
     @State private var isHovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -178,7 +169,7 @@ struct HoverableActionButton: View {
                 .padding(.vertical, 6)
                 .contentShape(Capsule())
                 .background(Capsule().fill(Color.primary.opacity(hoverCapsule.opacity)))
-                .modifier(GlassButtonBackground(luminance: effectiveLuminance, toneOverride: iconTone))
+                .modifier(GlassButtonBackground(luminance: effectiveLuminance))
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -203,7 +194,6 @@ struct HoverableActionButton: View {
 struct MusicButtonView: View {
     var artworkBrightness: CGFloat = 0.5
     var isAlbumPage: Bool = false
-    var iconTone: ButtonIconTone? = nil
 
     var body: some View {
         HoverableActionButton(
@@ -218,8 +208,7 @@ struct MusicButtonView: View {
             helpText: "打开 Apple Music",
             accessibilityText: "打开 Apple Music",
             artworkBrightness: artworkBrightness,
-            isAlbumPage: isAlbumPage,
-            iconTone: iconTone
+            isAlbumPage: isAlbumPage
         )
     }
 }
@@ -245,7 +234,6 @@ struct ExpandButtonView: View {
     var onExpand: () -> Void
     var artworkBrightness: CGFloat = 0.5
     var isAlbumPage: Bool = false
-    var iconTone: ButtonIconTone? = nil
 
     var body: some View {
         HoverableActionButton(
@@ -254,8 +242,7 @@ struct ExpandButtonView: View {
             helpText: "展开为浮窗",
             accessibilityText: "展开播放器",
             artworkBrightness: artworkBrightness,
-            isAlbumPage: isAlbumPage,
-            iconTone: iconTone
+            isAlbumPage: isAlbumPage
         )
     }
 }

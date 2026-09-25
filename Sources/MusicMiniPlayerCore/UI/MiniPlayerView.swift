@@ -34,13 +34,17 @@ public struct MiniPlayerView: View {
     @State private var effectArtwork: NSImage?
     @State private var effectArtworkSignature: String = ""
 
-    // Per-button icon legibility (founder 2026-09-24): black icon when the pixels
-    // directly under that button are too bright, else today's white. Recomputed once
-    // per artwork change / fullscreen-cover toggle — never per frame (ButtonIconLegibility.swift).
-    // The recompute itself runs off the main thread via `buttonIconCoordinator`
-    // (2026-09-24 review: must not hitch a song change) — its last-request-wins semantics
-    // drop a stale result from a superseded artwork/toggle; until a new result lands the
-    // PREVIOUS tones stay on screen (never cleared/flashed to white).
+    // Shuffle/repeat icon legibility ONLY (founder 2026-09-24, narrowed same day after
+    // trying the whole-button-set version): gray icon — never black — when the pixels
+    // directly under shuffle/repeat are too bright, solved to land exactly on the WCAG
+    // 3:1 non-text contrast floor. Recomputed once per artwork change / fullscreen-cover
+    // toggle — never per frame (ButtonIconLegibility.swift). The two top buttons and the
+    // bottom play area (SharedBottomControls) went back to their pre-2026-09-24 rules and
+    // no longer read this. The recompute itself runs off the main thread via
+    // `buttonIconCoordinator` (2026-09-24 review: must not hitch a song change) — its
+    // last-request-wins semantics drop a stale result from a superseded artwork/toggle;
+    // until a new result lands the PREVIOUS tones stay on screen (never cleared/flashed
+    // to white).
     @State private var buttonIconTones: [ButtonIconID: ButtonIconTone] = [:]
     @State private var buttonIconCoordinator = ButtonIconRefreshCoordinator()
     @State private var lastKnownPanelSize: CGSize = CGSize(width: PanelWindowMetrics.defaultSize.width, height: PanelWindowMetrics.defaultSize.height)
@@ -157,7 +161,7 @@ public struct MiniPlayerView: View {
         .overlay(alignment: .topLeading) {
             if (showControls || isAudioOutputMenuPresented) && musicController.currentPage == .album {
                 let lum = topLeftLuminance
-                MusicButtonView(artworkBrightness: lum, isAlbumPage: true, iconTone: buttonIconTones[.musicCapsule])
+                MusicButtonView(artworkBrightness: lum, isAlbumPage: true)
                     .padding(12)
                     .transition(.opacity)
             }
@@ -166,14 +170,13 @@ public struct MiniPlayerView: View {
             if (showControls || isAudioOutputMenuPresented) && musicController.currentPage == .album {
                 let lum = topRightLuminance
                 if onExpand != nil {
-                    ExpandButtonView(onExpand: onExpand!, artworkBrightness: lum, isAlbumPage: true, iconTone: buttonIconTones[.airplay])
+                    ExpandButtonView(onExpand: onExpand!, artworkBrightness: lum, isAlbumPage: true)
                         .padding(12)
                         .transition(.opacity)
                 } else {
                     AudioOutputSwitcherView(
                         artworkBrightness: lum,
                         isAlbumPage: true,
-                        iconTone: buttonIconTones[.airplay],
                         onMenuPresentedChanged: { isAudioOutputMenuPresented = $0 }
                     )
                         .padding(12)
@@ -330,9 +333,10 @@ public struct MiniPlayerView: View {
         topRightLuminance = musicController.topRightArtworkLuminance
     }
 
-    /// Recomputes every album-page button's icon tone (founder 2026-09-24). Called once
-    /// per artwork change / fullscreen-cover toggle (see the call sites above) — never
-    /// per frame. `artworkTone` must already reflect the current artwork when this runs.
+    /// Recomputes the shuffle/repeat buttons' icon tone (founder 2026-09-24, narrowed to
+    /// just these two the same day). Called once per artwork change / fullscreen-cover
+    /// toggle (see the call sites above) — never per frame. `artworkTone` must already
+    /// reflect the current artwork when this runs.
     ///
     /// Runs the actual composite render OFF the main thread via `buttonIconCoordinator`
     /// (2026-09-24 review: a synchronous call here would hitch every song/cover change).
@@ -363,10 +367,14 @@ public struct MiniPlayerView: View {
         }
     }
 
-    /// `buttonIconTones[id]` as a `Color`, defaulting to white (today's colour) when this
-    /// button has not been resolved yet.
+    /// `buttonIconTones[id]` as a `Color` — a solved neutral gray when the background is
+    /// too bright, else white (today's colour, including when this button has not been
+    /// resolved yet).
     private func iconColor(for id: ButtonIconID) -> Color {
-        buttonIconTones[id] == .black ? .black : .white
+        switch buttonIconTones[id] {
+        case .gray(let lightness): return Color(white: lightness)
+        case .white, .none: return .white
+        }
     }
 
     private func refreshEffectArtwork() {
@@ -492,22 +500,15 @@ extension MiniPlayerView {
                         isHovering: $isHovering,
                         showControls: $showControls,
                         isProgressBarHovering: $isProgressBarHovering,
-                        dragPosition: $dragPosition,
-                        iconTones: SharedBottomControlsIconTones(
-                            lyricsNav: iconColor(for: .lyricsNav),
-                            backward: iconColor(for: .backward),
-                            play: iconColor(for: .play),
-                            forward: iconColor(for: .forward),
-                            playlistNav: iconColor(for: .playlistNav)
-                        )
+                        dragPosition: $dragPosition
                     )
                     .blur(radius: controlsBlurAmount)
                     .offset(y: controlsOffsetY)
                 }
                 .opacity(showOverlayContent ? 1 : 0)
                 .allowsHitTesting(showOverlayContent)
-                // Short cross-fade when a button's icon tone flips (founder 2026-09-24) —
-                // never a hard snap.
+                // Short cross-fade when shuffle/repeat's icon tone changes (founder
+                // 2026-09-24) — never a hard snap.
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: buttonIconTones)
             }
             // 🔑 动画时长：全屏模式 0.5s，非全屏模式 0.4s

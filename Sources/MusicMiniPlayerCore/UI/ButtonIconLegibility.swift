@@ -5,48 +5,49 @@ import SwiftUI
 /**
  * [INPUT]: Depends on `ArtworkVisualMetrics`/`ArtworkBackgroundToneMap` (FluidGradientBackground.swift),
  *          `BackdropLegibilityBand` (RGBColor / relativeLuminance / whiteContrastRatio /
- *          fluidBackdropToneColor / resolveChannelCorrect / apply) for WCAG-correct contrast,
- *          `ArtworkContrastPolicy` + `MicroInteractionFeel` for the exact same C5 arm the
- *          live `FluidGradientBackground` reads, and raw artwork pixels via CoreGraphics /
- *          Core Image for the fullscreen hero composite (ported from
- *          research/spikes/legibility-gallery/.../CompositeSampler.swift, the founder-reviewed
- *          per-pixel renderer — round 1's whole-cover/band AVERAGE was rejected on sight
- *          2026-09-24: "what matters is the exact few pixels directly under each button").
- * [OUTPUT]: Exports `ButtonIconID` (every button/icon drawn over artwork on the album page),
- *           `ButtonIconRect` + `ButtonIconRects` (each button's real footprint in panel
- *           points, mirroring MiniPlayerView.swift/SharedControls.swift's own layout
- *           literals), `ButtonIconTone` (black/white), `ButtonIconDecision` (the WCAG
- *           threshold + hysteresis rule), and `ButtonIconLegibility.resolveAll` — the ONE
- *           mechanism every inventoried button asks for its icon colour.
- * [POS]: UI/ 的按钮图标可读性判定 — founder 2026-09-24 (verbatim intent): 检测按钮下面的像素
- *        过亮就把图标转黑，否则保持白色；只改图标颜色，不改玻璃材质/形状，不加光晕/阴影。
+ *          fluidBackdropToneColor / resolveChannelCorrect / apply / srgbToLinear /
+ *          linearToSRGB) for WCAG-correct contrast, `ArtworkContrastPolicy` +
+ *          `MicroInteractionFeel` for the exact same C5 arm the live `FluidGradientBackground`
+ *          reads, and raw artwork pixels via CoreGraphics / Core Image for the fullscreen
+ *          hero composite (ported from research/spikes/legibility-gallery/.../CompositeSampler.swift).
+ * [OUTPUT]: Exports `ButtonIconID` (the shuffle/repeat circle buttons this mechanism drives —
+ *           founder 2026-09-24 narrowed scope to ONLY these two), `ButtonIconRect` +
+ *           `ButtonIconRects` (their real footprint in panel points, mirroring
+ *           MiniPlayerView.swift's `shuffleRepeatCluster` layout literals), `ButtonIconTone`
+ *           (white, or a solved neutral gray), `ButtonIconDecision` (the WCAG threshold +
+ *           hysteresis rule + gray solve), and `ButtonIconLegibility.resolveAll` — the ONE
+ *           mechanism the shuffle/repeat cluster asks for its icon colour.
+ * [POS]: UI/ 的 shuffle/repeat 按钮图标可读性判定 — founder 2026-09-24 (verbatim intent,
+ *        narrowed same day after trying the whole-button-set version): 只有 shuffle/repeat
+ *        圆形按钮需要自适应；像素太亮时图标不是纯黑，而是恰好过 3:1 WCAG 对比度门槛的中性灰
+ *        （"灰色一点就行，保持对比度就好"），越暗的背景需要的灰越深但永远不到纯黑；平滑渐变
+ *        过渡，滞后区保留。播放区（SharedBottomControls）与顶部两个按钮（Music/AirPlay）都
+ *        不再经过这个机制，见 SharedControls.swift / HoverableButtons.swift / AudioOutputSwitcherView.swift
+ *        的原始（feature 之前）规则。
  *        Pure functions only (no SwiftUI view code) so they are unit-testable without
  *        hosting a window — MiniPlayerView.swift calls `resolveAll` once per artwork change
- *        (never per frame) and threads the per-button `ButtonIconTone` into
- *        HoverableActionButton / the shuffle-repeat cluster / SharedBottomControls.
+ *        (never per frame) and threads the resulting per-button `ButtonIconTone` into the
+ *        shuffle/repeat cluster's `foregroundStyle`.
  */
 
 // MARK: - Button inventory
 
-/// Every button/icon this mechanism drives, on the album page, fullscreen and
-/// non-fullscreen, hover and non-hover (only hover renders them, but the rect/decision
-/// math does not care). Selected-state tint colours (shuffle/repeat when ON) are NOT
-/// part of this enum — those stay the existing theme-red, untouched.
+/// The two circle buttons this mechanism drives (founder 2026-09-24: narrowed from the
+/// original nine-button inventory to just these). Selected-state tint colours
+/// (shuffle/repeat when ON) are NOT part of this enum — those stay the existing theme-red,
+/// untouched.
 enum ButtonIconID: CaseIterable, Hashable {
-    case musicCapsule
-    case airplay
     case shuffle
     case repeatButton
-    case lyricsNav
-    case playlistNav
-    case backward
-    case play
-    case forward
 }
 
 enum ButtonIconTone: Equatable {
     case white
-    case black
+    /// A neutral gray, sRGB gamma lightness 0...1 (r == g == b == lightness). Solved by
+    /// `ButtonIconGraySolve.lightness` to land EXACTLY on the 3:1 WCAG non-text contrast
+    /// floor against the background it was resolved for — never darker than that solve,
+    /// and never 0 (pure black); see `ButtonIconGraySolve`'s own floor.
+    case gray(Double)
 }
 
 /// A button's footprint in panel points. `(x, distanceFromBottom)` — bottom-origin,
@@ -67,53 +68,19 @@ struct ButtonIconRect: Equatable {
     }
 }
 
-/// Real production rects, derived from the exact literals `MiniPlayerView.swift` /
-/// `SharedControls.swift` already use — not re-measured guesses. Every button's rect is
-/// IDENTICAL in fullscreen and non-fullscreen mode (padding(12) corners for the top
-/// buttons; the bottom shuffle/repeat row + SharedBottomControls are laid out the same
-/// way regardless of `fullscreenAlbumCover` — only the composite BEHIND them differs,
-/// see `ButtonIconLegibility`).
+/// Real production rects, derived from the exact literals `MiniPlayerView.swift`'s
+/// `shuffleRepeatCluster` already uses — not re-measured guesses. Identical in fullscreen
+/// and non-fullscreen mode (only the composite BEHIND them differs, see
+/// `ButtonIconLegibility`).
 enum ButtonIconRects {
     /// `SharedBottomControls.body`: `PlaybackProgressSection().frame(height: 32)` +
-    /// `VStack(spacing: 4)` + the icon-row `HStack` (max child height 30, the
-    /// `playbackCluster`'s `.frame(width: 30, height: 30)` buttons) + that VStack's own
-    /// `.padding(.bottom, 16)`. No translation button on the album page (MiniPlayerView
-    /// never passes one), so this IS `SharedBottomControls`'s full rendered height.
+    /// `VStack(spacing: 4)` + the icon-row `HStack` (max child height 30) + that VStack's
+    /// own `.padding(.bottom, 16)`.
     private static let sharedBottomControlsHeight: CGFloat = 32 + 4 + 30 + 16
 
     /// `MiniPlayerView.albumOverlayContent`'s shuffle/repeat row: `.padding(.bottom, 4)`
     /// sits directly above `SharedBottomControls`.
     private static let shuffleRepeatRowBottomDistance: CGFloat = sharedBottomControlsHeight + 4
-
-    /// The icon row's own vertical centre: `.padding(.bottom, 16)` + half the row's max
-    /// height (30, `SharedControls.swift`'s `playbackCluster`). `leftNavigationButton` /
-    /// `playlistNavigationButton` (26 tall) share the same HStack, default `.center`
-    /// alignment, so their centres land on this same line.
-    private static let iconRowCenterDistance: CGFloat = 16 + 15
-
-    /// `MiniPlayerView.mainBody`'s `.overlay(alignment: .topLeading) { ... .padding(12) }`
-    /// wrapping `MusicButtonView` — a `HoverableActionButton` capsule:
-    /// `.padding(.horizontal, 10).padding(.vertical, 6)` around
-    /// `HStack(spacing: 4) { Image(systemName: "arrow.up.left").font(size:10,weight:.semibold); Text("Music").font(size:11,weight:.medium) }`.
-    static func musicCapsule(panelSize: CGSize) -> ButtonIconRect {
-        let iconFont = NSFont.systemFont(ofSize: 10, weight: .semibold)
-        let labelFont = NSFont.systemFont(ofSize: 11, weight: .medium)
-        let iconSize = ("↖" as NSString).size(withAttributes: [.font: iconFont]) // arrow.up.left stand-in width
-        let labelSize = ("Music" as NSString).size(withAttributes: [.font: labelFont])
-        let width = iconSize.width + 4 + labelSize.width + 20 // HStack spacing 4 + h-padding 10+10
-        let height = max(iconSize.height, labelSize.height) + 12 // v-padding 6+6
-        return ButtonIconRect(x: 12, distanceFromBottom: panelSize.height - 12 - height, width: width, height: height)
-    }
-
-    /// `MiniPlayerView.mainBody`'s `.overlay(alignment: .topTrailing) { ... .padding(12) }`
-    /// — either `AudioOutputSwitcherView` (`triggerSize == 32`, the default arm on the
-    /// floating panel) or `ExpandButtonView` (a `HoverableActionButton` capsule around a
-    /// single 12pt icon, comparable footprint). A single representative 32x32 box —
-    /// same "representative, not pixel-identical" precedent the legibility-gallery's own
-    /// `ElementLayout` uses for elements this module cannot reach a private layout for.
-    static func airplay(panelSize: CGSize) -> ButtonIconRect {
-        ButtonIconRect(x: panelSize.width - 12 - 32, distanceFromBottom: panelSize.height - 12 - 32, width: 32, height: 32)
-    }
 
     /// `MiniPlayerView.shuffleRepeatCluster`: real 24x24 frames, right-aligned with
     /// `.padding(.horizontal, 32)`, `HStack(spacing: 4)` (shuffle first, repeat second).
@@ -127,44 +94,10 @@ enum ButtonIconRects {
         return ButtonIconRect(x: clusterRight - 24, distanceFromBottom: shuffleRepeatRowBottomDistance, width: 24, height: 24)
     }
 
-    /// `SharedControls.swift`'s `leftNavigationButton`: `.frame(width: 26, height: 26)`,
-    /// `.padding(.horizontal, 12)` on the enclosing HStack pins it to the left inset.
-    static func lyricsNav(panelSize: CGSize) -> ButtonIconRect {
-        ButtonIconRect(x: 12, distanceFromBottom: iconRowCenterDistance - 13, width: 26, height: 26)
-    }
-
-    /// `SharedControls.swift`'s `playlistNavigationButton`: same 26x26 frame, right inset.
-    static func playlistNav(panelSize: CGSize) -> ButtonIconRect {
-        ButtonIconRect(x: panelSize.width - 12 - 26, distanceFromBottom: iconRowCenterDistance - 13, width: 26, height: 26)
-    }
-
-    /// `SharedControls.swift`'s `playbackCluster`: `HStack(spacing: 10)` of three
-    /// `.frame(width: 30, height: 30)` buttons, centred in the icon row (the two 26pt nav
-    /// buttons are equal-width, so the two `Spacer()`s either side centre the cluster at
-    /// the row's own midpoint, `panelSize.width / 2`).
-    static func backward(panelSize: CGSize) -> ButtonIconRect {
-        ButtonIconRect(x: panelSize.width / 2 - 55, distanceFromBottom: iconRowCenterDistance - 15, width: 30, height: 30)
-    }
-
-    static func play(panelSize: CGSize) -> ButtonIconRect {
-        ButtonIconRect(x: panelSize.width / 2 - 15, distanceFromBottom: iconRowCenterDistance - 15, width: 30, height: 30)
-    }
-
-    static func forward(panelSize: CGSize) -> ButtonIconRect {
-        ButtonIconRect(x: panelSize.width / 2 + 25, distanceFromBottom: iconRowCenterDistance - 15, width: 30, height: 30)
-    }
-
     static func rect(for id: ButtonIconID, panelSize: CGSize) -> ButtonIconRect {
         switch id {
-        case .musicCapsule: return musicCapsule(panelSize: panelSize)
-        case .airplay: return airplay(panelSize: panelSize)
         case .shuffle: return shuffle(panelSize: panelSize)
         case .repeatButton: return repeatButton(panelSize: panelSize)
-        case .lyricsNav: return lyricsNav(panelSize: panelSize)
-        case .playlistNav: return playlistNav(panelSize: panelSize)
-        case .backward: return backward(panelSize: panelSize)
-        case .play: return play(panelSize: panelSize)
-        case .forward: return forward(panelSize: panelSize)
         }
     }
 
@@ -321,14 +254,12 @@ enum ButtonIconCompositeSampler {
 
 // MARK: - Non-fullscreen backdrop colour
 
-/// When `fullscreenAlbumCover` is off, every inventoried button is only ever visible
-/// during hover — at which point `MiniPlayerView.floatingArtwork`'s non-fullscreen
-/// artwork has already shrunk to 0.48x width, centred ABOVE the `controlsHeight`-tall
-/// bottom band (`availableHeight = geo.height - controlsHeight`, `artCenterY =
-/// availableHeight / 2`). None of the inventoried rects (top corners, shuffle/repeat,
-/// SharedBottomControls) fall inside that shrunk cover's box at any panel size (the
-/// layout is fraction-of-geometry throughout, so the relationship is scale-invariant) —
-/// every one of them sits over `PanelBackdrop`'s fluid arm, i.e. `FluidGradientBackground`.
+/// When `fullscreenAlbumCover` is off, shuffle/repeat are only ever visible during hover —
+/// at which point `MiniPlayerView.floatingArtwork`'s non-fullscreen artwork has already
+/// shrunk to 0.48x width, centred ABOVE the `controlsHeight`-tall bottom band. The
+/// shuffle/repeat row never falls inside that shrunk cover's box at any panel size (the
+/// layout is fraction-of-geometry throughout, so the relationship is scale-invariant) — it
+/// sits over `PanelBackdrop`'s fluid arm, i.e. `FluidGradientBackground`.
 ///
 /// Rather than re-deriving that view's three-layer blurred/rotated composite (a
 /// resident-filter-heavy pipeline this project has already flagged as expensive to
@@ -363,25 +294,61 @@ enum ButtonIconBackdropColor {
     }
 }
 
-// MARK: - Decision (WCAG threshold + hysteresis)
+// MARK: - Gray solve (founder 2026-09-24, "灰色一点就行，保持对比度就好")
 
-/// The pure black/white call for one button, given the colour under it and its PREVIOUS
-/// tone. Hysteresis: switching white->black needs contrast to drop below 3:1 (WCAG's
-/// non-text minimum — a button icon is graphical UI, not body text); switching back
-/// black->white needs contrast to climb back up to >= 3.5:1, so a cover that sits right
-/// at the boundary does not flicker every recompute.
+/// Solves for a neutral gray icon colour that lands EXACTLY on the WCAG non-text 3:1
+/// contrast floor against a given background — never a hardcoded pure black.
+enum ButtonIconGraySolve {
+    /// The WCAG non-text minimum this mechanism targets. The gray is solved to land
+    /// EXACTLY here, so it is always "the lightest gray that still passes" — any lighter
+    /// gray would fail 3:1 against this exact background.
+    static let targetContrast: Double = 3.0
+
+    /// A floor on the SOLVED gray's linear luminance so the result is never literally 0
+    /// (pure black), matching the founder's "灰色一点就行" (some gray is enough, never
+    /// black). Chosen well below any linear luminance this solve actually produces for a
+    /// background bright enough to trigger it in the first place (see doc comment on
+    /// `lightness`), so it only ever acts as a defensive floor, not a lived-in clamp.
+    static let minimumLinearLuminance: Double = 0.02
+
+    /// The lightest neutral gray (sRGB gamma, 0...1 — feed directly into
+    /// `Color(white:)`/`ButtonIconTone.gray`) whose WCAG contrast against `background` is
+    /// exactly `targetContrast`. Solves `(backgroundLuminance + 0.05) / (gray + 0.05) ==
+    /// targetContrast` for the gray's own (linear) relative luminance, then converts back
+    /// to sRGB gamma space — the same `srgbToLinear`/`linearToSRGB` round-trip
+    /// `BackdropLegibilityBand`'s other channel-correct solves already use.
+    static func lightness(background: BackdropLegibilityBand.RGBColor) -> Double {
+        let backgroundLuminance = BackdropLegibilityBand.relativeLuminance(background)
+        let solvedLinear = (backgroundLuminance + 0.05) / targetContrast - 0.05
+        let clamped = min(max(solvedLinear, minimumLinearLuminance), 1)
+        return BackdropLegibilityBand.linearToSRGB(clamped)
+    }
+}
+
+// MARK: - Decision (WCAG threshold + hysteresis + gray solve)
+
+/// The white/gray call for one button, given the colour under it and its PREVIOUS tone.
+/// Hysteresis: switching white->gray needs contrast to drop below 3:1 (WCAG's non-text
+/// minimum — a button icon is graphical UI, not body text); switching back gray->white
+/// needs contrast to climb back up to >= 3.5:1, so a cover that sits right at the boundary
+/// does not flicker every recompute. While staying gray, the exact lightness keeps
+/// tracking the current background (continuous, not frozen at the moment it first flipped)
+/// so a 0.25s cross-fade (`MiniPlayerView`) reads as smooth motion, never a snap.
 enum ButtonIconDecision {
-    static let blackThreshold: Double = 3.0
+    /// Below this contrast, white no longer passes the WCAG 3:1 non-text minimum.
+    static let grayThreshold: Double = 3.0
+    /// Contrast must climb back up to this before returning to white.
     static let whiteThreshold: Double = 3.5
 
     static func resolve(color: BackdropLegibilityBand.RGBColor, previous: ButtonIconTone) -> ButtonIconTone {
         let contrast = BackdropLegibilityBand.whiteContrastRatio(relativeLuminance: BackdropLegibilityBand.relativeLuminance(color))
         switch previous {
         case .white:
-            return contrast < blackThreshold ? .black : .white
-        case .black:
-            return contrast >= whiteThreshold ? .white : .black
+            guard contrast < grayThreshold else { return .white }
+        case .gray:
+            guard contrast < whiteThreshold else { return .white }
         }
+        return .gray(ButtonIconGraySolve.lightness(background: color))
     }
 }
 
@@ -392,25 +359,22 @@ enum ButtonIconLegibility {
     static let fullscreenHeroFadeHeight: CGFloat = 100
 
     /// Working resolution for the fullscreen composite: panel size x1 (not x2 — a p90
-    /// stat over a ~30pt button rect does not need retina-resolution sampling, and the
+    /// stat over a ~24pt button rect does not need retina-resolution sampling, and the
     /// render cost — CIGaussianBlur + a CGContext raster over the OUTPUT extent — scales
     /// with this, not with the source cover's own resolution, see
     /// `ButtonIconCompositeSampler.render`'s doc comment and
-    /// `ButtonIconLegibilityTests.test_cost_600And1200SourceArtwork_...`. 2026-09-24
-    /// review: was x2; measured cost at x1 on a noisy 1200x1200 source is well under the
-    /// test's 500ms guard (typically single-digit ms on Apple Silicon) — see the test for
-    /// the actually-measured numbers, reported once per change in the PR/commit.
+    /// `ButtonIconLegibilityTests.test_cost_600And1200SourceArtwork_...`.
     static let fullscreenCompositeScale: CGFloat = 1
 
-    /// Resolves every inventoried button's icon tone, once (call this on artwork change
+    /// Resolves both shuffle/repeat buttons' icon tone, once (call this on artwork change
     /// or `fullscreenAlbumCover` toggle — never per frame). `previous` supplies the
     /// hysteresis state; a missing id defaults to `.white` (today's colour, so a track
-    /// with no prior computation never starts black).
+    /// with no prior computation never starts gray).
     ///
     /// Fullscreen: real per-pixel hero+fade+Layer1 composite, sampled locally per button
     /// (round 1's rejected whole-cover average is NOT used here).
     ///
-    /// Non-fullscreen: every button sits over the fluid backdrop (see
+    /// Non-fullscreen: both buttons sit over the fluid backdrop (see
     /// `ButtonIconBackdropColor`'s doc comment), whose OWN legibility band already
     /// guarantees white-foreground contrast >= 4.5:1 — strictly above this mechanism's
     /// 3:1 threshold. So non-fullscreen buttons are, by that existing invariant, always
