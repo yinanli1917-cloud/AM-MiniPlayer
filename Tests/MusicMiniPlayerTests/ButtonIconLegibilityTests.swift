@@ -5,14 +5,20 @@ import XCTest
 /// Founder 2026-09-24, narrowed same day after trying the whole-button-set version:
 /// ONLY the shuffle/repeat circle buttons adapt. "灰色一点就行，保持对比度就好" — when the
 /// pixels directly under shuffle/repeat are too bright, the icon becomes a neutral gray
-/// solved to land EXACTLY on the WCAG 3:1 non-text contrast floor, never pure black. The
-/// two top buttons and the bottom play area (SharedBottomControls) went back to their
-/// pre-2026-09-24 rules and no longer read this mechanism at all (verified below via
-/// source/structure checks, since there is no SwiftUI-rendering-identity tool here).
+/// solved to land EXACTLY on the APCA legibility floor (`ButtonIconDecision.grayThreshold`),
+/// never pure black. The two top buttons and the bottom play area (SharedBottomControls)
+/// went back to their pre-2026-09-24 rules and no longer read this mechanism at all
+/// (verified below via source/structure checks, since there is no SwiftUI-rendering-identity
+/// tool here).
+///
+/// 2026-09-25: the statistic (p90 -> blurred-patch median) and the contrast metric
+/// (WCAG 2 -> APCA) both changed after a real founder-reported cover (Bad Sweetheart
+/// "Damn": saturated teal + thin white linework) proved the old pair wrong — see
+/// `ButtonIconLegibilityEvalTests` for the labelled before/after eval.
 ///
 /// Pure-model only, no view hosting (same convention as `BackdropLegibilityBandTests`):
-/// `ButtonIconDecision`/`ButtonIconGraySolve`/`ButtonIconCompositeSampler` are plain
-/// CGContext + Core Image pixel math + WCAG arithmetic, deterministic headless.
+/// `ButtonIconDecision`/`ButtonIconGraySolve`/`ButtonIconCompositeSampler`/`APCAContrast`
+/// are plain CGContext + Core Image pixel math + APCA arithmetic, deterministic headless.
 final class ButtonIconLegibilityTests: XCTestCase {
 
     // MARK: - Fixtures
@@ -28,42 +34,52 @@ final class ButtonIconLegibilityTests: XCTestCase {
 
     private let panelSize = CGSize(width: PanelWindowMetrics.defaultSize.width, height: PanelWindowMetrics.defaultSize.height)
 
-    /// Builds a neutral-gray `RGBColor` whose WCAG contrast against white is exactly
-    /// `contrast` (solved via the same sRGB linearization `BackdropLegibilityBand` uses),
-    /// so the decision boundary tests are exact, not approximate.
-    private func grayColor(contrast: Double) -> BackdropLegibilityBand.RGBColor {
-        let relativeLuminance = 1.05 / contrast - 0.05
-        let gamma = BackdropLegibilityBand.linearToSRGB(relativeLuminance)
+    private static let white = BackdropLegibilityBand.RGBColor(r: 1, g: 1, b: 1)
+
+    /// Builds a neutral-gray `RGBColor` whose APCA |Lc| against white is exactly `lc`
+    /// (solved via bisection — APCA has no closed-form inverse — so the decision boundary
+    /// tests are exact, not approximate). `|Lc(white, gray)|` is monotonically decreasing
+    /// as the gray lightens toward white (maximal ~108 at black, 0 at white itself).
+    private func grayColor(lc: Double) -> BackdropLegibilityBand.RGBColor {
+        func magnitude(_ lightness: Double) -> Double {
+            abs(APCAContrast.lc(text: Self.white, background: BackdropLegibilityBand.RGBColor(r: lightness, g: lightness, b: lightness)))
+        }
+        var lo = 0.0 // magnitude(lo) >= lc
+        var hi = 1.0 // magnitude(hi) <= lc
+        for _ in 0..<60 {
+            let mid = (lo + hi) / 2
+            if magnitude(mid) >= lc {
+                lo = mid
+            } else {
+                hi = mid
+            }
+        }
+        let gamma = (lo + hi) / 2
         return BackdropLegibilityBand.RGBColor(r: gamma, g: gamma, b: gamma)
     }
 
-    /// The contrast a `ButtonIconTone` actually delivers against `color` — white is
-    /// trivially 1.0 (own colour), a solved gray is recomputed from its own lightness so
-    /// the assertion checks the REAL resulting contrast, not just that a case was chosen.
+    /// The APCA |Lc| a `ButtonIconTone` actually delivers against `color` — white is the
+    /// fixed foreground this mechanism always starts from, a solved gray is recomputed
+    /// from its own lightness so the assertion checks the REAL resulting contrast, not
+    /// just that a case was chosen.
     private func actualContrast(of tone: ButtonIconTone, against color: BackdropLegibilityBand.RGBColor) -> Double {
         switch tone {
         case .white:
-            return BackdropLegibilityBand.whiteContrastRatio(relativeLuminance: BackdropLegibilityBand.relativeLuminance(color))
+            return abs(APCAContrast.lc(text: Self.white, background: color))
         case .gray(let lightness):
-            let grayLuminance = BackdropLegibilityBand.relativeLuminance(BackdropLegibilityBand.RGBColor(r: lightness, g: lightness, b: lightness))
-            let bgLuminance = BackdropLegibilityBand.relativeLuminance(color)
-            let lighter = max(grayLuminance, bgLuminance)
-            let darker = min(grayLuminance, bgLuminance)
-            return (lighter + 0.05) / (darker + 0.05)
+            let gray = BackdropLegibilityBand.RGBColor(r: lightness, g: lightness, b: lightness)
+            return abs(APCAContrast.lc(text: gray, background: color))
         }
     }
 
-    // MARK: - ButtonIconGraySolve (pure math — the exact-3:1 solve)
+    // MARK: - ButtonIconGraySolve (pure math — the exact-APCA-floor solve)
 
     func test_graySolve_pureWhiteBackground_landsExactlyOnTargetContrast() {
         let white = BackdropLegibilityBand.RGBColor(r: 1, g: 1, b: 1)
         let lightness = ButtonIconGraySolve.lightness(background: white)
         let gray = BackdropLegibilityBand.RGBColor(r: lightness, g: lightness, b: lightness)
-        let contrast = BackdropLegibilityBand.whiteContrastRatio(relativeLuminance: BackdropLegibilityBand.relativeLuminance(gray))
-        // whiteContrastRatio(relativeLuminance:) is exactly "(1+0.05)/(L+0.05)" — the same
-        // formula the solve targets against a white foreground reference, so this IS the
-        // background/gray contrast for a white background.
-        XCTAssertEqual(contrast, ButtonIconGraySolve.targetContrast, accuracy: 0.02)
+        let contrast = abs(APCAContrast.lc(text: gray, background: white))
+        XCTAssertEqual(contrast, ButtonIconGraySolve.targetLc, accuracy: 0.1)
     }
 
     func test_graySolve_neverReturnsPureBlack() {
@@ -73,58 +89,58 @@ final class ButtonIconLegibilityTests: XCTestCase {
     }
 
     func test_graySolve_neverDarkerThanTheSolvedBoundary() {
-        // The solve is defined as the LIGHTEST gray that still reaches the target contrast
-        // — any lighter gray must fail, confirming the solved value sits exactly at the
+        // The solve is defined as the LIGHTEST gray that still reaches the target |Lc| —
+        // any lighter gray must fail, confirming the solved value sits exactly at the
         // boundary rather than with extra (unrequested) margin.
-        let background = grayColor(contrast: 4.0) // some background bright enough to flip
+        let background = grayColor(lc: 30) // some background bright enough to flip
         let lightness = ButtonIconGraySolve.lightness(background: background)
-        let bit = BackdropLegibilityBand.linearToSRGB(min(BackdropLegibilityBand.srgbToLinear(lightness) + 0.02, 1))
+        let bit = min(lightness + 0.02, 1)
         let solvedContrast = actualContrast(of: .gray(lightness), against: background)
         let lighterContrast = actualContrast(of: .gray(bit), against: background)
-        XCTAssertGreaterThanOrEqual(solvedContrast, ButtonIconGraySolve.targetContrast - 0.02)
+        XCTAssertGreaterThanOrEqual(solvedContrast, ButtonIconGraySolve.targetLc - 0.1)
         XCTAssertLessThan(lighterContrast, solvedContrast, "a lighter gray than the solved value must give LESS contrast — the solve sits at the boundary")
     }
 
     // MARK: - ButtonIconDecision (threshold + hysteresis + gray solve)
 
-    func test_decision_wellBelowGrayThreshold_flipsWhiteToGray_atExactly3to1() {
-        let color = grayColor(contrast: 2.5)
+    func test_decision_wellBelowGrayThreshold_flipsWhiteToGray_atExactlyAPCAFloor() {
+        let color = grayColor(lc: 25)
         let result = ButtonIconDecision.resolve(color: color, previous: .white)
         guard case .gray(let lightness) = result else {
             return XCTFail("expected .gray, got \(result)")
         }
         XCTAssertGreaterThan(lightness, 0, "never pure black")
-        XCTAssertEqual(actualContrast(of: result, against: color), ButtonIconGraySolve.targetContrast, accuracy: 0.02)
+        XCTAssertEqual(actualContrast(of: result, against: color), ButtonIconGraySolve.targetLc, accuracy: 0.1)
     }
 
     func test_decision_wellAboveWhiteThreshold_staysOrReturnsWhite() {
-        let color = grayColor(contrast: 5.0)
+        let color = grayColor(lc: 75)
         XCTAssertEqual(ButtonIconDecision.resolve(color: color, previous: .white), .white)
         XCTAssertEqual(ButtonIconDecision.resolve(color: color, previous: .gray(0.3)), .white)
     }
 
     func test_decision_hysteresis_midBandDoesNotFlipEitherDirection() {
-        // 3.2 sits strictly between the 3.0 gray threshold and the 3.5 white threshold.
-        let color = grayColor(contrast: 3.2)
-        XCTAssertEqual(ButtonIconDecision.resolve(color: color, previous: .white), .white, "white must not flip until contrast < 3.0")
+        // 48.5 sits strictly between the 45 gray threshold and the 52 white threshold.
+        let color = grayColor(lc: 48.5)
+        XCTAssertEqual(ButtonIconDecision.resolve(color: color, previous: .white), .white, "white must not flip until |Lc| < 45")
         let stillGray = ButtonIconDecision.resolve(color: color, previous: .gray(0.3))
         guard case .gray = stillGray else {
-            return XCTFail("gray must not flip back to white until contrast >= 3.5, got \(stillGray)")
+            return XCTFail("gray must not flip back to white until |Lc| >= 52, got \(stillGray)")
         }
     }
 
     func test_decision_boundaryValues_areExact() {
-        // A small margin either side of each threshold — `grayColor` round-trips through
-        // sRGB<->linear twice (once building the fixture, once inside `resolve`), so
-        // asserting the literal threshold value itself is not float-exact; the DIRECTION
-        // of the flip at 0.01 either side of each threshold is what the contract promises.
-        XCTAssertEqual(ButtonIconDecision.resolve(color: grayColor(contrast: 3.01), previous: .white), .white, "just above 3.0 must not flip")
-        guard case .gray = ButtonIconDecision.resolve(color: grayColor(contrast: 2.99), previous: .white) else {
-            return XCTFail("just below 3.0 must flip to gray")
+        // A small margin either side of each threshold — `grayColor` bisects to the target
+        // |Lc|, so asserting the literal threshold value itself is not float-exact; the
+        // DIRECTION of the flip at 0.5 either side of each threshold is what the contract
+        // promises.
+        XCTAssertEqual(ButtonIconDecision.resolve(color: grayColor(lc: 45.5), previous: .white), .white, "just above 45 must not flip")
+        guard case .gray = ButtonIconDecision.resolve(color: grayColor(lc: 44.5), previous: .white) else {
+            return XCTFail("just below 45 must flip to gray")
         }
-        XCTAssertEqual(ButtonIconDecision.resolve(color: grayColor(contrast: 3.51), previous: .gray(0.3)), .white, "just above 3.5 must switch back")
-        guard case .gray = ButtonIconDecision.resolve(color: grayColor(contrast: 3.49), previous: .gray(0.3)) else {
-            return XCTFail("just below 3.5 must stay gray")
+        XCTAssertEqual(ButtonIconDecision.resolve(color: grayColor(lc: 52.5), previous: .gray(0.3)), .white, "just above 52 must switch back")
+        guard case .gray = ButtonIconDecision.resolve(color: grayColor(lc: 51.5), previous: .gray(0.3)) else {
+            return XCTFail("just below 52 must stay gray")
         }
     }
 
@@ -133,8 +149,8 @@ final class ButtonIconLegibilityTests: XCTestCase {
     /// within the flipped regime) recomputes to a DIFFERENT lightness, letting the 0.25s
     /// cross-fade in `MiniPlayerView` read as smooth motion, never a snap-then-freeze.
     func test_decision_grayLightness_recomputesContinuously_asBackgroundShiftsWhileFlipped() {
-        let dimmerFlip = grayColor(contrast: 2.9)
-        let brighterFlip = grayColor(contrast: 1.5)
+        let dimmerFlip = grayColor(lc: 38) // still below 45, mildly so
+        let brighterFlip = grayColor(lc: 10) // lower |Lc| == brighter/closer-to-white background
         guard case .gray(let l1) = ButtonIconDecision.resolve(color: dimmerFlip, previous: .white) else {
             return XCTFail("expected gray")
         }
@@ -219,11 +235,10 @@ final class ButtonIconLegibilityTests: XCTestCase {
 
     /// Reports the actual gray solved for white / 0.8 / 0.6 gamma-luminance solid covers
     /// (each cover's own tone-mapped composite, matching every other resolveAll test's
-    /// convention) — printed so the founder can see the exact numbers. On THIS pipeline
-    /// (post hero-fade + Layer-1 tone-map compositing, not a raw untouched pixel), 0.6
-    /// already sits past the flip boundary here too — the gray solve activates whenever
-    /// the composited pixel under the button drops below 3:1, never a hardcoded gamma
-    /// cutoff — so all three report a solved gray, none pure black.
+    /// convention) — printed so the founder can see the exact numbers. The gray solve
+    /// activates whenever the composited pixel's APCA |Lc| against white drops below
+    /// `ButtonIconDecision.grayThreshold`, never a hardcoded gamma cutoff — whichever of
+    /// the three flip, none may ever solve to pure black.
     func test_resolveAll_fullscreen_reportedBackgroundLuminances() {
         for gamma: CGFloat in [0.6, 0.8, 1.0] {
             let cover = makeSolidImage(white: gamma)
@@ -245,9 +260,9 @@ final class ButtonIconLegibilityTests: XCTestCase {
         }
     }
 
-    /// A background dim enough that white still comfortably passes 3:1 must stay
-    /// byte-identical white — the gray solve is a targeted fix for OVEREXPOSED pixels,
-    /// not a general dimming of shuffle/repeat.
+    /// A background dim enough that white still comfortably passes the APCA floor must
+    /// stay byte-identical white — the gray solve is a targeted fix for OVEREXPOSED
+    /// pixels, not a general dimming of shuffle/repeat.
     func test_resolveAll_fullscreen_dimCover_staysWhite() {
         let cover = makeSolidImage(white: 0.3)
         let tone = ArtworkBackgroundToneMap.forMetrics(cover.artworkVisualMetrics())
