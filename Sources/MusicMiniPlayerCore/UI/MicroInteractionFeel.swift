@@ -14,6 +14,12 @@ import AppKit
 /// - hoverCapsule: `.capsule` (default) vs `.off`
 /// - pressScale: `.unified` (default) vs `.legacy`
 /// - progressHover: `.tuned` (default) vs `.legacy`
+/// - progressHoverIntent: `.intent` (default, gated by dwell + low velocity —
+///   founder 2026-09-25: a fast pass over the progress bar was thickening it)
+///   vs `.immediate` (today's shipped behaviour — thickens on mouseEntered
+///   with no gate). See `ProgressHoverIntentEngine` (SharedControls.swift)
+///   for the pure state machine and Tokens.progressHoverIntent* below for
+///   the tuned numbers + research citations.
 /// - shuffleRepeat: `.critical` (default) vs `.legacy055`
 /// - windowPresent: `.fade` (default) vs `.hardcut`
 /// - artworkContrast: `.tuned` (default) vs `.legacy` — C5 light-artwork
@@ -27,6 +33,7 @@ public enum MicroInteractionFeel {
     public static let hoverCapsuleDefaultsKey = "nanoPodFeelHoverCapsule"
     public static let pressScaleDefaultsKey = "nanoPodFeelPressScale"
     public static let progressHoverDefaultsKey = "nanoPodFeelProgressHover"
+    public static let progressHoverIntentDefaultsKey = "nanoPodFeelProgressHoverIntent"
     public static let shuffleRepeatDefaultsKey = "nanoPodFeelShuffleRepeat"
     public static let windowPresentDefaultsKey = "nanoPodFeelWindowPresent"
     public static let edgeMorphDefaultsKey = "nanoPodFeelEdgeMorph"
@@ -63,6 +70,19 @@ public enum MicroInteractionFeel {
         public static func resolve(from raw: String?) -> ProgressHoverMode {
             guard let raw else { return .tuned }
             return ProgressHoverMode(rawValue: raw.lowercased()) ?? .tuned
+        }
+    }
+
+    /// `.intent` gates the thickening on hover-intent (dwell + low velocity,
+    /// modelled on Brian Cherne's hoverIntent jQuery plugin); `.immediate` is
+    /// today's shipped behaviour (thickens the instant the pointer enters).
+    public enum ProgressHoverIntentMode: String, CaseIterable {
+        case intent = "intent"
+        case immediate = "immediate"
+
+        public static func resolve(from raw: String?) -> ProgressHoverIntentMode {
+            guard let raw else { return .intent }
+            return ProgressHoverIntentMode(rawValue: raw.lowercased()) ?? .intent
         }
     }
 
@@ -236,6 +256,7 @@ public enum MicroInteractionFeel {
     nonisolated(unsafe) public static var testingHoverCapsule: HoverCapsuleMode?
     nonisolated(unsafe) public static var testingPressScale: PressScaleMode?
     nonisolated(unsafe) public static var testingProgressHover: ProgressHoverMode?
+    nonisolated(unsafe) public static var testingProgressHoverIntent: ProgressHoverIntentMode?
     nonisolated(unsafe) public static var testingShuffleRepeat: ShuffleRepeatMode?
     nonisolated(unsafe) public static var testingWindowPresent: WindowPresentMode?
     nonisolated(unsafe) public static var testingEdgeMorph: EdgeMorphMode?
@@ -247,6 +268,7 @@ public enum MicroInteractionFeel {
         testingHoverCapsule = nil
         testingPressScale = nil
         testingProgressHover = nil
+        testingProgressHoverIntent = nil
         testingShuffleRepeat = nil
         testingWindowPresent = nil
         testingEdgeMorph = nil
@@ -285,6 +307,16 @@ public enum MicroInteractionFeel {
         #endif
         return ProgressHoverMode.resolve(
             from: UserDefaults.standard.string(forKey: progressHoverDefaultsKey)
+        )
+    }
+
+    public static var progressHoverIntent: ProgressHoverIntentMode {
+        #if DEBUG
+        if let testingProgressHoverIntent { return testingProgressHoverIntent }
+        if isRunningTests { return .intent }
+        #endif
+        return ProgressHoverIntentMode.resolve(
+            from: UserDefaults.standard.string(forKey: progressHoverIntentDefaultsKey)
         )
     }
 
@@ -370,6 +402,9 @@ public enum MicroInteractionFeel {
         case "progresshover":
             UserDefaults.standard.set(ProgressHoverMode.resolve(from: value).rawValue, forKey: progressHoverDefaultsKey)
             return true
+        case "progresshoverintent":
+            UserDefaults.standard.set(ProgressHoverIntentMode.resolve(from: value).rawValue, forKey: progressHoverIntentDefaultsKey)
+            return true
         case "shufflerepeat":
             UserDefaults.standard.set(ShuffleRepeatMode.resolve(from: value).rawValue, forKey: shuffleRepeatDefaultsKey)
             return true
@@ -419,6 +454,7 @@ public enum MicroInteractionFeel {
         UserDefaults.standard.removeObject(forKey: hoverCapsuleDefaultsKey)
         UserDefaults.standard.removeObject(forKey: pressScaleDefaultsKey)
         UserDefaults.standard.removeObject(forKey: progressHoverDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: progressHoverIntentDefaultsKey)
         UserDefaults.standard.removeObject(forKey: shuffleRepeatDefaultsKey)
         UserDefaults.standard.removeObject(forKey: windowPresentDefaultsKey)
         UserDefaults.standard.removeObject(forKey: edgeMorphDefaultsKey)
@@ -444,6 +480,42 @@ public enum MicroInteractionFeel {
         public static let pressSpringDamping: Double = 1.0
 
         public static let progressHoverDuration: TimeInterval = 0.16
+
+        // progressHoverIntent (research/hover-intent-2026-09-25.md): gates the
+        // progress-bar thickening on the pointer settling, not merely entering.
+        //
+        // dwellDuration — how long the pointer must stay (within
+        // movementTolerance of its anchor) before the bar commits to thick.
+        // Comfortably above any plausible transit time across the bar (a fast
+        // pass is ~30-80ms) while staying well under NN/g's 300-500ms
+        // disclosure-reveal guidance ("Timing Guidelines for Exposing Hidden
+        // Content", nngroup.com/articles/timing-exposing-content/) — this is a
+        // lightweight in-place affordance (closer to a button hover highlight)
+        // not a heavyweight disclosure, so it should read faster than a menu.
+        // Anchored just above Nielsen's classic ~100ms "feels instantaneous"
+        // perceptual threshold (Nielsen, "Response Times: The 3 Important
+        // Limits", nngroup.com/articles/response-times-3-important-limits/)
+        // so a genuine pause registers as a fast, deliberate catch rather than
+        // truly instant (which would re-admit fast transits).
+        public static let progressHoverIntentDwellDuration: TimeInterval = 0.15
+        // movementTolerance — points of drift from the anchor that do NOT
+        // reset the dwell timer (absorbs hand tremor / high-poll-rate mouse
+        // noise while resting). Modelled on Brian Cherne's hoverIntent jQuery
+        // plugin (briancherne.github.io/jquery-hoverIntent/, sensitivity
+        // default 6-7px over a 100ms poll) but tightened because this check
+        // runs per qualifying move event (not a fixed 100ms sample) against a
+        // thin 14pt-tall bar.
+        public static let progressHoverIntentMovementTolerance: CGFloat = 4.0
+        // exitGrace — brief hold before UN-thickening an already-committed
+        // (visible) bar, to absorb boundary jitter right at the hit rect's
+        // edge; it does NOT apply to the invisible pending state (nothing is
+        // on screen there to flicker, so that resets immediately). Kept below
+        // the ~100ms "instant" perceptual threshold so hiding still reads as
+        // immediate — this is a much smaller number than NN/g's ~500ms hide
+        // guidance because that guidance is for content the user must travel
+        // the cursor across empty space to reach (e.g. a mega-menu panel);
+        // nothing here requires that travel.
+        public static let progressHoverIntentExitGrace: TimeInterval = 0.08
 
         public static let shuffleReboundResponse: Double = 0.30
         public static let shuffleReboundDamping: Double = 1.0

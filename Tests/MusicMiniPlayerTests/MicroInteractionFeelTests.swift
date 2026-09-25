@@ -27,6 +27,10 @@ final class MicroInteractionFeelTests: XCTestCase {
         XCTAssertEqual(MicroInteractionFeel.ProgressHoverMode.resolve(from: "nope"), .tuned)
         XCTAssertEqual(MicroInteractionFeel.ProgressHoverMode.resolve(from: "legacy"), .legacy)
 
+        XCTAssertEqual(MicroInteractionFeel.ProgressHoverIntentMode.resolve(from: nil), .intent)
+        XCTAssertEqual(MicroInteractionFeel.ProgressHoverIntentMode.resolve(from: "nope"), .intent)
+        XCTAssertEqual(MicroInteractionFeel.ProgressHoverIntentMode.resolve(from: "immediate"), .immediate)
+
         XCTAssertEqual(MicroInteractionFeel.ShuffleRepeatMode.resolve(from: nil), .critical)
         XCTAssertEqual(MicroInteractionFeel.ShuffleRepeatMode.resolve(from: "nope"), .critical)
         XCTAssertEqual(MicroInteractionFeel.ShuffleRepeatMode.resolve(from: "legacy055"), .legacy055)
@@ -66,6 +70,16 @@ final class MicroInteractionFeelTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: MicroInteractionFeel.hoverCapsuleDefaultsKey)
     }
 
+    func test_progressHoverIntent_testingOverride_takesPrecedenceOverUserDefaults() {
+        UserDefaults.standard.set("immediate", forKey: MicroInteractionFeel.progressHoverIntentDefaultsKey)
+        MicroInteractionFeel.testingProgressHoverIntent = .immediate
+        XCTAssertEqual(MicroInteractionFeel.progressHoverIntent, .immediate)
+        MicroInteractionFeel.testingProgressHoverIntent = .intent
+        XCTAssertEqual(MicroInteractionFeel.progressHoverIntent, .intent, "override wins even against a contradicting UserDefaults value")
+        MicroInteractionFeel.testingProgressHoverIntent = nil
+        UserDefaults.standard.removeObject(forKey: MicroInteractionFeel.progressHoverIntentDefaultsKey)
+    }
+
     func test_apply_roundTripsThroughUserDefaults() {
         XCTAssertTrue(MicroInteractionFeel.apply(channel: "hoverCapsule", value: "off"))
         XCTAssertEqual(UserDefaults.standard.string(forKey: MicroInteractionFeel.hoverCapsuleDefaultsKey), "off")
@@ -75,6 +89,9 @@ final class MicroInteractionFeelTests: XCTestCase {
 
         XCTAssertTrue(MicroInteractionFeel.apply(channel: "progressHover", value: "legacy"))
         XCTAssertEqual(UserDefaults.standard.string(forKey: MicroInteractionFeel.progressHoverDefaultsKey), "legacy")
+
+        XCTAssertTrue(MicroInteractionFeel.apply(channel: "progressHoverIntent", value: "immediate"))
+        XCTAssertEqual(UserDefaults.standard.string(forKey: MicroInteractionFeel.progressHoverIntentDefaultsKey), "immediate")
 
         XCTAssertTrue(MicroInteractionFeel.apply(channel: "shuffleRepeat", value: "legacy055"))
         XCTAssertEqual(UserDefaults.standard.string(forKey: MicroInteractionFeel.shuffleRepeatDefaultsKey), "legacy055")
@@ -89,6 +106,7 @@ final class MicroInteractionFeelTests: XCTestCase {
         _ = MicroInteractionFeel.apply(channel: "hoverCapsule", value: "off")
         _ = MicroInteractionFeel.apply(channel: "pressScale", value: "legacy")
         _ = MicroInteractionFeel.apply(channel: "progressHover", value: "legacy")
+        _ = MicroInteractionFeel.apply(channel: "progressHoverIntent", value: "immediate")
         _ = MicroInteractionFeel.apply(channel: "shuffleRepeat", value: "legacy055")
         _ = MicroInteractionFeel.apply(channel: "windowPresent", value: "hardcut")
 
@@ -97,6 +115,7 @@ final class MicroInteractionFeelTests: XCTestCase {
         XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.hoverCapsuleDefaultsKey))
         XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.pressScaleDefaultsKey))
         XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.progressHoverDefaultsKey))
+        XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.progressHoverIntentDefaultsKey))
         XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.shuffleRepeatDefaultsKey))
         XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.windowPresentDefaultsKey))
     }
@@ -110,6 +129,10 @@ final class MicroInteractionFeelTests: XCTestCase {
         XCTAssertEqual(MicroInteractionFeel.Tokens.pressSpringDamping, 1.0, accuracy: 0.0001)
 
         XCTAssertEqual(MicroInteractionFeel.Tokens.progressHoverDuration, 0.16, accuracy: 0.0001)
+
+        XCTAssertEqual(MicroInteractionFeel.Tokens.progressHoverIntentDwellDuration, 0.15, accuracy: 0.0001)
+        XCTAssertEqual(MicroInteractionFeel.Tokens.progressHoverIntentMovementTolerance, 4.0, accuracy: 0.0001)
+        XCTAssertEqual(MicroInteractionFeel.Tokens.progressHoverIntentExitGrace, 0.08, accuracy: 0.0001)
 
         XCTAssertEqual(MicroInteractionFeel.Tokens.shuffleReboundResponse, 0.30, accuracy: 0.0001)
         XCTAssertEqual(MicroInteractionFeel.Tokens.shuffleReboundDamping, 1.0, accuracy: 0.0001)

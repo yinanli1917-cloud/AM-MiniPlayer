@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Combine
+import QuartzCore
 
 /// Pure decision function for button press-scale feel (Play/Pause, Skip,
 /// capsule buttons). `.unified` resolves to the shared `MicroInteractionFeel`
@@ -47,6 +48,162 @@ enum ProgressHoverStyle {
         case .tuned:
             return (MicroInteractionFeel.Tokens.progressHoverDuration, .easeOut)
         }
+    }
+}
+
+/// Pure hover-intent state machine for the progress-bar thickening trigger
+/// (founder 2026-09-25: a fast pass over the bar was thickening it — too easy
+/// to trigger by accident). Research (see `MicroInteractionFeel.Tokens.
+/// progressHoverIntent*` for the numbers + citations): Brian Cherne's
+/// hoverIntent jQuery plugin gates a hover callback on the pointer SLOWING
+/// DOWN, not merely entering; NN/g's "Timing Guidelines for Exposing Hidden
+/// Content" recommends a settle delay before revealing hover-triggered
+/// content, reasoning that revealing it too quickly causes accidental
+/// activations.
+///
+/// This is a REDUCER, not a class: every method takes the current `state`
+/// (plus the event's data and an explicit `now`) and returns the next state
+/// plus the `Effect` the caller must apply. No timers, no I/O, no wall clock
+/// — fully deterministic and unit-testable without waiting on real time.
+///
+/// - Movement is event-driven (NSTrackingArea `.mouseMoved`), not polled: the
+///   caller arms exactly one one-shot timer per `Effect.armTimer` and cancels
+///   it before applying any other effect (single-slot scheduling), so a
+///   fast pass through the hit region can never leave a stale timer to fire
+///   later after the pointer has already left.
+/// - Small jitter (<= `movementTolerance` points from the anchor) does not
+///   reset the dwell countdown — only movement that exceeds the tolerance
+///   re-anchors and restarts it.
+/// - Direct manipulation (`commitImmediately`, i.e. mouseDown) always wins
+///   immediately, from any state.
+/// - `exitGrace` protects only the already-COMMITTED (visible, thick) state
+///   from boundary jitter — re-entering within the grace window resumes with
+///   zero visual change. Exiting from the merely PENDING (not yet visible)
+///   state resets immediately: nothing is on screen there to flicker.
+enum ProgressHoverIntentEngine {
+    struct Config: Equatable {
+        var dwellDuration: TimeInterval
+        var movementTolerance: CGFloat
+        var exitGrace: TimeInterval
+
+        static let `default` = Config(
+            dwellDuration: MicroInteractionFeel.Tokens.progressHoverIntentDwellDuration,
+            movementTolerance: MicroInteractionFeel.Tokens.progressHoverIntentMovementTolerance,
+            exitGrace: MicroInteractionFeel.Tokens.progressHoverIntentExitGrace
+        )
+    }
+
+    enum State: Equatable {
+        case idle
+        case pending(anchor: CGPoint, commitDeadline: TimeInterval)
+        case committed
+        case exitGrace(graceDeadline: TimeInterval)
+    }
+
+    enum Effect: Equatable {
+        /// Truly hands-off: leave everything as is, INCLUDING any timer the
+        /// caller already has scheduled. This is deliberately distinct from
+        /// `.cancelTimer` below — both are "no visual change", but only one
+        /// of them may touch an in-flight timer. Conflating them was a real
+        /// bug during development: sub-tolerance jitter (which must leave
+        /// the dwell timer running) and exiting from `.pending` (which must
+        /// cancel it) both have "nothing to show" in common, but need
+        /// opposite timer handling.
+        case none
+        /// Cancel any scheduled timer; no visual change (nothing was ever
+        /// committed, so there is nothing to un-set).
+        case cancelTimer
+        /// Cancel any previously-scheduled work item and schedule exactly one
+        /// new one-shot timer for `deadline` (a `now`-relative time base),
+        /// calling back into `timerFired`.
+        case armTimer(deadline: TimeInterval)
+        /// Cancel any scheduled timer; the bar must be (or stay) thick.
+        case commit
+        /// Cancel any scheduled timer; the bar must be (or stay) thin.
+        case uncommit
+    }
+
+    /// Pointer entered the hit region (`mouseEntered`), or a passive re-sync
+    /// (`resolve`) found it already inside.
+    static func enter(state: State, at point: CGPoint, now: TimeInterval, config: Config) -> (State, Effect) {
+        switch state {
+        case .idle:
+            let deadline = now + config.dwellDuration
+            return (.pending(anchor: point, commitDeadline: deadline), .armTimer(deadline: deadline))
+        case .exitGrace:
+            // Re-entered before the grace window elapsed: resume committed,
+            // zero visual change (the bar was never un-thickened).
+            return (.committed, .commit)
+        case .pending, .committed:
+            // AppKit only fires mouseEntered after a genuine outside->inside
+            // transition, so this is defensive — leave the in-flight timer
+            // (if any) alone rather than restarting it.
+            return (state, .none)
+        }
+    }
+
+    /// Pointer moved while inside the hit region (`mouseMoved`). Only
+    /// meaningful while `.pending`; a no-op in every other state.
+    static func move(state: State, to point: CGPoint, now: TimeInterval, config: Config) -> (State, Effect) {
+        guard case .pending(let anchor, _) = state else { return (state, .none) }
+        let dx = point.x - anchor.x
+        let dy = point.y - anchor.y
+        guard (dx * dx + dy * dy).squareRoot() > config.movementTolerance else {
+            // Within tolerance: treat as still resting, do not touch the
+            // in-flight dwell timer (avoids an infinite-delay livelock from
+            // ordinary hand tremor continually resetting the clock).
+            return (state, .none)
+        }
+        let deadline = now + config.dwellDuration
+        return (.pending(anchor: point, commitDeadline: deadline), .armTimer(deadline: deadline))
+    }
+
+    /// Pointer left the hit region (`mouseExited`), or a passive re-sync
+    /// found it outside.
+    static func exit(state: State, now: TimeInterval, config: Config) -> (State, Effect) {
+        switch state {
+        case .committed:
+            let deadline = now + config.exitGrace
+            return (.exitGrace(graceDeadline: deadline), .armTimer(deadline: deadline))
+        case .pending:
+            // Nothing visible yet — reset immediately, no grace needed. The
+            // in-flight dwell timer MUST be cancelled here (.cancelTimer,
+            // not .none) or it would still fire later and — since by then
+            // the pointer is confirmed outside — thicken the bar after the
+            // fact, then immediately need to un-thicken again.
+            return (.idle, .cancelTimer)
+        case .idle, .exitGrace:
+            return (state, .none)
+        }
+    }
+
+    /// The single scheduled one-shot timer fired.
+    static func timerFired(state: State, now: TimeInterval) -> (State, Effect) {
+        switch state {
+        case .pending(_, let deadline) where now >= deadline:
+            return (.committed, .commit)
+        case .exitGrace(let deadline) where now >= deadline:
+            return (.idle, .uncommit)
+        default:
+            // Stale or early fire (state moved on since this timer was
+            // armed) — single-slot scheduling means this should not happen
+            // in practice, but never act on it if it does.
+            return (state, .none)
+        }
+    }
+
+    /// Direct manipulation (`mouseDown`) — always commits immediately,
+    /// bypassing the dwell gate entirely, from any state.
+    static func commitImmediately(state: State) -> (State, Effect) {
+        guard state != .committed else { return (state, .none) }
+        return (.committed, .commit)
+    }
+
+    /// Passive re-sync (`layout()` / `updateTrackingAreas()` /
+    /// `viewDidMoveToWindow()`) — MUST go through the same gate as
+    /// `enter`/`exit`, never set `.committed` directly.
+    static func resolve(state: State, insideRegion: Bool, at point: CGPoint, now: TimeInterval, config: Config) -> (State, Effect) {
+        insideRegion ? enter(state: state, at: point, now: now, config: config) : exit(state: state, now: now, config: config)
     }
 }
 
@@ -390,7 +547,10 @@ private struct NativePlaybackProgressSection: NSViewRepresentable {
     }
 }
 
-private final class NativePlaybackProgressView: NSView {
+// Internal (not private): ProgressHoverIntentViewTests drives real NSEvents
+// into this view via @testable import, matching the LiquidEdgeStageView /
+// NativeLyricsRowView convention.
+final class NativePlaybackProgressView: NSView {
     override var isFlipped: Bool { true }
 
     var onHoverChanged: ((Bool) -> Void)?
@@ -439,6 +599,11 @@ private final class NativePlaybackProgressView: NSView {
     private var cancellable: AnyCancellable?
     private var trackingArea: NSTrackingArea?
     private var isDraggingProgress = false
+    // Internal (not private): read by tests to assert exact engine state /
+    // that no work item is left scheduled after teardown.
+    private(set) var hoverIntentState: ProgressHoverIntentEngine.State = .idle
+    private var hoverIntentWorkItem: DispatchWorkItem?
+    var hasScheduledHoverIntentWork: Bool { hoverIntentWorkItem != nil }
     private var lastLabelCurrentSecond: Int?
     private var lastLabelRemainingSecond: Int?
     private var lastLaidOutBounds: CGRect = .null
@@ -460,6 +625,7 @@ private final class NativePlaybackProgressView: NSView {
 
     deinit {
         cancellable?.cancel()
+        hoverIntentWorkItem?.cancel()
     }
 
     func bind(to timePublisher: TimePublisher) {
@@ -491,7 +657,7 @@ private final class NativePlaybackProgressView: NSView {
         super.viewDidMoveToWindow()
         if window == nil {
             isDraggingProgress = false
-            setProgressHovering(false)
+            resetHoverIntent()
         } else {
             syncHoverStateToPointer()
         }
@@ -502,9 +668,16 @@ private final class NativePlaybackProgressView: NSView {
         if let trackingArea {
             removeTrackingArea(trackingArea)
         }
+        var options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways]
+        if MicroInteractionFeel.progressHoverIntent == .intent {
+            // Only needed to re-evaluate the dwell/velocity gate while a
+            // decision is pending; scoped to this small tracking rect so it
+            // costs nothing while the pointer is anywhere else.
+            options.insert(.mouseMoved)
+        }
         let area = NSTrackingArea(
             rect: progressInteractiveRect(),
-            options: [.mouseEnteredAndExited, .activeAlways],
+            options: options,
             owner: self,
             userInfo: nil
         )
@@ -514,12 +687,29 @@ private final class NativePlaybackProgressView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        setProgressHovering(true)
+        switch MicroInteractionFeel.progressHoverIntent {
+        case .immediate:
+            setProgressHovering(true)
+        case .intent:
+            let point = convert(event.locationInWindow, from: nil)
+            applyHoverIntent(ProgressHoverIntentEngine.enter(state: hoverIntentState, at: point, now: hoverIntentNow(), config: .default))
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard MicroInteractionFeel.progressHoverIntent == .intent else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        applyHoverIntent(ProgressHoverIntentEngine.move(state: hoverIntentState, to: point, now: hoverIntentNow(), config: .default))
     }
 
     override func mouseExited(with event: NSEvent) {
         guard !isDraggingProgress else { return }
-        setProgressHovering(false)
+        switch MicroInteractionFeel.progressHoverIntent {
+        case .immediate:
+            setProgressHovering(false)
+        case .intent:
+            applyHoverIntent(ProgressHoverIntentEngine.exit(state: hoverIntentState, now: hoverIntentNow(), config: .default))
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -529,7 +719,14 @@ private final class NativePlaybackProgressView: NSView {
             return
         }
         isDraggingProgress = true
-        setProgressHovering(true)
+        // Direct manipulation always wins immediately — never gated by
+        // hover-intent, in either arm.
+        switch MicroInteractionFeel.progressHoverIntent {
+        case .immediate:
+            setProgressHovering(true)
+        case .intent:
+            applyHoverIntent(ProgressHoverIntentEngine.commitImmediately(state: hoverIntentState))
+        }
         updateDrag(with: event)
     }
 
@@ -627,23 +824,95 @@ private final class NativePlaybackProgressView: NSView {
         )
     }
 
-    private func progressInteractiveRect() -> CGRect {
+    // Internal (not private): tests use this to build valid inside/outside
+    // points without duplicating the layout constants.
+    func progressInteractiveRect() -> CGRect {
         progressRect()
     }
 
+    /// Passive re-sync (called from `layout()`, `updateTrackingAreas()`, and
+    /// `viewDidMoveToWindow()`) — routes through the SAME hover-intent gate
+    /// as `mouseEntered`/`mouseExited`; it must never set hovering `true`
+    /// directly, or a fast pass could still thicken the bar via a layout
+    /// pass that happens to land while the pointer is transiting.
     private func syncHoverStateToPointer() {
         guard let window else {
-            setProgressHovering(false)
+            resetHoverIntent()
             return
         }
         let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
-        setProgressHovering(progressInteractiveRect().contains(point))
+        let inside = progressInteractiveRect().contains(point)
+        switch MicroInteractionFeel.progressHoverIntent {
+        case .immediate:
+            setProgressHovering(inside)
+        case .intent:
+            applyHoverIntent(ProgressHoverIntentEngine.resolve(state: hoverIntentState, insideRegion: inside, at: point, now: hoverIntentNow(), config: .default))
+        }
     }
 
     private func setProgressHovering(_ hovering: Bool) {
         guard isProgressHovering != hovering else { return }
         isProgressHovering = hovering
         onHoverChanged?(hovering)
+    }
+
+    private func hoverIntentNow() -> TimeInterval {
+        CACurrentMediaTime()
+    }
+
+    /// Applies one `ProgressHoverIntentEngine` transition. IMPORTANT: unlike
+    /// an earlier version of this method, the scheduled work item is only
+    /// touched by the effects that are actually ABOUT a timer
+    /// (`.cancelTimer`, `.armTimer`, `.commit`, `.uncommit`) — `.none` must
+    /// leave any in-flight timer running untouched. Cancelling
+    /// unconditionally here was a real bug caught by
+    /// ProgressHoverIntentViewTests.test_subToleranceJitter_
+    /// stillThickensOnSchedule: a sub-tolerance jitter move (`.none`) was
+    /// silently cancelling the still-pending dwell timer armed by the
+    /// preceding `mouseEntered`, so a genuinely-resting pointer that
+    /// wiggled by a point or two never committed.
+    private func applyHoverIntent(_ result: (ProgressHoverIntentEngine.State, ProgressHoverIntentEngine.Effect)) {
+        hoverIntentState = result.0
+        switch result.1 {
+        case .none:
+            break
+        case .cancelTimer:
+            hoverIntentWorkItem?.cancel()
+            hoverIntentWorkItem = nil
+        case .armTimer(let deadline):
+            hoverIntentWorkItem?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.hoverIntentTimerFired() }
+            hoverIntentWorkItem = work
+            let delay = max(0, deadline - hoverIntentNow())
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        case .commit:
+            hoverIntentWorkItem?.cancel()
+            hoverIntentWorkItem = nil
+            setProgressHovering(true)
+        case .uncommit:
+            hoverIntentWorkItem?.cancel()
+            hoverIntentWorkItem = nil
+            setProgressHovering(false)
+        }
+    }
+
+    private func hoverIntentTimerFired() {
+        // This exact work item has now finished executing (that is how we
+        // got here) — clear the reference before processing the resulting
+        // transition, so `hasScheduledHoverIntentWork` never reports a
+        // spent timer as still pending.
+        hoverIntentWorkItem = nil
+        applyHoverIntent(ProgressHoverIntentEngine.timerFired(state: hoverIntentState, now: hoverIntentNow()))
+    }
+
+    /// Hard reset for teardown (view leaving the window): cancels any
+    /// in-flight timer and forces the idle/thin state immediately,
+    /// regardless of arm.
+    private func resetHoverIntent() {
+        hoverIntentWorkItem?.cancel()
+        hoverIntentWorkItem = nil
+        hoverIntentState = .idle
+        setProgressHovering(false)
     }
 
     private func updateDisplay() {
