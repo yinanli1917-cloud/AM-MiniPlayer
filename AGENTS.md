@@ -73,7 +73,7 @@ Sources/
 │   │   └── Background/           - Background views
 │   │       ├── FluidGradientBackground.swift
 │   │       ├── LiquidBackgroundView.swift
-│   │       └── PanelBackdrop.swift   - 面板底材切换（fluid 默认 | macOS 26 原生 NSGlassEffectView 玻璃实验臂），nanopod://debug/backdrop/<style> 运行时切换
+│   │       └── PanelBackdrop.swift   - 面板底材切换（fluid 默认 | macOS 26 原生 NSGlassEffectView：glass=Regular 实验臂、clear=Clear 透桌面+封面主色单色染色），nanopod://backdrop/<fluid|glass|clear> 运行时切换（release 可用）
 │   ├── Utils/
 │   │   ├── HTTPClient.swift           - HTTP requests + retry + connection warmup + NetworkOutcomeLedger (protocol vs transport)
 │   │   ├── LanguageUtils.swift        - Language detection + S/T Chinese conversion + Japanese reading (CFStringTokenizer) + two-lane romanized-title corroboration
