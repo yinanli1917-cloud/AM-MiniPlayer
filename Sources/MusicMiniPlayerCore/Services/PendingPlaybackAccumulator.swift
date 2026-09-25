@@ -8,10 +8,18 @@
  *        confirmed-track-change call sites (handleTrackChange's notification
  *        path, applySnapshot's snapshot path) call `beginPendingPlay` instead
  *        of recording directly; `updatePersistentID` is called wherever a
- *        persistentID resolves later (SB completion, PID-refill poll);
- *        `tick` rides MusicController's EXISTING snapshot-poll cadence (no
- *        new timer) to accumulate listened time and commit the instant the
- *        threshold is crossed, not just on the next track change.
+ *        persistentID resolves later (SB completion, PID-refill poll).
+ *        `tick` is driven from TWO existing, event-driven sources — no new
+ *        timer: (1) MusicController's `$isPlaying.removeDuplicates()`
+ *        subscription (wired in `init`), which fires on every REAL isPlaying
+ *        transition regardless of which of `pollPositionViaSB`'s several
+ *        branches or `applySnapshot` caused it (2026-09-25 round 2 fix — see
+ *        PendingPlaybackAccumulatorWiringGapTests for why `applySnapshot`
+ *        alone under-covers ordinary steady playback); (2) `applySnapshot`'s
+ *        own direct call, kept alongside it for the `measurementTime`
+ *        timestamp precision it alone provides. Calling `tick` twice for one
+ *        transition (both fire within the same synchronous call) is harmless
+ *        — see the round-2 fix's comment in MusicController.init.
  * [PROTOCOL]: Changes here → update this header, then check root CLAUDE.md
  */
 
@@ -47,7 +55,14 @@ public struct PendingPlay: Equatable {
     public let album: String
     public var duration: TimeInterval
     public var persistentID: String
-    public let isURLTrack: Bool
+    /// 2026-09-25 review round 2: mutable, not `let` — the notification path
+    /// opens the pending play with `isURLTrack: false` (unknown until the SB
+    /// read classifies the track), and `updatePersistentID` must be able to
+    /// correct it on the STILL-PENDING play, not just on an already-committed
+    /// store row. Without this, a PID-bearing URL track that qualifies AFTER
+    /// its trackClass resolves would commit as `.library` instead of
+    /// `.radioOrStream`/whatever `deriveSourceKind` says for its real PID shape.
+    public var isURLTrack: Bool
     /// Also this play's identity token: PlaybackHistoryStore.patchPersistentID
     /// and PendingPlaybackAccumulator.updatePersistentID both key off exact
     /// equality with this value, not off title/artist (which two different
@@ -216,6 +231,7 @@ public final class PendingPlaybackAccumulator {
         if var play = current, play.startedAt == startedAt, play.persistentID.isEmpty {
             DebugLogger.log("History", "patch pending PID: \(play.title) - \(play.artist) pid='\(persistentID)'")
             play.persistentID = persistentID
+            play.isURLTrack = isURLTrack
             if let refreshedDuration, refreshedDuration > 0 {
                 play.duration = refreshedDuration
             }

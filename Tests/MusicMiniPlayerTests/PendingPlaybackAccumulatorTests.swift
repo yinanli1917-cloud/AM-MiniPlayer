@@ -5,12 +5,17 @@
  *           math, qualification threshold (0 and 10s), pause-excluded timing,
  *           redundant re-detection dedup, the H3 rapid-double-skip regression,
  *           the H4 late-PID regression (both the still-pending and
- *           already-committed patch paths), app-quit flush, and a 100k-tick
- *           soak — all fake-clock-driven, zero real timers.
+ *           already-committed patch paths), app-quit flush, a 100k-tick
+ *           soak, and the wiring-layer pause-gap (2026-09-25 review round 2:
+ *           `tick()` only reaching PendingPlaybackAccumulator through
+ *           `applySnapshot`-equivalent boundaries, never through an
+ *           `isPlaying`-change subscription) — all fake-clock-driven, zero
+ *           real timers.
  * [POS]: Test module (2026-09-25 diagnosis phase-2 fix)
  */
 
 import XCTest
+import Combine
 @testable import MusicMiniPlayerCore
 
 // ============================================================
@@ -316,6 +321,28 @@ final class PendingPlaybackAccumulatorTests: XCTestCase {
         XCTAssertEqual(store.entries.first?.sourceKind, .library)
     }
 
+    /// 2026-09-25 review round 2, item 2: the notification path always opens
+    /// with `isURLTrack: false` (unknown until the SB read classifies
+    /// trackClass) — a PID-bearing URL track that only qualifies AFTER that
+    /// classification resolves must still commit as `.radioOrStream`, not
+    /// `.library`. Requires `isURLTrack` to be patchable on the STILL-PENDING
+    /// play (round 1 only patched an already-committed store row's classification).
+    func test_h4_updatePersistentID_alsoPatchesIsURLTrackOnStillPendingPlay() {
+        let store = makeStore(dir: freshDir())
+        let acc = PendingPlaybackAccumulator(store: store, minimumListenSeconds: 10)
+        let t0 = Date(timeIntervalSince1970: 9200)
+        acc.beginPendingPlay(title: "Stream Song", artist: "Artist", album: "Album", duration: 200, persistentID: "", isURLTrack: false, isPlaying: true, now: t0)
+
+        // SB resolves BOTH a real PID and reveals trackClass == "URL track" —
+        // well before the 10s threshold, so this patches the PENDING play.
+        acc.updatePersistentID(startedAt: t0, persistentID: "URLPID123", isURLTrack: true, now: t0.addingTimeInterval(1))
+
+        acc.tick(isPlaying: true, now: t0.addingTimeInterval(10))
+        XCTAssertEqual(store.entries.count, 1)
+        XCTAssertEqual(store.entries.first?.persistentID, "URLPID123")
+        XCTAssertEqual(store.entries.first?.sourceKind, .radioOrStream, "isURLTrack must have been corrected on the pending play BEFORE commit, not left at the notification-time default (false)")
+    }
+
     func test_h4_pidArrivesAfterAlreadyCommitted_patchesStoreInPlace_neverDoubleRecords() {
         let store = makeStore(dir: freshDir())
         let acc = PendingPlaybackAccumulator(store: store, minimumListenSeconds: 0) // commits immediately, PID still unknown
@@ -471,5 +498,256 @@ final class PendingPlaybackAccumulatorTests: XCTestCase {
         }
 
         XCTAssertEqual(store.entries.count, PlaybackHistoryStore.capacity, "must stay capped, never grow unbounded over 100k events")
+    }
+
+    // MARK: - Music.app quits mid-session, then reopens (2026-09-25 review round 2, item 3)
+    //
+    // nanoPod (the menu bar app) keeps running and polling while Music.app
+    // itself quits — from the accumulator's point of view this looks like:
+    // isPlaying goes false (whatever mechanism detects "not running" drives a
+    // tick, exactly like a pause), a gap passes, then a fresh confirmed
+    // identity arrives once Music.app reopens and starts playing again
+    // (`currentTrackTitle` was poisoned to the sentinel while gone, so
+    // `snapshotIndicatesTrackChange`'s heal branch treats the next valid
+    // snapshot as a change even if it's the SAME song — MusicController.swift's
+    // existing poisoned-display heal, unchanged by this fix).
+
+    /// SAME song resumes after reopen. `isSameSong` matches (same PID) —
+    /// per the coordinator's own closing note ("一首歌播完…隔很久又放同一首
+    /// 时…会并进上一次播放…不算回归"), a redundant re-detection of a song
+    /// still held as `current` merges into it rather than starting fresh.
+    /// This is that exact accepted behavior, not a new gap: the pre-quit and
+    /// post-reopen listening on the SAME song combine into one entry.
+    func test_musicAppQuitAndReopen_sameSongResumes_mergesIntoOnePlay_perAcceptedRedetectionRule() {
+        let store = makeStore(dir: freshDir())
+        let acc = PendingPlaybackAccumulator(store: store, minimumListenSeconds: 10)
+        let t0 = Date(timeIntervalSince1970: 300_000)
+
+        acc.beginPendingPlay(title: "Song A", artist: "Artist", album: "Album", duration: 200, persistentID: "PID_A", isURLTrack: false, isPlaying: true, now: t0)
+        acc.tick(isPlaying: true, now: t0.addingTimeInterval(3)) // 3s listened
+        acc.tick(isPlaying: false, now: t0.addingTimeInterval(3)) // Music.app quits — isPlaying observed false, segment closes
+        XCTAssertTrue(store.entries.isEmpty, "only 3s listened so far — must not have qualified yet")
+
+        // Music.app is closed for two real minutes; nanoPod keeps polling but
+        // isPlaying stays false throughout (nothing accrues).
+        acc.tick(isPlaying: false, now: t0.addingTimeInterval(123))
+
+        // Reopened: Music.app resumes the SAME song (same PID) — the
+        // poisoned-title heal makes MusicController call beginPendingPlay
+        // again even though it's the same identity. `beginPendingPlay`'s
+        // redundant-re-detection branch returns early and does NOT itself
+        // reopen the segment (it only logs) — in the real system, resuming
+        // playback is a SEPARATE signal: `self.isPlaying` transitions
+        // false→true independently, firing the `$isPlaying` subscription's
+        // own `tick(isPlaying: true)` (item 1's fix). Model both signals,
+        // exactly like the real wiring fires both.
+        acc.beginPendingPlay(title: "Song A", artist: "Artist", album: "Album", duration: 200, persistentID: "PID_A", isURLTrack: false, isPlaying: true, now: t0.addingTimeInterval(123))
+        XCTAssertTrue(store.entries.isEmpty, "redundant re-detection of the still-tracked song must not itself commit or restart progress")
+        acc.tick(isPlaying: true, now: t0.addingTimeInterval(123)) // the isPlaying subscription firing at the reopen moment — reopens the segment
+
+        acc.tick(isPlaying: true, now: t0.addingTimeInterval(123 + 7)) // +7s post-reopen = 10s total real listening
+        XCTAssertEqual(store.entries.count, 1, "3s pre-quit + 7s post-reopen = 10s of ACTUAL listening on the same song must qualify exactly once")
+        XCTAssertEqual(store.entries.first?.persistentID, "PID_A")
+        XCTAssertEqual(store.entries.first?.startedAt, t0, "the committed entry's startedAt is the ORIGINAL play's, not the reopen moment — one continuous listen, not two")
+    }
+
+    /// DIFFERENT song plays after reopen — the ordinary, already-well-tested
+    /// track-change path, exercised specifically through an app-quit gap:
+    /// the pre-quit song (never qualified) must be correctly discarded, and
+    /// the post-reopen different song must accumulate and commit independently.
+    func test_musicAppQuitAndReopen_differentSongPlays_preQuitSongDiscarded_newSongIndependent() {
+        let store = makeStore(dir: freshDir())
+        let acc = PendingPlaybackAccumulator(store: store, minimumListenSeconds: 10)
+        let t0 = Date(timeIntervalSince1970: 310_000)
+
+        acc.beginPendingPlay(title: "Song A", artist: "Artist", album: "Album", duration: 200, persistentID: "PID_A", isURLTrack: false, isPlaying: true, now: t0)
+        acc.tick(isPlaying: true, now: t0.addingTimeInterval(4)) // 4s — under threshold
+        acc.tick(isPlaying: false, now: t0.addingTimeInterval(4)) // quits
+
+        acc.tick(isPlaying: false, now: t0.addingTimeInterval(200)) // closed for a while
+
+        // Reopened with a DIFFERENT song playing.
+        acc.beginPendingPlay(title: "Song B", artist: "Other Artist", album: "Other Album", duration: 180, persistentID: "PID_B", isURLTrack: false, isPlaying: true, now: t0.addingTimeInterval(200))
+        XCTAssertTrue(store.entries.isEmpty, "Song A's pre-quit 4s must be discarded (correctly, it never reached 10s) when a genuinely different song supersedes it")
+
+        acc.tick(isPlaying: true, now: t0.addingTimeInterval(200 + 10))
+        XCTAssertEqual(store.entries.count, 1)
+        XCTAssertEqual(store.entries.first?.persistentID, "PID_B", "only the post-reopen different song qualifies, independently of the discarded pre-quit one")
+    }
+
+    // MARK: - System clock rollback (2026-09-25 review round 2, item 3)
+
+    /// The system clock jumping backward must never manufacture a negative
+    /// or absurdly large listened-time value, and PlaybackHistoryStore's
+    /// insertion-order guarantee (always `insert(at: 0)`, never re-sorted by
+    /// `startedAt`) must hold even when a later-inserted entry's own
+    /// timestamp is numerically EARLIER than an already-stored one's.
+    func test_systemClockRollback_noNegativeOrHugeAccumulation_insertionOrderPreserved() {
+        let store = makeStore(dir: freshDir())
+        let acc = PendingPlaybackAccumulator(store: store, minimumListenSeconds: 10)
+        let t0 = Date(timeIntervalSince1970: 400_000)
+
+        acc.beginPendingPlay(title: "Song 1", artist: "Artist", album: "Album", duration: 200, persistentID: "P1", isURLTrack: false, isPlaying: true, now: t0)
+        acc.tick(isPlaying: true, now: t0.addingTimeInterval(10))
+        XCTAssertEqual(store.entries.count, 1, "sanity: Song 1 committed normally")
+
+        // System clock rolls back by an hour at the next confirmed change.
+        let rolledBack = t0.addingTimeInterval(10 - 3600)
+        acc.beginPendingPlay(title: "Song 2", artist: "Artist", album: "Album", duration: 200, persistentID: "P2", isURLTrack: false, isPlaying: true, now: rolledBack)
+
+        // A tick arrives with `now` even further behind `rolledBack` (clock
+        // still unstable / jittering backward) — segmentStart > now.
+        acc.tick(isPlaying: true, now: rolledBack.addingTimeInterval(-100))
+        let listenedDuringRollback = acc.current.map { PendingPlaybackRules.totalListenedSeconds($0, at: rolledBack.addingTimeInterval(-100)) }
+        XCTAssertNotNil(listenedDuringRollback)
+        XCTAssertGreaterThanOrEqual(listenedDuringRollback ?? -1, 0, "must never go negative when segmentStart is after `now`")
+        XCTAssertLessThan(listenedDuringRollback ?? .infinity, 1000, "must never explode into a huge bogus value")
+        XCTAssertEqual(store.entries.count, 1, "Song 2 must not have spuriously qualified from a clock artifact")
+
+        // Clock corrects itself and real forward progress resumes.
+        acc.tick(isPlaying: true, now: rolledBack.addingTimeInterval(10))
+        XCTAssertEqual(store.entries.count, 2, "Song 2 must still be able to qualify once real forward progress resumes")
+
+        // Insertion order: always newest-BY-RECORDING-ORDER at index 0, never
+        // re-sorted by startedAt — Song 2's `startedAt` (rolledBack, an hour
+        // before Song 1's) must not reorder or corrupt the list.
+        XCTAssertEqual(store.entries.map(\.persistentID), ["P2", "P1"], "store must never re-sort by startedAt; a clock rollback must not reorder or corrupt existing rows")
+    }
+}
+
+// ============================================================
+// MARK: - Wiring-layer pause gap (2026-09-25 review round 2)
+//
+// PendingPlaybackAccumulator.tick's own math is correct GIVEN it receives a
+// tick at every isPlaying transition — that contract held in every test
+// above because each one calls tick() explicitly at the pause/resume
+// moment. The real bug was never in that math: it's that MusicController
+// never called tick() at an isPlaying transition at all. `applySnapshot`
+// (the only place `tick` was wired, round 1) is reached during ordinary
+// steady playback ONLY at confirmed track changes and the 30s fullSyncTimer
+// — pollPositionViaSB's 2s poll and the 5s identity heartbeat both mutate
+// `self.isPlaying` directly (MusicController.swift, "Update playing state"
+// and the velocity-pause-inference branch) WITHOUT going through
+// applySnapshot at all. A pause between two such boundaries — easily up to
+// 30 real seconds — got its whole wall-clock span counted as "listened".
+//
+// These tests drive PendingPlaybackAccumulator through a real Combine
+// `PassthroughSubject<Bool, Never>` standing in for MusicController's real
+// `$isPlaying`, on an injected MUTABLE fake clock (deterministic, no real
+// waiting) — the RED test reproduces today's gap by leaving the publisher
+// UNSUBSCRIBED (matching current MusicController: nothing listens to
+// isPlaying changes) and driving only 30s-fullSyncTimer-shaped boundary
+// ticks; the GREEN test proves the fix's exact shape
+// (`$isPlaying.removeDuplicates().sink { tick(isPlaying:) }`) closes it.
+// ============================================================
+
+/// Simple mutable fake clock — a class (not a struct) so a `.sink` closure
+/// can read its CURRENT value at the moment a Combine event actually fires,
+/// exactly like `Date()` would in the real MusicController subscription,
+/// but fully deterministic and controlled by the test.
+private final class MutableFakeClock {
+    var now: Date
+    init(_ now: Date) { self.now = now }
+    func advance(by seconds: TimeInterval) { now = now.addingTimeInterval(seconds) }
+}
+
+final class PendingPlaybackAccumulatorWiringGapTests: XCTestCase {
+
+    private func makeStore(dir: URL) -> PlaybackHistoryStore {
+        PlaybackHistoryStore(
+            fileURL: NanoPodCacheLocation.versionedFileURL(baseName: "playback-history", schemaVersion: PlaybackHistoryStore.schemaVersion, in: dir),
+            scheduler: { _, _ in },
+            writeHook: { _, _ in }
+        )
+    }
+
+    private func freshDir() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    }
+
+    /// Documents the round-1 gap this file's OTHER test proves the fix for.
+    /// Originally run RED (before the fix, `swift test` output: "XCTAssertNil
+    /// failed: ... PID_OLD ... committed" — reproducing exactly the round-2
+    /// review finding) against a harness with NO isPlaying subscription —
+    /// only 30s-fullSyncTimer-shaped boundary ticks, matching MusicController's
+    /// ACTUAL round-1 wiring during steady, non-track-changing playback. Old
+    /// Song genuinely plays 3s, is paused, and 17s later (no boundary crossed
+    /// in between) the user skips to Next Song. Kept — assertion inverted —
+    /// as a permanent characterization test: this is the anti-pattern the
+    /// real MusicController.init subscription (item 1's fix) exists to avoid;
+    /// it intentionally does NOT exercise MusicController at all, so removing
+    /// that subscription later would NOT be caught here — the actual
+    /// regression pin is the very next test, `_withIsPlayingSubscription_`.
+    func test_withoutIsPlayingSubscription_illustratesWhyItsNecessary_pausedTimeWronglyCounted() {
+        let store = makeStore(dir: freshDir())
+        let clock = MutableFakeClock(Date(timeIntervalSince1970: 50_000))
+        let acc = PendingPlaybackAccumulator(store: store, minimumListenSeconds: 10, clock: { clock.now })
+
+        // `$isPlaying` stand-in — deliberately left UNSUBSCRIBED, matching
+        // today's MusicController (nothing observes isPlaying transitions).
+        let isPlayingChanges = PassthroughSubject<Bool, Never>()
+        var cancellables = Set<AnyCancellable>()
+        _ = (isPlayingChanges, cancellables) // exists, unused — that omission IS the bug
+
+        acc.beginPendingPlay(title: "Old Song", artist: "Artist", album: "Album", duration: 200, persistentID: "PID_OLD", isURLTrack: false, isPlaying: true, now: clock.now)
+
+        clock.advance(by: 3)
+        isPlayingChanges.send(false) // Music.app really paused here — nobody's listening
+        clock.advance(by: 17) // genuinely paused for 17 more real seconds; no 30s fullSync boundary crossed
+
+        // The user resumes and skips — a real confirmed track change at t+20.
+        acc.beginPendingPlay(title: "Next Song", artist: "Artist", album: "Album", duration: 200, persistentID: "PID_NEXT", isURLTrack: false, isPlaying: true, now: clock.now)
+
+        // INVERTED on purpose (was XCTAssertNil, failed, before the fix):
+        // this harness deliberately has NO isPlaying subscription, so Old
+        // Song's 17s pause is wrongly folded into "listened" time and it
+        // wrongly qualifies — exactly the round-1 gap. Asserting that HERE
+        // (in a harness that will never have the real fix applied to it)
+        // keeps the suite green while leaving the reproduction executable
+        // and readable, instead of deleting the evidence once it stopped
+        // being "red".
+        XCTAssertNotNil(
+            store.entries.first(where: { $0.persistentID == "PID_OLD" }),
+            "documents the round-1 anti-pattern: without an isPlaying subscription, only ~3s genuinely listened (paused for 17s) still wrongly crosses the 10s threshold and commits"
+        )
+    }
+
+    /// GREEN: the actual fix shape — `$isPlaying.removeDuplicates().sink { tick(isPlaying:) }`
+    /// — applied to the SAME scenario. `removeDuplicates()` matters here too:
+    /// a redundant `send(true)` at the same value must not restart the segment.
+    func test_pauseGap_withIsPlayingSubscription_correctlyExcludesPausedTime() {
+        let store = makeStore(dir: freshDir())
+        let clock = MutableFakeClock(Date(timeIntervalSince1970: 60_000))
+        let acc = PendingPlaybackAccumulator(store: store, minimumListenSeconds: 10, clock: { clock.now })
+
+        let isPlayingChanges = PassthroughSubject<Bool, Never>()
+        var cancellables = Set<AnyCancellable>()
+        isPlayingChanges
+            .removeDuplicates()
+            .sink { playing in acc.tick(isPlaying: playing) }
+            .store(in: &cancellables)
+
+        acc.beginPendingPlay(title: "Old Song", artist: "Artist", album: "Album", duration: 200, persistentID: "PID_OLD", isURLTrack: false, isPlaying: true, now: clock.now)
+
+        clock.advance(by: 3)
+        isPlayingChanges.send(false) // pause — the subscription ticks NOW, closing the 3s segment
+        isPlayingChanges.send(false) // a redundant duplicate signal (e.g. two paths both observing the same pause) — removeDuplicates must swallow it
+        clock.advance(by: 17) // paused; nothing accrues
+
+        acc.beginPendingPlay(title: "Next Song", artist: "Artist", album: "Album", duration: 200, persistentID: "PID_NEXT", isURLTrack: false, isPlaying: true, now: clock.now)
+
+        XCTAssertNil(
+            store.entries.first(where: { $0.persistentID == "PID_OLD" }),
+            "with the isPlaying subscription wired, only the true ~3s listened must be counted — 3s < the 10s threshold, so Old Song must NOT qualify"
+        )
+
+        // Now let it actually cross the threshold: Next Song plays 12 real
+        // seconds with a duplicate-suppressed same-value signal in the middle.
+        clock.advance(by: 6)
+        isPlayingChanges.send(true) // still playing — must be swallowed by removeDuplicates, not treated as a fresh resume
+        clock.advance(by: 6)
+        acc.tick(isPlaying: true) // the regular applySnapshot-cadence tick also still runs alongside the subscription
+
+        XCTAssertEqual(store.entries.first?.persistentID, "PID_NEXT", "12 real seconds of Next Song must qualify and commit")
     }
 }

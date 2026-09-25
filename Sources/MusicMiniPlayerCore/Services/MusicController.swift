@@ -268,6 +268,11 @@ public class MusicController: ObservableObject {
         store: playbackHistoryStore,
         minimumListenSeconds: Self.minimumListenSecondsForHistory
     )
+    /// 2026-09-25 review round 2 fix: holds the `$isPlaying` subscription
+    /// that drives `pendingPlaybackAccumulator.tick` on every REAL isPlaying
+    /// transition — see the wiring-gap note on `init` below for why
+    /// `applySnapshot`'s tick alone (round 1) wasn't enough.
+    private var pendingPlaybackCancellables = Set<AnyCancellable>()
 
     var artworkCache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
@@ -520,6 +525,29 @@ public class MusicController: ObservableObject {
             guard let self else { return }
             self.playbackHistory = self.playbackHistoryStore.entries
         }
+        // 🔑 2026-09-25 review round 2 fix: round 1 only wired
+        // `pendingPlaybackAccumulator.tick` into `applySnapshot`, but during
+        // ordinary steady (non-track-changing) playback `applySnapshot` is
+        // only reached at the 30s `fullSyncTimer` — the 2s `pollPositionViaSB`
+        // poll and its 5s identity-heartbeat branch both mutate `self.isPlaying`
+        // DIRECTLY (see "Update playing state" and the velocity-pause-inference
+        // branch further down this file) WITHOUT ever going through
+        // `applySnapshot`. A pause between two `applySnapshot` boundaries — up
+        // to 30 real seconds — had its whole wall-clock span counted as
+        // "listened" (reproduced in PendingPlaybackAccumulatorWiringGapTests).
+        // Fix: tick on every REAL isPlaying transition, event-driven, no new
+        // timer. `removeDuplicates()` matters because the velocity-pause
+        // branch below can assign `isPlaying = false` even when it was
+        // already false. `applySnapshot`'s own tick stays — harmless (ticking
+        // twice for one transition just closes an empty extra segment) and
+        // still the only place a snapshot's `measurementTime` (rather than
+        // `Date()`) is available.
+        $isPlaying
+            .removeDuplicates()
+            .sink { [weak self] playing in
+                self?.pendingPlaybackAccumulator.tick(isPlaying: playing)
+            }
+            .store(in: &pendingPlaybackCancellables)
         if preview || Self.isRunningUnitTests {
             setupPreviewData()
             return
