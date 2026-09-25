@@ -39,25 +39,43 @@ public enum PlaylistRowContinuousAnimationPolicy {
 // ============================================================
 
 /// What the History section actually shows, given the full recorded
-/// `playbackHistory` and the current track's persistentID. The store still
-/// RECORDS every confirmed track change unfiltered (`PlaybackHistoryStore`,
+/// `playbackHistory` and the currently-playing identity. The store still
+/// RECORDS every qualified track play unfiltered (`PlaybackHistoryStore`,
 /// `MusicController.clearPlaybackHistory()`/persistence untouched) — this is
 /// a pure display-layer filter: the currently playing track already has its
 /// own row on the Now Playing card, and History is "what played before."
 ///
-/// Guarded to a non-empty `currentPersistentID`: a radio/URL track's
-/// persistentID is `""`, and several PAST radio/URL history entries can
-/// legitimately also carry `""` — blindly matching `"" == ""` would hide
-/// those unrelated rows too, not just the current one. With no real current
-/// identity, the display list is unfiltered.
+/// 2026-09-25 diagnosis fix (H1): the old rule filtered EVERY entry whose
+/// persistentID matched the current track, not just the row that duplicates
+/// the Now Playing card — an A→B→A repeat listen made the earlier, already-
+/// finished play of A vanish from History too. Since PendingPlaybackAccumulator
+/// (PendingPlaybackAccumulator.swift) now only inserts a row once a play
+/// QUALIFIES, "the row for THIS play" is structurally always `history.first`
+/// (the newest entry) when it IS the currently-playing identity — so only
+/// `history.first` is ever considered, never a broad PID-wide filter.
+///
+/// PID is authoritative when both sides have one (mirrors
+/// `MusicController.notificationIndicatesTrackChange`'s own rule); otherwise
+/// falls back to title+artist — a radio/URL track's persistentID is `""`,
+/// and several PAST radio/URL history entries can legitimately also carry
+/// `""`, so blind `"" == ""` PID matching would hide unrelated rows too.
 public enum PlaybackHistoryDisplayPolicy {
     public static func displayed(
         history: [PlaybackHistoryEntry],
+        currentTitle: String,
+        currentArtist: String,
         currentPersistentID: String?
     ) -> [PlaybackHistoryEntry] {
-        guard let currentID = currentPersistentID, !currentID.isEmpty else {
-            return history
+        guard let first = history.first else { return history }
+
+        let isCurrentPlay: Bool
+        if let currentID = currentPersistentID, !currentID.isEmpty, !first.persistentID.isEmpty {
+            isCurrentPlay = first.persistentID == currentID
+        } else {
+            isCurrentPlay = first.title == currentTitle && first.artist == currentArtist
         }
-        return history.filter { $0.persistentID != currentID }
+
+        guard isCurrentPlay else { return history }
+        return Array(history.dropFirst())
     }
 }

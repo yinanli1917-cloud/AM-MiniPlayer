@@ -260,6 +260,14 @@ public class MusicController: ObservableObject {
 
     public var lyricsService: LyricsService { LyricsService.shared }
     private let playbackHistoryStore = PlaybackHistoryStore()
+    /// 2026-09-25 diagnosis fix: single named constant, easy to find/change.
+    /// 0 = old behavior (every confirmed track change records immediately).
+    /// Default 10s pending founder ruling — see research/diagnosis-2026-09-25-history.md §6.
+    public static let minimumListenSecondsForHistory: TimeInterval = 10
+    private lazy var pendingPlaybackAccumulator = PendingPlaybackAccumulator(
+        store: playbackHistoryStore,
+        minimumListenSeconds: Self.minimumListenSecondsForHistory
+    )
 
     var artworkCache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
@@ -502,6 +510,16 @@ public class MusicController: ObservableObject {
     public init(preview: Bool = false) {
         debugPrint("🎬 [MusicController] init() called with preview=\(preview)\n")
         self.isPreview = preview
+        // Keep @Published playbackHistory in sync with the store WITHOUT
+        // reassigning on every unrelated accumulator tick — see
+        // PlaybackHistoryStore.onChange's own doc comment. Wired
+        // unconditionally (even in preview/test mode, which returns early
+        // below) since it's cheap and this is the one place `self` is
+        // available to close over.
+        playbackHistoryStore.onChange = { [weak self] in
+            guard let self else { return }
+            self.playbackHistory = self.playbackHistoryStore.entries
+        }
         if preview || Self.isRunningUnitTests {
             setupPreviewData()
             return
@@ -880,29 +898,43 @@ public class MusicController: ObservableObject {
     // MARK: - Playback History (WT-D plan H — real playback history, not Apple Music's)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    /// Records a CONFIRMED track change (called only from the two identity-
-    /// discipline-gated points: `handleTrackChange`'s SB-resolved persistentID
-    /// completion, and `applySnapshot`'s `trackChanged` branch) into the
-    /// playback history store, then republishes `playbackHistory`.
-    private func recordPlaybackHistory(
-        title: String, artist: String, album: String,
-        persistentID: String, duration: TimeInterval, isURLTrack: Bool,
-        now: Date = Date()
-    ) {
-        let candidate = PlaybackHistoryEntry.make(
-            title: title, artist: artist, album: album,
-            persistentID: persistentID, duration: duration,
-            isURLTrack: isURLTrack, startedAt: now
-        )
-        playbackHistoryStore.record(candidate, now: now)
+    /// Settings → "Clear Playback History". Also drops any in-flight pending
+    /// play (2026-09-25 fix): otherwise a play already tracked before the
+    /// clear could still cross the listen threshold afterward and silently
+    /// resurrect a row the user just asked to wipe.
+    public func clearPlaybackHistory() {
+        playbackHistoryStore.clear()
+        pendingPlaybackAccumulator.reset()
+        // Explicit resync rather than relying solely on `onChange` firing:
+        // `clear()` is a no-op (and never fires `onChange`) when the store's
+        // OWN `entries` was already empty — which is exactly the preview/test
+        // seeding case (`setupPreviewData()` writes `playbackHistory`
+        // directly, bypassing the store entirely). A rare, user-initiated
+        // action (Settings button), not a hot path — safe to always resync.
         playbackHistory = playbackHistoryStore.entries
     }
 
-    /// Settings → "Clear Playback History".
-    public func clearPlaybackHistory() {
-        playbackHistoryStore.clear()
-        playbackHistory = playbackHistoryStore.entries
+    /// Called from AppDelegate's applicationWillTerminate. Folds the
+    /// in-progress segment of whatever play is pending through `now` one
+    /// last time (in case it crosses the listen threshold in its final
+    /// second) and forces the store's debounced write out synchronously —
+    /// `DispatchQueue.main.asyncAfter` work scheduled by the normal 1s
+    /// debounce does not survive the process dying inside that window.
+    public func flushPlaybackHistoryForTermination() {
+        pendingPlaybackAccumulator.flushForAppTermination()
+        playbackHistoryStore.flush()
     }
+
+    #if DEBUG
+    /// Test seam (2026-09-25 capacity measurement): directly sets the
+    /// @Published surface PlaylistView renders, bypassing the store/pending-
+    /// play mechanism entirely — for measuring PlaylistView's own render/
+    /// layout cost at a given row count, not for exercising the recording
+    /// pipeline (use PendingPlaybackAccumulatorTests / PlaybackHistoryStoreTests for that).
+    public func debugSeedPlaybackHistoryForTesting(_ entries: [PlaybackHistoryEntry]) {
+        playbackHistory = entries
+    }
+    #endif
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - Timer Lifecycle
@@ -1462,6 +1494,24 @@ public class MusicController: ObservableObject {
         lyricsIdentityReissueCountForCurrentTrack = 0
         let generation = incrementGeneration()
 
+        // 🔑 Confirmed-track-change point (notification path): open a
+        // pending play BEFORE the SB persistentID read below even starts.
+        // 2026-09-25 diagnosis fix (H3): the old code only recorded once
+        // that SB read resolved — if Music.app raced ahead and the read
+        // discovered a mismatch (below), the notification path bailed and
+        // this play's History row was never written at all, even though a
+        // real confirmed track change had already happened. Beginning the
+        // pending play here means it's already being tracked (and, under a
+        // 0-second threshold, may already be committed) by the time any
+        // mismatch could cause a bail.
+        let capturedDuration = self.duration
+        let capturedAlbum = album
+        let pendingPlayStartedAt = Date()
+        pendingPlaybackAccumulator.beginPendingPlay(
+            title: name, artist: artist, album: capturedAlbum, duration: capturedDuration,
+            persistentID: "", isURLTrack: false, isPlaying: self.isPlaying, now: pendingPlayStartedAt
+        )
+
         // ━━━ IMMEDIATE: artwork + lyrics — zero queue dependency ━━━
         // fetchArtwork uses artworkQueue (separate SB instance) + API in parallel.
         // Empty persistentID = title-based dedup; cache backfill happens when SB returns ID.
@@ -1469,8 +1519,6 @@ public class MusicController: ObservableObject {
         // 🔑 Capture duration NOW — Task { @MainActor } defers execution.
         // During rapid switching, later notifications' GCD blocks run before earlier Tasks,
         // so self.duration may already reflect a different song by execution time.
-        let capturedDuration = self.duration
-        let capturedAlbum = album
         Task { @MainActor in
             self.lyricsService.fetchLyrics(for: name, artist: artist, duration: capturedDuration, album: capturedAlbum)
         }
@@ -1535,14 +1583,17 @@ public class MusicController: ObservableObject {
                 }
                 DiagnosticsService.shared.enrichTrackContext(self.diagnosticsTrackContext())
 
-                // 🔑 Confirmed-track-change point (notification path, PID now resolved):
-                // record real playback history. Dedupe (same-PID-as-last / rapid radio
-                // jitter) lives in PlaybackHistoryStore.shouldRecord.
-                self.recordPlaybackHistory(
-                    title: name, artist: artist, album: capturedAlbum,
+                // 🔑 PID resolved (notification path): feed it into the pending
+                // play opened above — patches the in-memory play if still
+                // pending, or patches the store in place if it already
+                // qualified and committed with an empty PID (H4). A no-op
+                // when `persistentID` is still "" (this SB read itself timed
+                // out) — the pending play just continues untagged.
+                self.pendingPlaybackAccumulator.updatePersistentID(
+                    startedAt: pendingPlayStartedAt,
                     persistentID: persistentID,
-                    duration: sbDuration > 0 ? sbDuration : capturedDuration,
-                    isURLTrack: self.currentTrackIsURLTrack
+                    isURLTrack: self.currentTrackIsURLTrack,
+                    refreshedDuration: sbDuration > 0 ? sbDuration : nil
                 )
 
                 // Backfill cache: if artwork already arrived, cache it under persistentID
@@ -2371,6 +2422,16 @@ public class MusicController: ObservableObject {
 
     /// Applies the snapshot to @Published properties on the main thread.
     private func applySnapshot(_ s: PlayerStateSnapshot, quality: String?, trackChanged: Bool) {
+        // 🔑 2026-09-25 diagnosis fix: accumulate listened time on the
+        // EXISTING snapshot-poll cadence (no new timer) and commit the
+        // instant the threshold is crossed — not just on the next track
+        // change, so a play that qualifies mid-song survives the app
+        // quitting before any later change would have recorded it. Must run
+        // BEFORE the trackChanged branch below (which may open a NEW pending
+        // play) so this tick still finalizes the OUTGOING play's listened
+        // time through this exact measurement instant.
+        pendingPlaybackAccumulator.tick(isPlaying: s.isPlaying, now: s.measurementTime)
+
         // Value guards: assign only when values change to avoid unnecessary SwiftUI redraws.
         if Date().timeIntervalSince(lastUserActionTime) > userActionLockDuration {
             if isPlaying != s.isPlaying { isPlaying = s.isPlaying }
@@ -2448,11 +2509,13 @@ public class MusicController: ObservableObject {
 
             // 🔑 Confirmed-track-change point (snapshot/radio path, gated by
             // snapshotIndicatesTrackChange / shouldConfirmSnapshotTrackChange
-            // upstream): record real playback history.
-            recordPlaybackHistory(
-                title: s.trackName, artist: s.trackArtist, album: s.trackAlbum,
-                persistentID: s.persistentID, duration: s.trackDuration,
-                isURLTrack: currentTrackIsURLTrack
+            // upstream): open a pending play — it only becomes a History row
+            // once PendingPlaybackAccumulator confirms enough of it was
+            // actually listened to (see `tick` above and the class header).
+            pendingPlaybackAccumulator.beginPendingPlay(
+                title: s.trackName, artist: s.trackArtist, album: s.trackAlbum, duration: s.trackDuration,
+                persistentID: s.persistentID, isURLTrack: currentTrackIsURLTrack,
+                isPlaying: s.isPlaying, now: s.measurementTime
             )
 
             let artworkPersistentID = currentTrackIsURLTrack ? "" : s.persistentID
@@ -2466,8 +2529,14 @@ public class MusicController: ObservableObject {
         } else if (currentPersistentID ?? "").isEmpty, !s.persistentID.isEmpty {
             // PID refill recovery: the SB-queue refill timed out and the
             // snapshot carries the real ID — adopt it so PID authority resumes
-            // without re-running the artwork/lyrics pipeline.
+            // without re-running the artwork/lyrics pipeline. Not a track
+            // change (this `else if` only reached when `trackChanged` is
+            // false), so whatever play is currently pending must be this
+            // same song — feed the PID through the same patch path (H4).
             currentPersistentID = s.persistentID
+            pendingPlaybackAccumulator.updateCurrentPersistentIDIfPending(
+                persistentID: s.persistentID, isURLTrack: currentTrackIsURLTrack, now: s.measurementTime
+            )
         }
 
         evaluateLyricsHealthOnHeartbeat()

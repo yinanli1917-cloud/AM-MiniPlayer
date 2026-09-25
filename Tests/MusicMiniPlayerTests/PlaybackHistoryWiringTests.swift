@@ -1,19 +1,21 @@
 /**
  * [INPUT]: MusicMiniPlayerCore.MusicController / PlaybackHistoryEntry
  * [OUTPUT]: Unit tests — preview seeding + clearPlaybackHistory() + the pure
- *           confirmed-track → PlaybackHistoryEntry mapping used at both
- *           confirmed-change call sites in MusicController.swift
- * [POS]: Test module (WT-D plan H2)
+ *           confirmed-track → PlaybackHistoryEntry mapping the two
+ *           confirmed-change call sites in MusicController.swift feed into
+ *           PendingPlaybackAccumulator.beginPendingPlay(...)
+ * [POS]: Test module (WT-D plan H2; 2026-09-25 diagnosis phase-2 fix)
  *
- * NOTE: The two confirmed-track-change call sites (handleTrackChange's SB
- * completion block, and applySnapshot's trackChanged branch) live behind
+ * NOTE: The two confirmed-track-change call sites (handleTrackChange, before
+ * its SB persistentID read; applySnapshot's trackChanged branch) live behind
  * ScriptingBridge / AppleScript reads with no injectable seam — driving them
- * directly would require a live Music.app. Per plan H2, this file instead
- * pins (a) the pure mapping those call sites feed into
- * (`PlaybackHistoryEntry.make`, already unit-tested standalone in
- * PlaybackHistoryStoreTests) against the exact argument shapes each call site
- * passes, and (b) the MusicController-level surface built on top of the
- * store: preview seeding and clearPlaybackHistory().
+ * directly would require a live Music.app. This file instead pins (a) the
+ * pure mapping those call sites feed into (`PlaybackHistoryEntry.make`,
+ * already unit-tested standalone in PlaybackHistoryStoreTests), and (b) the
+ * MusicController-level surface built on top of the store: preview seeding
+ * and clearPlaybackHistory() (which now also resets any in-flight pending
+ * play — see PendingPlaybackAccumulatorTests for the mechanism itself, which
+ * DOES have a full injectable seam and is exercised directly there).
  */
 
 import XCTest

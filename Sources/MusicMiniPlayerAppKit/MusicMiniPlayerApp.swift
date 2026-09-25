@@ -150,6 +150,11 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         // Metadata cache persists on a debounce — force the pending write
         // out before the process dies.
         MetadataResolver.shared.diskCache.flush()
+        // Playback History persists on a debounce too, and a play that
+        // crossed the listen threshold in its last second could still be
+        // sitting un-committed in PendingPlaybackAccumulator — flush both
+        // (2026-09-25 diagnosis fix).
+        MusicController.shared.flushPlaybackHistoryForTermination()
         UpdateApplier.applyIfStaged()
     }
 

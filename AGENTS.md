@@ -40,6 +40,8 @@ Sources/
 │   │   ├── UpdateService.swift            - Silent GitHub Releases check + download + SHA256 verify + stage
 │   │   ├── UpdateApplier.swift            - Spawn detached shell script on quit to swap bundle + relaunch
 │   │   ├── MetadataWarmupSweep.swift      - 启动元数据预热：每 schema 版本一次，后台串行解析队列/最近曲目缺失行（utility QoS + 让位前台抓取 + 可整体取消，仅元数据不抓歌词）
+│   │   ├── PlaybackHistoryStore.swift     - 真实播放记录环形缓冲（capacity 100，NanoPodCacheLocation 版本化文件 + 旧文件一次性迁移种子）+ 防抖落盘 + patchPersistentID 原地补丁 + flush()（2026-09-25 History 完整性修复）
+│   │   ├── PendingPlaybackAccumulator.swift - 「待定播放→达标入账」：实际播放时长（暂停不计）≥ minimumListenSecondsForHistory（默认 10s，0=旧行为）或播到自然结束才入 History；PID 晚到原地打补丁不重插行；同曲重复探测不重启计时；app 退出前 flush（同时解 H1 展示层过滤/H3 通知-快照竞态漏记/H4 SB 超时误判双记）
 │   │   └── Lyrics/
 │   │       ├── LyricsFetcher.swift              - GAMMA pipeline orchestration + fetchAllSources + AuthoritativeBackfillBudget (回填 9s 硬上限) + DrainExitFacts（排水循环退出闭包拆分：纯项每结果只算一次，事件项留在闭包内）
 │   │       ├── LyricsOriginalDeliverySLA.swift  - 原文 3s A 规则：路径天花板 + 翻译后补不闸原文（2.9/3.1 边界）
@@ -149,6 +151,8 @@ Tests/MusicMiniPlayerTests/         - 999 个单元测试（2026-08-27 `swift te
     └── PanelWindowLayoutParityTests.swift - 面板窗口去 32pt 透明条：真实 MiniPlayerView 新旧窗口四页逐字节一致（含对照组）+ 顶角吸附 16pt
     └── LiquidEdgeTests / LiquidEdgeControllerTests / LiquidEdgeCapsuleInputTests - 液态贴边：pose 数学、真窗口假时钟全流程、液体落在面板上、胶囊按钮点击
     └── NativeLyricsHandoffClockTests.swift - 切行确定性时钟门：注入播放钟+墙钟锁步驱动真 surface（debugNowOverride/debugTick/debugPlaybackClockDateProvider），钉死上一行位移/opacity/亮层同帧退场（边界后 +150ms 错峰）；复现旧红测试=0.8s appear 窗内切行被冻结、余晖先暗的 harness 伪影
+    └── PendingPlaybackAccumulatorTests.swift - 「待定播放→达标入账」假时钟穷举：0s/10s 两档门槛、9.9s 不记/10.0s 记边界、暂停不计时、极短曲自然结束、同曲重复探测不重启、H3 快速双切歌不丢已达标行、H4 PID 晚到原地打补丁不重插行、app 退出 flush、100k 次 soak、真实 09-25 凌晨连切段回放
+    └── PlaybackHistoryCapacityMeasurementTests.swift - 真 NSWindow 托管 PlaylistView 实测 History 50/100/200/300 行 body 求值+布局耗时（结果钉进 PlaybackHistoryStore.capacity 注释）；全部行封面预置内存缓存，零网络/SB 调用
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix
 scripts/patch_keyboard_shortcuts_resources.py - build_app.sh 构建前改 KeyboardShortcuts 唯一的 Bundle.module 查找：先查 Contents/Resources（上游变了就 fail closed；`restore` 模式还原 checkout）

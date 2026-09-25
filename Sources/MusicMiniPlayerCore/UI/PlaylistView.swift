@@ -381,18 +381,21 @@ public struct PlaylistView: View {
             .padding(.vertical, 20)
     }
 
-    /// History section's display list: `playbackHistory` with the CURRENTLY
-    /// PLAYING track filtered out (2026-09-15 CPU-regression fix, part 2 —
-    /// see the call site and `isActiveForContinuousAnimation` above for why).
-    /// `PlaybackHistoryStore` still records every confirmed track change
-    /// unfiltered — `MusicController.clearPlaybackHistory()`/persistence are
-    /// untouched; this is a pure display-layer filter. Guarded to non-empty
-    /// `currentPersistentID` only: a radio/URL track's persistentID is "" like
-    /// several PAST radio entries can also be, so blindly matching "" == ""
-    /// would hide unrelated history rows, not just the current one.
+    /// History section's display list: `playbackHistory` with the row for
+    /// THIS play (the currently playing identity) hidden (2026-09-15
+    /// CPU-regression fix, part 2 — see the call site and
+    /// `isActiveForContinuousAnimation` above for why). `PlaybackHistoryStore`
+    /// still records every qualified track play unfiltered —
+    /// `MusicController.clearPlaybackHistory()`/persistence are untouched;
+    /// this is a pure display-layer filter that only ever considers the
+    /// newest row (`history.first`) — see `PlaybackHistoryDisplayPolicy`'s
+    /// 2026-09-25 H1 fix note for why an earlier repeat play of the same
+    /// song must stay visible.
     private var displayedPlaybackHistory: [PlaybackHistoryEntry] {
         PlaybackHistoryDisplayPolicy.displayed(
             history: musicController.playbackHistory,
+            currentTitle: musicController.currentTrackTitle,
+            currentArtist: musicController.currentArtist,
             currentPersistentID: musicController.currentPersistentID
         )
     }
