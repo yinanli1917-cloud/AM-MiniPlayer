@@ -109,12 +109,17 @@ final class PanelWindowLayoutParityTests: XCTestCase {
         }
     }
 
+    /// Distinct RGB values over every pixel: a blank capture has one, a
+    /// drawn page about 250. A sparse grid measured the backdrop instead —
+    /// the preview artwork is a template SF Symbol that draws dark in the
+    /// light appearance, the backdrop goes flat, and a 7px grid found only
+    /// 46 values on the fully drawn lyrics page (132 in the dark appearance).
     private func distinctPixels(_ rep: NSBitmapImageRep) -> Int {
         guard let d = rep.bitmapData else { return 0 }
         var set = Set<UInt32>()
         let bpp = rep.bitsPerPixel / 8
-        for y in stride(from: 0, to: rep.pixelsHigh, by: 7) {
-            for x in stride(from: 0, to: rep.pixelsWide, by: 7) {
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide {
                 let o = y * rep.bytesPerRow + x * bpp
                 set.insert(UInt32(d[o]) << 16 | UInt32(d[o + 1]) << 8 | UInt32(d[o + 2]))
             }
