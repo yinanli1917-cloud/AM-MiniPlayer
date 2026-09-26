@@ -1624,12 +1624,10 @@ public class MusicController: ObservableObject {
                     refreshedDuration: sbDuration > 0 ? sbDuration : nil
                 )
 
-                // Backfill cache: if artwork already arrived, cache it under persistentID
-                if !persistentID.isEmpty, let artwork = self.currentArtwork,
-                   self.artworkCache.object(forKey: persistentID as NSString) == nil {
-                    self.artworkCache.setObject(artwork, forKey: persistentID as NSString,
-                                                cost: Self.imageCacheCost(artwork))
-                }
+                // Backfill cache: only if the on-screen artwork is PROVEN to
+                // belong to this generation (2026-09-26 fix — see
+                // backfillArtworkCacheIfCurrent's doc comment).
+                self.backfillArtworkCacheIfCurrent(persistentID: persistentID, generation: generation)
 
                 if sbDuration > 0 {
                     // 🔑 Save old duration BEFORE overwriting — comparing after
