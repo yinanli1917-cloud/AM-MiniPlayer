@@ -1,0 +1,911 @@
+<title>nanoPod 引导分镜</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    color-scheme: light;
+    --bg:#F3F2F4; --surface:#FFFFFF; --surface-2:#F8F7F9; --ink:#17161B; --muted:#6B6875; --line:#E4E1E8; --line-2:#EEECF1;
+    /* Apple Music 粉红：浅色 #FA4058 / 深色 #FB546C，取自本机 Music.app 图标渐变取样（docs/design/2026-09-25-menu-settings/proposal.md 开头） */
+    --accent:#FA4058; --accent-ink:#D42640; --accent-soft:rgba(250,64,88,.12);
+    --ok:#22A06B; --warn:#C77D0A;
+    --mock-card-bg:rgba(255,255,255,.66); --mock-card-ink:#1A1A1F; --mock-card-muted:#5F5E6A; --mock-card-line:rgba(255,255,255,.75); --mock-card-line2:rgba(0,0,0,.08);
+    --mock-card-shadow:0 12px 34px rgba(20,16,32,.22), 0 1px 2px rgba(20,16,32,.10);
+    --mock-btn:#1A1A1F; --mock-btn-ink:#fff; --mock-track:rgba(0,0,0,.10);
+    --wall-a:#8C6FB4; --wall-b:#5E4A8A; --wall-c:#B48CC9;
+    --sans:-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", Arial, sans-serif;
+    --display:"Manrope", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+    --mono:"JetBrains Mono", "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      color-scheme: dark;
+      --bg:#0E0D11; --surface:#17161C; --surface-2:#1D1C23; --ink:#EEEDF2; --muted:#8E8B9A; --line:#28262F; --line-2:#211F27;
+      --accent:#FB546C; --accent-ink:#FF8497; --accent-soft:rgba(251,84,108,.16);
+      --ok:#3DCB8A; --warn:#E5A33A;
+    }
+  }
+  :root[data-theme="dark"]{
+    color-scheme: dark;
+    --bg:#0E0D11; --surface:#17161C; --surface-2:#1D1C23; --ink:#EEEDF2; --muted:#8E8B9A; --line:#28262F; --line-2:#211F27;
+    --accent:#FB546C; --accent-ink:#FF8497; --accent-soft:rgba(251,84,108,.16);
+    --ok:#3DCB8A; --warn:#E5A33A;
+  }
+  /* 模拟 macOS 外观（与页面主题独立） */
+  .stage[data-mock="dark"]{
+    --mock-card-bg:rgba(34,32,40,.58); --mock-card-ink:#F3F2F6; --mock-card-muted:#A9A6B4; --mock-card-line:rgba(255,255,255,.16); --mock-card-line2:rgba(0,0,0,.35);
+    --mock-card-shadow:0 16px 40px rgba(0,0,0,.45), 0 1px 2px rgba(0,0,0,.4);
+    --mock-btn:#F3F2F6; --mock-btn-ink:#1A1A1F; --mock-track:rgba(255,255,255,.14);
+    --wall-a:#3A2F63; --wall-b:#1E1A38; --wall-c:#6B4E8F;
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding-block:28px 64px;padding-inline:20px}
+  h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0}
+  h1{font-size:30px;font-weight:800;letter-spacing:-.02em;line-height:1.15}
+  h2{font-size:19px;font-weight:700;letter-spacing:-.01em}
+  h3{font-size:14px;font-weight:700}
+  p{margin:0}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .mono{font-family:var(--mono);font-size:12px}
+  a{color:var(--accent-ink)}
+  header{display:grid;gap:10px;margin-bottom:22px}
+  header .lede{max-width:66ch;color:var(--muted)}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:12px;color:var(--muted)}
+  .legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+  .legend .l-halo::before{border:2px solid var(--accent);background:transparent;width:8px;height:8px}
+  .legend .l-card::before{background:var(--ink)}
+  .legend .l-ring::before{background:var(--accent)}
+  .legend .l-glow::before{background:linear-gradient(90deg,transparent,#e9c46a)}
+
+  section{margin-top:34px}
+  .sec-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:12px}
+  .sec-head p{color:var(--muted);max-width:70ch}
+
+  .toolbar{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--surface);margin-bottom:12px}
+  .toolbar .grp{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .toolbar .grp-label{font-size:11px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;font-family:var(--mono);margin-right:2px}
+  .btn{appearance:none;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);border-radius:8px;padding:5px 10px;font:inherit;font-size:13px;cursor:pointer}
+  .btn:hover{border-color:var(--muted)}
+  .btn:disabled{opacity:.45;cursor:default}
+  .btn:focus-visible,.seg button:focus-visible,.chk input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .btn.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+  .btn.primary:hover{opacity:.9}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .seg button{appearance:none;border:0;background:var(--surface-2);color:var(--muted);padding:5px 9px;font:inherit;font-size:12px;cursor:pointer;border-right:1px solid var(--line)}
+  .seg button:last-child{border-right:0}
+  .seg button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+  .chk{display:inline-flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;user-select:none}
+  .chk input{accent-color:var(--accent);margin:0}
+
+  .demo{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;align-items:start}
+  @media (max-width:980px){.demo{grid-template-columns:1fr}}
+  .stage-box{border:1px solid var(--line);border-radius:14px;background:var(--surface);overflow:hidden}
+  .stage-fit{position:relative;width:100%;overflow:hidden}
+  .stage{position:absolute;left:0;top:0;width:720px;height:440px;transform-origin:0 0;font-family:var(--sans);
+    background:
+      radial-gradient(120% 80% at 80% 100%, var(--wall-c) 0%, transparent 55%),
+      linear-gradient(160deg, var(--wall-a), var(--wall-b));
+    isolation:isolate}
+  .stage.static{pointer-events:none}
+  .stage *{box-sizing:border-box}
+  .menubar{position:absolute;left:0;top:0;right:0;height:24px;background:rgba(20,16,40,.55);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:flex-end;padding:0 10px;gap:14px;color:#fff;font-size:12px}
+  .menubar .apple{margin-right:auto;margin-left:6px;font-weight:700;opacity:.9}
+  .menubar .glyph{width:14px;height:14px;opacity:.85}
+  .menubar .note{position:absolute;left:632px;top:4px;width:16px;height:16px;display:grid;place-items:center;border-radius:4px}
+  .menubar .note svg{width:12px;height:12px;fill:#fff}
+  .menubar .clock{opacity:.9;font-variant-numeric:tabular-nums}
+  .stage-caption{position:absolute;left:10px;top:30px;font-family:var(--mono);font-size:10px;color:rgba(255,255,255,.55);letter-spacing:.06em}
+
+  /* 面板 250×284（全屏封面开） */
+  .panel{position:absolute;width:250px;height:284px;border-radius:16px;overflow:hidden;
+    box-shadow:0 18px 40px rgba(0,0,0,.35), 0 1px 0 rgba(255,255,255,.08) inset;background:#1a1626;
+    transition:transform .52s cubic-bezier(.3,.9,.3,1), opacity .4s ease .1s, left .62s cubic-bezier(.2,1.12,.32,1), top .62s cubic-bezier(.2,1.12,.32,1);transform-origin:100% 50%}
+  .stage.rm .panel{transition:opacity .16s linear, left .2s linear, top .2s linear}
+  .panel .art{position:absolute;inset:0;background:
+      radial-gradient(60% 55% at 70% 30%, rgba(255,255,255,.22), transparent 60%),
+      radial-gradient(45% 45% at 30% 75%, rgba(255,120,150,.35), transparent 65%),
+      linear-gradient(160deg,#1c2a3f 0%,#4a2f57 55%,#c8556a 100%)}
+  .panel .art::after{content:"";position:absolute;left:50%;top:50%;width:140px;height:140px;border-radius:50%;transform:translate(-50%,-50%);border:1px solid rgba(255,255,255,.18);box-shadow:0 0 0 22px rgba(255,255,255,.06), 0 0 0 46px rgba(255,255,255,.04)}
+  .panel .meta{position:absolute;left:12px;right:12px;bottom:12px;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.5);transition:all .4s cubic-bezier(.3,.9,.3,1)}
+  .panel .meta .t{font-size:16px;font-weight:700;letter-spacing:-.01em}
+  .panel .meta .a{font-size:13px;font-weight:500;opacity:.9}
+  .panel .controls{position:absolute;left:0;right:0;bottom:0;padding:0 12px 16px;color:#fff;opacity:0;transform:translateY(30px);filter:blur(10px);transition:all .4s cubic-bezier(.3,.9,.3,1)}
+  .panel .tops{position:absolute;left:0;right:0;top:0;padding:12px;display:flex;justify-content:space-between;align-items:flex-start;color:#fff;opacity:0;transition:opacity .3s ease}
+  .panel .tops .tl{display:flex;align-items:center;gap:4px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.14);font-size:11px;font-weight:500}
+  .panel .tops .tl svg{width:10px;height:10px;fill:#fff}
+  .panel .tops .tr{width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.14);display:grid;place-items:center}
+  .panel .tops .tr svg{width:14px;height:14px;fill:#fff}
+  .panel .route{position:absolute;right:12px;top:49px;width:150px;border-radius:10px;background:rgba(20,18,30,.92);color:#fff;font-size:10px;padding:6px;opacity:0;transform:translateY(-6px) scale(.96);transform-origin:100% 0;transition:opacity .22s ease,transform .3s cubic-bezier(.3,1.2,.4,1);box-shadow:0 8px 20px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.1) inset}
+  .panel .route div{display:flex;justify-content:space-between;padding:4px 6px;border-radius:6px}
+  .panel .route div.cur{background:rgba(255,255,255,.12)}
+  .panel .route.on{opacity:1;transform:none}
+  .panel .sr{display:flex;justify-content:flex-end;gap:4px;padding:0 20px 4px}
+  .panel .sr i{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.10)}
+  .panel .sr i svg{width:11px;height:11px;fill:#fff}
+  .panel .tr-row{display:flex;justify-content:flex-end;padding:0 0 10px}
+  .panel .tr-row i{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.12)}
+  .panel .tr-row i.on{background:rgba(255,255,255,.25)}
+  .panel .tr-row i svg{width:13px;height:13px;fill:#fff}
+  .panel .prog{height:14px;display:flex;align-items:center;gap:8px;font-size:9px;opacity:.85;font-variant-numeric:tabular-nums}
+  .panel .prog .bar{flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,.28);position:relative}
+  .panel .prog .bar::after{content:"";position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:2px;background:#fff}
+  .panel .row{display:flex;align-items:center;justify-content:space-between;margin-top:4px;height:30px}
+  .panel .row i{display:grid;place-items:center;border-radius:50%}
+  .panel .row .nav{width:26px;height:26px}
+  .panel .row .nav svg{width:15px;height:15px;fill:#fff}
+  .panel .row .cluster{display:flex;gap:10px}
+  .panel .row .cluster i{width:30px;height:30px}
+  .panel .row .cluster svg{width:14px;height:14px;fill:#fff}
+  .panel .row .cluster i.play svg{width:16px;height:16px}
+  .panel.st-hover .controls,.panel.st-lyrics-hover .controls{opacity:1;transform:none;filter:none}
+  .panel.st-hover .tops{opacity:1}
+  .panel.st-hover .meta{bottom:88px}
+  .panel.st-hover .meta .t{font-size:12px}
+  .panel.st-hover .meta .a{font-size:10px;opacity:.7}
+  .panel .lyr{position:absolute;inset:0;opacity:0;transition:opacity .3s ease;background:#1a1626}
+  .panel .lyr .bg{position:absolute;inset:-40px;background:linear-gradient(160deg,#1c2a3f 0%,#4a2f57 55%,#c8556a 100%);filter:blur(28px) brightness(.55) saturate(1.2)}
+  .panel .lyr .lines{position:absolute;left:26px;right:28px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:14px;color:#fff}
+  .panel .lyr .ln{font-size:15px;font-weight:700;letter-spacing:-.005em;opacity:.35;filter:blur(.6px);line-height:1.25}
+  .panel .lyr .ln.far{opacity:.22;filter:blur(1.1px)}
+  .panel .lyr .ln.active{opacity:1;filter:none;font-size:17px}
+  .panel .lyr .ln .tx{display:block;font-size:11px;font-weight:500;opacity:.8;margin-top:3px;max-height:0;overflow:hidden;transition:max-height .35s ease,opacity .3s ease .1s}
+  .panel.st-translated .lyr .ln .tx{max-height:16px}
+  .panel.st-lyrics .lyr,.panel.st-lyrics-hover .lyr,.panel.st-translated .lyr{opacity:1}
+  .panel.st-lyrics .meta,.panel.st-lyrics-hover .meta,.panel.st-translated .meta{opacity:0}
+  .panel.st-lyrics-hover .controls{opacity:1;transform:none;filter:none}
+  .panel .controls .tr-row{display:none}
+  .panel.st-lyrics-hover .controls .tr-row,.panel.st-translated .controls .tr-row{display:flex}
+  .panel.st-lyrics-hover .controls .sr,.panel.st-translated .controls .sr{display:none}
+  .panel.st-translated .controls{opacity:1;transform:none;filter:none}
+  .panel.st-tucked,.panel.st-floating{transform:translateX(24px) scale(.04,.22);opacity:0;pointer-events:none}
+  .sliver{position:absolute;left:714px;width:6px;height:56px;background:#0b0a10;border-radius:3px 0 0 3px;opacity:0;transition:opacity .3s ease .35s;box-shadow:-1px 0 0 rgba(255,255,255,.08)}
+  .sliver::after{content:"";position:absolute;left:0;top:6px;bottom:6px;width:2px;border-radius:1px;background:linear-gradient(180deg,rgba(255,170,190,.0),rgba(255,170,190,.95) 40%,rgba(255,170,190,.0));opacity:.9}
+  .stage.tucked .sliver,.stage.floating .sliver{opacity:1}
+  .stage.rm .sliver{transition:opacity .16s linear}
+  .capsule{position:absolute;left:586px;width:120px;height:204px;border-radius:26px;background:rgba(28,22,40,.92);
+    box-shadow:0 14px 30px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.10) inset;color:#fff;opacity:0;transform:translateX(60px) scale(.7);transform-origin:100% 50%;
+    transition:transform .42s cubic-bezier(.25,1.1,.4,1), opacity .25s ease;padding:12px;display:flex;flex-direction:column;align-items:center;gap:8px}
+  .stage.rm .capsule{transition:opacity .16s linear;transform:none}
+  .capsule .cov{width:96px;height:96px;border-radius:14px;background:linear-gradient(160deg,#1c2a3f 0%,#4a2f57 55%,#c8556a 100%)}
+  .capsule .ct{font-size:11px;font-weight:700;line-height:1.2;text-align:center;height:34px;display:flex;flex-direction:column;justify-content:center}
+  .capsule .ct small{font-weight:500;opacity:.7;font-size:10px}
+  .capsule .cc{height:40px;display:flex;gap:14px;align-items:center}
+  .capsule .cc svg{width:14px;height:14px;fill:#fff}
+  .stage.floating .capsule{opacity:1;transform:none}
+  .stage.expanding .capsule{opacity:0;transform:translateX(-40px) scale(1.9);transition:transform .38s cubic-bezier(.3,.9,.3,1), opacity .2s ease .12s}
+  .edgeglow{position:absolute;right:0;width:12px;height:284px;opacity:0;transition:opacity .4s ease;background:linear-gradient(90deg,transparent,rgba(255,200,120,.55));filter:blur(2px)}
+  .stage.showglow .edgeglow{opacity:1}
+  .cornerglow{position:absolute;right:0;bottom:0;width:120px;height:120px;opacity:0;transition:opacity .4s ease;background:radial-gradient(circle at 100% 100%, rgba(255,200,120,.45), transparent 70%);filter:blur(4px)}
+  .stage.showcorner .cornerglow{opacity:1}
+
+  /* 高亮环 */
+  .halo{position:absolute;width:40px;height:40px;border-radius:50%;border:1.5px solid var(--accent);opacity:0;pointer-events:none;
+    box-shadow:0 0 0 3px var(--accent-soft), 0 0 14px rgba(250,64,88,.35);transition:opacity .25s ease,left .42s cubic-bezier(.3,1.1,.4,1),top .42s cubic-bezier(.3,1.1,.4,1),width .3s ease,height .3s ease}
+  .halo.pill{border-radius:10px}
+  .halo.cap{border-radius:999px}
+  .halo.on{opacity:1;animation:settle .9s cubic-bezier(.3,1.4,.5,1) 1}
+  .stage.rm .halo.on{animation:none}
+  @keyframes settle{0%{transform:scale(1.25);opacity:0}60%{opacity:1}100%{transform:scale(1)}}
+
+  /* 引导卡：玻璃 */
+  .card{position:absolute;width:236px;padding:14px 14px 12px;border-radius:14px;color:var(--mock-card-ink);
+    background:var(--mock-card-bg);backdrop-filter:blur(18px) saturate(1.5);-webkit-backdrop-filter:blur(18px) saturate(1.5);
+    box-shadow:var(--mock-card-shadow), 0 0 0 .5px var(--mock-card-line2), inset 0 1px 0 var(--mock-card-line);font-family:var(--sans);
+    transition:left .5s cubic-bezier(.3,1.14,.5,1), top .5s cubic-bezier(.3,1.14,.5,1), opacity .18s ease, transform .3s cubic-bezier(.3,.9,.3,1)}
+  .stage.rm .card{transition:opacity .16s linear}
+  .card.enter{animation:cardIn .36s cubic-bezier(.3,1.08,.4,1) both}
+  .stage.rm .card.enter{animation:fadeIn .16s linear both}
+  @keyframes cardIn{from{opacity:0;transform:translateX(var(--from-x,8px)) translateY(var(--from-y,0)) scale(.96)}to{opacity:1;transform:none}}
+  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+  .card .beak{position:absolute;width:12px;height:12px;background:var(--mock-card-bg);backdrop-filter:blur(18px) saturate(1.5);-webkit-backdrop-filter:blur(18px) saturate(1.5);transform:rotate(45deg)}
+  .card .beak.right{right:-6px;top:var(--beak-y,50%);margin-top:-6px;box-shadow:.5px -.5px 0 var(--mock-card-line2)}
+  .card .beak.top{top:-6px;left:var(--beak-x,50%);margin-left:-6px;box-shadow:-.5px -.5px 0 var(--mock-card-line)}
+  .card .beak.left{left:-6px;top:var(--beak-y,50%);margin-top:-6px;box-shadow:-.5px .5px 0 var(--mock-card-line2)}
+  .card .head{display:flex;align-items:center;gap:10px}
+  .card .ring{flex:none;width:22px;height:22px;position:relative}
+  .card .ring svg{width:22px;height:22px;display:block;overflow:visible}
+  .card .ring .num{position:absolute;inset:0;display:grid;place-items:center;font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+  .card .ring .chk{position:absolute;inset:0;display:grid;place-items:center;opacity:0;transform:scale(.6)}
+  .card .ring .chk svg{width:11px;height:11px;stroke:var(--accent);stroke-width:2.4;fill:none;stroke-linecap:round;stroke-linejoin:round}
+  .card .ring.done .num{opacity:0;transform:translateY(-6px);transition:all .2s ease}
+  .card .ring.done .chk{opacity:1;transform:scale(1);transition:all .3s cubic-bezier(.3,1.4,.5,1) .08s}
+  .card .title{font-size:13px;font-weight:600;letter-spacing:-.005em;line-height:1.3}
+  .card .body{font-size:12px;color:var(--mock-card-muted);margin-top:8px;line-height:1.45}
+  .card .beats{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+  .card .beats li{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--mock-card-ink)}
+  .card .beats li .dot{flex:none;width:14px;height:14px;border-radius:50%;border:1.5px solid var(--mock-track);display:grid;place-items:center;transition:all .28s cubic-bezier(.3,1.5,.5,1)}
+  .card .beats li .dot svg{width:8px;height:8px;stroke:#fff;stroke-width:2.6;fill:none;stroke-linecap:round;stroke-linejoin:round;opacity:0}
+  .card .beats li.done .dot{background:var(--accent);border-color:var(--accent)}
+  .card .beats li.done .dot svg{opacity:1}
+  .card .beats li.done{color:var(--mock-card-muted)}
+  /* 触控板手势示意：按系统设置「触控板」页演示的逐帧规格缩放（research/trackpad-demo-frames.md）
+     轮廓 188×142 → 96×72，圆角 16 → 8，描边 3 → 1.5，无填充；圆点 22 → 11，间距 32 → 16，色 #6B9CFD；
+     位移 0.95s cubic-bezier(.42,0,.58,1)，无缩放，只有透明度呼吸；一轮 3.55s，播两轮后静止在起点 0.31 */
+  .card .tp{margin-top:10px;height:72px;display:grid;place-items:center}
+  .card .tp .pad{position:relative;width:96px;height:72px;border-radius:8px;box-shadow:inset 0 0 0 1.5px var(--mock-card-line2)}
+  .card .tp .f{position:absolute;width:11px;height:11px;border-radius:50%;background:#6B9CFD;opacity:.31}
+  .card .tp .f::after{content:"";position:absolute;inset:0;border-radius:50%;background:#6B9CFD;opacity:0;filter:blur(1.5px);transform-origin:50% 50%}
+  .card .tp .pad.swipe .f.a{left:24px;top:30px}
+  .card .tp .pad.swipe .f.b{left:40px;top:30px}
+  .card .tp .pad.fling .f.a{left:24px;top:22px}
+  .card .tp .pad.fling .f.b{left:40px;top:22px}
+  .card .tp .pad.swipe .f{animation:tpSwipe 3.55s linear 2 both}
+  .card .tp .pad.swipe .f::after{animation:tpTrailH 3.55s linear 2 both}
+  .card .tp .pad.fling .f{animation:tpFling 3.55s linear 2 both}
+  .card .tp .pad.fling .f::after{animation:tpTrailD 3.55s linear 2 both}
+  .stage.rm .card .tp .f{animation:none!important;opacity:.31;transform:none}
+  .stage.rm .card .tp .f::after{animation:none!important;opacity:0}
+  /* 时间轴（3.55s = 100%）：0–.45s 淡入 → 停 .35s → .95s 位移 → 停 .35s → .3s 到 .31 → 平台 .58s → .42s 到 0 → 隐 .15s */
+  @keyframes tpSwipe{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(36px,0)}59.2%{opacity:1;transform:translate(36px,0)}67.6%{opacity:.31;transform:translate(36px,0)}83.9%{opacity:.31;transform:translate(36px,0)}95.8%,100%{opacity:0;transform:translate(36px,0)}}
+  @keyframes tpFling{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(26px,18px)}59.2%{opacity:1;transform:translate(26px,18px)}67.6%{opacity:.31;transform:translate(26px,18px)}83.9%{opacity:.31;transform:translate(26px,18px)}95.8%,100%{opacity:0;transform:translate(26px,18px)}}
+  /* 拖尾：只沿运动方向拉长，速度最高时最长（22 → 34–48px 按比例 1 → 1.8） */
+  @keyframes tpTrailH{0%,22.5%{opacity:0;transform:scaleX(1)}36%{opacity:.45;transform:translateX(-4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:scaleX(1)}}
+  @keyframes tpTrailD{0%,22.5%{opacity:0;transform:rotate(35deg) scaleX(1)}36%{opacity:.45;transform:rotate(35deg) translateX(-4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:rotate(35deg) scaleX(1)}}
+  .card .foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px}
+  .card .link{font-size:11px;color:var(--mock-card-muted);text-decoration:none;cursor:default}
+  .card .link:hover{text-decoration:underline}
+  .card .mbtn{font-size:11px;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--mock-btn);color:var(--mock-btn-ink);border:0;font-family:inherit}
+  .card .mbtn.sec{background:var(--mock-track);color:var(--mock-card-ink)}
+  .card .note{font-size:10.5px;color:var(--mock-card-muted);margin-top:8px;line-height:1.4}
+  .card .chip{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;color:var(--mock-card-muted);margin-top:8px;padding:2px 8px;border-radius:999px;background:var(--mock-track)}
+  .card .chip b{color:var(--ok);font-weight:700}
+  .card .confirm{font-size:12px;color:var(--mock-card-ink);margin-top:8px;font-weight:600}
+
+  .hud{position:absolute;padding:3px 8px;border-radius:999px;background:rgba(0,0,0,.72);color:#fff;font-family:var(--mono);font-size:10px;letter-spacing:.02em;opacity:0;transform:translateY(4px);transition:opacity .2s ease,transform .2s ease;pointer-events:none;white-space:nowrap}
+  .hud.on{opacity:1;transform:none}
+  canvas.fx{position:absolute;left:0;top:0;width:720px;height:440px;pointer-events:none}
+
+  .notes{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:16px;display:grid;gap:12px;align-content:start}
+  .notes .scene-id{display:flex;align-items:center;gap:10px}
+  .notes .scene-id .pill{font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent-ink)}
+  .notes dl{margin:0;display:grid;grid-template-columns:78px 1fr;gap:6px 10px;font-size:13px}
+  .notes dt{color:var(--muted);font-size:12px;padding-top:1px}
+  .notes dd{margin:0}
+  .notes .copy{border-top:1px solid var(--line-2);padding-top:10px;display:grid;gap:6px;font-size:12.5px}
+  .notes .copy .k{color:var(--muted);font-family:var(--mono);font-size:11px;margin-right:6px}
+  .statusline{display:flex;gap:14px;flex-wrap:wrap;padding:8px 12px;font-family:var(--mono);font-size:11px;color:var(--muted);border-top:1px solid var(--line)}
+  .statusline b{color:var(--ink);font-weight:500}
+
+  .frames{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+  .frame{border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:hidden}
+  .frame .thumb{position:relative;width:100%;aspect-ratio:720/440;overflow:hidden;max-width:100%}
+  .frame .thumb .stage{transform-origin:0 0}
+  .frame .cap{padding:10px 12px;display:grid;gap:3px}
+  .frame .cap .n{font-family:var(--mono);font-size:11px;color:var(--accent-ink)}
+  .frame .cap .t{font-weight:600;font-size:13px}
+  .frame .cap .d{font-size:12px;color:var(--muted)}
+
+  .rings{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:12px}
+  .ringcell{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:14px 10px;display:grid;justify-items:center;gap:8px;text-align:center}
+  .ringcell .big{width:64px;height:64px;position:relative}
+  .ringcell .big svg{width:64px;height:64px;overflow:visible;display:block}
+  .ringcell .big .num{position:absolute;inset:0;display:grid;place-items:center;font-family:var(--display);font-weight:700;font-size:18px;font-variant-numeric:tabular-nums}
+  .ringcell .lab{font-size:12px;color:var(--muted)}
+  .ringcell .lab b{display:block;color:var(--ink);font-weight:600}
+
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+  table{border-collapse:collapse;width:100%;min-width:640px;font-size:12.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line-2);vertical-align:top}
+  th{font-family:var(--mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:500;background:var(--surface-2)}
+  tr:last-child td{border-bottom:0}
+  td.t{font-family:var(--mono);font-size:12px;white-space:nowrap;color:var(--accent-ink)}
+  td .rm{display:block;color:var(--muted);font-size:11.5px;margin-top:2px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media (max-width:900px){.two{grid-template-columns:1fr}}
+  .callout{border-left:3px solid var(--accent);padding:10px 14px;background:var(--surface);border-radius:0 10px 10px 0;color:var(--ink);font-size:13px}
+  footer{margin-top:44px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:16px;display:grid;gap:6px}
+
+  @media (prefers-reduced-motion: reduce){
+    .card,.panel,.capsule,.sliver,.halo,.edgeglow,.cornerglow{transition:none!important;animation:none!important}
+    .card .tp .f{animation:none!important;opacity:.9;transform:none}
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">nanoPod · Guided Tour · 方案 v2 · 2026-09-26</div>
+    <h1>七段学会 nanoPod</h1>
+    <p class="lede">交互式引导的分镜 v2.1：玻璃卡片贴在要操作的控件旁边，用户真的做一遍，做完自动打勾、进度环推进、火花一闪；最后一段整圈合拢放礼花。较 v1 新增「专辑页两个角」与「甩到角落」两步，文案改成亲切口吻，强调色换成 Apple Music 粉红（浅 #FA4058 / 深 #FB546C）；当前歌不能翻译时，翻译一步延后到第一首能翻的歌再教（菜单 v2 已无翻译项）。纯前端模拟：「做这一步」代替用户的真实操作；可切深浅色、中英、Reduce Motion 和三条边界分支。真实手感以 app 内为准，由创始人终验。</p>
+    <div class="legend">
+      <span class="l-card">引导卡（Liquid Glass；macOS 14/15 回退为 NSVisualEffectView .popover）</span>
+      <span class="l-halo">高亮环（点击透传覆盖窗）</span>
+      <span class="l-ring">进度环 7 段（第 1 段「Music 已连上」通常预填；延后的段画成虚线）</span>
+      <span class="l-glow">边缘光 / 角落光（甩动与收边的目的地提示）</span>
+    </div>
+  </header>
+
+  <section id="demo">
+    <div class="sec-head">
+      <h2>演示台</h2>
+      <p>720×440 的屏幕右上角局部，面板取真实默认位置（距可视区右上各 20pt）与真实尺寸 250×284；甩动一步演示甩到右下角（角边距 16pt）。</p>
+    </div>
+
+    <div class="toolbar" role="toolbar" aria-label="演示控制">
+      <div class="grp">
+        <button class="btn" id="prev" type="button">◀ 上一镜</button>
+        <button class="btn" id="next" type="button">下一镜 ▶</button>
+        <button class="btn primary" id="doit" type="button">做这一步</button>
+        <button class="btn" id="auto" type="button" aria-pressed="false">自动播放</button>
+      </div>
+      <div class="grp"><span class="grp-label">外观</span>
+        <div class="seg" id="appearance">
+          <button type="button" data-v="dark" aria-pressed="true">深色</button>
+          <button type="button" data-v="light" aria-pressed="false">浅色</button>
+        </div>
+      </div>
+      <div class="grp"><span class="grp-label">文案</span>
+        <div class="seg" id="lang">
+          <button type="button" data-v="zh" aria-pressed="true">中</button>
+          <button type="button" data-v="en" aria-pressed="false">EN</button>
+        </div>
+      </div>
+      <div class="grp"><span class="grp-label">分支</span>
+        <label class="chk"><input type="checkbox" id="opt-rm"> Reduce Motion</label>
+        <label class="chk"><input type="checkbox" id="opt-unauth"> 未授权 Music</label>
+        <label class="chk"><input type="checkbox" id="opt-notrans"> 这首歌不可翻译</label>
+        <label class="chk"><input type="checkbox" id="opt-playing" checked> 已在播放</label>
+      </div>
+    </div>
+
+    <div class="demo">
+      <div class="stage-box">
+        <div class="stage-fit" id="fit">
+          <div class="stage" id="stage" data-mock="dark"></div>
+        </div>
+        <div class="statusline" id="statusline"></div>
+      </div>
+      <aside class="notes" id="notes" aria-live="polite"></aside>
+    </div>
+  </section>
+
+  <section id="frames-sec">
+    <div class="sec-head">
+      <h2>全部分镜</h2>
+      <p>静态帧，与演示台同一套渲染。G 只在 Music 自动化权限未授时出现；S4′ 是当前歌不可翻译时的延后提示，S4L 是之后第一首能翻的歌播起来时补的那张卡；S5b 是甩到角落之后、划进边之前的中间态。</p>
+    </div>
+    <div class="frames" id="frames"></div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>进度环八态</h2>
+      <p>7 段、段间 7°。Music 权限已授的用户从 1/7 起步（Nunes &amp; Drèze 2006 预盖章实验：2/10 起步完成率 34%，0/8 起步 19%）。终局七段缝合成整圈再脉冲一次；翻译被延后时停在 6/7，第 5 段画成粉红虚线，补完再合拢。</p>
+    </div>
+    <div class="rings" id="rings"></div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>完成一步的节奏</h2>
+      <p>从检测到完成到下一张卡就位约 1.0 s。beat 完成只打勾 + 触觉；一段完成才填环 + 火花。每行给普通与 Reduce Motion 两种规格。</p>
+    </div>
+    <div class="two">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>t</th><th>发生什么</th><th>规格</th></tr></thead>
+          <tbody>
+            <tr><td class="t">0 ms</td><td>检测到完成</td><td>haptic <span class="mono">.levelChange</span>，<span class="mono">.drawCompleted</span><span class="rm">RM：保留（触觉不是动效）</span></td></tr>
+            <tr><td class="t">0 ms</td><td>卡内 beat 打勾</td><td>圆点 → 实心勾，scale 1→1.22→1，spring(response .28, damping .6)<span class="rm">RM：直接切换</span></td></tr>
+            <tr><td class="t">50 ms</td><td>进度环当前段填充</td><td>trim <span class="mono">.smooth(0.45)</span>（不过冲，避免溢到下一段）；线宽 2.5→3.5→2.5 spring(.30, .60)<span class="rm">RM：linear 0.30，线宽不变</span></td></tr>
+            <tr><td class="t">50 ms</td><td>火花</td><td>16 粒 2–3.5pt 圆点，初速 90–140 pt/s 全向，阻尼 .88/帧，寿命 0.55 s，色粉红 60% / 白 40%，起点环心；Canvas+TimelineView，寿命结束即 paused<span class="rm">RM：不放</span></td></tr>
+            <tr><td class="t">100 ms</td><td>环内数字 → 勾</td><td><span class="mono">.contentTransition(.symbolEffect(.replace.downUp))</span> 0.30 s<span class="rm">RM：<span class="mono">.replace</span> 无位移</span></td></tr>
+            <tr><td class="t">750 ms</td><td>卡内容淡出</td><td>opacity 1→0，0.14 s easeIn</td></tr>
+            <tr><td class="t">800 ms</td><td>卡位移到下一锚点</td><td>窗口 frame spring(response .50, damping .86)，速度连续；箭头在中点换向<span class="rm">RM：原地淡出、新位置淡入 0.16 s</span></td></tr>
+            <tr><td class="t">860 ms</td><td>新内容淡入</td><td>标题、正文、beats 依次 40 ms 错峰淡入 + 6pt 自锚点方向位移，各 0.18 s smooth；环内数字 <span class="mono">.numericText</span><span class="rm">RM：整体 opacity 0.16 s</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>t</th><th>终局（第 7 段完成）</th><th>规格</th></tr></thead>
+          <tbody>
+            <tr><td class="t">0 ms</td><td>最后一段填充</td><td>同左 0.45 s；haptic <span class="mono">.alignment</span>（整圈合拢的语义）</td></tr>
+            <tr><td class="t">450 ms</td><td>七段缝合</td><td>段间 7° → 0°，0.30 s smooth<span class="rm">RM：交叉淡化到整圈</span></td></tr>
+            <tr><td class="t">500 ms</td><td>整圈脉冲</td><td>scale 1→1.10→1 spring(.50, .62)；线宽 2.5→4→2.5；描边 粉红→白→粉红 0.4 s<span class="rm">RM：只做描边色闪一次</span></td></tr>
+            <tr><td class="t">550 ms</td><td>礼花</td><td>72 粒自面板上沿一线缓缓喷出：初速 220–320 pt/s 向上、锥角 ±30°、重力 360 pt/s²、空气阻力让末段飘落、自旋 ±2.5 rad/s、6×9pt 矩形/圆/细条三形、色取封面主色 3 + 白（哑光），寿命 1.8 s，末 0.5 s 淡出；独立点击透传窗口，2.2 s 后关闭<span class="rm">RM：不放</span></td></tr>
+            <tr><td class="t">900 ms</td><td>卡长成终卡</td><td>高度 spring(.40, .85)，文案与两个按钮错峰淡入 0.2 s</td></tr>
+            <tr><td class="t">8 s</td><td>自动收起（或点「好了」）</td><td>opacity 0.16 s easeIn，scale 1→.97；随后整套对象销毁，零常驻</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>卡片规格</h2>
+    </div>
+    <div class="two">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>项</th><th>规格</th></tr></thead>
+          <tbody>
+            <tr><td>尺寸</td><td>宽 236pt 固定，高随内容（92–186pt）；圆角 14pt continuous（面板 16，卡片更小所以更小）；箭头 12pt 等腰与卡同一形状</td></tr>
+            <tr><td>材质</td><td><b>macOS 26：Liquid Glass</b>，SwiftUI <span class="mono">.glassEffect(.regular, in: TourBubbleShape)</span>（卡体 + 箭头一个形状），整张卡包在一个 <span class="mono">GlassEffectContainer</span> 里，无 tint；卡内按钮是实色胶囊，不再叠玻璃。<b>macOS 14/15</b>：<span class="mono">NSVisualEffectView</span> <span class="mono">.popover</span> 材质 + <span class="mono">maskImage</span> 同一形状（系统 popover 的画法）。不用 <span class="mono">.hudWindow</span>（过曝）。选玻璃的理由与三条教训的处理见 proposal §4.6</td></tr>
+            <tr><td>光边</td><td>顶部 1px 内高光（玻璃自带），外 0.5px 8% 描边；阴影 0 12 34 rgba(0,0,0,.22)（浅）/ 0 16 40 rgba(0,0,0,.45)（深）</td></tr>
+            <tr><td>字</td><td>SF Pro Text：标题 13 semibold；正文 12 regular 次级色；beat 12；脚注 10.5；环内数字 9 semibold tabular</td></tr>
+            <tr><td>进度环</td><td>22pt，线宽 2.5，7 段、段间 7°、起点 12 点钟；轨道 12% 对比色，填充 Apple Music 粉红（浅 <span class="mono">#FA4058</span> / 深 <span class="mono">#FB546C</span>）；延后的段画成粉红虚线轨道</td></tr>
+            <tr><td>放置</td><td>面板内锚点：卡放在面板朝屏幕中心的一侧，间距 16pt，垂直对齐锚点；绝不盖住面板。贴边小条锚点：胶囊探出区域之外再留 20pt。面板被甩走时卡跟着走。不再有状态栏锚点</td></tr>
+            <tr><td>层级</td><td>与面板同 level（.floating）并排在其上；菜单打开时卡片暂隐</td></tr>
+            <tr><td>跟随</td><td>只订阅面板的 didMove / didResize / didChangeScreen 与已有的 windowMovementBegan/Ended 通知：拖动中卡片隐去，松手后弹回新位置；不轮询</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">
+        <h3>三条不可破的边界</h3>
+        <p style="margin-top:6px">1. 引导任何一步都不触发系统弹窗；当前歌不能翻译就把翻译一步延后，不指向设置、不改锚点。<br>2. 卡片窗口不成为 key window，不抢面板与其他 app 的焦点；面板收边、隐藏、换屏、被甩走时卡片跟着藏或跟着走。<br>3. 引导结束（完成或跳过）后整套对象销毁：无窗口、无玻璃、无每帧工作、无 timer；唯一允许的残留是延后步的一个 Combine 订阅（订 canTranslate，事件驱动），补完或过期即取消；<span class="mono">WindowAnimationCensus</span> 扫不到任何残留。</p>
+        <h3 style="margin-top:12px">触控板手势示意（按逐帧规格）</h3>
+        <p style="margin-top:6px">按创始人录的系统设置「触控板」页演示逐帧提取（research/trackpad-demo-frames.md）等比缩到卡内：轮廓 96×72、圆角 8、描边 1.5、无填充；两个圆点 11pt、间距 16、色 #6B9CFD。圆点只做透明度、不缩放：0.45s 淡入 → 停 0.35s → 0.95s 位移（ease-in-out，无过冲）→ 停 0.35s → 0.3s 暗到 31% → 停 0.58s → 0.42s 淡出 → 隐 0.15s，一轮 3.55s；位移时沿运动方向拖一条同色渐隐尾巴。播两轮后静止在起点 31%，卡被 hover 时再播一轮。源动画末尾约 6% 位移在一帧内贴合终点，不复刻。</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p>本页只是分镜与规格的可视化，不是实现；位置数值按真实面板几何推算（底部控件 padding 12/16、播放簇 30×30 间距 10、翻译按钮 32×32 右下、顶部 ↖ Music 胶囊与 32pt 输出钮各留 12pt、贴边小条 6×56、胶囊 120×204、角边距 16、边缘判定 28）。玻璃在网页里用 backdrop-filter 近似。</p>
+    <p>配套文档：docs/design/2026-09-25-onboarding/proposal.md（旅程、状态机、检测钩子、边界矩阵、材质决定、动效规格、验收）。</p>
+  </footer>
+</div>
+
+<script>
+(function(){
+  'use strict';
+  const W=720,H=440,MENU=24;
+  const POS={ home:{x:450,y:44}, corner:{x:454,y:140} };   // 默认（右上、20pt）与甩到右下角（16pt）
+  const PW=250,PH=284, CAPW=120,CAPH=204;
+
+  function anchorsFor(P){
+    return {
+      panel:{x:P.x,y:P.y+PH/2},
+      play:{x:P.x+125,y:P.y+PH-16-15},
+      lyrics:{x:P.x+12+13,y:P.y+PH-16-15},
+      translate:{x:P.x+PW-12-16,y:P.y+PH-16-30-4-16-10-16},
+      tl:{x:P.x+12+31,y:P.y+12+11},
+      tr:{x:P.x+PW-12-16,y:P.y+12+16},
+      sliver:{x:714,y:P.y+PH/2}
+    };
+  }
+
+  const G={
+    play:'<svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5z"/></svg>',
+    prev:'<svg viewBox="0 0 16 16"><path d="M3 3h2v10H3zM13 3v10L6 8z"/></svg>',
+    next:'<svg viewBox="0 0 16 16"><path d="M11 3h2v10h-2zM3 3v10l7-5z"/></svg>',
+    quote:'<svg viewBox="0 0 16 16"><path d="M2 2h12a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H8l-3.5 3v-3H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zm2 3v1.5h3V5zm0 3v1.5h6V8z"/></svg>',
+    stack:'<svg viewBox="0 0 16 16"><path d="M2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zm12 2h1v9a2 2 0 0 1-2 2H4v-1h9a1 1 0 0 0 1-1zM5 5v5l4-2.5z"/></svg>',
+    translate:'<svg viewBox="0 0 16 16"><path d="M1 3h4V1h1.5v2H10v1.5H8.6c-.4 1.3-1 2.4-1.8 3.3.6.5 1.3.9 2 1.2l-.6 1.3c-.9-.4-1.7-.9-2.4-1.5-.9.8-2 1.4-3.3 1.8L2 9.3c1.1-.3 2-.8 2.8-1.4A8 8 0 0 1 3.4 5.5H5c.2.5.5 1 .9 1.4.6-.7 1-1.5 1.3-2.4H1zm9.2 4h1.6L15 15h-1.5l-.7-2h-3l-.7 2H7.6zm.8 1.8-1 3h2z"/></svg>',
+    shuffle:'<svg viewBox="0 0 16 16"><path d="M11 2l3 2.5L11 7V5.5h-1.6c-.7 0-1.1.3-1.5.9L7 8l.9 1.6c.4.6.8.9 1.5.9H11V9l3 2.5L11 14v-1.5H9.4c-1.3 0-2.2-.6-2.8-1.6L6 9.9l-.6 1c-.6 1-1.5 1.6-2.8 1.6H1V11h1.6c.7 0 1.1-.3 1.5-.9L5 8l-.9-1.6c-.4-.6-.8-.9-1.5-.9H1V4h1.6c1.3 0 2.2.6 2.8 1.6L6 6.1l.6-.5c.6-1 1.5-1.6 2.8-1.6H11z"/></svg>',
+    repeat:'<svg viewBox="0 0 16 16"><path d="M4 5h7V3l3 2.5L11 8V6.5H4a1 1 0 0 0-1 1V9H1.5V7.5A2.5 2.5 0 0 1 4 5zm8 6H5v2l-3-2.5L5 8v1.5h7a1 1 0 0 0 1-1V7h1.5v1.5A2.5 2.5 0 0 1 12 11z"/></svg>',
+    note:'<svg viewBox="0 0 16 16"><path d="M10 1v9.2a2.8 2.8 0 1 1-1.5-2.5V4.2L5 5.3v6.4a2.8 2.8 0 1 1-1.5-2.5V3.9z"/></svg>',
+    speaker:'<svg viewBox="0 0 16 16"><path d="M2 6h3l4-3v10l-4-3H2zM11 5.2a3.5 3.5 0 0 1 0 5.6l-.9-1.2a2 2 0 0 0 0-3.2zM12.6 3a6 6 0 0 1 0 10l-.9-1.2a4.5 4.5 0 0 0 0-7.6z"/></svg>',
+    arrowUL:'<svg viewBox="0 0 16 16"><path d="M3 3h7v2H6.4l6.3 6.3-1.4 1.4L5 6.4V10H3z"/></svg>',
+    check:'<svg viewBox="0 0 12 12"><path d="M2.5 6.5l2.5 2.5 4.5-5"/></svg>',
+    checkS:'<svg viewBox="0 0 10 10"><path d="M2 5.2l2.2 2.2L8 3.4"/></svg>'
+  };
+
+  const COPY={
+    zh:{
+      skip:'跳过引导', skipStep:'这步先跳过',
+      welcome:{title:'嗨，来认识一下 nanoPod', body:'六个小动作，每个都请真的做一遍。卡片会一路陪着你，两分钟不到。', primary:'走起', secondary:'先不用', foot:'想重来？菜单栏 ♪ 里有「继续引导」', chip:'Music 已经连上了'},
+      gate:{title:'先和 Music 打个招呼', body:'nanoPod 靠 Music 放歌、读歌词。点一下，系统会问你一次，选「好」就行。', primary:'好，连上', secondary:'等会儿再说', confirm:'连上了。'},
+      reveal:{title:'把鼠标挪过来', body:'面板安静的时候只留封面，控件都藏在下面。', beats:['移到面板上','按一下播放'], beatsPlaying:['移到面板上','已经在放了'], confirm:'出声了。'},
+      corners:{title:'专辑页的两个角', body:'右上换出声的设备，左上一键跳去 Music。', beats:['点右上，看看现在从哪出声','点左上 ↖ Music'], confirm:'两个角都认识了。', musicOpened:'Music 在后面开好了，回来接着来。'},
+      lyrics:{title:'看歌词', body:'左下角的小气泡，或者直接点封面。', confirm:'到了。'},
+      translate:{title:'顺手开翻译', body:'右下角这个按钮。译文会跟在每一句下面。', confirm:'译文来了。'},
+      translateAlt:{title:'这首不用翻，先跳过', body:'等到一首外文歌，我再来说翻译在哪。', confirm:'先记着。'},
+      later:{title:'这首能翻了', body:'鼠标挪过来，右下角那个按钮点一下。', confirm:'译文来了。'},
+      doneDeferred:{body:'六个做完了，翻译那步等一首外文歌再补。想更顺手？给「显示 / 隐藏面板」录个快捷键。'},
+      move:{title:'甩去一个角落', body:'双指按住面板，往哪个角一甩，它就落在哪。', beats:['甩到任意一个角','再往屏幕边上一划'], bodyTuck:'落好了。现在往右边一划，它会藏进屏幕边。', fallback:'替我收起来', note:'用鼠标？到 设置 › 快捷键 给「贴边隐藏」录个键就行。', confirm:'收好了。'},
+      ret:{title:'它就贴在这条边上', beats:['鼠标停上去，它会探出头','点一下，回来'], confirm:'回来了。'},
+      done:{title:'就这些，你都会了', body:'想更顺手？给「显示 / 隐藏面板」录个快捷键，一个键就能叫它出来。', primary:'录个快捷键', secondary:'好了', foot:'以后想重看，设置里有「重看引导」'},
+      segs:['连接 Music','悬停·播放','两个角','歌词','翻译','甩·收','回来']
+    },
+    en:{
+      skip:'Skip the tour', skipStep:'Skip this one',
+      welcome:{title:"Hi. Let's get you the hang of nanoPod", body:'Six little moves, each one for real. The card stays with you the whole way. Under two minutes.', primary:"Let's go", secondary:'Not now', foot:"Want a redo? It's under ♪ › Continue tour", chip:"Music's already connected"},
+      gate:{title:'Say hi to Music', body:"nanoPod plays and reads lyrics through Music. Click, macOS asks once, and you're in.", primary:'Connect', secondary:'Maybe later', confirm:'Connected.'},
+      reveal:{title:'Bring your cursor over', body:"When the panel's resting, it's just the cover. The controls are tucked underneath.", beats:['Hover the panel','Hit play'], beatsPlaying:['Hover the panel','Already playing'], confirm:"There's your music."},
+      corners:{title:'The two corners', body:'Top right picks where the sound goes. Top left jumps you into Music.', beats:["Top right: see where it's playing",'Top left: ↖ Music'], confirm:'Both corners, done.', musicOpened:"Music's open behind you. Come on back."},
+      lyrics:{title:'Now the lyrics', body:'The little speech bubble, bottom left. Or just click the cover.', confirm:'There you go.'},
+      translate:{title:'Turn on translation', body:'The button at the bottom right. Every line gets one underneath.', confirm:'Translated.'},
+      translateAlt:{title:"This one doesn't need it. Skipping for now", body:"When a song in another language comes on, I'll show you where translation lives.", confirm:'Noted.'},
+      later:{title:'This one can be translated', body:'Bring your cursor over and hit the button at the bottom right.', confirm:'Translated.'},
+      doneDeferred:{body:'Six down. Translation waits for a song that needs it. Want it faster? Give Show / Hide panel a key.'},
+      move:{title:'Fling it to a corner', body:"Two fingers on the panel, flick toward any corner. It'll land there.", beats:['Flick it to a corner','Now swipe it into the edge'], bodyTuck:'Landed. Now swipe right and it slips into the edge.', fallback:'Tuck it for me', note:'On a mouse? Give Hide to Edge a key in Settings › Shortcuts.', confirm:'Tucked away.'},
+      ret:{title:"It's right there on the edge", beats:['Rest your cursor on it. It peeks out','Click, and it\'s back'], confirm:"And it's back."},
+      done:{title:"That's it. You've got it", body:'Want it even faster? Give Show / Hide panel a key and summon it from anywhere.', primary:'Set a shortcut', secondary:'All done', foot:'Replay anytime under Settings › Replay tour'},
+      segs:['Connect','Hover · Play','Corners','Lyrics','Translate','Fling · Tuck','Return']
+    }
+  };
+
+  const SCENES=[
+    {id:'S0', key:'welcome', step:null, filled:[0], panel:'st-rest', pos:'home', anchor:'panel', halo:null,
+      name:{zh:'欢迎',en:'Welcome'},
+      notes:{teach:'这是什么、要花多久、可以跳过。第 1 段「Music 已连上」在权限已授时预填，用户从 1/7 起步。', why:'HIG Launching：首启别让人先读一堆；Nunes & Drèze：预盖章提高完成率。', anchor:'面板朝屏幕中心一侧的中点；卡片与面板间距 16pt。', signal:'点「走起」；「先不用」写入 status=skipped，以后只从菜单栏「继续引导」进。', edge:'Music 权限未授 → 先出 G 卡。面板已收边 → 卡锚到小条，先走 S6 再回到 S1。', level:'无庆祝。'}},
+    {id:'G', key:'gate', step:0, filled:[], panel:'st-rest', pos:'home', anchor:'panel', halo:null, optional:'unauth',
+      name:{zh:'和 Music 打招呼',en:'Say hi to Music'},
+      notes:{teach:'把 Music 自动化权限的系统询问放在用户点按钮之后，而不是启动时突然弹。', why:'铁律：引导自己不触发系统弹窗；这是用户点击换来的一次系统询问，与现有 C6 的 requestAutomationAccess 同一路径。', anchor:'同 S0。', signal:'OnboardingState.automationStatus == .authorized（同步询问返回后再查一次）。', edge:'被拒绝 → 卡变「Music 还没点头」+「去打开」系统设置深链 + 「先往下走」；不阻塞后续步骤，但 S1 的播放 beat 会说明原因。', level:'小火花 + 环第 1 段。'}},
+    {id:'S1', key:'reveal', step:1, filled:[0], panel:'st-rest', pos:'home', anchor:'play', halo:{a:'play',w:40,h:40},
+      name:{zh:'悬停 · 播放',en:'Hover · Play'},
+      notes:{teach:'面板静止时只剩封面，控件悬停才出现；顺手确认在播放。', why:'「控件在哪」是这个面板最不直观的一件事；播放本身显而易见，所以只作为 beat，已在播放时预勾。', anchor:'播放按钮中心；卡放面板左侧，垂直对齐该行；高亮环 40pt 从一开始就标出隐藏按钮的位置，悬停时按钮在环里浮现。', signal:'beat1：新增钩子 controlsRevealed（MiniPlayerView 的 showOverlayContent 翻真时发通知）；beat2：MusicController.$isPlaying == true。', edge:'Music 没开：按播放会拉起 Music，卡文案改「正在叫醒 Music…」；库里没歌：beat2 8 秒未完成时「这步先跳过」变明显。', level:'小火花 + 环第 2 段 + haptic .levelChange。'}},
+    {id:'S2', key:'corners', step:2, filled:[0,1], panel:'st-hover', pos:'home', anchor:'tr', halo:{a:'tr',w:40,h:40},
+      name:{zh:'专辑页的两个角',en:'The two corners'},
+      notes:{teach:'专辑页悬停后左上「↖ Music」跳去 Apple Music（完整版跳对应的原生播放器），右上换音频输出设备。', why:'创始人 09-26 点名；两个角落按钮只在悬停时出现。合成一步、两个 beat，高亮环在两个角之间跳。', anchor:'右上输出钮中心（右 12、上 12，32pt）→ 左上 ↖ Music 胶囊中心；卡片不动，只换 beat 与高亮环位置。', signal:'beat1：新增钩子 audioOutputMenuPresented（AudioOutputSwitcherView.onMenuPresentedChanged 翻真）；beat2：新增钩子 musicButtonTapped（MusicButtonView action 内 post）。两个 beat 任意顺序。', edge:'点 ↖ Music 会把 Music 带到前台：面板与卡都是浮动窗，仍在最上；卡正文随动「Music 在后面开好了，回来接着来。」输出设备只有一个：beat1 仍以列表打开为准。', level:'小火花 + 环第 3 段。'}},
+    {id:'S3', key:'lyrics', step:3, filled:[0,1,2], panel:'st-hover', pos:'home', anchor:'lyrics', halo:{a:'lyrics',w:36,h:36},
+      name:{zh:'歌词',en:'Lyrics'},
+      notes:{teach:'去歌词页的两条路：左下角对话气泡，或点封面。', why:'创始人点名；图标语义不自明。', anchor:'左下导航按钮中心；卡片位置不变，只换内容与箭头 y。', signal:'MusicController.$currentPage == .lyrics。', edge:'当前歌没有歌词：仍算完成（教的是导航），歌词页显示自己的空态；S4 随即走替代分支。', level:'小火花 + 环第 4 段。'}},
+    {id:'S4', key:'translate', step:4, filled:[0,1,2,3], panel:'st-lyrics-hover', pos:'home', anchor:'translate', halo:{a:'translate',w:40,h:40}, alt:'notrans',
+      name:{zh:'翻译',en:'Translate'},
+      notes:{teach:'歌词页右下角的翻译按钮。', why:'创始人点名；按钮只在悬停时出现，且只有 canTranslate 为真才挂载。', anchor:'翻译按钮中心（右下角，距底 92pt）；卡放面板左侧对齐该 y。', signal:'LyricsService.$showTranslation 翻真（检测动作，不检测结果）。', edge:'canTranslate == false（无歌词 / 网络不可达 / 已是目标语言）→ S4′：这一步标为 deferred，卡就地说一句「这首不用翻，先跳过」，第 5 段变粉红虚线轨道，1.1s 后往 S5 走；引导结束后只留一个 $canTranslate 订阅，第一首能翻的歌播起来（面板可见、开播 3s 后）再出 S4L 补这一段；连续 3 首没做或 20 次启动未遇到 → 静默标 skipped。不指向设置（那是总开关，当前歌不能翻时开了也看不到结果），菜单 v2 已无翻译项。翻译失败 → 不弹任何窗，卡照常完成。', level:'小火花 + 环第 5 段。'}},
+    {id:'S5', key:'move', step:5, filled:[0,1,2,3,4], panel:'st-rest', pos:'home', anchor:'panel', halo:null, glow:'corner',
+      name:{zh:'甩到角落，再划进边',en:'Fling · Tuck'},
+      notes:{teach:'双指按住面板往一个角一甩，它按速度投影落到最近的角；落定后再往屏幕边一划，藏进边里。', why:'创始人 09-26 点名的移动方式 + 招牌收边动作；两个都是双指手势，连成一步两个 beat，卡片跟着面板跑。', anchor:'面板朝屏幕中心一侧的中点；卡内触控板手势示意先演「斜甩」、beat1 完成后换成「横划」；右下角亮角落光、划入时右缘亮边缘光。', signal:'beat1：新增 SnappablePanel.snappedCorner 通知（弹簧动画结束且 origin 落在四角目标 ±1pt）；beat2：新增 LiquidEdgeController.statePublisher：.tucked（settled）。卡在 .collapsing 一出现就淡出。', edge:'鼠标用户：拖动不吸角、也不能划 → 「替我收起来」按钮调 hideToNearestEdge()，仍能看到小条并学会 S6；脚注指向快捷键。Stage Manager 开着 → 只教右边的角。落在左边角 → 文案改「往左边一划」。', level:'第 6 段的填充与火花在 S6 卡出现时补放（此刻卡片已隐去）。'}},
+    {id:'S6', key:'ret', step:6, filled:[0,1,2,3,4,5], panel:'st-tucked', pos:'corner', anchor:'sliver', halo:{a:'sliver',w:18,h:72,pill:true},
+      name:{zh:'回来',en:'Return'},
+      notes:{teach:'它在哪、怎么探出胶囊、怎么回来。', why:'教了收就必须教放——否则用户第一次收边就「丢」了窗口。', anchor:'贴边小条（6×56，右缘，面板中线高度）；卡放在胶囊探出区域之外再留 20pt。', signal:'beat1：state == .floating（hover 停留 80ms）；beat2：.expanding 后 settled 回 .card。', edge:'用户直接双指向内划展开 → 两个 beat 同时勾。鼠标移开胶囊又缩回 → beat1 保持已勾。', level:'终局：最后一段填充 → 七段缝合成整圈 → 脉冲 → 礼花 → 卡长成终卡。haptic .alignment。'}},
+    {id:'S7', key:'done', step:null, filled:[0,1,2,3,4,5,6], closed:true, panel:'st-rest', pos:'corner', anchor:'panel', halo:null, finale:true,
+      name:{zh:'终局',en:'Done'},
+      notes:{teach:'确认学会；把唯一值得的下一步（录快捷键）递过去；告诉他在哪重看。', why:'Intuit：只为用户自己完成的事庆祝一次；快捷键没有默认值，是完成度最高的后续设置。', anchor:'面板朝屏幕中心一侧的中点（面板已在它落的角）。', signal:'点「好了」或 8s 无操作 → 写 status=completed, schema=2 → 整套对象销毁。', edge:'礼花窗口独立、点击透传、2.2s 后关闭；Reduce Motion 不放礼花只闪环。翻译被延后时：环停在 6/7（第 5 段虚线），正文改「翻译那步等一首外文歌再补」，礼花照放（庆祝的是这一坐的完成），只留一个 $canTranslate 订阅。', level:'礼花 72 粒 1.8s，一次。'}},
+    {id:'S4L', key:'later', step:4, filled:[0,1,2,3,5,6], panel:'st-lyrics-hover', pos:'corner', anchor:'translate', halo:{a:'translate',w:40,h:40}, optional:'notrans',
+      name:{zh:'翻译 · 补课',en:'Translate · later'},
+      notes:{teach:'第一首能翻的歌播起来时，在翻译按钮旁补教这一步。', why:'情境式：教的对象是面板右下那个按钮，等它真的有用的那一刻再教（NN/g：卡在真正需要的那一刻）。', anchor:'同 S4；面板在它当时的位置。出现条件：canTranslate 翻真 ∧ 面板可见 ∧ 开播 ≥ 3s ∧ 本次启动未出过。', signal:'LyricsService.$showTranslation 翻真；已经是 true（用户早在设置里开了）→ 不出卡，静默补段。', edge:'这首没做 → 换歌时卡淡出，下一首能翻的歌再来，最多 3 首；20 次启动没遇到能翻的歌 → 静默标 skipped。这张卡是引导结束后唯一会再出现的卡。', level:'环第 5 段填充 + 小火花 + haptic .alignment；七段安静合拢、脉冲一次；不放礼花（礼花在 S7 放过了）。做完取消订阅，彻底零常驻。'}}
+  ];
+
+  const state={idx:0, lang:'zh', mock:'dark', rm:false, unauth:false, notrans:false, playing:true, auto:false, busy:false};
+  try{ state.rm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(e){}
+  const $=s=>document.querySelector(s);
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  function visibleScenes(){ return SCENES.filter(s=>!(s.optional==='unauth' && !state.unauth) && !(s.optional==='notrans' && !state.notrans)); }
+
+  const SEGS=7;
+  function arcPath(cx,cy,r,a0,a1){
+    const p=a=>[cx+r*Math.cos(a*Math.PI/180), cy+r*Math.sin(a*Math.PI/180)];
+    const [x0,y0]=p(a0),[x1,y1]=p(a1); const large=(a1-a0)>180?1:0;
+    return `M${x0.toFixed(3)} ${y0.toFixed(3)} A${r} ${r} 0 ${large} 1 ${x1.toFixed(3)} ${y1.toFixed(3)}`;
+  }
+  function ringSVG(size,stroke,filled,closed,pending){
+    const r=(size-stroke)/2, c=size/2, gap=closed?0:7, seg=360/SEGS; pending=pending||[];
+    let s=`<svg viewBox="0 0 ${size} ${size}" aria-hidden="true">`;
+    for(let i=0;i<SEGS;i++){
+      const a0=-90+i*seg+gap/2, a1=-90+(i+1)*seg-gap/2; const d=arcPath(c,c,r,a0,a1); const on=filled.includes(i);
+      if(pending.includes(i)) s+=`<path d="${d}" pathLength="100" fill="none" stroke="var(--accent)" stroke-opacity=".5" stroke-width="${stroke}" stroke-dasharray="7 7" stroke-linecap="butt"/>`;
+      else s+=`<path d="${d}" fill="none" stroke="var(--mock-track)" stroke-width="${stroke}" stroke-linecap="round"/>`;
+      s+=`<path class="fill" data-i="${i}" d="${d}" pathLength="100" fill="none" stroke="var(--accent)" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="100" stroke-dashoffset="${on?0:100}" style="transition:stroke-dashoffset .45s cubic-bezier(.2,.8,.2,1), stroke-width .3s cubic-bezier(.3,1.4,.5,1)"/>`;
+    }
+    if(closed){ s+=`<circle class="whole" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="var(--accent)" stroke-width="${stroke}"/>`; }
+    return s+'</svg>';
+  }
+
+  function buildStage(root,isStatic){
+    root.innerHTML=`
+      <div class="menubar"><span class="apple"></span>
+        <svg class="glyph" viewBox="0 0 16 16"><path fill="#fff" d="M8 3a7 7 0 0 1 6.5 4.4A7 7 0 0 1 8 13a7 7 0 0 1-6.5-5.6A7 7 0 0 1 8 3zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
+        <svg class="glyph" viewBox="0 0 16 16"><path fill="#fff" d="M2 5.5A8 8 0 0 1 14 5.5l-1.4 1.4A6 6 0 0 0 3.4 6.9zm2.6 2.6a4.4 4.4 0 0 1 6.8 0L10 9.5a2.5 2.5 0 0 0-4 0zM8 11.5l1.5 1.5L8 14.5 6.5 13z"/></svg>
+        <svg class="glyph" viewBox="0 0 16 16"><path fill="#fff" d="M2 5h10v6H2zM13 7h1v2h-1z"/></svg>
+        <span class="clock">Fri 11:31</span>
+        <span class="note">${G.note}</span>
+      </div>
+      <div class="stage-caption"></div>
+      <div class="edgeglow"></div><div class="cornerglow"></div>
+      <div class="panel st-rest">
+        <div class="art"></div>
+        <div class="lyr"><div class="bg"></div>
+          <div class="lines">
+            <div class="ln far">また君の声が聞こえる<span class="tx">又听见你的声音</span></div>
+            <div class="ln">夜の街に溶けていく<span class="tx">融进夜色的街</span></div>
+            <div class="ln active">Plastic Love<span class="tx">塑料之爱</span></div>
+            <div class="ln">踊り続けるだけ<span class="tx">只是继续跳舞</span></div>
+            <div class="ln far">誰にも止められない<span class="tx">谁也拦不住</span></div>
+          </div>
+        </div>
+        <div class="meta"><div class="t">Plastic Love</div><div class="a">Mariya Takeuchi</div></div>
+        <div class="tops"><span class="tl">${G.arrowUL}Music</span><span class="tr">${G.speaker}</span></div>
+        <div class="route"><div class="cur"><span>MacBook Pro 扬声器</span><span>✓</span></div><div><span>AirPods Pro</span></div><div><span>Studio Display</span></div></div>
+        <div class="controls">
+          <div class="sr"><i>${G.shuffle}</i><i>${G.repeat}</i></div>
+          <div class="tr-row"><i class="trbtn">${G.translate}</i></div>
+          <div class="prog"><span>1:42</span><div class="bar"></div><span>-3:06</span></div>
+          <div class="row"><i class="nav">${G.quote}</i><div class="cluster"><i>${G.prev}</i><i class="play">${G.play}</i><i>${G.next}</i></div><i class="nav">${G.stack}</i></div>
+        </div>
+      </div>
+      <div class="sliver"></div>
+      <div class="capsule"><div class="cov"></div><div class="ct">Plastic Love<small>Mariya Takeuchi</small></div><div class="cc">${G.prev}${G.play}${G.next}</div></div>
+      <div class="halo"></div>
+      <div class="card"><div class="beak right"></div><div class="inner"></div></div>
+      <div class="hud hud-haptic">⌁ haptic</div>
+      <div class="hud hud-event"></div>
+      ${isStatic?'':'<canvas class="fx" width="720" height="440"></canvas>'}`;
+    if(isStatic) root.classList.add('static');
+    return { root, P:{...POS.home}, panel:root.querySelector('.panel'), card:root.querySelector('.card'), inner:root.querySelector('.inner'), beak:root.querySelector('.beak'),
+      halo:root.querySelector('.halo'), sliver:root.querySelector('.sliver'), capsule:root.querySelector('.capsule'), route:root.querySelector('.route'),
+      caption:root.querySelector('.stage-caption'), hudH:root.querySelector('.hud-haptic'), hudE:root.querySelector('.hud-event'), fx:root.querySelector('canvas.fx'), trbtn:root.querySelector('.trbtn'),
+      edgeglow:root.querySelector('.edgeglow') };
+  }
+
+  function layoutPanel(refs){
+    const P=refs.P;
+    refs.panel.style.left=P.x+'px'; refs.panel.style.top=P.y+'px';
+    refs.sliver.style.top=(P.y+PH/2-28)+'px';
+    refs.capsule.style.top=(P.y+PH/2-CAPH/2)+'px';
+    refs.edgeglow.style.top=P.y+'px';
+  }
+
+  function cardHTML(scene,opts){
+    const L=COPY[opts.lang], sc=scene.key;
+    const ring=(filled,closed,num,done,pending)=>`<div class="ring ${done?'done':''}">${ringSVG(22,2.5,filled,closed,pending)}<div class="num">${num}</div><div class="chk">${G.check}</div></div>`;
+    const skip=`<a class="link">${L.skip}</a>`;
+    let head='',body='',extra='',foot='';
+    const stepNum = scene.step==null ? '' : String(scene.step+1);
+    switch(sc){
+      case 'welcome':{ const c=L.welcome; const filled=opts.unauth?[]:[0];
+        head=`${ring(filled,false,opts.unauth?'0':'1',false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
+        if(!opts.unauth) extra=`<div class="chip"><b>✓</b>${c.chip}</div>`;
+        foot=`<div class="foot"><a class="link">${c.secondary}</a><button class="mbtn" type="button">${c.primary}</button></div><div class="note">${c.foot}</div>`; break;}
+      case 'gate':{ const c=L.gate; head=`${ring([],false,'1',false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
+        foot=`<div class="foot"><a class="link">${c.secondary}</a><button class="mbtn" type="button">${c.primary}</button></div>`; break;}
+      case 'reveal':{ const c=L.reveal; const beats=opts.playing?c.beatsPlaying:c.beats;
+        head=`${ring(scene.filled,false,stepNum,false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
+        extra=`<ul class="beats"><li class="b0"><span class="dot">${G.checkS}</span>${beats[0]}</li><li class="b1 ${opts.playing?'done':''}"><span class="dot">${G.checkS}</span>${beats[1]}</li></ul>`;
+        foot=`<div class="foot">${skip}<a class="link">${L.skipStep}</a></div>`; break;}
+      case 'corners':{ const c=L.corners;
+        head=`${ring(scene.filled,false,stepNum,false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
+        extra=`<ul class="beats"><li class="b0"><span class="dot">${G.checkS}</span>${c.beats[0]}</li><li class="b1"><span class="dot">${G.checkS}</span>${c.beats[1]}</li></ul>`;
+        foot=`<div class="foot">${skip}<a class="link">${L.skipStep}</a></div>`; break;}
+      case 'lyrics':{ const c=L.lyrics; head=`${ring(scene.filled,false,stepNum,false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
+        foot=`<div class="foot">${skip}<a class="link">${L.skipStep}</a></div>`; break;}
+      case 'translate':{ const c=opts.notrans?L.translateAlt:L.translate; head=`${ring(scene.filled,false,stepNum,false,opts.notrans?[4]:[])}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
+        foot=opts.notrans?`<div class="foot">${skip}</div>`:`<div class="foot">${skip}<a class="link">${L.skipStep}</a></div>`; break;}
+      case 'later':{ const c=L.later; head=`${ring(scene.filled,false,'5',false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
+        foot=`<div class="foot">${skip}<a class="link">${L.skipStep}</a></div>`; break;}
+      case 'move':{ const c=L.move; const tucked=!!opts.afterFling;
+        head=`${ring(scene.filled,false,stepNum,false)}<div class="title">${c.title}</div>`; body=`<div class="body">${tucked?c.bodyTuck:c.body}</div>`;
+        extra=`<ul class="beats"><li class="b0 ${tucked?'done':''}"><span class="dot">${G.checkS}</span>${c.beats[0]}</li><li class="b1"><span class="dot">${G.checkS}</span>${c.beats[1]}</li></ul>
+               <div class="tp"><div class="pad ${tucked?'swipe':'fling'}"><span class="f a"></span><span class="f b"></span></div></div><div class="note">${c.note}</div>`;
+        foot=`<div class="foot">${skip}<button class="mbtn sec" type="button">${c.fallback}</button></div>`; break;}
+      case 'ret':{ const c=L.ret; head=`${ring(scene.filled,false,stepNum,false)}<div class="title">${c.title}</div>`;
+        extra=`<ul class="beats"><li class="b0"><span class="dot">${G.checkS}</span>${c.beats[0]}</li><li class="b1"><span class="dot">${G.checkS}</span>${c.beats[1]}</li></ul>`;
+        foot=`<div class="foot">${skip}<a class="link">${L.skipStep}</a></div>`; break;}
+      case 'done':{ const c=L.done; const deferred=!!opts.notrans;
+        head=`${deferred?ring([0,1,2,3,5,6],false,'6',false,[4]):ring([0,1,2,3,4,5,6],true,'',true)}<div class="title">${c.title}</div>`; body=`<div class="body">${deferred?L.doneDeferred.body:c.body}</div>`;
+        foot=`<div class="foot"><button class="mbtn sec" type="button">${c.secondary}</button><button class="mbtn" type="button">${c.primary}</button></div><div class="note">${c.foot}</div>`; break;}
+    }
+    return `<div class="head">${head}</div>${body}${extra}<div class="confirm" hidden></div>${foot}`;
+  }
+
+  function placeCard(refs,scene,opts){
+    const card=refs.card, beak=refs.beak, A=anchorsFor(refs.P), P=refs.P;
+    const h=card.offsetHeight||150; let left,top,side='right',by=0,bx=0;
+    const anchor=(opts.anchorOverride||scene.anchor);
+    if(anchor==='sliver'){ side='right'; left=586-20-236; top=A.sliver.y-h/2; by=A.sliver.y-top; }
+    else { const a=A[anchor]||A.panel; side='right'; left=P.x-16-236; top=a.y-h/2; top=Math.min(Math.max(top,MENU+8),H-8-h); by=a.y-top; }
+    by=Math.min(Math.max(by,18),h-18);
+    card.style.left=left+'px'; card.style.top=top+'px';
+    beak.className='beak '+side;
+    if(side==='top') beak.style.setProperty('--beak-x',bx+'px'); else beak.style.setProperty('--beak-y',by+'px');
+  }
+  function placeHalo(refs,scene,opts,overrideA){
+    const halo=refs.halo; const A=anchorsFor(refs.P);
+    const useAlt=scene.key==='translate'&&opts.notrans;
+    const hd=overrideA?{a:overrideA.a,w:overrideA.w,h:overrideA.h,pill:overrideA.pill,cap:overrideA.cap}:scene.halo;
+    if(!hd||useAlt){ halo.className='halo'; return; }
+    const a=A[hd.a]; halo.style.width=hd.w+'px'; halo.style.height=hd.h+'px';
+    halo.style.left=(a.x-hd.w/2)+'px'; halo.style.top=(a.y-hd.h/2)+'px';
+    if(hd.a==='sliver') halo.style.left=(714-6)+'px';
+    halo.className='halo on'+(hd.pill?' pill':'')+(hd.cap?' cap':'');
+  }
+  function setPanel(refs,cls){
+    refs.panel.className='panel '+cls;
+    refs.root.classList.toggle('tucked',cls==='st-tucked'); refs.root.classList.toggle('floating',cls==='st-floating');
+    if(cls!=='st-floating') refs.root.classList.remove('expanding');
+    refs.trbtn.classList.toggle('on',cls==='st-translated');
+  }
+  function applyScene(refs,scene,opts){
+    refs.root.classList.toggle('rm',!!opts.rm); refs.root.setAttribute('data-mock',opts.mock);
+    refs.root.classList.toggle('showglow',scene.glow==='edge'); refs.root.classList.toggle('showcorner',scene.glow==='corner');
+    refs.P={...POS[scene.pos||'home']}; layoutPanel(refs);
+    setPanel(refs,scene.panel); refs.route.classList.remove('on');
+    refs.inner.innerHTML=cardHTML(scene,opts); refs.card.style.opacity='1';
+    placeCard(refs,scene,opts); placeHalo(refs,scene,opts);
+    refs.caption.textContent=`${scene.id} · ${scene.name[opts.lang]}`+(scene.key==='translate'&&opts.notrans?' · deferred':'');
+    if(!opts.static){ refs.card.classList.remove('enter'); void refs.card.offsetWidth; refs.card.classList.add('enter'); }
+  }
+
+  function makeFX(canvas){
+    const ctx=canvas.getContext('2d'); let parts=[],raf=0,last=0;
+    function tick(t){ if(!last) last=t; const dt=Math.min(0.05,(t-last)/1000); last=t; ctx.clearRect(0,0,canvas.width,canvas.height);
+      parts=parts.filter(p=>p.life<p.max);
+      for(const p of parts){ p.life+=dt; p.vy+=p.g*dt; p.vx*=Math.pow(p.drag,dt*60); p.vy*=Math.pow(p.drag,dt*60); p.x+=p.vx*dt; p.y+=p.vy*dt; p.rot+=p.spin*dt;
+        const k=p.life/p.max; const alpha=p.fadeFrom<1?Math.max(0,1-Math.max(0,(k-p.fadeFrom)/(1-p.fadeFrom))):1;
+        ctx.save(); ctx.globalAlpha=alpha; ctx.translate(p.x,p.y); ctx.rotate(p.rot); ctx.fillStyle=p.color;
+        if(p.shape==='c'){ ctx.beginPath(); ctx.arc(0,0,p.w/2,0,Math.PI*2); ctx.fill(); } else ctx.fillRect(-p.w/2,-p.h/2,p.w,p.h); ctx.restore(); }
+      if(parts.length){ raf=requestAnimationFrame(tick); } else { raf=0; last=0; ctx.clearRect(0,0,canvas.width,canvas.height); } }
+    function start(){ if(!raf){ last=0; raf=requestAnimationFrame(tick); } }
+    return {
+      sparks(x,y){ for(let i=0;i<16;i++){ const a=Math.random()*Math.PI*2,v=90+Math.random()*50; parts.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,g:0,drag:.88,life:0,max:.55,fadeFrom:.55,w:2+Math.random()*1.5,h:0,shape:'c',rot:0,spin:0,color:Math.random()<.6?'#FA4058':'#ffffff'}); } start(); },
+      confetti(P){ const colors=['#c8556a','#4a2f57','#e9c46a','#ffffff']; for(let i=0;i<72;i++){ const x=P.x+Math.random()*PW,y=P.y-8; const ang=(-90+(Math.random()*60-30))*Math.PI/180,v=220+Math.random()*100; const shape=['r','c','s'][i%3];
+        parts.push({x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,g:360,drag:.985,life:0,max:1.8,fadeFrom:.72,w:shape==='s'?3:6*(0.6+Math.random()*.5),h:shape==='s'?10:9*(0.6+Math.random()*.5),shape,rot:Math.random()*6,spin:(Math.random()*5-2.5),color:colors[i%4]}); } start(); },
+      stop(){ parts=[]; if(raf){cancelAnimationFrame(raf); raf=0;} ctx.clearRect(0,0,canvas.width,canvas.height); }
+    };
+  }
+
+  const live=buildStage($('#stage'),false); const fx=makeFX(live.fx); let fitScale=1;
+  function fit(){ const box=$('#fit'); const w=box.clientWidth; fitScale=Math.min(1,w/W); $('#stage').style.transform=`scale(${fitScale})`; box.style.height=(H*fitScale)+'px'; }
+  window.addEventListener('resize',fit); fit(); setTimeout(fit,300); if(document.fonts&&document.fonts.ready){ document.fonts.ready.then(fit); }
+  function currentOpts(extra){ return Object.assign({lang:state.lang,mock:state.mock,rm:state.rm,unauth:state.unauth,notrans:state.notrans,playing:state.playing,static:false},extra||{}); }
+  function ringCenterInStage(){ const r=live.inner.querySelector('.ring'); if(!r) return {x:200,y:200}; const a=r.getBoundingClientRect(),s=live.root.getBoundingClientRect(); return {x:(a.left-s.left)/fitScale+a.width/(2*fitScale),y:(a.top-s.top)/fitScale+a.height/(2*fitScale)}; }
+  function hud(el,text,ms){ if(text) el.textContent=text; const c=live.card; el.style.left=(parseFloat(c.style.left)||0)+'px'; el.style.top=((parseFloat(c.style.top)||0)-22)+'px'; el.classList.add('on'); setTimeout(()=>el.classList.remove('on'),ms||500); }
+
+  function renderNotes(scene){
+    const n=scene.notes, L=COPY[state.lang==='zh'?'en':'zh'];
+    let other=scene.key==='translate'&&state.notrans?L.translateAlt:(L[scene.key]||{}); if(scene.key==='done'&&state.notrans) other=Object.assign({},L.done,{body:L.doneDeferred.body}); const lines=[];
+    if(other.title) lines.push(`<div><span class="k">title</span>${other.title}</div>`);
+    if(other.body) lines.push(`<div><span class="k">body</span>${other.body}</div>`);
+    if(other.bodyTuck) lines.push(`<div><span class="k">after</span>${other.bodyTuck}</div>`);
+    if(other.beats) lines.push(`<div><span class="k">beats</span>${other.beats.join(' · ')}</div>`);
+    if(other.primary) lines.push(`<div><span class="k">buttons</span>${other.primary}${other.secondary?' / '+other.secondary:''}</div>`);
+    if(other.fallback) lines.push(`<div><span class="k">fallback</span>${other.fallback}</div>`);
+    if(other.confirm) lines.push(`<div><span class="k">confirm</span>${other.confirm}</div>`);
+    $('#notes').innerHTML=`<div class="scene-id"><span class="pill">${scene.id}</span><h3>${scene.name.zh} · ${scene.name.en}</h3></div>
+      <dl><dt>教什么</dt><dd>${n.teach}</dd><dt>为什么</dt><dd>${n.why}</dd><dt>锚点</dt><dd>${n.anchor}</dd><dt>完成信号</dt><dd>${n.signal}</dd><dt>边界</dt><dd>${n.edge}</dd><dt>反馈</dt><dd>${n.level}</dd></dl>
+      <div class="copy"><div class="eyebrow">另一语言文案 · ${state.lang==='zh'?'EN':'中'}</div>${lines.join('')}</div>`;
+  }
+  function renderStatus(scene){
+    const filled=scene.filled.length+(scene.key==='welcome'&&state.unauth?-1:0);
+    $('#statusline').innerHTML=`<span>镜头 <b>${scene.id}</b></span><span>进度环 <b>${Math.max(0,filled)} / 7</b></span><span>面板 <b>${scene.panel.replace('st-','')} @ ${scene.pos||'home'}</b></span><span>锚点 <b>${scene.anchor}${(scene.key==='translate'&&state.notrans)?' (deferred)':''}</b></span><span>Reduce Motion <b>${state.rm?'on':'off'}</b></span>`;
+  }
+  function show(idx){
+    const scenes=visibleScenes(); state.idx=Math.max(0,Math.min(idx,scenes.length-1)); const scene=scenes[state.idx];
+    fx.stop(); applyScene(live,scene,currentOpts()); renderNotes(scene); renderStatus(scene);
+    $('#prev').disabled=state.idx===0; $('#next').disabled=state.idx===scenes.length-1; $('#doit').disabled=(scene.key==='done'&&!state.notrans);
+  }
+
+  async function doStep(){
+    if(state.busy) return; state.busy=true; $('#doit').disabled=true;
+    const scenes=visibleScenes(); const scene=scenes[state.idx]; const L=COPY[state.lang]; const rm=state.rm; const inner=live.inner;
+    const fillSeg=(i)=>{ const p=inner.querySelector(`.fill[data-i="${i}"]`); if(p){ p.style.strokeDashoffset='0'; if(!rm){ p.style.strokeWidth='3.5'; setTimeout(()=>p.style.strokeWidth='2.5',300);} } };
+    const beat=async(sel)=>{ const li=inner.querySelector(sel); if(li) li.classList.add('done'); hud(live.hudH,'⌁ haptic .levelChange',500); await sleep(rm?120:260); };
+    const confirm=(t)=>{ const c=inner.querySelector('.confirm'); if(c){ c.textContent=t; c.hidden=false; } };
+    const ringDone=()=>{ const r=inner.querySelector('.ring'); if(r) r.classList.add('done'); };
+    const celebrate=async(segIdx)=>{ await sleep(50); fillSeg(segIdx); if(!rm){ const c=ringCenterInStage(); fx.sparks(c.x,c.y); } await sleep(50); ringDone(); };
+    const advance=async()=>{ if(state.idx<scenes.length-1){ live.card.style.opacity='0'; await sleep(rm?160:180); state.idx+=1; const next=scenes[state.idx]; applyScene(live,next,currentOpts()); renderNotes(next); renderStatus(next); $('#prev').disabled=false; $('#next').disabled=state.idx===scenes.length-1; } };
+
+    switch(scene.key){
+      case 'welcome': hud(live.hudE,'tap: 走起',500); await sleep(350); break;
+      case 'gate': hud(live.hudE,'system dialog → Allow',700); await sleep(600); confirm(L.gate.confirm); await celebrate(0); await sleep(700); break;
+      case 'reveal':
+        hud(live.hudE,'hover → controlsRevealed',700); setPanel(live,'st-hover'); await sleep(rm?200:450); await beat('.b0');
+        if(!state.playing){ hud(live.hudE,'click ▶ → isPlaying',600); await sleep(400); await beat('.b1'); }
+        confirm(L.reveal.confirm); await celebrate(1); await sleep(700); break;
+      case 'corners':
+        hud(live.hudE,'click top-right → audioOutputMenuPresented',900); live.route.classList.add('on'); await sleep(rm?300:700); live.route.classList.remove('on'); await beat('.b0');
+        placeHalo(live,scene,currentOpts(),{a:'tl',w:74,h:34,cap:true}); await sleep(rm?150:420);
+        hud(live.hudE,'click ↖ Music → musicButtonTapped',900); await sleep(500); await beat('.b1');
+        confirm(L.corners.confirm); await celebrate(2); await sleep(700); break;
+      case 'lyrics':
+        hud(live.hudE,'click quote → currentPage = .lyrics',800); await sleep(300); setPanel(live,'st-lyrics-hover'); await sleep(rm?200:400);
+        confirm(L.lyrics.confirm); await celebrate(3); await sleep(700); break;
+      case 'translate':
+        if(state.notrans){ hud(live.hudE,'canTranslate == false → defer .translate',1000); confirm(L.translateAlt.confirm); await sleep(rm?500:1100); break; }
+        hud(live.hudE,'click translate → showTranslation',800); await sleep(300);
+        setPanel(live,'st-translated'); await sleep(rm?200:450);
+        confirm(L.translate.confirm); await celebrate(4); await sleep(700); break;
+      case 'later':{
+        hud(live.hudE,'$canTranslate → true (new song, 3s in) → deferred tip',1000); await sleep(500);
+        hud(live.hudE,'click translate → showTranslation',800); await sleep(300); setPanel(live,'st-translated'); await sleep(rm?200:450);
+        confirm(L.later.confirm); hud(live.hudH,'⌁ haptic .alignment',700); await sleep(50); fillSeg(4); if(!rm){ const c=ringCenterInStage(); fx.sparks(c.x,c.y); }
+        await sleep(450);
+        const ring=inner.querySelector('.ring');
+        if(ring){ ring.innerHTML=ringSVG(22,2.5,[0,1,2,3,4,5,6],true)+`<div class="num"></div><div class="chk">${G.check}</div>`; ring.classList.add('done');
+          const whole=ring.querySelector('.whole');
+          if(whole&&!rm){ whole.style.transition='stroke-width .4s cubic-bezier(.3,1.4,.5,1)'; whole.style.strokeWidth='4'; setTimeout(()=>{whole.style.strokeWidth='2.5';},220); ring.style.transition='transform .5s cubic-bezier(.3,1.6,.5,1)'; ring.style.transform='scale(1.08)'; setTimeout(()=>ring.style.transform='scale(1)',260); } }
+        await sleep(900); hud(live.hudE,'done → cancel $canTranslate sink, teardown',1000); await sleep(800);
+        state.busy=false; $('#doit').disabled=true; return; }
+      case 'move':{
+        hud(live.hudE,'two-finger flick → spring to corner',900);
+        live.card.style.opacity='0'; await sleep(120);
+        live.P={...POS.corner}; layoutPanel(live); await sleep(rm?250:680);
+        hud(live.hudE,'.windowMovementEnded @ corner → snappedCorner',700);
+        // card re-appears beside the moved panel, beat1 done, glyph switches to swipe
+        live.inner.innerHTML=cardHTML(scene,currentOpts({afterFling:true})); placeCard(live,scene,currentOpts()); live.card.style.opacity='1';
+        live.root.classList.remove('showcorner'); live.root.classList.add('showglow');
+        hud(live.hudH,'⌁ haptic .levelChange',500); await sleep(rm?400:1400);
+        hud(live.hudE,'two-finger swipe → .collapsing',800);
+        live.card.style.opacity='0'; live.root.classList.remove('showglow'); await sleep(120);
+        setPanel(live,'st-tucked'); await sleep(rm?250:620);
+        hud(live.hudE,'.tucked (settled)',600); await sleep(200);
+        const next=scenes[state.idx+1]; state.idx+=1; applyScene(live,next,currentOpts()); renderNotes(next); renderStatus(next);
+        await sleep(rm?200:380); hud(live.hudH,'⌁ haptic .levelChange',600); fillSeg(5); if(!rm){ const c=ringCenterInStage(); fx.sparks(c.x,c.y); }
+        $('#prev').disabled=false; $('#next').disabled=state.idx===scenes.length-1; state.busy=false; $('#doit').disabled=false;
+        if(state.auto){ await sleep(900); return doStep(); } return; }
+      case 'ret':{
+        hud(live.hudE,'hover 80ms → .floating',800); setPanel(live,'st-floating'); await sleep(rm?250:520); await beat('.b0');
+        hud(live.hudE,'click → .expanding → .card',900); live.root.classList.add('expanding'); await sleep(rm?150:260);
+        setPanel(live,'st-rest'); live.root.classList.remove('expanding'); await sleep(rm?200:420); await beat('.b1');
+        confirm(L.ret.confirm);
+        hud(live.hudH,'⌁ haptic .alignment',700); await sleep(50); fillSeg(6); if(!rm){ const c=ringCenterInStage(); fx.sparks(c.x,c.y); }
+        await sleep(450);
+        const ring=inner.querySelector('.ring');
+        if(ring&&!state.notrans){ ring.innerHTML=ringSVG(22,2.5,[0,1,2,3,4,5,6],true)+`<div class="num"></div><div class="chk">${G.check}</div>`; ring.classList.add('done');
+          const whole=ring.querySelector('.whole');
+          if(whole&&!rm){ whole.style.transition='stroke-width .4s cubic-bezier(.3,1.4,.5,1), stroke .4s ease'; whole.style.strokeWidth='4'; whole.style.stroke='#fff'; setTimeout(()=>{whole.style.strokeWidth='2.5'; whole.style.stroke='var(--accent)';},220); ring.style.transition='transform .5s cubic-bezier(.3,1.6,.5,1)'; ring.style.transform='scale(1.10)'; setTimeout(()=>ring.style.transform='scale(1)',260); }
+          else if(whole){ whole.style.transition='stroke .2s'; whole.style.stroke='#fff'; setTimeout(()=>whole.style.stroke='var(--accent)',200); } }
+        else if(ring){ ring.classList.add('done'); }
+        await sleep(100); if(!rm) fx.confetti(live.P);
+        await sleep(350);
+        const next=scenes[state.idx+1]; state.idx+=1; live.card.style.opacity='0'; await sleep(160);
+        applyScene(live,next,currentOpts()); renderNotes(next); renderStatus(next);
+        $('#prev').disabled=false; $('#next').disabled=state.idx===scenes.length-1; state.busy=false; $('#doit').disabled=!state.notrans; state.auto=false; $('#auto').setAttribute('aria-pressed','false'); return; }
+      case 'done':
+        if(state.notrans){ hud(live.hudE,'好了 → completed; keep ONE sink on $canTranslate',1100); await sleep(900); await advance(); state.busy=false; $('#doit').disabled=false; return; }
+        hud(live.hudE,'好了 → status = completed, teardown',900); await sleep(600); state.busy=false; return;
+    }
+    await advance();
+    state.busy=false; $('#doit').disabled=(scenes[state.idx].key==='done');
+    if(state.auto&&scenes[state.idx].key!=='done'){ await sleep(1100); return doStep(); }
+  }
+
+  $('#prev').addEventListener('click',()=>{ if(!state.busy) show(state.idx-1); });
+  $('#next').addEventListener('click',()=>{ if(!state.busy) show(state.idx+1); });
+  $('#doit').addEventListener('click',doStep);
+  $('#auto').addEventListener('click',(e)=>{ state.auto=!state.auto; e.currentTarget.setAttribute('aria-pressed',String(state.auto)); if(state.auto){ show(0); setTimeout(doStep,600); } });
+  function segHandler(id,key){ $(id).addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b) return; state[key]=b.dataset.v; [...$(id).children].forEach(x=>x.setAttribute('aria-pressed',String(x===b))); show(state.idx); renderFrames(); }); }
+  segHandler('#appearance','mock'); segHandler('#lang','lang');
+  $('#opt-rm').checked=state.rm;
+  $('#opt-rm').addEventListener('change',e=>{ state.rm=e.target.checked; show(state.idx); renderFrames(); });
+  $('#opt-unauth').addEventListener('change',e=>{ state.unauth=e.target.checked; show(0); renderFrames(); });
+  $('#opt-notrans').addEventListener('change',e=>{ state.notrans=e.target.checked; show(state.idx); renderFrames(); });
+  $('#opt-playing').addEventListener('change',e=>{ state.playing=e.target.checked; show(state.idx); renderFrames(); });
+  document.addEventListener('keydown',e=>{ if(e.target.closest('input,button,select,textarea')) return; if(e.key==='ArrowRight') $('#next').click(); else if(e.key==='ArrowLeft') $('#prev').click(); else if(e.key==='Enter') $('#doit').click(); });
+
+  const FRAME_DEFS=[
+    {sc:'S0', opts:{}, cap:{n:'S0',t:'欢迎 · 1/7 起步',d:'点「走起」或「先不用」。第 1 段 Music 已连上，预填。'}},
+    {sc:'G', opts:{unauth:true}, cap:{n:'G（条件）',t:'和 Music 打招呼',d:'只在自动化权限未授时出现；用户点按钮才触发系统询问。'}},
+    {sc:'S1', opts:{}, cap:{n:'S1',t:'悬停 · 播放',d:'高亮环先标出隐藏按钮的位置；悬停后按钮在环里浮现。'}},
+    {sc:'S2', opts:{}, cap:{n:'S2',t:'专辑页的两个角',d:'右上换输出、左上 ↖ Music 合成一步两个 beat；高亮环在两角之间跳。'}},
+    {sc:'S3', opts:{}, cap:{n:'S3',t:'歌词',d:'卡片不动，只换内容与箭头位置；去左下角对话气泡。'}},
+    {sc:'S4', opts:{}, cap:{n:'S4',t:'翻译',d:'歌词页右下角翻译按钮，检测 showTranslation 翻真。'}},
+    {sc:'S4', opts:{notrans:true}, cap:{n:'S4′（条件）',t:'翻译 · 延后',d:'当前歌不可翻译：卡片说一句先跳过，第 5 段变粉红虚线轨道，往 S5 走。'}},
+    {sc:'S4L', opts:{notrans:true}, cap:{n:'S4L（之后）',t:'翻译 · 补课',d:'引导结束后第一首能翻的歌播起来时，这张卡在翻译按钮旁出现；做完环安静合拢，不再放礼花。'}},
+    {sc:'S5', opts:{}, cap:{n:'S5',t:'甩到角落',d:'触控板示意演「斜甩」，右下角亮角落光；检测 snappedCorner。'}},
+    {sc:'S5', opts:{afterFling:true, posOverride:'corner', glowOverride:'edge'}, cap:{n:'S5b（中间态）',t:'再划进边',d:'面板已落角，卡片跟过来；示意换成「横划」，右缘亮边缘光；检测 .tucked。'}},
+    {sc:'S6', opts:{}, cap:{n:'S6',t:'回来',d:'卡在胶囊探出区之外；两个 beat：hover 探出、点击回来。'}},
+    {sc:'S7', opts:{}, cap:{n:'S7',t:'终局',d:'整圈合拢、脉冲、礼花一次；递出「录个快捷键」。'}},
+    {sc:'S1', opts:{mockOverride:'light'}, cap:{n:'S1 · 浅色',t:'浅色外观',d:'同一张玻璃卡在浅色外观下。'}}
+  ];
+  const frameRefs=[];
+  function renderFrames(){
+    const grid=$('#frames'); grid.innerHTML=''; frameRefs.length=0;
+    for(const f of FRAME_DEFS){
+      const scene=SCENES.find(s=>s.id===f.sc);
+      const el=document.createElement('div'); el.className='frame';
+      el.innerHTML=`<div class="thumb"><div class="stage" data-mock="${state.mock}"></div></div><div class="cap"><div class="n">${f.cap.n}</div><div class="t">${f.cap.t}</div><div class="d">${f.cap.d}</div></div>`;
+      grid.appendChild(el);
+      const st=el.querySelector('.stage'); const refs=buildStage(st,true);
+      const opts=currentOpts(Object.assign({static:true},f.opts)); if(f.opts.mockOverride) opts.mock=f.opts.mockOverride; if(f.sc==='G') opts.unauth=true; if(f.sc==='S4L') opts.notrans=true;
+      const sc=Object.assign({},scene); if(f.opts.posOverride) sc.pos=f.opts.posOverride; if(f.opts.glowOverride) sc.glow=f.opts.glowOverride;
+      applyScene(refs,sc,opts);
+      frameRefs.push({el:el.querySelector('.thumb'),st});
+    }
+    fitFrames();
+  }
+  function fitFrames(){ for(const f of frameRefs){ const w=f.el.clientWidth; f.st.style.transform=`scale(${w/W})`; } }
+  window.addEventListener('resize',fitFrames);
+
+  function renderRings(){
+    const row=$('#rings'); row.innerHTML='';
+    const defs=[
+      {f:[],n:'0',lab:'未连接 Music 的用户从 0 起步',b:'0 / 7'},
+      {f:[0],n:'1',lab:'首启常态：已连接，预填一段',b:'1 / 7'},
+      {f:[0,1],n:'2',lab:'悬停·播放 完成',b:'2 / 7'},
+      {f:[0,1,2],n:'3',lab:'两个角 完成',b:'3 / 7'},
+      {f:[0,1,2,3],n:'4',lab:'歌词 完成',b:'4 / 7'},
+      {f:[0,1,2,3,4],n:'5',lab:'翻译 完成',b:'5 / 7'},
+      {f:[0,1,2,3,4,5],n:'6',lab:'甩·收 完成',b:'6 / 7'},
+      {f:[0,1,2,3,4,5,6],n:'✓',lab:'回来 完成：七段缝合成整圈并脉冲',b:'7 / 7',closed:true},
+      {f:[0,1,2,3,5,6],n:'6',lab:'翻译延后：第 5 段粉红虚线，等一首能翻的歌再补',b:'6 / 7',p:[4]}
+    ];
+    for(const d of defs){ const cell=document.createElement('div'); cell.className='ringcell';
+      cell.innerHTML=`<div class="big" style="--mock-track:var(--line);">${ringSVG(64,5,d.f,!!d.closed,d.p)}<div class="num">${d.n}</div></div><div class="lab"><b>${d.b}</b>${d.lab}</div>`; row.appendChild(cell); }
+  }
+
+  renderRings(); renderFrames(); show(0);
+})();
+</script>
