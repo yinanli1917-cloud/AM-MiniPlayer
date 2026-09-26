@@ -21,6 +21,10 @@ import AppKit
 ///   for the pure state machine and Tokens.progressHoverIntent* below for
 ///   the tuned numbers + research citations.
 /// - shuffleRepeat: `.critical` (default) vs `.legacy055`
+/// - buttonFill: `.tinted` (default, 2026-09-26 — album-page shuffle/repeat
+///   circle fill sampled+darkened from the local backdrop, icon always
+///   white) vs `.legacy` (today's clear/untinted glass + white/gray icon).
+///   See `ButtonFillTint` for the pure fill-colour function.
 /// - windowPresent: `.fade` (default) vs `.hardcut`
 /// - artworkContrast: `.tuned` (default) vs `.legacy` — C5 light-artwork
 ///   contrast for the fluid backdrop (roadmap C5). Params are a SEPARATE
@@ -35,6 +39,7 @@ public enum MicroInteractionFeel {
     public static let progressHoverDefaultsKey = "nanoPodFeelProgressHover"
     public static let progressHoverIntentDefaultsKey = "nanoPodFeelProgressHoverIntent"
     public static let shuffleRepeatDefaultsKey = "nanoPodFeelShuffleRepeat"
+    public static let buttonFillDefaultsKey = "nanoPodFeelButtonFill"
     public static let windowPresentDefaultsKey = "nanoPodFeelWindowPresent"
     public static let edgeMorphDefaultsKey = "nanoPodFeelEdgeMorph"
     public static let settingsTabDefaultsKey = "nanoPodFeelSettingsTab"
@@ -103,6 +108,21 @@ public enum MicroInteractionFeel {
         public static func resolve(from raw: String?) -> WindowPresentMode {
             guard let raw else { return .fade }
             return WindowPresentMode(rawValue: raw.lowercased()) ?? .fade
+        }
+    }
+
+    /// Album-page shuffle/repeat circle fill: `.tinted` (default, 2026-09-26 —
+    /// founder: the two circles look bad on bright covers) vs `.legacy` (the
+    /// shipped-until-now behaviour, byte-identical: clear/untinted glass, icon
+    /// colour solved by `ButtonIconDecision` white/gray). See `ButtonFillTint`
+    /// and `research/album-buttons-2026-09-26.md` for the replacement's numbers.
+    public enum ButtonFillMode: String, CaseIterable {
+        case tinted = "tinted"
+        case legacy = "legacy"
+
+        public static func resolve(from raw: String?) -> ButtonFillMode {
+            guard let raw else { return .tinted }
+            return ButtonFillMode(rawValue: raw.lowercased()) ?? .tinted
         }
     }
 
@@ -258,6 +278,7 @@ public enum MicroInteractionFeel {
     nonisolated(unsafe) public static var testingProgressHover: ProgressHoverMode?
     nonisolated(unsafe) public static var testingProgressHoverIntent: ProgressHoverIntentMode?
     nonisolated(unsafe) public static var testingShuffleRepeat: ShuffleRepeatMode?
+    nonisolated(unsafe) public static var testingButtonFill: ButtonFillMode?
     nonisolated(unsafe) public static var testingWindowPresent: WindowPresentMode?
     nonisolated(unsafe) public static var testingEdgeMorph: EdgeMorphMode?
     nonisolated(unsafe) public static var testingSettingsTab: SettingsTabMode?
@@ -270,6 +291,7 @@ public enum MicroInteractionFeel {
         testingProgressHover = nil
         testingProgressHoverIntent = nil
         testingShuffleRepeat = nil
+        testingButtonFill = nil
         testingWindowPresent = nil
         testingEdgeMorph = nil
         testingSettingsTab = nil
@@ -327,6 +349,16 @@ public enum MicroInteractionFeel {
         #endif
         return ShuffleRepeatMode.resolve(
             from: UserDefaults.standard.string(forKey: shuffleRepeatDefaultsKey)
+        )
+    }
+
+    public static var buttonFill: ButtonFillMode {
+        #if DEBUG
+        if let testingButtonFill { return testingButtonFill }
+        if isRunningTests { return .tinted }
+        #endif
+        return ButtonFillMode.resolve(
+            from: UserDefaults.standard.string(forKey: buttonFillDefaultsKey)
         )
     }
 
@@ -408,6 +440,9 @@ public enum MicroInteractionFeel {
         case "shufflerepeat":
             UserDefaults.standard.set(ShuffleRepeatMode.resolve(from: value).rawValue, forKey: shuffleRepeatDefaultsKey)
             return true
+        case "buttonfill":
+            UserDefaults.standard.set(ButtonFillMode.resolve(from: value).rawValue, forKey: buttonFillDefaultsKey)
+            return true
         case "windowpresent":
             UserDefaults.standard.set(WindowPresentMode.resolve(from: value).rawValue, forKey: windowPresentDefaultsKey)
             return true
@@ -456,6 +491,7 @@ public enum MicroInteractionFeel {
         UserDefaults.standard.removeObject(forKey: progressHoverDefaultsKey)
         UserDefaults.standard.removeObject(forKey: progressHoverIntentDefaultsKey)
         UserDefaults.standard.removeObject(forKey: shuffleRepeatDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: buttonFillDefaultsKey)
         UserDefaults.standard.removeObject(forKey: windowPresentDefaultsKey)
         UserDefaults.standard.removeObject(forKey: edgeMorphDefaultsKey)
         UserDefaults.standard.removeObject(forKey: settingsTabDefaultsKey)
