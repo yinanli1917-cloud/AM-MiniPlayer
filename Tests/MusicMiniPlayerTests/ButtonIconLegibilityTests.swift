@@ -509,8 +509,12 @@ final class ButtonIconLegibilityTests: XCTestCase {
         let source = try sourceText("Sources/MusicMiniPlayerCore/UI/MiniPlayerView.swift")
         XCTAssertFalse(source.contains("iconTone: buttonIconTones"), "the top two buttons must not read buttonIconTones any more")
         XCTAssertFalse(source.contains("iconTones: SharedBottomControlsIconTones"), "SharedBottomControls must not be passed a tone override any more")
-        // Only the shuffle/repeat cluster may still call `iconColor(for:)`.
-        XCTAssertTrue(source.contains("iconColor(for: .shuffle)"))
-        XCTAssertTrue(source.contains("iconColor(for: .repeatButton)"))
+        // Only the shuffle/repeat cluster may still reach `iconColor(for:)` — since
+        // 2026-09-26 (MicroInteractionFeel.buttonFill) that cluster calls it through
+        // `neutralIconColor(for:)`, which falls through to `iconColor(for:)` on the
+        // `.legacy` arm only (see ButtonFillTint.swift / MicroInteractionFeel.swift).
+        XCTAssertTrue(source.contains("neutralIconColor(for: .shuffle)"))
+        XCTAssertTrue(source.contains("neutralIconColor(for: .repeatButton)"))
+        XCTAssertTrue(source.contains(": iconColor(for: id)"), "neutralIconColor's .legacy branch must still fall through to iconColor(for:)")
     }
 }

@@ -216,7 +216,7 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
             // (defect 5: names server-side animation survivors on a static panel).
             // nanopod://debug/feel/<appear|blur|sweep>/<v28|current|layer>
             // nanopod://debug/feel/wave/<topdown|sync>
-            // nanopod://debug/feel/<hoverCapsule|pressScale|progressHover|shuffleRepeat|windowPresent>/<arm>
+            // nanopod://debug/feel/<hoverCapsule|pressScale|progressHover|shuffleRepeat|buttonFill|windowPresent>/<arm>
             // nanopod://debug/feel/reset — resets both NativeLyricsFeelParity and MicroInteractionFeel
             // nanopod://debug/onboarding/<show|reset> — force-show or reset the C6 onboarding window
             let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()

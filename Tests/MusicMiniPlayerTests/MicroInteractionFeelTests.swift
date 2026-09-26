@@ -35,6 +35,10 @@ final class MicroInteractionFeelTests: XCTestCase {
         XCTAssertEqual(MicroInteractionFeel.ShuffleRepeatMode.resolve(from: "nope"), .critical)
         XCTAssertEqual(MicroInteractionFeel.ShuffleRepeatMode.resolve(from: "legacy055"), .legacy055)
 
+        XCTAssertEqual(MicroInteractionFeel.ButtonFillMode.resolve(from: nil), .tinted)
+        XCTAssertEqual(MicroInteractionFeel.ButtonFillMode.resolve(from: "nope"), .tinted)
+        XCTAssertEqual(MicroInteractionFeel.ButtonFillMode.resolve(from: "legacy"), .legacy)
+
         XCTAssertEqual(MicroInteractionFeel.WindowPresentMode.resolve(from: nil), .fade)
         XCTAssertEqual(MicroInteractionFeel.WindowPresentMode.resolve(from: "nope"), .fade)
         XCTAssertEqual(MicroInteractionFeel.WindowPresentMode.resolve(from: "hardcut"), .hardcut)
@@ -96,6 +100,9 @@ final class MicroInteractionFeelTests: XCTestCase {
         XCTAssertTrue(MicroInteractionFeel.apply(channel: "shuffleRepeat", value: "legacy055"))
         XCTAssertEqual(UserDefaults.standard.string(forKey: MicroInteractionFeel.shuffleRepeatDefaultsKey), "legacy055")
 
+        XCTAssertTrue(MicroInteractionFeel.apply(channel: "buttonFill", value: "legacy"))
+        XCTAssertEqual(UserDefaults.standard.string(forKey: MicroInteractionFeel.buttonFillDefaultsKey), "legacy")
+
         XCTAssertTrue(MicroInteractionFeel.apply(channel: "windowPresent", value: "hardcut"))
         XCTAssertEqual(UserDefaults.standard.string(forKey: MicroInteractionFeel.windowPresentDefaultsKey), "hardcut")
 
@@ -108,6 +115,7 @@ final class MicroInteractionFeelTests: XCTestCase {
         _ = MicroInteractionFeel.apply(channel: "progressHover", value: "legacy")
         _ = MicroInteractionFeel.apply(channel: "progressHoverIntent", value: "immediate")
         _ = MicroInteractionFeel.apply(channel: "shuffleRepeat", value: "legacy055")
+        _ = MicroInteractionFeel.apply(channel: "buttonFill", value: "legacy")
         _ = MicroInteractionFeel.apply(channel: "windowPresent", value: "hardcut")
 
         XCTAssertTrue(MicroInteractionFeel.apply(channel: "reset", value: ""))
@@ -117,7 +125,18 @@ final class MicroInteractionFeelTests: XCTestCase {
         XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.progressHoverDefaultsKey))
         XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.progressHoverIntentDefaultsKey))
         XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.shuffleRepeatDefaultsKey))
+        XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.buttonFillDefaultsKey))
         XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.windowPresentDefaultsKey))
+    }
+
+    func test_buttonFill_testingOverride_takesPrecedenceOverUserDefaults() {
+        UserDefaults.standard.set("legacy", forKey: MicroInteractionFeel.buttonFillDefaultsKey)
+        MicroInteractionFeel.testingButtonFill = .legacy
+        XCTAssertEqual(MicroInteractionFeel.buttonFill, .legacy)
+        MicroInteractionFeel.testingButtonFill = .tinted
+        XCTAssertEqual(MicroInteractionFeel.buttonFill, .tinted, "override wins even against a contradicting UserDefaults value")
+        MicroInteractionFeel.testingButtonFill = nil
+        UserDefaults.standard.removeObject(forKey: MicroInteractionFeel.buttonFillDefaultsKey)
     }
 
     func test_tokens_pinnedToSpecifiedValues() {

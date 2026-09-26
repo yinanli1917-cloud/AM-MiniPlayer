@@ -8,6 +8,7 @@ public struct MiniPlayerView: View {
     @EnvironmentObject var musicController: MusicController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     // Use musicController.currentPage instead of local page state so every surface stays synchronized.
     @State private var isHovering: Bool = false
     @State private var showControls: Bool = false
@@ -47,6 +48,14 @@ public struct MiniPlayerView: View {
     // to white).
     @State private var buttonIconTones: [ButtonIconID: ButtonIconTone] = [:]
     @State private var buttonIconCoordinator = ButtonIconRefreshCoordinator()
+
+    // `.tinted` arm (default, 2026-09-26): the shuffle/repeat circles' own fill
+    // colour, sampled+darkened from the local backdrop so the icon can stay
+    // permanently white (ButtonFillTint.swift). Populated/animated the same way
+    // as `buttonIconTones` above, but only the arm MicroInteractionFeel.buttonFill
+    // currently selects gets refreshed — see refreshButtonIconTones().
+    @State private var buttonFillColors: [ButtonIconID: BackdropLegibilityBand.RGBColor] = [:]
+    @State private var buttonFillCoordinator = ButtonFillRefreshCoordinator()
     @State private var lastKnownPanelSize: CGSize = CGSize(width: PanelWindowMetrics.defaultSize.width, height: PanelWindowMetrics.defaultSize.height)
 
     // Shuffle/repeat feedback animation progress.
@@ -357,30 +366,70 @@ public struct MiniPlayerView: View {
         let tone = artworkTone
         let panelSize = lastKnownPanelSize
         let reduceTransparencySnapshot = reduceTransparency
-        let previous = buttonIconTones
-        let coordinator = buttonIconCoordinator
 
-        Task {
-            guard let result = await coordinator.refresh(
-                fullscreen: fullscreen,
-                artwork: artwork,
-                tone: tone,
-                panelSize: panelSize,
-                reduceTransparency: reduceTransparencySnapshot,
-                previous: previous
-            ) else { return }
-            buttonIconTones = result
+        // Only the currently-selected arm's (expensive, fullscreen-composite-
+        // rendering) pipeline runs — the other arm's @State is simply left
+        // stale/unused, same as any other inactive-arm state elsewhere in this
+        // codebase. Switching arms via `defaults write` mid-session picks this
+        // branch up on the next natural trigger (track/cover change, fullscreen
+        // toggle, panel re-appear); see research/album-buttons-2026-09-26.md.
+        switch MicroInteractionFeel.buttonFill {
+        case .legacy:
+            let previous = buttonIconTones
+            let coordinator = buttonIconCoordinator
+            Task {
+                guard let result = await coordinator.refresh(
+                    fullscreen: fullscreen,
+                    artwork: artwork,
+                    tone: tone,
+                    panelSize: panelSize,
+                    reduceTransparency: reduceTransparencySnapshot,
+                    previous: previous
+                ) else { return }
+                buttonIconTones = result
+            }
+        case .tinted:
+            let previous = buttonFillColors
+            let coordinator = buttonFillCoordinator
+            Task {
+                guard let result = await coordinator.refresh(
+                    fullscreen: fullscreen,
+                    artwork: artwork,
+                    tone: tone,
+                    panelSize: panelSize,
+                    reduceTransparency: reduceTransparencySnapshot,
+                    previous: previous
+                ) else { return }
+                buttonFillColors = result
+            }
         }
     }
 
     /// `buttonIconTones[id]` as a `Color` — a solved neutral gray when the background is
     /// too bright, else white (today's colour, including when this button has not been
-    /// resolved yet).
+    /// resolved yet). Only reachable from `.legacy`'s render path — see `neutralIconColor`.
     private func iconColor(for id: ButtonIconID) -> Color {
         switch buttonIconTones[id] {
         case .gray(let lightness): return Color(white: lightness)
         case .white, .none: return .white
         }
+    }
+
+    /// The shuffle/repeat icon colour for its NEUTRAL (not shuffle-on/repeat-on)
+    /// state, branched on the current `buttonFill` arm: `.tinted` always draws a
+    /// pure white icon (the fill guarantees contrast — see `ButtonFillTint`);
+    /// `.legacy` keeps today's white-or-solved-gray behaviour unchanged.
+    private func neutralIconColor(for id: ButtonIconID) -> Color {
+        MicroInteractionFeel.buttonFill == .tinted ? .white : iconColor(for: id)
+    }
+
+    /// `.tinted` arm's fill `Color` for one button — `ButtonFillTint`'s resolved
+    /// colour once available, else a neutral mid-gray placeholder before the
+    /// first async resolve lands (matches `ButtonFillTint`'s own darkened range,
+    /// so there is no bright flash before the real colour arrives).
+    private func fillColor(for id: ButtonIconID) -> Color {
+        let rgb = buttonFillColors[id] ?? BackdropLegibilityBand.RGBColor(r: 0.35, g: 0.35, b: 0.35)
+        return Color(red: rgb.r, green: rgb.g, blue: rgb.b)
     }
 
     private func refreshEffectArtwork() {
@@ -516,6 +565,10 @@ extension MiniPlayerView {
                 // Short cross-fade when shuffle/repeat's icon tone changes (founder
                 // 2026-09-24) — never a hard snap.
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: buttonIconTones)
+                // Same short cross-fade for the `.tinted` arm's fill colour changes
+                // (buttonIconTones itself never changes on that arm, so it alone
+                // would not animate this transition).
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: buttonFillColors)
             }
             // 🔑 动画时长：全屏模式 0.5s，非全屏模式 0.4s
             .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
@@ -527,19 +580,23 @@ extension MiniPlayerView {
     @ViewBuilder
     private var shuffleRepeatCluster: some View {
         let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
+        let fillArm = MicroInteractionFeel.buttonFill
+        let prefersSolidFill = reduceTransparency || colorSchemeContrast == .increased
 
         HStack(spacing: 4) {
             Button(action: { musicController.toggleShuffle() }) {
                 AnimatedShuffleIcon(
-                    color: musicController.shuffleEnabled ? themeColor : iconColor(for: .shuffle),
+                    color: musicController.shuffleEnabled ? themeColor : neutralIconColor(for: .shuffle),
                     isEnabled: musicController.shuffleEnabled
                 )
                 .frame(width: 24, height: 24)
-                .background(
-                    Circle()
-                        .fill(musicController.shuffleEnabled ? themeColor.opacity(0.2) : Color.clear)
-                )
-                .modifier(GlassButtonTexture(shape: Circle()))
+                .modifier(ShuffleRepeatCircleChrome(
+                    isEnabled: musicController.shuffleEnabled,
+                    themeColor: themeColor,
+                    fillColor: fillColor(for: .shuffle),
+                    fillArm: fillArm,
+                    prefersSolidFill: prefersSolidFill
+                ))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("随机播放")
@@ -549,15 +606,17 @@ extension MiniPlayerView {
                 Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
                     .contentTransition(.symbolEffect(.replace))
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(musicController.repeatMode > 0 ? themeColor : iconColor(for: .repeatButton))
+                    .foregroundStyle(musicController.repeatMode > 0 ? themeColor : neutralIconColor(for: .repeatButton))
                     .rotationEffect(.degrees(repeatFlow * 10))
                     .scaleEffect(1 - repeatFlow * 0.1)
                     .frame(width: 24, height: 24)
-                    .background(
-                        Circle()
-                            .fill(musicController.repeatMode > 0 ? themeColor.opacity(0.2) : Color.clear)
-                    )
-                    .modifier(GlassButtonTexture(shape: Circle()))
+                    .modifier(ShuffleRepeatCircleChrome(
+                        isEnabled: musicController.repeatMode > 0,
+                        themeColor: themeColor,
+                        fillColor: fillColor(for: .repeatButton),
+                        fillArm: fillArm,
+                        prefersSolidFill: prefersSolidFill
+                    ))
             }
             .buttonStyle(.plain)
             .accessibilityLabel(musicController.repeatMode == 0 ? "关闭循环" : musicController.repeatMode == 1 ? "单曲循环" : "列表循环")
@@ -794,6 +853,56 @@ extension MiniPlayerView {
                     .overlay(Text("No Art").foregroundColor(.white))
                 Spacer()
             }
+        }
+    }
+}
+
+// MARK: - Shuffle/Repeat circle chrome (2026-09-26, MicroInteractionFeel.buttonFill)
+
+/// The shuffle/repeat circle's background + material, branched on the button's
+/// enabled (shuffle-on / repeat-on) state and the `buttonFill` arm. Selected
+/// state (`isEnabled == true`, theme-red) is IDENTICAL on both arms — out of
+/// this mechanism's scope, see `ButtonIconLegibility.swift`'s own doc comment.
+/// `.legacy`'s neutral state is byte-identical to the pre-2026-09-26 shuffleRepeatCluster
+/// (`Circle().fill(.clear)` + `GlassButtonTexture`). `.tinted`'s neutral state uses
+/// `fillColor` (`ButtonFillTint`'s resolved colour — see ButtonFillTint.swift) via a
+/// macOS 26 tinted regular glass effect (same `.glassEffect(.regular.tint(_:), in:)`
+/// recipe `GlassCircle` in HoverableButtons.swift already established elsewhere in
+/// this codebase, wrapped in the same `GlassEffectContainer` `GlassButtonTexture` uses
+/// for these exact buttons today), a material+overlay approximation pre-26, or —
+/// respecting Reduce Transparency / Increase Contrast — an OPAQUE circle in the same
+/// colour instead of any translucent material (mirrors `AudioOutputPanelGlass`'s
+/// existing `reduceTransparency` branch in AudioOutputSwitcherView.swift).
+private struct ShuffleRepeatCircleChrome: ViewModifier {
+    let isEnabled: Bool
+    let themeColor: Color
+    let fillColor: Color
+    let fillArm: MicroInteractionFeel.ButtonFillMode
+    let prefersSolidFill: Bool
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content
+                .background(Circle().fill(themeColor.opacity(0.2)))
+                .modifier(GlassButtonTexture(shape: Circle()))
+        } else if fillArm == .legacy {
+            content
+                .background(Circle().fill(Color.clear))
+                .modifier(GlassButtonTexture(shape: Circle()))
+        } else if prefersSolidFill {
+            content.background(Circle().fill(fillColor))
+        } else if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: 0) {
+                content.glassEffect(.regular.tint(fillColor), in: .circle)
+            }
+        } else {
+            content.background(
+                Circle()
+                    .fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, .light)
+                    .overlay(Circle().fill(fillColor.opacity(0.55)))
+                    .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 0.5))
+            )
         }
     }
 }
