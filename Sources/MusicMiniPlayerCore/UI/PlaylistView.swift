@@ -37,6 +37,18 @@ public struct PlaylistView: View {
     /// guessing from static reading. See the 2026-09-15 CPU-regression fix at
     /// the Up Next section below (WT-D plan H postmortem) for why this exists.
     public static var debugBodyEvalCount = 0
+
+    /// Mirrors `sectionOffsets` (below) — the section frames already reported
+    /// into `SectionOffsetKey` for the sticky-header overlay. Not read
+    /// anywhere in production. `"history_maxY"` (History section's bottom
+    /// edge in the "playlistScroll" coordinate space) is, by construction,
+    /// the Now Playing card's own top edge — History and Now Playing are
+    /// adjacent siblings with zero spacing in the same VStack — so this lets
+    /// PlaybackHistoryInsertionScrollStabilityTests measure whether the Now
+    /// Playing card visually shifts on screen when a History entry is
+    /// appended (2026-09-26 History order fix), without adding any new
+    /// GeometryReader/.preference plumbing beyond what already exists.
+    public static var debugLastSectionOffsets: [String: CGFloat] = [:]
     #endif
 
     // ═══════════════════════════════════════════
@@ -145,10 +157,14 @@ public struct PlaylistView: View {
                                     emptyStateText(PlaylistL10n.localized("noRecentTracks"))
                                 } else {
                                     // Real playback history nanoPod itself observed (founder
-                                    // ruling 2026-09-13) — already newest-first, unlike the
-                                    // legacy `recentTracks` (Apple Music account "recently
-                                    // played", kept fetching but no longer read by this
-                                    // section — WT-E still calls the public API for it).
+                                    // ruling 2026-09-13), unlike the legacy `recentTracks`
+                                    // (Apple Music account "recently played", kept fetching but
+                                    // no longer read by this section — WT-E still calls the
+                                    // public API for it). Rendered OLDEST→NEWEST (2026-09-26
+                                    // founder ruling) — `displayedPlaybackHistory` reverses the
+                                    // store's own newest-first order so the most recently
+                                    // finished play is this ForEach's LAST row, immediately
+                                    // above the Now Playing card below it.
                                     // 2026-09-15: the currently PLAYING track is filtered out
                                     // of this display list (`displayedPlaybackHistory`) — it
                                     // already has its own row on the Now Playing card; History
@@ -258,6 +274,9 @@ public struct PlaylistView: View {
                     .coordinateSpace(name: "playlistScroll")
                     .onPreferenceChange(SectionOffsetKey.self) { offsets in
                         sectionOffsets = offsets
+                        #if DEBUG
+                        Self.debugLastSectionOffsets = offsets
+                        #endif
                     }
                     .onAppear {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -391,12 +410,22 @@ public struct PlaylistView: View {
     /// newest row (`history.first`) — see `PlaybackHistoryDisplayPolicy`'s
     /// 2026-09-25 H1 fix note for why an earlier repeat play of the same
     /// song must stay visible.
+    ///
+    /// 2026-09-26 founder ruling: rendered top-to-bottom OLDEST→NEWEST
+    /// (`PlaybackHistoryDisplayPolicy.chronological`), so the most recently
+    /// finished play is the LAST row of this section — immediately above the
+    /// Now Playing card that follows it in the ScrollView, matching
+    /// Music.app's own History ordering. `displayed(...)` itself still
+    /// returns newest-first (its own tests are unchanged); `chronological`
+    /// is a separate, independently-tested reordering step.
     private var displayedPlaybackHistory: [PlaybackHistoryEntry] {
-        PlaybackHistoryDisplayPolicy.displayed(
-            history: musicController.playbackHistory,
-            currentTitle: musicController.currentTrackTitle,
-            currentArtist: musicController.currentArtist,
-            currentPersistentID: musicController.currentPersistentID
+        PlaybackHistoryDisplayPolicy.chronological(
+            PlaybackHistoryDisplayPolicy.displayed(
+                history: musicController.playbackHistory,
+                currentTitle: musicController.currentTrackTitle,
+                currentArtist: musicController.currentArtist,
+                currentPersistentID: musicController.currentPersistentID
+            )
         )
     }
 

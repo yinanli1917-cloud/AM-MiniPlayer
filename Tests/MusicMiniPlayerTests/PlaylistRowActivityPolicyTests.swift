@@ -151,3 +151,70 @@ final class PlaybackHistoryDisplayPolicyTests: XCTestCase {
         XCTAssertEqual(displayed.map(\.persistentID), ["", ""], "only the actual current-track row should be removed")
     }
 }
+
+/// 2026-09-26 founder ruling (research/evidence/2026-09-26-history-order-and-
+/// artwork.webp): History must read top-to-bottom OLDEST→NEWEST — the most
+/// recently finished play sits immediately above the Now Playing card,
+/// matching Music.app's own History ordering. Before this fix,
+/// `displayed(...)`'s newest-first order was rendered as-is, so the OLDEST
+/// row (not the newest) ended up adjacent to Now Playing. Kept as a separate
+/// pure step from `displayed` so that function's own newest-first contract
+/// (and every test above pinned to it) is untouched.
+final class PlaybackHistoryDisplayPolicyChronologicalTests: XCTestCase {
+
+    private func entry(_ id: String, startedAt: Date = Date()) -> PlaybackHistoryEntry {
+        PlaybackHistoryEntry(
+            persistentID: id, title: "T-\(id)", artist: "A", album: "Al",
+            duration: 200, sourceKind: id.isEmpty ? .radioOrStream : .library,
+            startedAt: startedAt
+        )
+    }
+
+    func test_reversesNewestFirstIntoOldestFirst() {
+        // `displayed(...)`'s own contract: index 0 is the newest surviving row.
+        let newestFirst = [entry("newest"), entry("mid"), entry("oldest")]
+
+        let chronological = PlaybackHistoryDisplayPolicy.chronological(newestFirst)
+
+        XCTAssertEqual(
+            chronological.map(\.persistentID), ["oldest", "mid", "newest"],
+            "oldest must render first (top of the History section), newest last (bottom, adjacent to Now Playing)"
+        )
+    }
+
+    func test_newestEntryIsLastAfterReordering_adjacentToNowPlayingPosition() {
+        let newestFirst = [entry("newest"), entry("older1"), entry("older2")]
+
+        let chronological = PlaybackHistoryDisplayPolicy.chronological(newestFirst)
+
+        XCTAssertEqual(chronological.last?.persistentID, "newest", "the ForEach's LAST row is immediately above the Now Playing section in PlaylistView's VStack")
+        XCTAssertEqual(chronological.first?.persistentID, "older2")
+    }
+
+    func test_singleEntry_unaffected() {
+        let single = [entry("only")]
+        XCTAssertEqual(PlaybackHistoryDisplayPolicy.chronological(single).map(\.persistentID), ["only"])
+    }
+
+    func test_emptyList_returnsEmpty() {
+        XCTAssertTrue(PlaybackHistoryDisplayPolicy.chronological([]).isEmpty)
+    }
+
+    /// Composition as `PlaylistView.displayedPlaybackHistory` actually calls
+    /// it: `chronological(displayed(...))`. The currently-playing row is
+    /// still hidden (unchanged semantics), and everything left over renders
+    /// oldest-first.
+    func test_composedWithDisplayed_currentRowHidden_remainderOldestFirst() {
+        let history = [
+            entry("current", startedAt: Date(timeIntervalSince1970: 3000)), // newest, now playing
+            entry("mid", startedAt: Date(timeIntervalSince1970: 2000)),
+            entry("oldest", startedAt: Date(timeIntervalSince1970: 1000))
+        ]
+
+        let result = PlaybackHistoryDisplayPolicy.chronological(
+            PlaybackHistoryDisplayPolicy.displayed(history: history, currentTitle: "T", currentArtist: "A", currentPersistentID: "current")
+        )
+
+        XCTAssertEqual(result.map(\.persistentID), ["oldest", "mid"], "current row hidden; remainder oldest-first, newest ('mid') last")
+    }
+}

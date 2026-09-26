@@ -213,6 +213,58 @@ extension MusicController {
         currentArtwork != nil && appliedArtworkGeneration == generation && !currentArtworkIsPlaceholder
     }
 
+    /// 2026-09-26 fix (founder report: research/evidence/2026-09-26-history-
+    /// order-and-artwork.webp — a History row showed the WRONG song's cover).
+    /// `handleTrackChange`'s notification path fetches artwork immediately
+    /// (before persistentID is known — `MusicController.swift`) and only
+    /// learns the real persistentID later, from ScriptingBridge, up to 1.5s
+    /// after (`SBTimeoutRunner.run(timeout: 1.5, lane: "trackMetadata")`).
+    /// Once that PID resolves, this backfills `artworkCache` under it so a
+    /// later History/Up Next row for the SAME track hits the memory tier
+    /// instead of re-fetching — but `currentArtwork` at that moment is
+    /// whatever is CURRENTLY on screen, which is only guaranteed to be the
+    /// NEW track's own cover if it was actually applied FOR THIS generation
+    /// (`hasAppliedRealArtwork(for:)` — same gate `applyArtworkIfCurrent`
+    /// uses). Without this gate: `fetchArtwork`'s `heldPreviousArtwork` path
+    /// deliberately keeps the OLD track's real cover on screen while the new
+    /// one is still in flight (to avoid a placeholder flash) — if SB's PID
+    /// read resolves before the new cover arrives, that RETAINED previous-
+    /// track image got cached under the NEW track's persistentID. Every
+    /// later reader of this exact cache (`getCachedArtwork`,
+    /// `RowArtworkStore`'s `memoryRead` in `makeRowArtworkStore`,
+    /// `fetchArtworkByPersistentID`'s pre-check) then serves the wrong song's
+    /// cover for that persistentID — including History rows. This specific
+    /// write never reaches disk (only `artworkCache`, the in-memory NSCache,
+    /// confirmed by read-only inspection of the founder's real
+    /// `~/Library/Application Support/nanoPod/ArtworkCache/`: neither song's
+    /// persistentID-keyed digest exists there, only their correct,
+    /// unrelated metadata-title-keyed entries) — so the poisoning was
+    /// confined to the running process (until quit/relaunch or eviction),
+    /// which is consistent with the founder observing it live but disk
+    /// forensics turning up nothing.
+    ///
+    /// Also requires `artworkFetchGeneration == generation` — the SAME pairing
+    /// `applyArtworkIfCurrent` and the `fetchFailed` placeholder fallback both
+    /// use alongside `hasAppliedRealArtwork(for:)` a few dozen lines away:
+    /// `hasAppliedRealArtwork(for:)` alone only proves the ON-SCREEN image was
+    /// once validly applied FOR generation `generation`; it says nothing about
+    /// whether `generation` is still the CURRENT one. This closure's own early
+    /// guard (`handleTrackChange`, before the up-to-1.5s ScriptingBridge read)
+    /// checks this once, but a newer track change can still increment
+    /// `artworkFetchGeneration` again while that SB read is in flight — this
+    /// second check catches that case at the point the backfill actually runs.
+    /// See `TrackIdentityArtworkBackfillTests` for the repro this gates.
+    func backfillArtworkCacheIfCurrent(persistentID: String, generation: Int) {
+        guard !persistentID.isEmpty,
+              artworkFetchGeneration == generation,
+              hasAppliedRealArtwork(for: generation),
+              let artwork = currentArtwork,
+              artworkCache.object(forKey: persistentID as NSString) == nil else {
+            return
+        }
+        artworkCache.setObject(artwork, forKey: persistentID as NSString, cost: Self.imageCacheCost(artwork))
+    }
+
     /// 🔑 generation 由调用方提供（handleTrackChange / applySnapshot 各自 incrementGeneration）
     /// 不再内部递增 — 修复了双递增导致 handleTrackChange SB 块永远 stale 的 bug
     /// 🔑 去重统一依赖 generation + Task cancellation：

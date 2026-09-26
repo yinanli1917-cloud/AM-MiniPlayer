@@ -78,4 +78,24 @@ public enum PlaybackHistoryDisplayPolicy {
         guard isCurrentPlay else { return history }
         return Array(history.dropFirst())
     }
+
+    /// 2026-09-26 founder ruling (research/evidence/2026-09-26-history-order-and-
+    /// artwork.webp): the History section must read top-to-bottom OLDEST→NEWEST,
+    /// matching Music.app's own History list — the row for the most recently
+    /// finished play sits immediately above the Now Playing card, because
+    /// PlaylistView renders the History section directly above Now Playing in
+    /// its ScrollView (`PlaylistView.swift`, `historySection` then
+    /// `nowPlayingSection`). Before this fix, `displayed(...)`'s newest-first
+    /// order (mirroring the store's own insertion order, `history.first` ==
+    /// newest) was rendered as-is, so the OLDEST visible row ended up adjacent
+    /// to Now Playing and the newest sat at the top, farthest away — backwards.
+    ///
+    /// Kept as a SEPARATE pure step (not folded into `displayed` above) so
+    /// `displayed`'s existing filter contract — and every test pinned to its
+    /// newest-first return order — is untouched; only the final on-screen
+    /// ordering changes. `PlaylistView` composes them:
+    /// `chronological(displayed(...))`.
+    public static func chronological(_ entries: [PlaybackHistoryEntry]) -> [PlaybackHistoryEntry] {
+        entries.reversed()
+    }
 }
