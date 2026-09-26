@@ -161,6 +161,7 @@ scripts/e2e_smoke.sh               - 真 app 端到端冒烟（构建→启动�
 docs/lyrics_test_cases.json        - 82 条预定义歌词测试用例（`LyricsVerifier run` 全量跑）
 docs/lyrics_benchmark_cases.json   - 100 首全球基准测试（10 语言区域 × 10 首）
 docs/defect-recordings/            - 缺陷录屏逐帧证据归档（含 NOTES.md 分析）
+docs/craft-notes.md                - 手艺笔记：一路学到的细节（用户碰到什么 / 业界解法 / 我们怎么做 / 为什么这个数），供官网回顾；做完值得讲的细节就在顶部追加一条（创始人 2026-09-26 定）
 postmortem/001~006                 - 已知 bug 根因 + 解决方案
 
 research/references/               - 竞品动效研究（competitor motion studies）：录屏 + perceive-animation 逐帧拆解 spec
