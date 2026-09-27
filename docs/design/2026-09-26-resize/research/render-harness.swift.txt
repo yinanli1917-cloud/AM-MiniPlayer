@@ -1,0 +1,183 @@
+import XCTest
+import AppKit
+import SwiftUI
+@testable import MusicMiniPlayerCore
+
+/// TEMPORARY (scratchpad worktree only, never committed): renders every page of the
+/// real MiniPlayerView at several panel widths into PNG files so the resize design
+/// proposal can inspect layouts at min / default / max sizes without screenshots.
+/// Windows are placed far off-screen so nothing flashes on the founder's display.
+private final class OffscreenWindow: NSWindow {
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+}
+
+@MainActor
+final class TempResizeRenderTests: XCTestCase {
+    private var windows: [NSWindow] = []
+    private let music = MusicController.shared
+    private var savedFullscreen: Any?
+
+    override func setUp() {
+        super.setUp()
+        savedFullscreen = UserDefaults.standard.object(forKey: "fullscreenAlbumCover")
+    }
+
+    override func tearDown() {
+        windows.forEach { $0.orderOut(nil) }
+        windows = []
+        UserDefaults.standard.set(savedFullscreen, forKey: "fullscreenAlbumCover")
+        super.tearDown()
+    }
+
+    private var outDir: String {
+        ProcessInfo.processInfo.environment["RESIZE_RENDER_OUT"] ?? NSTemporaryDirectory() + "resize-render"
+    }
+
+    private var root: some View {
+        MiniPlayerView()
+            .environmentObject(music)
+            .environmentObject(EdgePresentationModel())
+    }
+
+    private func spin(_ s: Double) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
+
+    private func makeArtwork() -> NSImage {
+        let size = NSSize(width: 600, height: 600)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        let g = NSGradient(colors: [
+            NSColor(calibratedRed: 0.93, green: 0.55, blue: 0.35, alpha: 1),
+            NSColor(calibratedRed: 0.35, green: 0.22, blue: 0.45, alpha: 1),
+            NSColor(calibratedRed: 0.10, green: 0.35, blue: 0.55, alpha: 1)
+        ])!
+        g.draw(in: NSRect(origin: .zero, size: size), angle: -60)
+        NSColor(calibratedWhite: 1, alpha: 0.85).setFill()
+        NSBezierPath(ovalIn: NSRect(x: 320, y: 340, width: 190, height: 190)).fill()
+        NSColor(calibratedWhite: 0.05, alpha: 0.7).setFill()
+        NSBezierPath(rect: NSRect(x: 60, y: 80, width: 220, height: 140)).fill()
+        image.unlockFocus()
+        return image
+    }
+
+    private func makeWindow(width: CGFloat) -> (window: NSWindow, host: NSView) {
+        let size = PanelWindowMetrics.size(forWidth: width)
+        let w = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: size.width, height: size.height),
+                                styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        w.titlebarAppearsTransparent = true
+        w.titleVisibility = .hidden
+        w.isOpaque = false
+        w.backgroundColor = .clear
+        w.appearance = NSAppearance(named: .darkAqua)
+        w.contentView = PanelWindowMetrics.makeContentView(root: root)
+        w.orderFrontRegardless()
+        windows.append(w)
+        return (w, w.contentView!.subviews[0])
+    }
+
+    private func capture(_ view: NSView, name: String, width: CGFloat) {
+        view.layoutSubtreeIfNeeded()
+        // Capture the WHOLE hosting view (32pt taller than the window); the montage
+        // script crops the window-sized part after checking which band is the safe area.
+        let visible = view.bounds
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: visible) else { XCTFail("no rep"); return }
+        view.cacheDisplay(in: visible, to: rep)
+        let distinct = distinctPixels(rep)
+        guard let data = rep.representation(using: .png, properties: [:]) else { XCTFail("no png"); return }
+        try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
+        let path = "\(outDir)/\(name)-\(Int(width)).png"
+        FileManager.default.createFile(atPath: path, contents: data)
+        print("[TempResizeRender] wrote \(path) distinct=\(distinct) size=\(rep.pixelsWide)x\(rep.pixelsHigh)")
+    }
+
+    private func distinctPixels(_ rep: NSBitmapImageRep) -> Int {
+        guard let d = rep.bitmapData else { return 0 }
+        var set = Set<UInt32>()
+        let bpp = rep.bitsPerPixel / 8
+        for y in stride(from: 0, to: rep.pixelsHigh, by: 2) {
+            for x in stride(from: 0, to: rep.pixelsWide, by: 2) {
+                let o = y * rep.bytesPerRow + x * bpp
+                set.insert(UInt32(d[o]) << 16 | UInt32(d[o + 1]) << 8 | UInt32(d[o + 2]))
+            }
+        }
+        return set.count
+    }
+
+    func test_renderPagesAtWidths() {
+        let widths: [CGFloat] = [180, 200, 250, 320, 375, 400]
+        let artwork = makeArtwork()
+        for width in widths {
+            // Reset shared state for this width. Start on the lyrics page so the
+            // first switch to .album lands in the forced hover/controls state.
+            music.currentPage = .lyrics
+            music.currentTrackTitle = "Winter Solstice"
+            music.currentArtist = "Karen Mok"
+            music.currentAlbum = "Golden Flower"
+            music.currentArtwork = artwork
+            UserDefaults.standard.set(false, forKey: "fullscreenAlbumCover")
+
+            let (_, hoverHost) = makeWindow(width: width)
+            spin(1.0)
+            music.currentPage = .album
+            spin(1.5)
+            capture(hoverHost, name: "album-hover-first", width: width)
+            UserDefaults.standard.set(true, forKey: "fullscreenAlbumCover")
+            spin(1.2)
+            capture(hoverHost, name: "albumfull-hover-first", width: width)
+            windows.forEach { $0.orderOut(nil) }
+            windows = []
+
+            // Fresh window already on the album page: the rest (non-hover) state.
+            UserDefaults.standard.set(false, forKey: "fullscreenAlbumCover")
+            music.currentPage = .album
+            let (_, host) = makeWindow(width: width)
+            spin(1.5)
+            capture(host, name: "album-rest", width: width)
+
+            UserDefaults.standard.set(true, forKey: "fullscreenAlbumCover")
+            spin(1.2)
+            capture(host, name: "albumfull-rest", width: width)
+
+            // Lyrics page with the built-in translated word-level fixture. The
+            // controller's track identity is set to the fixture's so LyricsView's
+            // onAppear fetch hits the same-song stability guard and never replaces it.
+            if let fixture = NativeLyricsDebugFixture.fixture(named: "translated-word") {
+                music.currentTrackTitle = fixture.title
+                music.currentArtist = fixture.artist
+                music.currentAlbum = fixture.album
+                music.duration = fixture.duration
+                LyricsService.shared.applyDebugFixture(fixture)
+                LyricsService.shared.showTranslation = true
+                LyricsService.shared.updateCurrentTime(6.0)
+            }
+            music.currentPage = .lyrics
+            spin(2.5)
+            capture(host, name: "lyrics", width: width)
+
+            LyricsService.shared.showTranslation = false
+            spin(1.2)
+            capture(host, name: "lyrics-notrans", width: width)
+
+            music.currentTrackTitle = "Winter Solstice"
+            music.currentArtist = "Karen Mok"
+            music.currentAlbum = "Golden Flower"
+            music.duration = 287
+            music.currentArtwork = artwork
+            music.currentPage = .playlist
+            spin(1.5)
+            capture(host, name: "playlist", width: width)
+
+            // Switching back to the album page forces the hover/controls state on
+            // (MiniPlayerView.onChange(currentPage)), which no mouse can undo here.
+            music.currentPage = .album
+            spin(1.5)
+            capture(host, name: "albumfull-hover", width: width)
+
+            UserDefaults.standard.set(false, forKey: "fullscreenAlbumCover")
+            spin(1.2)
+            capture(host, name: "album-hover", width: width)
+
+            windows.forEach { $0.orderOut(nil) }
+            windows = []
+        }
+    }
+}

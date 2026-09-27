@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nanoPod 面板三档示意</title>
+<style>
+  :root {
+    --bg: #f3f2f0; --ink: #1c1c1e; --muted: #6e6e73; --line: #d9d8d5; --card: #ffffff;
+    --accent: #fa4058; --panel-edge: rgba(0,0,0,.18);
+    --screen: #d7dbe2; --screen-ink: #5b6472;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121214; --ink: #f2f2f4; --muted: #9a9aa3; --line: #2c2c31; --card: #1c1c20;
+      --panel-edge: rgba(255,255,255,.14); --screen: #2a2f38; --screen-ink: #8b95a6;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121214; --ink: #f2f2f4; --muted: #9a9aa3; --line: #2c2c31; --card: #1c1c20;
+    --panel-edge: rgba(255,255,255,.14); --screen: #2a2f38; --screen-ink: #8b95a6;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
+  main { max-width: 1240px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 40px 0 8px; }
+  p.note { color: var(--muted); margin: 0 0 16px; font-size: 13px; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0 20px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; background: var(--card); color: var(--ink); padding: 6px 12px; cursor: pointer; font: inherit; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  label.ctl { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; }
+  .row { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-end; overflow-x: auto; padding-bottom: 8px; }
+  .tier { display: flex; flex-direction: column; gap: 6px; }
+  .tier .cap { color: var(--muted); font-size: 12px; }
+
+  /* The panel itself: 1pt = 1px. */
+  .panel { position: relative; overflow: hidden; border-radius: 16px; box-shadow: 0 12px 32px rgba(0,0,0,.28), inset 0 0 0 .5px var(--panel-edge); background: #2b2233; color: #fff; }
+  .panel .cover { position: absolute; left: 0; top: 0; background: linear-gradient(-60deg, #ee8c59 0%, #59386f 55%, #1a5a8c 100%); }
+  .panel .cover::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: var(--blend, 100px); background: linear-gradient(to bottom, rgba(43,34,51,0), #2b2233); }
+  .panel .cover .disc { position: absolute; right: 12%; top: 10%; width: 32%; height: 32%; border-radius: 50%; background: rgba(255,255,255,.88); }
+  .panel .cover .box { position: absolute; left: 12%; top: 58%; width: 36%; height: 22%; background: rgba(12,8,16,.65); }
+  .panel .backdrop { position: absolute; inset: 0; background: radial-gradient(120% 90% at 30% 20%, #6a4b7a 0%, #2b2233 60%, #1b2c3c 100%); }
+  .panel .meta { position: absolute; left: 0; }
+  .panel .meta .t { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .panel .meta .a { font-weight: 500; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .panel .topbtn { position: absolute; display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px; border-radius: 13px; background: rgba(255,255,255,.22); font-size: 11px; font-weight: 600; }
+  .panel .topicon { position: absolute; width: 22px; height: 16px; border: 2px solid rgba(255,255,255,.9); border-radius: 3px; }
+  .panel .cluster { position: absolute; display: flex; gap: 4px; }
+  .panel .cluster i { display: block; border-radius: 50%; background: rgba(255,255,255,.2); }
+  .panel .bar { position: absolute; left: 0; right: 0; bottom: 0; }
+  .panel .bar .prog { position: relative; margin: 0 var(--pinset, 20px); border-radius: 99px; background: rgba(255,255,255,.25); }
+  .panel .bar .prog b { position: absolute; left: 0; top: 0; bottom: 0; width: 22%; border-radius: 99px; background: #fff; }
+  .panel .bar .times { display: flex; justify-content: space-between; margin: 4px var(--pinset, 20px) 0; opacity: .85; font-variant-numeric: tabular-nums; }
+  .panel .bar .btns { display: flex; align-items: center; justify-content: space-between; }
+  .panel .bar .btns .mid { display: flex; align-items: center; }
+  .panel .bar .btns i { display: block; border-radius: 50%; background: rgba(255,255,255,.16); position: relative; }
+  .panel .bar .btns i::after { content: ""; position: absolute; left: 50%; top: 50%; width: 40%; height: 40%; transform: translate(-50%,-50%); background: #fff; border-radius: 2px; }
+  .panel .bar .btns i.play::after { clip-path: polygon(15% 0, 100% 50%, 15% 100%); border-radius: 0; }
+  .panel .bar .btns i.prev::after { clip-path: polygon(100% 0, 0 50%, 100% 100%); border-radius: 0; }
+  .panel .bar .btns i.next::after { clip-path: polygon(0 0, 100% 50%, 0 100%); border-radius: 0; }
+  .panel .bar .btns i.nav::after { border-radius: 30%; }
+  /* lyrics page */
+  .panel .lyrics { position: absolute; left: 0; right: 0; top: 0; }
+  .panel .lyrics .l { font-weight: 600; line-height: 1.2; opacity: .35; }
+  .panel .lyrics .l.cur { opacity: 1; }
+  .panel .lyrics .tr { font-weight: 600; line-height: 1.2; opacity: .3; }
+  .panel .lyrics .cur + .tr { opacity: .75; }
+  .panel .fade { position: absolute; left: 0; right: 0; bottom: 0; background: linear-gradient(to bottom, rgba(43,34,51,0), rgba(43,34,51,.9)); }
+  /* playlist page */
+  .panel .list { position: absolute; left: 0; right: 0; top: 32px; }
+  .panel .list .h { font-weight: 700; display: flex; align-items: center; }
+  .panel .list .np { display: flex; align-items: center; gap: 12px; border-radius: 10px; background: rgba(255,255,255,.14); }
+  .panel .list .np .art { border-radius: 6px; background: linear-gradient(-60deg, #ee8c59, #59386f 60%, #1a5a8c); flex: none; }
+  .panel .list .r { display: flex; align-items: center; gap: 8px; }
+  .panel .list .r .art { border-radius: 4px; background: rgba(255,255,255,.14); flex: none; }
+  .panel .list .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .panel .list .a { opacity: .7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* transition stage */
+  .stage { position: relative; width: 100%; max-width: 900px; height: 520px; border-radius: 14px; background: var(--screen); overflow: hidden; border: 1px solid var(--line); }
+  .stage .menubar { position: absolute; left: 0; right: 0; top: 0; height: 24px; background: rgba(0,0,0,.08); }
+  .stage .hint { position: absolute; left: 16px; bottom: 12px; color: var(--screen-ink); font-size: 12px; }
+  .stage .panel { position: absolute; }
+  .stage .panel.animate { transition: width 350ms cubic-bezier(.2,.8,.2,1), height 350ms cubic-bezier(.2,.8,.2,1), left 350ms cubic-bezier(.2,.8,.2,1), top 350ms cubic-bezier(.2,.8,.2,1); }
+  .stage .layer { position: absolute; transform-origin: top right; }
+  .stage .layer.old { transition: opacity 120ms ease-out; opacity: 0; pointer-events: none; }
+  .tick { display: inline-block; min-width: 120px; color: var(--muted); font-size: 13px; }
+  .tick.on { color: var(--accent); }
+  input[type=range] { width: 320px; }
+  .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 24px; font-size: 13px; color: var(--muted); margin-top: 12px; }
+  @media (prefers-reduced-motion: reduce) {
+    .stage .panel.animate { transition: none; }
+    .stage .layer.old { transition: none; }
+  }
+  @media (max-width: 720px) { .stage { height: 460px; } input[type=range] { width: 100%; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>nanoPod 面板三档示意</h1>
+  <p class="note">1pt = 1px。数值来自 <code>proposal.md</code> §4 的取值表；假封面、假歌词，只看排版密度与控件比例，不看材质。</p>
+
+  <div class="toolbar">
+    <span class="seg" role="group" aria-label="页面">
+      <button data-page="album" aria-pressed="true">专辑页（全屏封面）</button>
+      <button data-page="album2" aria-pressed="false">专辑页（普通封面·hover）</button>
+      <button data-page="lyrics" aria-pressed="false">歌词页</button>
+      <button data-page="playlist" aria-pressed="false">歌单页</button>
+    </span>
+    <span class="seg" role="group" aria-label="外观">
+      <button data-theme="auto" aria-pressed="true">跟随系统</button>
+      <button data-theme="light" aria-pressed="false">浅色</button>
+      <button data-theme="dark" aria-pressed="false">深色</button>
+    </span>
+  </div>
+
+  <h2>三档并排</h2>
+  <div class="row" id="tiers"></div>
+
+  <h2>切档过渡（吸在右上角）</h2>
+  <p class="note">目标档版式立即铺好并钉在锚点角，窗口只做裁切揭示；旧版式 120ms 淡出；封面连续缩放。滑杆模拟捏合 / 拖边的「虚拟宽」：越过相邻两档中点外 5% 才跳档（滞回），跳档时「触觉」亮一下。系统开了 Reduce Motion 时，这页的过渡也会直接到位。</p>
+  <div class="toolbar">
+    <span class="seg" role="group" aria-label="档位">
+      <button data-tier="S" aria-pressed="false">小 200×227</button>
+      <button data-tier="M" aria-pressed="true">中 250×284</button>
+      <button data-tier="L" aria-pressed="false">大 375×426</button>
+    </span>
+    <label class="ctl">虚拟宽 <input type="range" id="vw" min="170" max="420" value="250" step="1"> <output id="vwOut">250</output></label>
+    <span class="tick" id="tick">触觉：—</span>
+    <label class="ctl">锚点角
+      <select id="corner">
+        <option value="tr" selected>右上</option><option value="tl">左上</option><option value="br">右下</option><option value="bl">左下</option>
+      </select>
+    </label>
+  </div>
+  <div class="stage" id="stage">
+    <div class="menubar"></div>
+    <div class="panel animate" id="live"></div>
+    <div class="hint">屏幕示意 900×520（缩略）；面板按真实点数绘制，边距 16</div>
+  </div>
+  <div class="legend">
+    <div>小↔中 中点 225 → 跳档线 227.5 / 222.5</div>
+    <div>中↔大 中点 312.5 → 跳档线 318.75 / 306.25</div>
+    <div>弹簧：0.35s、临界阻尼、带初速度</div>
+    <div>Reduce Motion：一次到位、0.1s 淡化</div>
+  </div>
+</main>
+<script>
+(() => {
+  // §4 取值表
+  const TIERS = {
+    S: { w: 200, h: 227, title: 14, titleH: 11, artist: 11, artistH: 9, cluster: 22, ctlH: 68, blend: 80, topPad: 10,
+         lyr: 20, lyrTr: 13.5, lyrInset: 24, lyrTop: 36, lyrBar: 100,
+         nav: 22, play: 26, gap: 8, pad: 10, bottom: 12, progH: 28, bar: 6, time: 9,
+         npArt: 36, rowArt: 24, secFont: 13, secH: 32, npT: 13, npA: 11, rowT: 11, rowA: 9, hpad: 12 },
+    M: { w: 250, h: 284, title: 16, titleH: 12, artist: 13, artistH: 10, cluster: 24, ctlH: 80, blend: 100, topPad: 12,
+         lyr: 24, lyrTr: 16, lyrInset: 32, lyrTop: 42, lyrBar: 120,
+         nav: 26, play: 30, gap: 10, pad: 12, bottom: 16, progH: 32, bar: 7, time: 10,
+         npArt: 45, rowArt: 30, secFont: 13, secH: 32, npT: 13, npA: 11, rowT: 11, rowA: 9, hpad: 16 },
+    L: { w: 375, h: 426, title: 20, titleH: 14, artist: 16, artistH: 12, cluster: 28, ctlH: 96, blend: 150, topPad: 14,
+         lyr: 28, lyrTr: 19, lyrInset: 40, lyrTop: 50, lyrBar: 136,
+         nav: 30, play: 34, gap: 12, pad: 14, bottom: 20, progH: 36, bar: 8, time: 11,
+         npArt: 68, rowArt: 45, secFont: 15, secH: 36, npT: 15, npA: 13, rowT: 13, rowA: 11, hpad: 20 },
+  };
+  const ORDER = ['S', 'M', 'L'];
+  const NAMES = { S: '小 200×227', M: '中 250×284', L: '大 375×426' };
+  let page = 'album';
+
+  const px = n => `${n}px`;
+
+  function bar(t) {
+    return `<div class="bar" style="padding:0 ${px(t.pad)} ${px(t.bottom)}; --pinset:${px(t.pad + 8)}">
+      <div class="prog" style="height:${px(t.bar)}"><b></b></div>
+      <div class="times" style="font-size:${px(t.time)}"><span>1:02</span><span>-3:45</span></div>
+      <div class="btns" style="margin-top:${px(Math.round(t.progH * 0.25))}">
+        <i class="nav" style="width:${px(t.nav)};height:${px(t.nav)}"></i>
+        <span class="mid" style="gap:${px(t.gap)}">
+          <i class="prev" style="width:${px(t.play)};height:${px(t.play)}"></i>
+          <i class="play" style="width:${px(t.play)};height:${px(t.play)}"></i>
+          <i class="next" style="width:${px(t.play)};height:${px(t.play)}"></i>
+        </span>
+        <i class="nav" style="width:${px(t.nav)};height:${px(t.nav)}"></i>
+      </div>
+    </div>`;
+  }
+
+  function albumFull(t) {
+    // rest state: title centre at h-38 (M); scale the offsets with the tier
+    const k = t.w / 250;
+    const tY = t.h - Math.round(38 * k), aY = t.h - Math.round(20 * k);
+    return `<div class="cover" style="width:${px(t.w)};height:${px(t.w)};--blend:${px(t.blend)}"><span class="disc"></span><span class="box"></span></div>
+      <div class="meta" style="left:${px(12)};width:${px(t.w - 24)};top:${px(tY - Math.round(t.title * 0.7))}"><div class="t" style="font-size:${px(t.title)}">Winter Solstice</div></div>
+      <div class="meta" style="left:${px(12)};width:${px(t.w - 24)};top:${px(aY - Math.round(t.artist * 0.7))}"><div class="a" style="font-size:${px(t.artist)}">Karen Mok</div></div>`;
+  }
+
+  function albumHover(t) {
+    const art = Math.round(t.w * 0.48);
+    const avail = t.h - t.ctlH;
+    const left = t === TIERS.S ? 28 : t === TIERS.M ? 32 : 40;
+    const right = t === TIERS.S ? 68 : t === TIERS.M ? 80 : 96;
+    const col = t.w - left - right;
+    return `<div class="backdrop"></div>
+      <div class="cover" style="left:${px((t.w - art) / 2)};top:${px((avail - art) / 2)};width:${px(art)};height:${px(art)};border-radius:12px;--blend:0px;box-shadow:0 12px 25px rgba(0,0,0,.5)"><span class="disc"></span><span class="box"></span></div>
+      <span class="topbtn" style="left:${px(t.topPad)};top:${px(t.topPad)}">↖ Music</span>
+      <span class="topicon" style="right:${px(t.topPad + 4)};top:${px(t.topPad + 5)}"></span>
+      <div class="meta" style="left:${px(left)};width:${px(col)};top:${px(t.h - t.ctlH - 4 - 16 - Math.round(t.titleH * 0.7))}"><div class="t" style="font-size:${px(t.titleH)}">Winter Solstice</div></div>
+      <div class="meta" style="left:${px(left)};width:${px(col)};top:${px(t.h - t.ctlH - 4 - 4 - Math.round(t.artistH * 0.7))}"><div class="a" style="font-size:${px(t.artistH)}">Karen Mok</div></div>
+      <div class="cluster" style="right:${px(right - t.cluster * 2 - 4 - 12)};top:${px(t.h - t.ctlH - 4 - t.cluster - 6)}"><i style="width:${px(t.cluster)};height:${px(t.cluster)}"></i><i style="width:${px(t.cluster)};height:${px(t.cluster)}"></i></div>
+      ${bar(t)}`;
+  }
+
+  function lyrics(t) {
+    const lines = [
+      ['You keep arriving before the light', '你总是在光出现之前抵达', false],
+      ['This line is intentionally long enough to wrap inside the small window', '这一行故意写得更长，用来验证小窗口里的换行不会被裁掉', true],
+      ['风吹过玻璃，字还在发亮', 'The letters keep glowing after the wind passes.', false],
+      ['何度でも 名前を呼び直す', 'No matter how many times, I call the name again.', false],
+      ['hold on to the held word', '抓住那个被延长的词', false],
+    ];
+    const gap = Math.round(t.lyr * 0.33), pair = Math.round(t.lyr * 0.88);
+    let html = `<div class="backdrop"></div><div class="lyrics" style="padding:${px(t.lyrTop)} ${px(t.lyrInset)} 0">`;
+    for (const [l, tr, cur] of lines) {
+      html += `<div class="l ${cur ? 'cur' : ''}" style="font-size:${px(t.lyr)}">${l}</div><div class="tr" style="font-size:${px(t.lyrTr)};margin:${px(gap)} 0 ${px(pair)}">${tr}</div>`;
+    }
+    html += `</div><div class="fade" style="height:${px(t.lyrBar)}"></div>`;
+    html += `<span class="topbtn" style="left:${px(t.topPad)};top:${px(t.topPad)}">↖ Music</span>` + bar(t);
+    return html;
+  }
+
+  function playlist(t) {
+    const row = (title, artist) => `<div class="r" style="padding:6px ${px(t.hpad)}"><span class="art" style="width:${px(t.rowArt)};height:${px(t.rowArt)}"></span><span style="min-width:0"><div class="t" style="font-size:${px(t.rowT)}">${title}</div><div class="a" style="font-size:${px(t.rowA)}">${artist}</div></span></div>`;
+    return `<div class="backdrop"></div><div class="list">
+      <div class="h" style="font-size:${px(t.secFont)};height:${px(t.secH)};padding:0 ${px(t.hpad)}">History</div>
+      ${row('History Song 2', 'Artist H2')}${row('History Song 1', 'Artist H1')}
+      <div class="h" style="font-size:${px(t.secFont)};height:${px(t.secH)};padding:0 ${px(t.hpad)}">Now Playing</div>
+      <div class="np" style="margin:0 ${px(t.hpad - 4)};padding:12px"><span class="art" style="width:${px(t.npArt)};height:${px(t.npArt)}"></span><span style="min-width:0"><div class="t" style="font-size:${px(t.npT)}">Winter Solstice</div><div class="a" style="font-size:${px(t.npA)}">Karen Mok</div></span></div>
+      <div class="h" style="font-size:${px(t.secFont)};height:${px(t.secH)};padding:0 ${px(t.hpad)}">Up Next</div>
+      ${row('Next Song 1', 'Artist X')}${row('Next Song 2', 'Artist Y')}
+    </div><div class="fade" style="height:${px(t.lyrBar)}"></div>${bar(t)}`;
+  }
+
+  function render(tierKey) {
+    const t = TIERS[tierKey];
+    const body = page === 'album' ? albumFull(t) + bar(t) : page === 'album2' ? albumHover(t) : page === 'lyrics' ? lyrics(t) : playlist(t);
+    return body;
+  }
+
+  // 三档并排
+  const tiersEl = document.getElementById('tiers');
+  function drawTiers() {
+    tiersEl.innerHTML = ORDER.map(k => {
+      const t = TIERS[k];
+      return `<div class="tier"><div class="panel" style="width:${px(t.w)};height:${px(t.h)}">${render(k)}</div><div class="cap">${NAMES[k]} · 歌词 ${t.lyr}pt · 按钮 ${t.nav}/${t.play} · 控件区 ${t.ctlH}</div></div>`;
+    }).join('');
+  }
+
+  // 过渡舞台
+  const stage = document.getElementById('stage'), live = document.getElementById('live');
+  const cornerSel = document.getElementById('corner');
+  let cur = 'M';
+  const MARGIN = 16;
+  function place(tierKey, animate) {
+    const t = TIERS[tierKey];
+    const W = stage.clientWidth, H = stage.clientHeight, c = cornerSel.value;
+    const left = c.endsWith('r') ? W - MARGIN - t.w : MARGIN;
+    const top = c.startsWith('t') ? 24 + MARGIN - 8 : H - MARGIN - t.h;
+    live.classList.toggle('animate', animate);
+    live.style.width = px(t.w); live.style.height = px(t.h); live.style.left = px(left); live.style.top = px(top);
+  }
+  function setLayers(tierKey, prevKey) {
+    const t = TIERS[tierKey];
+    const origin = { tr: 'top right', tl: 'top left', br: 'bottom right', bl: 'bottom left' }[cornerSel.value];
+    const anchorCSS = cornerSel.value === 'tr' ? 'right:0;top:0' : cornerSel.value === 'tl' ? 'left:0;top:0' : cornerSel.value === 'br' ? 'right:0;bottom:0' : 'left:0;bottom:0';
+    let html = '';
+    if (prevKey && prevKey !== tierKey) {
+      const p = TIERS[prevKey];
+      html += `<div class="layer old" style="${anchorCSS};width:${px(p.w)};height:${px(p.h)};transform-origin:${origin};opacity:1">${render(prevKey)}</div>`;
+    }
+    html += `<div class="layer new" style="${anchorCSS};width:${px(t.w)};height:${px(t.h)}">${render(tierKey)}</div>`;
+    live.innerHTML = html;
+    requestAnimationFrame(() => { const o = live.querySelector('.layer.old'); if (o) o.style.opacity = '0'; });
+  }
+  function goTo(tierKey, animate = true) {
+    if (tierKey === cur && animate) return;
+    const prev = cur; cur = tierKey;
+    setLayers(tierKey, prev);
+    place(tierKey, animate);
+    document.querySelectorAll('[data-tier]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.tier === tierKey)));
+  }
+
+  // 虚拟宽 → 档（滞回）
+  const vw = document.getElementById('vw'), vwOut = document.getElementById('vwOut'), tick = document.getElementById('tick');
+  const MID = { SM: 225, ML: 312.5 }, GAP = { SM: 50, ML: 125 }, BAND = 0.05;
+  function tierFor(width, current) {
+    let k = current;
+    if (k === 'S' && width > MID.SM + GAP.SM * BAND) k = 'M';
+    if (k === 'M' && width < MID.SM - GAP.SM * BAND) k = 'S';
+    if (k === 'M' && width > MID.ML + GAP.ML * BAND) k = 'L';
+    if (k === 'L' && width < MID.ML - GAP.ML * BAND) k = 'M';
+    return k;
+  }
+  let tickTimer = null;
+  vw.addEventListener('input', () => {
+    const w = Number(vw.value); vwOut.textContent = w;
+    const next = tierFor(w, cur);
+    if (next !== cur) {
+      goTo(next);
+      tick.textContent = `触觉：跳到 ${NAMES[next]}`; tick.classList.add('on');
+      clearTimeout(tickTimer); tickTimer = setTimeout(() => { tick.classList.remove('on'); tick.textContent = '触觉：—'; }, 700);
+    }
+  });
+  vw.addEventListener('change', () => { vw.value = TIERS[cur].w; vwOut.textContent = vw.value; });
+
+  document.querySelectorAll('[data-tier]').forEach(b => b.addEventListener('click', () => { goTo(b.dataset.tier); vw.value = TIERS[cur].w; vwOut.textContent = vw.value; }));
+  cornerSel.addEventListener('change', () => { setLayers(cur, null); place(cur, true); });
+  document.querySelectorAll('[data-page]').forEach(b => b.addEventListener('click', () => {
+    page = b.dataset.page;
+    document.querySelectorAll('[data-page]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    drawTiers(); setLayers(cur, null);
+  }));
+  document.querySelectorAll('[data-theme]').forEach(b => b.addEventListener('click', () => {
+    const v = b.dataset.theme;
+    if (v === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', v);
+    document.querySelectorAll('[data-theme]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  }));
+  window.addEventListener('resize', () => place(cur, false));
+
+  drawTiers();
+  setLayers('M', null);
+  place('M', false);
+})();
+</script>
+</body>
+</html>
