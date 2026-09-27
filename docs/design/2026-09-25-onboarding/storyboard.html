@@ -4,8 +4,8 @@
   :root{
     color-scheme: light;
     --bg:#F3F2F4; --surface:#FFFFFF; --surface-2:#F8F7F9; --ink:#17161B; --muted:#6B6875; --line:#E4E1E8; --line-2:#EEECF1;
-    /* Apple Music 粉红：浅色 #FA4058 / 深色 #FB546C，取自本机 Music.app 图标渐变取样（docs/design/2026-09-25-menu-settings/proposal.md 开头） */
-    --accent:#FA4058; --accent-ink:#D42640; --accent-soft:rgba(250,64,88,.12);
+    /* Apple Music 粉红：浅 #FA4058 / 深 #FB546C（菜单/设置 v2 定稿，本机 Music.app 图标渐变取样） */
+    --accent:#FA4058; --accent-ink:#D42640; --accent-soft:rgba(250,64,88,.12); --ring-track:rgba(250,64,88,.22);
     --ok:#22A06B; --warn:#C77D0A;
     --mock-card-bg:rgba(255,255,255,.66); --mock-card-ink:#1A1A1F; --mock-card-muted:#5F5E6A; --mock-card-line:rgba(255,255,255,.75); --mock-card-line2:rgba(0,0,0,.08);
     --mock-card-shadow:0 12px 34px rgba(20,16,32,.22), 0 1px 2px rgba(20,16,32,.10);
@@ -19,18 +19,20 @@
     :root:not([data-theme="light"]){
       color-scheme: dark;
       --bg:#0E0D11; --surface:#17161C; --surface-2:#1D1C23; --ink:#EEEDF2; --muted:#8E8B9A; --line:#28262F; --line-2:#211F27;
-      --accent:#FB546C; --accent-ink:#FF8497; --accent-soft:rgba(251,84,108,.16);
+      --accent:#FB546C; --accent-ink:#FF8497; --accent-soft:rgba(251,84,108,.16); --ring-track:rgba(251,84,108,.28);
       --ok:#3DCB8A; --warn:#E5A33A;
     }
   }
   :root[data-theme="dark"]{
     color-scheme: dark;
     --bg:#0E0D11; --surface:#17161C; --surface-2:#1D1C23; --ink:#EEEDF2; --muted:#8E8B9A; --line:#28262F; --line-2:#211F27;
-    --accent:#FB546C; --accent-ink:#FF8497; --accent-soft:rgba(251,84,108,.16);
+    --accent:#FB546C; --accent-ink:#FF8497; --accent-soft:rgba(251,84,108,.16); --ring-track:rgba(251,84,108,.28);
     --ok:#3DCB8A; --warn:#E5A33A;
   }
-  /* 模拟 macOS 外观（与页面主题独立） */
+  /* 模拟 macOS 外观（与页面主题独立）：卡内的环随模拟外观取色 */
+  .stage[data-mock="light"]{ --mock-accent:#FA4058; --mock-ring-track:rgba(250,64,88,.22); }
   .stage[data-mock="dark"]{
+    --mock-accent:#FB546C; --mock-ring-track:rgba(251,84,108,.28);
     --mock-card-bg:rgba(34,32,40,.58); --mock-card-ink:#F3F2F6; --mock-card-muted:#A9A6B4; --mock-card-line:rgba(255,255,255,.16); --mock-card-line2:rgba(0,0,0,.35);
     --mock-card-shadow:0 16px 40px rgba(0,0,0,.45), 0 1px 2px rgba(0,0,0,.4);
     --mock-btn:#F3F2F6; --mock-btn-ink:#1A1A1F; --mock-track:rgba(255,255,255,.14);
@@ -96,10 +98,11 @@
   .menubar .clock{opacity:.9;font-variant-numeric:tabular-nums}
   .stage-caption{position:absolute;left:10px;top:30px;font-family:var(--mono);font-size:10px;color:rgba(255,255,255,.55);letter-spacing:.06em}
 
-  /* 面板 250×284（全屏封面开） */
+  /* 面板 250×284（全屏封面开）。移动：x、y 各走自己的过渡，x 快 y 慢，轨迹自然成弧 */
   .panel{position:absolute;width:250px;height:284px;border-radius:16px;overflow:hidden;
     box-shadow:0 18px 40px rgba(0,0,0,.35), 0 1px 0 rgba(255,255,255,.08) inset;background:#1a1626;
-    transition:transform .52s cubic-bezier(.3,.9,.3,1), opacity .4s ease .1s, left .62s cubic-bezier(.2,1.12,.32,1), top .62s cubic-bezier(.2,1.12,.32,1);transform-origin:100% 50%}
+    transition:transform .52s cubic-bezier(.3,.9,.3,1), opacity .4s ease .1s, left .50s cubic-bezier(.2,1.12,.32,1), top .74s cubic-bezier(.22,1,.36,1);transform-origin:100% 50%}
+  .stage[data-side="left"] .panel{transform-origin:0 50%}
   .stage.rm .panel{transition:opacity .16s linear, left .2s linear, top .2s linear}
   .panel .art{position:absolute;inset:0;background:
       radial-gradient(60% 55% at 70% 30%, rgba(255,255,255,.22), transparent 60%),
@@ -158,13 +161,18 @@
   .panel.st-lyrics-hover .controls .sr,.panel.st-translated .controls .sr{display:none}
   .panel.st-translated .controls{opacity:1;transform:none;filter:none}
   .panel.st-tucked,.panel.st-floating{transform:translateX(24px) scale(.04,.22);opacity:0;pointer-events:none}
+  .stage[data-side="left"] .panel.st-tucked,.stage[data-side="left"] .panel.st-floating{transform:translateX(-24px) scale(.04,.22)}
+  /* 贴边小条与胶囊：右缘为默认，左缘镜像 */
   .sliver{position:absolute;left:714px;width:6px;height:56px;background:#0b0a10;border-radius:3px 0 0 3px;opacity:0;transition:opacity .3s ease .35s;box-shadow:-1px 0 0 rgba(255,255,255,.08)}
   .sliver::after{content:"";position:absolute;left:0;top:6px;bottom:6px;width:2px;border-radius:1px;background:linear-gradient(180deg,rgba(255,170,190,.0),rgba(255,170,190,.95) 40%,rgba(255,170,190,.0));opacity:.9}
+  .stage[data-side="left"] .sliver{left:0;border-radius:0 3px 3px 0;box-shadow:1px 0 0 rgba(255,255,255,.08)}
+  .stage[data-side="left"] .sliver::after{left:auto;right:0}
   .stage.tucked .sliver,.stage.floating .sliver{opacity:1}
   .stage.rm .sliver{transition:opacity .16s linear}
   .capsule{position:absolute;left:586px;width:120px;height:204px;border-radius:26px;background:rgba(28,22,40,.92);
     box-shadow:0 14px 30px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.10) inset;color:#fff;opacity:0;transform:translateX(60px) scale(.7);transform-origin:100% 50%;
     transition:transform .42s cubic-bezier(.25,1.1,.4,1), opacity .25s ease;padding:12px;display:flex;flex-direction:column;align-items:center;gap:8px}
+  .stage[data-side="left"] .capsule{left:14px;transform:translateX(-60px) scale(.7);transform-origin:0 50%}
   .stage.rm .capsule{transition:opacity .16s linear;transform:none}
   .capsule .cov{width:96px;height:96px;border-radius:14px;background:linear-gradient(160deg,#1c2a3f 0%,#4a2f57 55%,#c8556a 100%)}
   .capsule .ct{font-size:11px;font-weight:700;line-height:1.2;text-align:center;height:34px;display:flex;flex-direction:column;justify-content:center}
@@ -173,14 +181,16 @@
   .capsule .cc svg{width:14px;height:14px;fill:#fff}
   .stage.floating .capsule{opacity:1;transform:none}
   .stage.expanding .capsule{opacity:0;transform:translateX(-40px) scale(1.9);transition:transform .38s cubic-bezier(.3,.9,.3,1), opacity .2s ease .12s}
+  .stage[data-side="left"].expanding .capsule{transform:translateX(40px) scale(1.9)}
   .edgeglow{position:absolute;right:0;width:12px;height:284px;opacity:0;transition:opacity .4s ease;background:linear-gradient(90deg,transparent,rgba(255,200,120,.55));filter:blur(2px)}
+  .stage[data-side="left"] .edgeglow{right:auto;left:0;background:linear-gradient(270deg,transparent,rgba(255,200,120,.55))}
   .stage.showglow .edgeglow{opacity:1}
-  .cornerglow{position:absolute;right:0;bottom:0;width:120px;height:120px;opacity:0;transition:opacity .4s ease;background:radial-gradient(circle at 100% 100%, rgba(255,200,120,.45), transparent 70%);filter:blur(4px)}
+  .cornerglow{position:absolute;left:0;bottom:0;width:140px;height:140px;opacity:0;transition:opacity .4s ease;background:radial-gradient(circle at 0% 100%, rgba(255,200,120,.45), transparent 70%);filter:blur(4px)}
   .stage.showcorner .cornerglow{opacity:1}
 
   /* 高亮环 */
-  .halo{position:absolute;width:40px;height:40px;border-radius:50%;border:1.5px solid var(--accent);opacity:0;pointer-events:none;
-    box-shadow:0 0 0 3px var(--accent-soft), 0 0 14px rgba(250,64,88,.35);transition:opacity .25s ease,left .42s cubic-bezier(.3,1.1,.4,1),top .42s cubic-bezier(.3,1.1,.4,1),width .3s ease,height .3s ease}
+  .halo{position:absolute;width:40px;height:40px;border-radius:50%;border:1.5px solid var(--mock-accent);opacity:0;pointer-events:none;
+    box-shadow:0 0 0 3px var(--mock-ring-track), 0 0 14px rgba(250,64,88,.35);transition:opacity .25s ease,left .42s cubic-bezier(.3,1.1,.4,1),top .42s cubic-bezier(.3,1.1,.4,1),width .3s ease,height .3s ease}
   .halo.pill{border-radius:10px}
   .halo.cap{border-radius:999px}
   .halo.on{opacity:1;animation:settle .9s cubic-bezier(.3,1.4,.5,1) 1}
@@ -199,14 +209,14 @@
   @keyframes fadeIn{from{opacity:0}to{opacity:1}}
   .card .beak{position:absolute;width:12px;height:12px;background:var(--mock-card-bg);backdrop-filter:blur(18px) saturate(1.5);-webkit-backdrop-filter:blur(18px) saturate(1.5);transform:rotate(45deg)}
   .card .beak.right{right:-6px;top:var(--beak-y,50%);margin-top:-6px;box-shadow:.5px -.5px 0 var(--mock-card-line2)}
-  .card .beak.top{top:-6px;left:var(--beak-x,50%);margin-left:-6px;box-shadow:-.5px -.5px 0 var(--mock-card-line)}
   .card .beak.left{left:-6px;top:var(--beak-y,50%);margin-top:-6px;box-shadow:-.5px .5px 0 var(--mock-card-line2)}
   .card .head{display:flex;align-items:center;gap:10px}
-  .card .ring{flex:none;width:22px;height:22px;position:relative}
-  .card .ring svg{width:22px;height:22px;display:block;overflow:visible}
-  .card .ring .num{position:absolute;inset:0;display:grid;place-items:center;font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+  /* 进度环：连续粗环，外径 24、线宽 5（≈21%），圆头；轨道=前景色低透明度 */
+  .card .ring{flex:none;width:24px;height:24px;position:relative}
+  .card .ring svg{width:24px;height:24px;display:block;overflow:visible}
+  .card .ring .num{position:absolute;inset:0;display:grid;place-items:center;font-size:8.5px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
   .card .ring .chk{position:absolute;inset:0;display:grid;place-items:center;opacity:0;transform:scale(.6)}
-  .card .ring .chk svg{width:11px;height:11px;stroke:var(--accent);stroke-width:2.4;fill:none;stroke-linecap:round;stroke-linejoin:round}
+  .card .ring .chk svg{width:10px;height:10px;stroke:var(--mock-accent);stroke-width:2.6;fill:none;stroke-linecap:round;stroke-linejoin:round}
   .card .ring.done .num{opacity:0;transform:translateY(-6px);transition:all .2s ease}
   .card .ring.done .chk{opacity:1;transform:scale(1);transition:all .3s cubic-bezier(.3,1.4,.5,1) .08s}
   .card .title{font-size:13px;font-weight:600;letter-spacing:-.005em;line-height:1.3}
@@ -215,32 +225,35 @@
   .card .beats li{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--mock-card-ink)}
   .card .beats li .dot{flex:none;width:14px;height:14px;border-radius:50%;border:1.5px solid var(--mock-track);display:grid;place-items:center;transition:all .28s cubic-bezier(.3,1.5,.5,1)}
   .card .beats li .dot svg{width:8px;height:8px;stroke:#fff;stroke-width:2.6;fill:none;stroke-linecap:round;stroke-linejoin:round;opacity:0}
-  .card .beats li.done .dot{background:var(--accent);border-color:var(--accent)}
+  .card .beats li.done .dot{background:var(--mock-accent);border-color:var(--mock-accent)}
   .card .beats li.done .dot svg{opacity:1}
   .card .beats li.done{color:var(--mock-card-muted)}
-  /* 触控板手势示意：按系统设置「触控板」页演示的逐帧规格缩放（research/trackpad-demo-frames.md）
-     轮廓 188×142 → 96×72，圆角 16 → 8，描边 3 → 1.5，无填充；圆点 22 → 11，间距 32 → 16，色 #6B9CFD；
-     位移 0.95s cubic-bezier(.42,0,.58,1)，无缩放，只有透明度呼吸；一轮 3.55s，播两轮后静止在起点 0.31 */
+  /* 触控板手势示意：按系统设置「触控板」页演示的逐帧规格缩放（research/trackpad-demo-frames.md） */
   .card .tp{margin-top:10px;height:72px;display:grid;place-items:center}
   .card .tp .pad{position:relative;width:96px;height:72px;border-radius:8px;box-shadow:inset 0 0 0 1.5px var(--mock-card-line2)}
   .card .tp .f{position:absolute;width:11px;height:11px;border-radius:50%;background:#6B9CFD;opacity:.31}
   .card .tp .f::after{content:"";position:absolute;inset:0;border-radius:50%;background:#6B9CFD;opacity:0;filter:blur(1.5px);transform-origin:50% 50%}
   .card .tp .pad.swipe .f.a{left:24px;top:30px}
   .card .tp .pad.swipe .f.b{left:40px;top:30px}
-  .card .tp .pad.fling .f.a{left:24px;top:22px}
-  .card .tp .pad.fling .f.b{left:40px;top:22px}
+  .card .tp .pad.swipeL .f.a{left:44px;top:30px}
+  .card .tp .pad.swipeL .f.b{left:60px;top:30px}
+  .card .tp .pad.nudge .f.a{left:52px;top:22px}
+  .card .tp .pad.nudge .f.b{left:68px;top:22px}
   .card .tp .pad.swipe .f{animation:tpSwipe 3.55s linear 2 both}
   .card .tp .pad.swipe .f::after{animation:tpTrailH 3.55s linear 2 both}
-  .card .tp .pad.fling .f{animation:tpFling 3.55s linear 2 both}
-  .card .tp .pad.fling .f::after{animation:tpTrailD 3.55s linear 2 both}
+  .card .tp .pad.swipeL .f{animation:tpSwipeL 3.55s linear 2 both}
+  .card .tp .pad.swipeL .f::after{animation:tpTrailHL 3.55s linear 2 both}
+  .card .tp .pad.nudge .f{animation:tpNudge 3.55s linear 2 both}
+  .card .tp .pad.nudge .f::after{animation:tpTrailN 3.55s linear 2 both}
   .stage.rm .card .tp .f{animation:none!important;opacity:.31;transform:none}
   .stage.rm .card .tp .f::after{animation:none!important;opacity:0}
-  /* 时间轴（3.55s = 100%）：0–.45s 淡入 → 停 .35s → .95s 位移 → 停 .35s → .3s 到 .31 → 平台 .58s → .42s 到 0 → 隐 .15s */
+  /* 时间轴（3.55s = 100%）：0–.45s 淡入 → 停 .35s → .95s 位移 cubic-bezier(.42,0,.58,1) → 停 .35s → .3s 到 .31 → 平台 .58s → .42s 到 0 → 隐 .15s */
   @keyframes tpSwipe{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(36px,0)}59.2%{opacity:1;transform:translate(36px,0)}67.6%{opacity:.31;transform:translate(36px,0)}83.9%{opacity:.31;transform:translate(36px,0)}95.8%,100%{opacity:0;transform:translate(36px,0)}}
-  @keyframes tpFling{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(26px,18px)}59.2%{opacity:1;transform:translate(26px,18px)}67.6%{opacity:.31;transform:translate(26px,18px)}83.9%{opacity:.31;transform:translate(26px,18px)}95.8%,100%{opacity:0;transform:translate(26px,18px)}}
-  /* 拖尾：只沿运动方向拉长，速度最高时最长（22 → 34–48px 按比例 1 → 1.8） */
+  @keyframes tpSwipeL{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(-36px,0)}59.2%{opacity:1;transform:translate(-36px,0)}67.6%{opacity:.31;transform:translate(-36px,0)}83.9%{opacity:.31;transform:translate(-36px,0)}95.8%,100%{opacity:0;transform:translate(-36px,0)}}
+  @keyframes tpNudge{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(-30px,18px)}59.2%{opacity:1;transform:translate(-30px,18px)}67.6%{opacity:.31;transform:translate(-30px,18px)}83.9%{opacity:.31;transform:translate(-30px,18px)}95.8%,100%{opacity:0;transform:translate(-30px,18px)}}
   @keyframes tpTrailH{0%,22.5%{opacity:0;transform:scaleX(1)}36%{opacity:.45;transform:translateX(-4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:scaleX(1)}}
-  @keyframes tpTrailD{0%,22.5%{opacity:0;transform:rotate(35deg) scaleX(1)}36%{opacity:.45;transform:rotate(35deg) translateX(-4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:rotate(35deg) scaleX(1)}}
+  @keyframes tpTrailHL{0%,22.5%{opacity:0;transform:scaleX(1)}36%{opacity:.45;transform:translateX(4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:scaleX(1)}}
+  @keyframes tpTrailN{0%,22.5%{opacity:0;transform:rotate(-31deg) scaleX(1)}36%{opacity:.45;transform:rotate(-31deg) translateX(4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:rotate(-31deg) scaleX(1)}}
   .card .foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px}
   .card .link{font-size:11px;color:var(--mock-card-muted);text-decoration:none;cursor:default}
   .card .link:hover{text-decoration:underline}
@@ -279,9 +292,15 @@
   .ringcell{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:14px 10px;display:grid;justify-items:center;gap:8px;text-align:center}
   .ringcell .big{width:64px;height:64px;position:relative}
   .ringcell .big svg{width:64px;height:64px;overflow:visible;display:block}
-  .ringcell .big .num{position:absolute;inset:0;display:grid;place-items:center;font-family:var(--display);font-weight:700;font-size:18px;font-variant-numeric:tabular-nums}
+  .ringcell .big .num{position:absolute;inset:0;display:grid;place-items:center;font-family:var(--display);font-weight:700;font-size:16px;font-variant-numeric:tabular-nums}
   .ringcell .lab{font-size:12px;color:var(--muted)}
   .ringcell .lab b{display:block;color:var(--ink);font-weight:600}
+  .ringcell.dark{background:#1E1E21;color:#EEEDF2;border-color:#2C2B31}
+  .ringcell.dark .lab{color:#A9A6B4}.ringcell.dark .lab b{color:#EEEDF2}
+
+  /* 轨迹示意 */
+  .traj{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:14px;display:grid;gap:8px}
+  .traj svg{width:100%;height:auto;display:block}
 
   .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
   table{border-collapse:collapse;width:100%;min-width:640px;font-size:12.5px}
@@ -297,27 +316,27 @@
 
   @media (prefers-reduced-motion: reduce){
     .card,.panel,.capsule,.sliver,.halo,.edgeglow,.cornerglow{transition:none!important;animation:none!important}
-    .card .tp .f{animation:none!important;opacity:.9;transform:none}
+    .card .tp .f{animation:none!important;opacity:.31;transform:none}
   }
 </style>
 
 <div class="wrap">
   <header>
-    <div class="eyebrow">nanoPod · Guided Tour · 方案 v2 · 2026-09-26</div>
-    <h1>七段学会 nanoPod</h1>
-    <p class="lede">交互式引导的分镜 v2.1：玻璃卡片贴在要操作的控件旁边，用户真的做一遍，做完自动打勾、进度环推进、火花一闪；最后一段整圈合拢放礼花。较 v1 新增「专辑页两个角」与「甩到角落」两步，文案改成亲切口吻，强调色换成 Apple Music 粉红（浅 #FA4058 / 深 #FB546C）；当前歌不能翻译时，翻译一步延后到第一首能翻的歌再教（菜单 v2 已无翻译项）。纯前端模拟：「做这一步」代替用户的真实操作；可切深浅色、中英、Reduce Motion 和三条边界分支。真实手感以 app 内为准，由创始人终验。</p>
+    <div class="eyebrow">nanoPod · 认识 nanoPod · 分镜 v3 · 2026-09-26</div>
+    <h1>认识 nanoPod</h1>
+    <p class="lede">分镜 v3。这不是教程，是陪着用户把 nanoPod 走一遍：玻璃卡片贴在要操作的地方，做完自动打勾、连续的粗进度环长一截、火花一闪；最后一步说句走心的话。较 v2.1：文案全部改成真诚克制的口吻（不再有「教会」这类字，移动面板的动作一律说「推」）；面板移到角落的演示改成 x、y 两轴各走一段弹簧、x 快（0.50s）y 慢（0.74s）的柔和弧线；进度环改成 Apple Watch 活动环那种连续粗环，轨道带同色相暗色。纯前端模拟：「做这一步」代替用户的真实操作；可切深浅色、中英、Reduce Motion 和三条边界分支。真实手感以 app 内为准，由创始人终验。</p>
     <div class="legend">
-      <span class="l-card">引导卡（Liquid Glass；macOS 14/15 回退为 NSVisualEffectView .popover）</span>
+      <span class="l-card">引导卡（Liquid Glass；macOS 14/15 回退 NSVisualEffectView .popover）</span>
       <span class="l-halo">高亮环（点击透传覆盖窗）</span>
-      <span class="l-ring">进度环 7 段（第 1 段「Music 已连上」通常预填；延后的段画成虚线）</span>
-      <span class="l-glow">边缘光 / 角落光（甩动与收边的目的地提示）</span>
+      <span class="l-ring">进度环：连续粗环，7 步各占 1/7（第 1 步「Music 已连上」通常预填）</span>
+      <span class="l-glow">角落光 / 边缘光（移动与收边的目的地提示）</span>
     </div>
   </header>
 
   <section id="demo">
     <div class="sec-head">
       <h2>演示台</h2>
-      <p>720×440 的屏幕右上角局部，面板取真实默认位置（距可视区右上各 20pt）与真实尺寸 250×284；甩动一步演示甩到右下角（角边距 16pt）。</p>
+      <p>720×440 当作一整块屏幕。面板从真实默认位置（距可视区右上各 20pt）出发；「放到角落」一步演示推到左下角（角边距 16pt）——选对角线的移动才看得出弧度，随后从左缘收边。</p>
     </div>
 
     <div class="toolbar" role="toolbar" aria-label="演示控制">
@@ -350,7 +369,7 @@
     <div class="demo">
       <div class="stage-box">
         <div class="stage-fit" id="fit">
-          <div class="stage" id="stage" data-mock="dark"></div>
+          <div class="stage" id="stage" data-mock="dark" data-side="right"></div>
         </div>
         <div class="statusline" id="statusline"></div>
       </div>
@@ -361,7 +380,7 @@
   <section id="frames-sec">
     <div class="sec-head">
       <h2>全部分镜</h2>
-      <p>静态帧，与演示台同一套渲染。G 只在 Music 自动化权限未授时出现；S4′ 是当前歌不可翻译时的延后提示，S4L 是之后第一首能翻的歌播起来时补的那张卡；S5b 是甩到角落之后、划进边之前的中间态。</p>
+      <p>静态帧，与演示台同一套渲染。G 只在 Music 自动化权限未授时出现；S4′ 是当前歌不可翻译时的延后提示，S4L 是之后第一首外文歌播起来时补的那张卡；S5b 是落到角落之后、推进边之前的中间态。</p>
     </div>
     <div class="frames" id="frames"></div>
   </section>
@@ -369,15 +388,23 @@
   <section>
     <div class="sec-head">
       <h2>进度环八态</h2>
-      <p>7 段、段间 7°。Music 权限已授的用户从 1/7 起步（Nunes &amp; Drèze 2006 预盖章实验：2/10 起步完成率 34%，0/8 起步 19%）。终局七段缝合成整圈再脉冲一次；翻译被延后时停在 6/7，第 5 段画成粉红虚线，补完再合拢。</p>
+      <p>连续粗环，没有分段缝：每完成一步弧长增加 1/7。外径 24pt、线宽 5pt（≈21%）、圆头；前景 浅 #FA4058 / 深 #FB546C；轨道是同一色相的低透明度（浅 22%、深 28%），不透明底上等价于 浅 #FED5DA / 深 #5C2D36。下面用 64pt 放大：线宽 13pt。左四个浅色底，右四个深色底。</p>
     </div>
     <div class="rings" id="rings"></div>
   </section>
 
   <section>
     <div class="sec-head">
+      <h2>移到角落的轨迹</h2>
+      <p>柔和的弧线：x、y 各走一段弹簧，x 快（0.50s）y 慢（0.74s），轨迹自然成弧，不手画路径。弧高随方向变：对角线移动约为位移的 12%，近水平或近竖直约 5–8%；最高点在行程约 1/3 处；两轴都落定约 0.6s。真实面板现在是两轴共用一段弹簧、各带初速度：零速度或推的方向正对角落时是直线，方向偏一点才自然弯——两种选择的取舍见 proposal §13.2。</p>
+    </div>
+    <div class="traj" id="traj"></div>
+  </section>
+
+  <section>
+    <div class="sec-head">
       <h2>完成一步的节奏</h2>
-      <p>从检测到完成到下一张卡就位约 1.0 s。beat 完成只打勾 + 触觉；一段完成才填环 + 火花。每行给普通与 Reduce Motion 两种规格。</p>
+      <p>从检测到完成到下一张卡就位约 1.0 s。beat 完成只打勾 + 触觉；一步完成才长环 + 火花。每行给普通与 Reduce Motion 两种规格。</p>
     </div>
     <div class="two">
       <div class="tbl-wrap">
@@ -386,8 +413,8 @@
           <tbody>
             <tr><td class="t">0 ms</td><td>检测到完成</td><td>haptic <span class="mono">.levelChange</span>，<span class="mono">.drawCompleted</span><span class="rm">RM：保留（触觉不是动效）</span></td></tr>
             <tr><td class="t">0 ms</td><td>卡内 beat 打勾</td><td>圆点 → 实心勾，scale 1→1.22→1，spring(response .28, damping .6)<span class="rm">RM：直接切换</span></td></tr>
-            <tr><td class="t">50 ms</td><td>进度环当前段填充</td><td>trim <span class="mono">.smooth(0.45)</span>（不过冲，避免溢到下一段）；线宽 2.5→3.5→2.5 spring(.30, .60)<span class="rm">RM：linear 0.30，线宽不变</span></td></tr>
-            <tr><td class="t">50 ms</td><td>火花</td><td>16 粒 2–3.5pt 圆点，初速 90–140 pt/s 全向，阻尼 .88/帧，寿命 0.55 s，色粉红 60% / 白 40%，起点环心；Canvas+TimelineView，寿命结束即 paused<span class="rm">RM：不放</span></td></tr>
+            <tr><td class="t">50 ms</td><td>进度环长一截</td><td>弧长 +1/7：trim 0.6 s ease-out cubic-bezier(.2,.8,.2,1)，圆头领着走；线宽 5→6→5 spring(.30, .60)<span class="rm">RM：linear 0.30，线宽不变</span></td></tr>
+            <tr><td class="t">50 ms</td><td>火花</td><td>16 粒 2–3.5pt 圆点，初速 90–140 pt/s 全向，阻尼 .88/帧，寿命 0.55 s，粉红 60% / 白 40%，起点环心；Canvas+TimelineView，寿命结束即 paused<span class="rm">RM：不放</span></td></tr>
             <tr><td class="t">100 ms</td><td>环内数字 → 勾</td><td><span class="mono">.contentTransition(.symbolEffect(.replace.downUp))</span> 0.30 s<span class="rm">RM：<span class="mono">.replace</span> 无位移</span></td></tr>
             <tr><td class="t">750 ms</td><td>卡内容淡出</td><td>opacity 1→0，0.14 s easeIn</td></tr>
             <tr><td class="t">800 ms</td><td>卡位移到下一锚点</td><td>窗口 frame spring(response .50, damping .86)，速度连续；箭头在中点换向<span class="rm">RM：原地淡出、新位置淡入 0.16 s</span></td></tr>
@@ -397,14 +424,13 @@
       </div>
       <div class="tbl-wrap">
         <table>
-          <thead><tr><th>t</th><th>终局（第 7 段完成）</th><th>规格</th></tr></thead>
+          <thead><tr><th>t</th><th>最后一步（环合上）</th><th>规格</th></tr></thead>
           <tbody>
-            <tr><td class="t">0 ms</td><td>最后一段填充</td><td>同左 0.45 s；haptic <span class="mono">.alignment</span>（整圈合拢的语义）</td></tr>
-            <tr><td class="t">450 ms</td><td>七段缝合</td><td>段间 7° → 0°，0.30 s smooth<span class="rm">RM：交叉淡化到整圈</span></td></tr>
-            <tr><td class="t">500 ms</td><td>整圈脉冲</td><td>scale 1→1.10→1 spring(.50, .62)；线宽 2.5→4→2.5；描边 粉红→白→粉红 0.4 s<span class="rm">RM：只做描边色闪一次</span></td></tr>
-            <tr><td class="t">550 ms</td><td>礼花</td><td>72 粒自面板上沿一线缓缓喷出：初速 220–320 pt/s 向上、锥角 ±30°、重力 360 pt/s²、空气阻力让末段飘落、自旋 ±2.5 rad/s、6×9pt 矩形/圆/细条三形、色取封面主色 3 + 白（哑光），寿命 1.8 s，末 0.5 s 淡出；独立点击透传窗口，2.2 s 后关闭<span class="rm">RM：不放</span></td></tr>
-            <tr><td class="t">900 ms</td><td>卡长成终卡</td><td>高度 spring(.40, .85)，文案与两个按钮错峰淡入 0.2 s</td></tr>
-            <tr><td class="t">8 s</td><td>自动收起（或点「好了」）</td><td>opacity 0.16 s easeIn，scale 1→.97；随后整套对象销毁，零常驻</td></tr>
+            <tr><td class="t">0 ms</td><td>最后一截长满</td><td>同左 0.6 s；haptic <span class="mono">.alignment</span>（合圈的语义）</td></tr>
+            <tr><td class="t">600 ms</td><td>圆头碰到起点：合圈脉冲</td><td>scale 1→1.08→1 spring(.50, .62)；线宽 5→6.5→5；描边 粉红→白→粉红 0.35 s<span class="rm">RM：只做描边色闪一次</span></td></tr>
+            <tr><td class="t">650 ms</td><td>礼花</td><td>72 粒自面板上沿一线缓缓喷出：初速 220–320 pt/s 向上、锥角 ±30°、重力 360 pt/s²、阻力 .985/帧、自旋 ±2.5 rad/s、6×9pt 三形、色取封面主色 3 + 白（哑光），寿命 1.8 s，末 0.5 s 淡出；独立点击透传窗口，2.2 s 后关闭<span class="rm">RM：不放</span></td></tr>
+            <tr><td class="t">1000 ms</td><td>卡长成最后一张</td><td>高度 spring(.40, .85)，文案与按钮错峰淡入 0.2 s</td></tr>
+            <tr><td class="t">8 s</td><td>自动收起（或点「好」）</td><td>opacity 0.16 s easeIn，scale 1→.97；随后整套对象销毁，零常驻</td></tr>
           </tbody>
         </table>
       </div>
@@ -420,20 +446,19 @@
         <table>
           <thead><tr><th>项</th><th>规格</th></tr></thead>
           <tbody>
-            <tr><td>尺寸</td><td>宽 236pt 固定，高随内容（92–186pt）；圆角 14pt continuous（面板 16，卡片更小所以更小）；箭头 12pt 等腰与卡同一形状</td></tr>
-            <tr><td>材质</td><td><b>macOS 26：Liquid Glass</b>，SwiftUI <span class="mono">.glassEffect(.regular, in: TourBubbleShape)</span>（卡体 + 箭头一个形状），整张卡包在一个 <span class="mono">GlassEffectContainer</span> 里，无 tint；卡内按钮是实色胶囊，不再叠玻璃。<b>macOS 14/15</b>：<span class="mono">NSVisualEffectView</span> <span class="mono">.popover</span> 材质 + <span class="mono">maskImage</span> 同一形状（系统 popover 的画法）。不用 <span class="mono">.hudWindow</span>（过曝）。选玻璃的理由与三条教训的处理见 proposal §4.6</td></tr>
-            <tr><td>光边</td><td>顶部 1px 内高光（玻璃自带），外 0.5px 8% 描边；阴影 0 12 34 rgba(0,0,0,.22)（浅）/ 0 16 40 rgba(0,0,0,.45)（深）</td></tr>
-            <tr><td>字</td><td>SF Pro Text：标题 13 semibold；正文 12 regular 次级色；beat 12；脚注 10.5；环内数字 9 semibold tabular</td></tr>
-            <tr><td>进度环</td><td>22pt，线宽 2.5，7 段、段间 7°、起点 12 点钟；轨道 12% 对比色，填充 Apple Music 粉红（浅 <span class="mono">#FA4058</span> / 深 <span class="mono">#FB546C</span>）；延后的段画成粉红虚线轨道</td></tr>
-            <tr><td>放置</td><td>面板内锚点：卡放在面板朝屏幕中心的一侧，间距 16pt，垂直对齐锚点；绝不盖住面板。贴边小条锚点：胶囊探出区域之外再留 20pt。面板被甩走时卡跟着走。不再有状态栏锚点</td></tr>
+            <tr><td>尺寸</td><td>宽 236pt 固定，高随内容（92–190pt）；圆角 14pt continuous；箭头 12pt 等腰与卡同一形状</td></tr>
+            <tr><td>材质</td><td><b>macOS 26：Liquid Glass</b>，SwiftUI <span class="mono">.glassEffect(.regular, in: TourBubbleShape)</span>（卡体 + 箭头一个形状），整张卡包在一个 <span class="mono">GlassEffectContainer</span> 里，无 tint；卡内按钮是实色胶囊，不再叠玻璃。<b>macOS 14/15</b>：<span class="mono">NSVisualEffectView</span> <span class="mono">.popover</span> 材质 + <span class="mono">maskImage</span> 同一形状。不用 <span class="mono">.hudWindow</span>。理由与三条教训的处理见 proposal §4.6</td></tr>
+            <tr><td>字</td><td>SF Pro Text：标题 13 semibold；正文 12 regular 次级色；beat 12；脚注 10.5；环内数字 8.5 semibold tabular</td></tr>
+            <tr><td>进度环</td><td>连续粗环：外径 24pt、线宽 5pt、圆头、12 点钟起顺时针；前景 浅 #FA4058 / 深 #FB546C；轨道同色相 浅 22% / 深 28% 透明度（不透明底等价 #FED5DA / #5C2D36）；每步 +1/7，0.6 s ease-out；合圈脉冲一次</td></tr>
+            <tr><td>放置</td><td>面板内锚点：卡放在面板朝屏幕中心的一侧，间距 16pt，垂直对齐锚点；绝不盖住面板。贴边小条锚点：胶囊探出区域之外再留 20pt。面板被移走时卡从新位置长出</td></tr>
             <tr><td>层级</td><td>与面板同 level（.floating）并排在其上；菜单打开时卡片暂隐</td></tr>
-            <tr><td>跟随</td><td>只订阅面板的 didMove / didResize / didChangeScreen 与已有的 windowMovementBegan/Ended 通知：拖动中卡片隐去，松手后弹回新位置；不轮询</td></tr>
+            <tr><td>跟随</td><td>只订阅面板的 didMove / didResize / didChangeScreen 与已有的 windowMovementBegan/Ended 通知：移动中卡片隐去，落定后从新位置长出；不轮询</td></tr>
           </tbody>
         </table>
       </div>
       <div class="callout">
         <h3>三条不可破的边界</h3>
-        <p style="margin-top:6px">1. 引导任何一步都不触发系统弹窗；当前歌不能翻译就把翻译一步延后，不指向设置、不改锚点。<br>2. 卡片窗口不成为 key window，不抢面板与其他 app 的焦点；面板收边、隐藏、换屏、被甩走时卡片跟着藏或跟着走。<br>3. 引导结束（完成或跳过）后整套对象销毁：无窗口、无玻璃、无每帧工作、无 timer；唯一允许的残留是延后步的一个 Combine 订阅（订 canTranslate，事件驱动），补完或过期即取消；<span class="mono">WindowAnimationCensus</span> 扫不到任何残留。</p>
+        <p style="margin-top:6px">1. 引导任何一步都不触发系统弹窗；当前歌不能翻译就把翻译一步延后，不指向设置、不改锚点。<br>2. 卡片窗口不成为 key window，不抢面板与其他 app 的焦点；面板收边、隐藏、换屏、被移走时卡片跟着藏或跟着走。<br>3. 引导结束（走完或停下）后整套对象销毁：无窗口、无玻璃、无每帧工作、无 timer；唯一允许的残留是延后步的一个 Combine 订阅（订 canTranslate，事件驱动），补完或过期即取消；<span class="mono">WindowAnimationCensus</span> 扫不到任何残留。</p>
         <h3 style="margin-top:12px">触控板手势示意（按逐帧规格）</h3>
         <p style="margin-top:6px">按创始人录的系统设置「触控板」页演示逐帧提取（research/trackpad-demo-frames.md）等比缩到卡内：轮廓 96×72、圆角 8、描边 1.5、无填充；两个圆点 11pt、间距 16、色 #6B9CFD。圆点只做透明度、不缩放：0.45s 淡入 → 停 0.35s → 0.95s 位移（ease-in-out，无过冲）→ 停 0.35s → 0.3s 暗到 31% → 停 0.58s → 0.42s 淡出 → 隐 0.15s，一轮 3.55s；位移时沿运动方向拖一条同色渐隐尾巴。播两轮后静止在起点 31%，卡被 hover 时再播一轮。源动画末尾约 6% 位移在一帧内贴合终点，不复刻。</p>
       </div>
@@ -442,7 +467,7 @@
 
   <footer>
     <p>本页只是分镜与规格的可视化，不是实现；位置数值按真实面板几何推算（底部控件 padding 12/16、播放簇 30×30 间距 10、翻译按钮 32×32 右下、顶部 ↖ Music 胶囊与 32pt 输出钮各留 12pt、贴边小条 6×56、胶囊 120×204、角边距 16、边缘判定 28）。玻璃在网页里用 backdrop-filter 近似。</p>
-    <p>配套文档：docs/design/2026-09-25-onboarding/proposal.md（旅程、状态机、检测钩子、边界矩阵、材质决定、动效规格、验收）。</p>
+    <p>配套文档：docs/design/2026-09-25-onboarding/proposal.md（v3：改了什么、文案对照表、轨迹与进度环规格、待创始人定的两个问题）。</p>
   </footer>
 </div>
 
@@ -450,18 +475,21 @@
 (function(){
   'use strict';
   const W=720,H=440,MENU=24;
-  const POS={ home:{x:450,y:44}, corner:{x:454,y:140} };   // 默认（右上、20pt）与甩到右下角（16pt）
-  const PW=250,PH=284, CAPW=120,CAPH=204;
+  const POS={ home:{x:450,y:44}, corner:{x:16,y:140} };   // 默认（右上、20pt）与推到左下角（16pt）
+  const PW=250,PH=284, CAPW=120,CAPH=204, SLIVER_W=6, CAP_GAP=14;
+  const STEPS=7;
 
+  function sideFor(P){ return (P.x+PW/2) < W/2 ? 'left' : 'right'; }
   function anchorsFor(P){
+    const side=sideFor(P);
     return {
-      panel:{x:P.x,y:P.y+PH/2},
+      panel:{x:side==='left'?P.x+PW:P.x, y:P.y+PH/2},
       play:{x:P.x+125,y:P.y+PH-16-15},
       lyrics:{x:P.x+12+13,y:P.y+PH-16-15},
       translate:{x:P.x+PW-12-16,y:P.y+PH-16-30-4-16-10-16},
       tl:{x:P.x+12+31,y:P.y+12+11},
       tr:{x:P.x+PW-12-16,y:P.y+12+16},
-      sliver:{x:714,y:P.y+PH/2}
+      sliver:{x:side==='left'?SLIVER_W/2:W-SLIVER_W/2, y:P.y+PH/2}
     };
   }
 
@@ -481,72 +509,71 @@
     checkS:'<svg viewBox="0 0 10 10"><path d="M2 5.2l2.2 2.2L8 3.4"/></svg>'
   };
 
+  // v3 文案：真诚、克制、不「教」。中英各自成立。
   const COPY={
     zh:{
-      skip:'跳过引导', skipStep:'这步先跳过',
-      welcome:{title:'嗨，来认识一下 nanoPod', body:'六个小动作，每个都请真的做一遍。卡片会一路陪着你，两分钟不到。', primary:'走起', secondary:'先不用', foot:'想重来？菜单栏 ♪ 里有「继续引导」', chip:'Music 已经连上了'},
-      gate:{title:'先和 Music 打个招呼', body:'nanoPod 靠 Music 放歌、读歌词。点一下，系统会问你一次，选「好」就行。', primary:'好，连上', secondary:'等会儿再说', confirm:'连上了。'},
-      reveal:{title:'把鼠标挪过来', body:'面板安静的时候只留封面，控件都藏在下面。', beats:['移到面板上','按一下播放'], beatsPlaying:['移到面板上','已经在放了'], confirm:'出声了。'},
-      corners:{title:'专辑页的两个角', body:'右上换出声的设备，左上一键跳去 Music。', beats:['点右上，看看现在从哪出声','点左上 ↖ Music'], confirm:'两个角都认识了。', musicOpened:'Music 在后面开好了，回来接着来。'},
-      lyrics:{title:'看歌词', body:'左下角的小气泡，或者直接点封面。', confirm:'到了。'},
-      translate:{title:'顺手开翻译', body:'右下角这个按钮。译文会跟在每一句下面。', confirm:'译文来了。'},
-      translateAlt:{title:'这首不用翻，先跳过', body:'等到一首外文歌，我再来说翻译在哪。', confirm:'先记着。'},
-      later:{title:'这首能翻了', body:'鼠标挪过来，右下角那个按钮点一下。', confirm:'译文来了。'},
-      doneDeferred:{body:'六个做完了，翻译那步等一首外文歌再补。想更顺手？给「显示 / 隐藏面板」录个快捷键。'},
-      move:{title:'甩去一个角落', body:'双指按住面板，往哪个角一甩，它就落在哪。', beats:['甩到任意一个角','再往屏幕边上一划'], bodyTuck:'落好了。现在往右边一划，它会藏进屏幕边。', fallback:'替我收起来', note:'用鼠标？到 设置 › 快捷键 给「贴边隐藏」录个键就行。', confirm:'收好了。'},
-      ret:{title:'它就贴在这条边上', beats:['鼠标停上去，它会探出头','点一下，回来'], confirm:'回来了。'},
-      done:{title:'就这些，你都会了', body:'想更顺手？给「显示 / 隐藏面板」录个快捷键，一个键就能叫它出来。', primary:'录个快捷键', secondary:'好了', foot:'以后想重看，设置里有「重看引导」'},
-      segs:['连接 Music','悬停·播放','两个角','歌词','翻译','甩·收','回来']
+      stop:'先到这里', skipStep:'这一步先不做',
+      welcome:{title:'你好，很高兴见到你', body:'接下来几分钟，我陪你把 nanoPod 走一遍。都是些顺手的小事，不着急。', primary:'开始', secondary:'以后再说', foot:'随时可以停下，设置里能接着来', chip:'Music 已经连上了'},
+      gate:{title:'先和 Music 打个招呼', body:'nanoPod 靠 Music 放歌、读歌词。点一下，系统会问你一次。', primary:'连上 Music', secondary:'稍后', confirm:'连上了。'},
+      reveal:{title:'把鼠标挪过来', body:'面板平时只留封面，控件在你需要的时候才出来。', beats:['移到面板上','按一下播放'], beatsPlaying:['移到面板上','已经在放了'], confirm:'有声音了。'},
+      corners:{title:'专辑页的两个角', body:'右上角选声音从哪里出，左上角一步到 Music。', beats:['右上角：声音从哪出','左上角：去 Music'], confirm:'两个角都在这儿。', musicOpened:'Music 打开了，回来接着来。'},
+      lyrics:{title:'歌词在这儿', body:'左下角的小气泡，或者点一下封面。', confirm:'到了。'},
+      translate:{title:'翻译', body:'右下角的按钮。译文会跟在每一句下面。', confirm:'译文来了。'},
+      translateAlt:{title:'这首不用翻', body:'等有一首外文歌的时候，我再来告诉你翻译在哪。', confirm:'记下了。'},
+      later:{title:'这首可以翻译', body:'鼠标挪过来，右下角的按钮点一下。', confirm:'译文来了。'},
+      move:{title:'放到你喜欢的角落', body:'双指按住面板，轻轻往一个角推过去，它会自己落好。', beats:['推到一个角落','再往屏幕边上推一下'], bodyTuck:'落好了。往左边再推一下，它会藏进屏幕边。', fallback:'替我收起来', note:'用鼠标的话，在 设置 › 快捷键 给「贴边隐藏」录个键就好。', confirm:'收好了。'},
+      ret:{title:'它就在这条边上', beats:['鼠标停上去，它会探出来','点一下，回来'], confirm:'回来了。'},
+      done:{title:'就这些了', body:'往后它就安静地待在一边，想听的时候就在。愿有音乐陪着的时候，都是好时光。', primary:'录个快捷键', secondary:'好', foot:'想再走一遍：设置 › 重新认识 nanoPod'},
+      doneDeferred:{body:'往后它就安静地待在一边，想听的时候就在。翻译那一步，等有外文歌的时候我再来。愿有音乐陪着的时候，都是好时光。'}
     },
     en:{
-      skip:'Skip the tour', skipStep:'Skip this one',
-      welcome:{title:"Hi. Let's get you the hang of nanoPod", body:'Six little moves, each one for real. The card stays with you the whole way. Under two minutes.', primary:"Let's go", secondary:'Not now', foot:"Want a redo? It's under ♪ › Continue tour", chip:"Music's already connected"},
-      gate:{title:'Say hi to Music', body:"nanoPod plays and reads lyrics through Music. Click, macOS asks once, and you're in.", primary:'Connect', secondary:'Maybe later', confirm:'Connected.'},
-      reveal:{title:'Bring your cursor over', body:"When the panel's resting, it's just the cover. The controls are tucked underneath.", beats:['Hover the panel','Hit play'], beatsPlaying:['Hover the panel','Already playing'], confirm:"There's your music."},
-      corners:{title:'The two corners', body:'Top right picks where the sound goes. Top left jumps you into Music.', beats:["Top right: see where it's playing",'Top left: ↖ Music'], confirm:'Both corners, done.', musicOpened:"Music's open behind you. Come on back."},
-      lyrics:{title:'Now the lyrics', body:'The little speech bubble, bottom left. Or just click the cover.', confirm:'There you go.'},
-      translate:{title:'Turn on translation', body:'The button at the bottom right. Every line gets one underneath.', confirm:'Translated.'},
-      translateAlt:{title:"This one doesn't need it. Skipping for now", body:"When a song in another language comes on, I'll show you where translation lives.", confirm:'Noted.'},
-      later:{title:'This one can be translated', body:'Bring your cursor over and hit the button at the bottom right.', confirm:'Translated.'},
-      doneDeferred:{body:'Six down. Translation waits for a song that needs it. Want it faster? Give Show / Hide panel a key.'},
-      move:{title:'Fling it to a corner', body:"Two fingers on the panel, flick toward any corner. It'll land there.", beats:['Flick it to a corner','Now swipe it into the edge'], bodyTuck:'Landed. Now swipe right and it slips into the edge.', fallback:'Tuck it for me', note:'On a mouse? Give Hide to Edge a key in Settings › Shortcuts.', confirm:'Tucked away.'},
-      ret:{title:"It's right there on the edge", beats:['Rest your cursor on it. It peeks out','Click, and it\'s back'], confirm:"And it's back."},
-      done:{title:"That's it. You've got it", body:'Want it even faster? Give Show / Hide panel a key and summon it from anywhere.', primary:'Set a shortcut', secondary:'All done', foot:'Replay anytime under Settings › Replay tour'},
-      segs:['Connect','Hover · Play','Corners','Lyrics','Translate','Fling · Tuck','Return']
+      stop:'Stop here', skipStep:'Skip this one',
+      welcome:{title:"Hi, glad you're here", body:"Over the next couple of minutes I'll walk through nanoPod with you. Small, everyday things. No rush.", primary:'Begin', secondary:'Later', foot:'Stop anytime. You can pick it up again in Settings', chip:"Music's connected"},
+      gate:{title:'Say hi to Music', body:'nanoPod plays and reads lyrics through Music. One click, and macOS will ask you once.', primary:'Connect Music', secondary:'Later', confirm:'Connected.'},
+      reveal:{title:'Bring your cursor over', body:"At rest it's just the cover. The controls come out when you need them.", beats:['Hover the panel','Press play'], beatsPlaying:['Hover the panel','Already playing'], confirm:"There's the music."},
+      corners:{title:'The two corners', body:'Top right picks where the sound comes out. Top left takes you to Music.', beats:['Top right: where the sound goes','Top left: over to Music'], confirm:'Both corners, right there.', musicOpened:"Music's open. Come back whenever you're ready."},
+      lyrics:{title:'The lyrics', body:'The little speech bubble at the bottom left, or click the cover.', confirm:'Here they are.'},
+      translate:{title:'Translation', body:'The button at the bottom right. Each line gets one underneath.', confirm:'Translated.'},
+      translateAlt:{title:"This one doesn't need it", body:"When a song in another language comes along, I'll show you where translation is.", confirm:'Noted.'},
+      later:{title:'This one can be translated', body:'Bring your cursor over and press the button at the bottom right.', confirm:'Translated.'},
+      move:{title:'Put it in a corner you like', body:'Two fingers on the panel, nudge it toward a corner. It settles there on its own.', beats:['Nudge it to a corner','Now nudge it into the edge'], bodyTuck:'Settled. Nudge it left once more and it slips into the edge.', fallback:'Tuck it for me', note:'On a mouse, give Hide to Edge a key in Settings › Shortcuts.', confirm:'Tucked in.'},
+      ret:{title:"It's right here on the edge", beats:['Rest your cursor on it. It peeks out',"Click, and it's back"], confirm:"It's back."},
+      done:{title:"That's all", body:'From here on it stays quietly to the side, there whenever you want it. I hope the time you spend with music, and with nanoPod, is time you enjoy.', primary:'Set a shortcut', secondary:'OK', foot:'To walk through again: Settings › Get to know nanoPod again'},
+      doneDeferred:{body:"From here on it stays quietly to the side, there whenever you want it. Translation can wait for a song that needs it; I'll come back then. I hope the time you spend with music, and with nanoPod, is time you enjoy."}
     }
   };
 
   const SCENES=[
     {id:'S0', key:'welcome', step:null, filled:[0], panel:'st-rest', pos:'home', anchor:'panel', halo:null,
-      name:{zh:'欢迎',en:'Welcome'},
-      notes:{teach:'这是什么、要花多久、可以跳过。第 1 段「Music 已连上」在权限已授时预填，用户从 1/7 起步。', why:'HIG Launching：首启别让人先读一堆；Nunes & Drèze：预盖章提高完成率。', anchor:'面板朝屏幕中心一侧的中点；卡片与面板间距 16pt。', signal:'点「走起」；「先不用」写入 status=skipped，以后只从菜单栏「继续引导」进。', edge:'Music 权限未授 → 先出 G 卡。面板已收边 → 卡锚到小条，先走 S6 再回到 S1。', level:'无庆祝。'}},
+      name:{zh:'见面',en:'Hello'},
+      notes:{teach:'这是什么、要多久、随时可以停。第 1 步「Music 已连上」在权限已授时预填，环从 1/7 起。', why:'HIG Launching：首启别让人先读一堆；Nunes & Drèze：预盖章提高完成率。口吻：像朋友顺手带你看看，不是上课。', anchor:'面板朝屏幕中心一侧的边中点；卡片与面板间距 16pt。', signal:'点「开始」；「以后再说」写入 status=skipped，菜单栏不出入口，以后从 设置 › 通用 的「接着认识 nanoPod」按钮进（走完后同一按钮变「重新认识 nanoPod」）。', edge:'Music 权限未授 → 先出 G 卡。面板已收边 → 卡锚到小条，先走 S6 再回到 S1。', level:'无庆祝。'}},
     {id:'G', key:'gate', step:0, filled:[], panel:'st-rest', pos:'home', anchor:'panel', halo:null, optional:'unauth',
       name:{zh:'和 Music 打招呼',en:'Say hi to Music'},
-      notes:{teach:'把 Music 自动化权限的系统询问放在用户点按钮之后，而不是启动时突然弹。', why:'铁律：引导自己不触发系统弹窗；这是用户点击换来的一次系统询问，与现有 C6 的 requestAutomationAccess 同一路径。', anchor:'同 S0。', signal:'OnboardingState.automationStatus == .authorized（同步询问返回后再查一次）。', edge:'被拒绝 → 卡变「Music 还没点头」+「去打开」系统设置深链 + 「先往下走」；不阻塞后续步骤，但 S1 的播放 beat 会说明原因。', level:'小火花 + 环第 1 段。'}},
+      notes:{teach:'把 Music 自动化权限的系统询问放在用户点按钮之后，而不是启动时突然弹。', why:'铁律：引导自己不触发系统弹窗；这是用户点击换来的一次系统询问，与现有 C6 的 requestAutomationAccess 同一路径。', anchor:'同 S0。', signal:'OnboardingState.automationStatus == .authorized（同步询问返回后再查一次）。', edge:'被拒绝 → 卡变「Music 还没答应」+「去看看」系统设置深链 + 「先往下」；不阻塞后续步骤，但 S1 的播放 beat 会说明原因。', level:'环 +1/7 + 小火花。'}},
     {id:'S1', key:'reveal', step:1, filled:[0], panel:'st-rest', pos:'home', anchor:'play', halo:{a:'play',w:40,h:40},
-      name:{zh:'悬停 · 播放',en:'Hover · Play'},
-      notes:{teach:'面板静止时只剩封面，控件悬停才出现；顺手确认在播放。', why:'「控件在哪」是这个面板最不直观的一件事；播放本身显而易见，所以只作为 beat，已在播放时预勾。', anchor:'播放按钮中心；卡放面板左侧，垂直对齐该行；高亮环 40pt 从一开始就标出隐藏按钮的位置，悬停时按钮在环里浮现。', signal:'beat1：新增钩子 controlsRevealed（MiniPlayerView 的 showOverlayContent 翻真时发通知）；beat2：MusicController.$isPlaying == true。', edge:'Music 没开：按播放会拉起 Music，卡文案改「正在叫醒 Music…」；库里没歌：beat2 8 秒未完成时「这步先跳过」变明显。', level:'小火花 + 环第 2 段 + haptic .levelChange。'}},
+      name:{zh:'鼠标挪过来',en:'Hover · Play'},
+      notes:{teach:'面板静止时只剩封面，控件悬停才出现；顺手确认在播放。', why:'「控件在哪」是这个面板最不直观的一件事；播放本身显而易见，所以只作为 beat，已在播放时预勾。', anchor:'播放按钮中心；卡放面板左侧，垂直对齐该行；高亮环 40pt 从一开始就标出隐藏按钮的位置，悬停时按钮在环里浮现。', signal:'beat1：新增钩子 controlsRevealed（MiniPlayerView 的 showOverlayContent 翻真时发通知）；beat2：MusicController.$isPlaying == true。', edge:'Music 没开：按播放会拉起 Music，卡文案改「正在打开 Music…」；库里没歌：beat2 8 秒未完成时「这一步先不做」变明显。', level:'环 +1/7 + 小火花 + haptic .levelChange。'}},
     {id:'S2', key:'corners', step:2, filled:[0,1], panel:'st-hover', pos:'home', anchor:'tr', halo:{a:'tr',w:40,h:40},
       name:{zh:'专辑页的两个角',en:'The two corners'},
-      notes:{teach:'专辑页悬停后左上「↖ Music」跳去 Apple Music（完整版跳对应的原生播放器），右上换音频输出设备。', why:'创始人 09-26 点名；两个角落按钮只在悬停时出现。合成一步、两个 beat，高亮环在两个角之间跳。', anchor:'右上输出钮中心（右 12、上 12，32pt）→ 左上 ↖ Music 胶囊中心；卡片不动，只换 beat 与高亮环位置。', signal:'beat1：新增钩子 audioOutputMenuPresented（AudioOutputSwitcherView.onMenuPresentedChanged 翻真）；beat2：新增钩子 musicButtonTapped（MusicButtonView action 内 post）。两个 beat 任意顺序。', edge:'点 ↖ Music 会把 Music 带到前台：面板与卡都是浮动窗，仍在最上；卡正文随动「Music 在后面开好了，回来接着来。」输出设备只有一个：beat1 仍以列表打开为准。', level:'小火花 + 环第 3 段。'}},
+      notes:{teach:'专辑页悬停后左上「↖ Music」跳去 Apple Music（完整版跳对应的原生播放器），右上换音频输出设备。', why:'创始人 09-26 点名；两个角落按钮只在悬停时出现。合成一步、两个 beat，高亮环在两个角之间跳。', anchor:'右上输出钮中心（右 12、上 12，32pt）→ 左上 ↖ Music 胶囊中心；卡片不动，只换 beat 与高亮环位置。', signal:'beat1：新增钩子 audioOutputMenuPresented（AudioOutputSwitcherView.onMenuPresentedChanged 翻真）；beat2：新增钩子 musicButtonTapped（MusicButtonView action 内 post）。两个 beat 任意顺序。', edge:'点 ↖ Music 会把 Music 带到前台：面板与卡都是浮动窗，仍在最上；卡正文随动「Music 打开了，回来接着来。」输出设备只有一个：beat1 仍以列表打开为准。', level:'环 +1/7 + 小火花。'}},
     {id:'S3', key:'lyrics', step:3, filled:[0,1,2], panel:'st-hover', pos:'home', anchor:'lyrics', halo:{a:'lyrics',w:36,h:36},
       name:{zh:'歌词',en:'Lyrics'},
-      notes:{teach:'去歌词页的两条路：左下角对话气泡，或点封面。', why:'创始人点名；图标语义不自明。', anchor:'左下导航按钮中心；卡片位置不变，只换内容与箭头 y。', signal:'MusicController.$currentPage == .lyrics。', edge:'当前歌没有歌词：仍算完成（教的是导航），歌词页显示自己的空态；S4 随即走替代分支。', level:'小火花 + 环第 4 段。'}},
+      notes:{teach:'去歌词页的两条路：左下角对话气泡，或点封面。', why:'创始人点名；图标语义不自明。', anchor:'左下导航按钮中心；卡片位置不变，只换内容与箭头 y。', signal:'MusicController.$currentPage == .lyrics。', edge:'当前歌没有歌词：仍算完成（这一步只是带他到歌词页），歌词页显示自己的空态；S4 随即走替代分支。', level:'环 +1/7 + 小火花。'}},
     {id:'S4', key:'translate', step:4, filled:[0,1,2,3], panel:'st-lyrics-hover', pos:'home', anchor:'translate', halo:{a:'translate',w:40,h:40}, alt:'notrans',
-      name:{zh:'翻译',en:'Translate'},
-      notes:{teach:'歌词页右下角的翻译按钮。', why:'创始人点名；按钮只在悬停时出现，且只有 canTranslate 为真才挂载。', anchor:'翻译按钮中心（右下角，距底 92pt）；卡放面板左侧对齐该 y。', signal:'LyricsService.$showTranslation 翻真（检测动作，不检测结果）。', edge:'canTranslate == false（无歌词 / 网络不可达 / 已是目标语言）→ S4′：这一步标为 deferred，卡就地说一句「这首不用翻，先跳过」，第 5 段变粉红虚线轨道，1.1s 后往 S5 走；引导结束后只留一个 $canTranslate 订阅，第一首能翻的歌播起来（面板可见、开播 3s 后）再出 S4L 补这一段；连续 3 首没做或 20 次启动未遇到 → 静默标 skipped。不指向设置（那是总开关，当前歌不能翻时开了也看不到结果），菜单 v2 已无翻译项。翻译失败 → 不弹任何窗，卡照常完成。', level:'小火花 + 环第 5 段。'}},
+      name:{zh:'翻译',en:'Translation'},
+      notes:{teach:'歌词页右下角的翻译按钮。', why:'创始人点名；按钮只在悬停时出现，且只有 canTranslate 为真才挂载。', anchor:'翻译按钮中心（右下角，距底 92pt）；卡放面板左侧对齐该 y。', signal:'LyricsService.$showTranslation 翻真（检测动作，不检测结果）。', edge:'canTranslate == false（无歌词 / 网络不可达 / 已是目标语言）→ S4′：这一步标为 deferred，卡就地说「这首不用翻」，环不长，1.1s 后往 S5 走；引导结束后只留一个 $canTranslate 订阅，第一首外文歌播起来（面板可见、开播 3s 后）再出 S4L 补这一步；连续 3 首没做或 20 次启动未遇到 → 静默标 skipped。不指向设置（那是总开关，当前歌不能翻时开了也看不到结果），菜单 v2 已无翻译项。翻译失败 → 不弹任何窗，卡照常完成。', level:'环 +1/7 + 小火花。'}},
     {id:'S5', key:'move', step:5, filled:[0,1,2,3,4], panel:'st-rest', pos:'home', anchor:'panel', halo:null, glow:'corner',
-      name:{zh:'甩到角落，再划进边',en:'Fling · Tuck'},
-      notes:{teach:'双指按住面板往一个角一甩，它按速度投影落到最近的角；落定后再往屏幕边一划，藏进边里。', why:'创始人 09-26 点名的移动方式 + 招牌收边动作；两个都是双指手势，连成一步两个 beat，卡片跟着面板跑。', anchor:'面板朝屏幕中心一侧的中点；卡内触控板手势示意先演「斜甩」、beat1 完成后换成「横划」；右下角亮角落光、划入时右缘亮边缘光。', signal:'beat1：新增 SnappablePanel.snappedCorner 通知（弹簧动画结束且 origin 落在四角目标 ±1pt）；beat2：新增 LiquidEdgeController.statePublisher：.tucked（settled）。卡在 .collapsing 一出现就淡出。', edge:'鼠标用户：拖动不吸角、也不能划 → 「替我收起来」按钮调 hideToNearestEdge()，仍能看到小条并学会 S6；脚注指向快捷键。Stage Manager 开着 → 只教右边的角。落在左边角 → 文案改「往左边一划」。', level:'第 6 段的填充与火花在 S6 卡出现时补放（此刻卡片已隐去）。'}},
+      name:{zh:'放到角落 · 收边',en:'Corner · Tuck'},
+      notes:{teach:'双指按住面板往一个角推，它按速度投影落到最近的角；落定后再往屏幕边推一下，藏进边里。', why:'创始人 09-26 点名的移动方式 + 招牌收边动作；两个都是双指手势，连成一步两个 beat，卡片跟着面板过去。演示选对角线（右上 → 左下）才看得出弧度，随后从左缘收边。', anchor:'面板朝屏幕中心一侧的边中点；卡内触控板示意先演「往角落推」、beat1 完成后换成「横推」；目标角亮角落光、推入时目标边亮边缘光。', signal:'beat1：新增 SnappablePanel.snappedCorner 通知（弹簧动画结束且 origin 落在四角目标 ±1pt）；beat2：新增 LiquidEdgeController.statePublisher：.tucked（settled）。卡在 .collapsing 一出现就淡出。', edge:'鼠标用户：拖动不吸角、也不能推 → 「替我收起来」按钮调 hideToNearestEdge()，仍能看到小条并走完 S6；脚注指向快捷键。Stage Manager 开着 → 只用右边的角。落在右边角 → 文案改「往右边再推一下」。', level:'环 +1/7 的填充与火花在 S6 卡出现时补放（此刻卡片已隐去）。'}},
     {id:'S6', key:'ret', step:6, filled:[0,1,2,3,4,5], panel:'st-tucked', pos:'corner', anchor:'sliver', halo:{a:'sliver',w:18,h:72,pill:true},
-      name:{zh:'回来',en:'Return'},
-      notes:{teach:'它在哪、怎么探出胶囊、怎么回来。', why:'教了收就必须教放——否则用户第一次收边就「丢」了窗口。', anchor:'贴边小条（6×56，右缘，面板中线高度）；卡放在胶囊探出区域之外再留 20pt。', signal:'beat1：state == .floating（hover 停留 80ms）；beat2：.expanding 后 settled 回 .card。', edge:'用户直接双指向内划展开 → 两个 beat 同时勾。鼠标移开胶囊又缩回 → beat1 保持已勾。', level:'终局：最后一段填充 → 七段缝合成整圈 → 脉冲 → 礼花 → 卡长成终卡。haptic .alignment。'}},
+      name:{zh:'回来',en:'Back'},
+      notes:{teach:'它在哪、怎么探出胶囊、怎么回来。', why:'收了就得让他知道怎么拿回来——否则第一次收边就「丢」了窗口。', anchor:'贴边小条（6×56，落角那一侧的屏幕边缘，面板中线高度）；卡放在胶囊探出区域之外再留 20pt。', signal:'beat1：state == .floating（hover 停留 80ms）；beat2：.expanding 后 settled 回 .card。', edge:'用户直接双指向内推展开 → 两个 beat 同时勾。鼠标移开胶囊又缩回 → beat1 保持已勾。', level:'最后一步：最后一截长满 → 圆头碰到起点合圈脉冲 → 礼花 → 卡长成最后一张。haptic .alignment。'}},
     {id:'S7', key:'done', step:null, filled:[0,1,2,3,4,5,6], closed:true, panel:'st-rest', pos:'corner', anchor:'panel', halo:null, finale:true,
-      name:{zh:'终局',en:'Done'},
-      notes:{teach:'确认学会；把唯一值得的下一步（录快捷键）递过去；告诉他在哪重看。', why:'Intuit：只为用户自己完成的事庆祝一次；快捷键没有默认值，是完成度最高的后续设置。', anchor:'面板朝屏幕中心一侧的中点（面板已在它落的角）。', signal:'点「好了」或 8s 无操作 → 写 status=completed, schema=2 → 整套对象销毁。', edge:'礼花窗口独立、点击透传、2.2s 后关闭；Reduce Motion 不放礼花只闪环。翻译被延后时：环停在 6/7（第 5 段虚线），正文改「翻译那步等一首外文歌再补」，礼花照放（庆祝的是这一坐的完成），只留一个 $canTranslate 订阅。', level:'礼花 72 粒 1.8s，一次。'}},
+      name:{zh:'就这些了',en:"That's all"},
+      notes:{teach:'不总结做了什么。说一句走心的话，把唯一值得的下一步（录快捷键）轻轻递过去，告诉他在哪能再走一遍。', why:'创始人 09-26：结束那一屏说走心的话，不总结做了哪几样；Intuit：只为用户自己完成的事庆祝一次。', anchor:'面板朝屏幕中心一侧的边中点（面板已在它落的角）。', signal:'点「好」或 8s 无操作 → 写 status=completed, schema=2 → 整套对象销毁。', edge:'礼花窗口独立、点击透传、2.2s 后关闭；Reduce Motion 不放礼花只闪环。翻译被延后时：环停在 6/7，正文多一句「翻译那一步，等有外文歌的时候我再来」，礼花照放（庆祝的是这一坐），只留一个 $canTranslate 订阅。', level:'礼花 72 粒 1.8s，一次。'}},
     {id:'S4L', key:'later', step:4, filled:[0,1,2,3,5,6], panel:'st-lyrics-hover', pos:'corner', anchor:'translate', halo:{a:'translate',w:40,h:40}, optional:'notrans',
-      name:{zh:'翻译 · 补课',en:'Translate · later'},
-      notes:{teach:'第一首能翻的歌播起来时，在翻译按钮旁补教这一步。', why:'情境式：教的对象是面板右下那个按钮，等它真的有用的那一刻再教（NN/g：卡在真正需要的那一刻）。', anchor:'同 S4；面板在它当时的位置。出现条件：canTranslate 翻真 ∧ 面板可见 ∧ 开播 ≥ 3s ∧ 本次启动未出过。', signal:'LyricsService.$showTranslation 翻真；已经是 true（用户早在设置里开了）→ 不出卡，静默补段。', edge:'这首没做 → 换歌时卡淡出，下一首能翻的歌再来，最多 3 首；20 次启动没遇到能翻的歌 → 静默标 skipped。这张卡是引导结束后唯一会再出现的卡。', level:'环第 5 段填充 + 小火花 + haptic .alignment；七段安静合拢、脉冲一次；不放礼花（礼花在 S7 放过了）。做完取消订阅，彻底零常驻。'}}
+      name:{zh:'翻译 · 之后',en:'Translation · later'},
+      notes:{teach:'第一首外文歌播起来时，在翻译按钮旁把这一步补上。', why:'情境式：这一步要带他看的是面板右下那个按钮，等它真的有用的那一刻再出现（NN/g：卡在真正需要的那一刻）。', anchor:'同 S4；面板在它当时的位置。出现条件：canTranslate 翻真 ∧ 面板可见 ∧ 开播 ≥ 3s ∧ 本次启动未出过。', signal:'LyricsService.$showTranslation 翻真；已经是 true（用户早在设置里开了）→ 不出卡，静默补上。', edge:'这首没做 → 换歌时卡淡出，下一首外文歌再来，最多 3 首；20 次启动没遇到 → 静默标 skipped。这张卡是引导结束后唯一会再出现的卡。', level:'最后一截长满 + 小火花 + haptic .alignment；安静合圈、脉冲一次；不放礼花（礼花在 S7 放过了）。做完取消订阅，彻底零常驻。'}}
   ];
 
   const state={idx:0, lang:'zh', mock:'dark', rm:false, unauth:false, notrans:false, playing:true, auto:false, busy:false};
@@ -554,25 +581,19 @@
   const $=s=>document.querySelector(s);
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   function visibleScenes(){ return SCENES.filter(s=>!(s.optional==='unauth' && !state.unauth) && !(s.optional==='notrans' && !state.notrans)); }
+  function countFor(scene){ return scene.filled.filter(i=>!(state.notrans && i===4)).length; }
 
-  const SEGS=7;
-  function arcPath(cx,cy,r,a0,a1){
-    const p=a=>[cx+r*Math.cos(a*Math.PI/180), cy+r*Math.sin(a*Math.PI/180)];
-    const [x0,y0]=p(a0),[x1,y1]=p(a1); const large=(a1-a0)>180?1:0;
-    return `M${x0.toFixed(3)} ${y0.toFixed(3)} A${r} ${r} 0 ${large} 1 ${x1.toFixed(3)} ${y1.toFixed(3)}`;
+  // 连续粗环：size 外径，stroke 线宽，count 已完成步数（0..7）
+  function ringSVG(size,stroke,count,closed){
+    const r=(size-stroke)/2, c=size/2, circ=2*Math.PI*r; const p=Math.max(0,Math.min(1,count/STEPS));
+    const dash=closed?circ:circ*p;
+    return `<svg viewBox="0 0 ${size} ${size}" aria-hidden="true">
+      <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="var(--mock-ring-track, var(--ring-track))" stroke-width="${stroke}"/>
+      <circle class="fill" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="var(--mock-accent, var(--accent))" stroke-width="${stroke}" stroke-linecap="round" transform="rotate(-90 ${c} ${c})"
+        stroke-dasharray="${dash.toFixed(3)} ${circ.toFixed(3)}" data-circ="${circ.toFixed(3)}" style="transition:stroke-dasharray .6s cubic-bezier(.2,.8,.2,1), stroke-width .3s cubic-bezier(.3,1.4,.5,1), stroke .35s ease"/>
+    </svg>`;
   }
-  function ringSVG(size,stroke,filled,closed,pending){
-    const r=(size-stroke)/2, c=size/2, gap=closed?0:7, seg=360/SEGS; pending=pending||[];
-    let s=`<svg viewBox="0 0 ${size} ${size}" aria-hidden="true">`;
-    for(let i=0;i<SEGS;i++){
-      const a0=-90+i*seg+gap/2, a1=-90+(i+1)*seg-gap/2; const d=arcPath(c,c,r,a0,a1); const on=filled.includes(i);
-      if(pending.includes(i)) s+=`<path d="${d}" pathLength="100" fill="none" stroke="var(--accent)" stroke-opacity=".5" stroke-width="${stroke}" stroke-dasharray="7 7" stroke-linecap="butt"/>`;
-      else s+=`<path d="${d}" fill="none" stroke="var(--mock-track)" stroke-width="${stroke}" stroke-linecap="round"/>`;
-      s+=`<path class="fill" data-i="${i}" d="${d}" pathLength="100" fill="none" stroke="var(--accent)" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="100" stroke-dashoffset="${on?0:100}" style="transition:stroke-dashoffset .45s cubic-bezier(.2,.8,.2,1), stroke-width .3s cubic-bezier(.3,1.4,.5,1)"/>`;
-    }
-    if(closed){ s+=`<circle class="whole" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="var(--accent)" stroke-width="${stroke}"/>`; }
-    return s+'</svg>';
-  }
+  function ringSetCount(ringEl,count,strokeBase){ const f=ringEl.querySelector('circle.fill'); if(!f) return; const circ=parseFloat(f.dataset.circ); const p=Math.max(0,Math.min(1,count/STEPS)); f.setAttribute('stroke-dasharray',`${(circ*p).toFixed(3)} ${circ.toFixed(3)}`); }
 
   function buildStage(root,isStatic){
     root.innerHTML=`
@@ -621,7 +642,7 @@
   }
 
   function layoutPanel(refs){
-    const P=refs.P;
+    const P=refs.P; const side=sideFor(P); refs.root.setAttribute('data-side',side);
     refs.panel.style.left=P.x+'px'; refs.panel.style.top=P.y+'px';
     refs.sliver.style.top=(P.y+PH/2-28)+'px';
     refs.capsule.style.top=(P.y+PH/2-CAPH/2)+'px';
@@ -630,65 +651,71 @@
 
   function cardHTML(scene,opts){
     const L=COPY[opts.lang], sc=scene.key;
-    const ring=(filled,closed,num,done,pending)=>`<div class="ring ${done?'done':''}">${ringSVG(22,2.5,filled,closed,pending)}<div class="num">${num}</div><div class="chk">${G.check}</div></div>`;
-    const skip=`<a class="link">${L.skip}</a>`;
+    const count=scene.filled.filter(i=>!(opts.notrans && i===4)).length;
+    const ring=(cnt,closed,num,done)=>`<div class="ring ${done?'done':''}">${ringSVG(24,5,cnt,closed)}<div class="num">${num}</div><div class="chk">${G.check}</div></div>`;
+    const stop=`<a class="link">${L.stop}</a>`;
     let head='',body='',extra='',foot='';
     const stepNum = scene.step==null ? '' : String(scene.step+1);
     switch(sc){
-      case 'welcome':{ const c=L.welcome; const filled=opts.unauth?[]:[0];
-        head=`${ring(filled,false,opts.unauth?'0':'1',false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
+      case 'welcome':{ const c=L.welcome; const cnt=opts.unauth?0:1;
+        head=`${ring(cnt,false,String(cnt),false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
         if(!opts.unauth) extra=`<div class="chip"><b>✓</b>${c.chip}</div>`;
         foot=`<div class="foot"><a class="link">${c.secondary}</a><button class="mbtn" type="button">${c.primary}</button></div><div class="note">${c.foot}</div>`; break;}
-      case 'gate':{ const c=L.gate; head=`${ring([],false,'1',false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
+      case 'gate':{ const c=L.gate; head=`${ring(0,false,'1',false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
         foot=`<div class="foot"><a class="link">${c.secondary}</a><button class="mbtn" type="button">${c.primary}</button></div>`; break;}
       case 'reveal':{ const c=L.reveal; const beats=opts.playing?c.beatsPlaying:c.beats;
-        head=`${ring(scene.filled,false,stepNum,false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
+        head=`${ring(count,false,stepNum,false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
         extra=`<ul class="beats"><li class="b0"><span class="dot">${G.checkS}</span>${beats[0]}</li><li class="b1 ${opts.playing?'done':''}"><span class="dot">${G.checkS}</span>${beats[1]}</li></ul>`;
-        foot=`<div class="foot">${skip}<a class="link">${L.skipStep}</a></div>`; break;}
+        foot=`<div class="foot">${stop}<a class="link">${L.skipStep}</a></div>`; break;}
       case 'corners':{ const c=L.corners;
-        head=`${ring(scene.filled,false,stepNum,false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
+        head=`${ring(count,false,stepNum,false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
         extra=`<ul class="beats"><li class="b0"><span class="dot">${G.checkS}</span>${c.beats[0]}</li><li class="b1"><span class="dot">${G.checkS}</span>${c.beats[1]}</li></ul>`;
-        foot=`<div class="foot">${skip}<a class="link">${L.skipStep}</a></div>`; break;}
-      case 'lyrics':{ const c=L.lyrics; head=`${ring(scene.filled,false,stepNum,false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
-        foot=`<div class="foot">${skip}<a class="link">${L.skipStep}</a></div>`; break;}
-      case 'translate':{ const c=opts.notrans?L.translateAlt:L.translate; head=`${ring(scene.filled,false,stepNum,false,opts.notrans?[4]:[])}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
-        foot=opts.notrans?`<div class="foot">${skip}</div>`:`<div class="foot">${skip}<a class="link">${L.skipStep}</a></div>`; break;}
-      case 'later':{ const c=L.later; head=`${ring(scene.filled,false,'5',false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
-        foot=`<div class="foot">${skip}<a class="link">${L.skipStep}</a></div>`; break;}
-      case 'move':{ const c=L.move; const tucked=!!opts.afterFling;
-        head=`${ring(scene.filled,false,stepNum,false)}<div class="title">${c.title}</div>`; body=`<div class="body">${tucked?c.bodyTuck:c.body}</div>`;
+        foot=`<div class="foot">${stop}<a class="link">${L.skipStep}</a></div>`; break;}
+      case 'lyrics':{ const c=L.lyrics; head=`${ring(count,false,stepNum,false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
+        foot=`<div class="foot">${stop}<a class="link">${L.skipStep}</a></div>`; break;}
+      case 'translate':{ const c=opts.notrans?L.translateAlt:L.translate; head=`${ring(count,false,stepNum,false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
+        foot=opts.notrans?`<div class="foot">${stop}</div>`:`<div class="foot">${stop}<a class="link">${L.skipStep}</a></div>`; break;}
+      case 'later':{ const c=L.later; head=`${ring(count,false,'5',false)}<div class="title">${c.title}</div>`; body=`<div class="body">${c.body}</div>`;
+        foot=`<div class="foot">${stop}<a class="link">${L.skipStep}</a></div>`; break;}
+      case 'move':{ const c=L.move; const tucked=!!opts.afterNudge; const glyph=tucked?(opts.side==='right'?'swipe':'swipeL'):'nudge';
+        head=`${ring(count,false,stepNum,false)}<div class="title">${c.title}</div>`; body=`<div class="body">${tucked?c.bodyTuck:c.body}</div>`;
         extra=`<ul class="beats"><li class="b0 ${tucked?'done':''}"><span class="dot">${G.checkS}</span>${c.beats[0]}</li><li class="b1"><span class="dot">${G.checkS}</span>${c.beats[1]}</li></ul>
-               <div class="tp"><div class="pad ${tucked?'swipe':'fling'}"><span class="f a"></span><span class="f b"></span></div></div><div class="note">${c.note}</div>`;
-        foot=`<div class="foot">${skip}<button class="mbtn sec" type="button">${c.fallback}</button></div>`; break;}
-      case 'ret':{ const c=L.ret; head=`${ring(scene.filled,false,stepNum,false)}<div class="title">${c.title}</div>`;
+               <div class="tp"><div class="pad ${glyph}"><span class="f a"></span><span class="f b"></span></div></div><div class="note">${c.note}</div>`;
+        foot=`<div class="foot">${stop}<button class="mbtn sec" type="button">${c.fallback}</button></div>`; break;}
+      case 'ret':{ const c=L.ret; head=`${ring(count,false,stepNum,false)}<div class="title">${c.title}</div>`;
         extra=`<ul class="beats"><li class="b0"><span class="dot">${G.checkS}</span>${c.beats[0]}</li><li class="b1"><span class="dot">${G.checkS}</span>${c.beats[1]}</li></ul>`;
-        foot=`<div class="foot">${skip}<a class="link">${L.skipStep}</a></div>`; break;}
+        foot=`<div class="foot">${stop}<a class="link">${L.skipStep}</a></div>`; break;}
       case 'done':{ const c=L.done; const deferred=!!opts.notrans;
-        head=`${deferred?ring([0,1,2,3,5,6],false,'6',false,[4]):ring([0,1,2,3,4,5,6],true,'',true)}<div class="title">${c.title}</div>`; body=`<div class="body">${deferred?L.doneDeferred.body:c.body}</div>`;
+        head=`${deferred?ring(6,false,'6',false):ring(7,true,'',true)}<div class="title">${c.title}</div>`; body=`<div class="body">${deferred?L.doneDeferred.body:c.body}</div>`;
         foot=`<div class="foot"><button class="mbtn sec" type="button">${c.secondary}</button><button class="mbtn" type="button">${c.primary}</button></div><div class="note">${c.foot}</div>`; break;}
     }
     return `<div class="head">${head}</div>${body}${extra}<div class="confirm" hidden></div>${foot}`;
   }
 
   function placeCard(refs,scene,opts){
-    const card=refs.card, beak=refs.beak, A=anchorsFor(refs.P), P=refs.P;
-    const h=card.offsetHeight||150; let left,top,side='right',by=0,bx=0;
+    const card=refs.card, beak=refs.beak, A=anchorsFor(refs.P), P=refs.P, side=sideFor(P);
+    const h=card.offsetHeight||150; let left,top,beakSide='right',by=0;
     const anchor=(opts.anchorOverride||scene.anchor);
-    if(anchor==='sliver'){ side='right'; left=586-20-236; top=A.sliver.y-h/2; by=A.sliver.y-top; }
-    else { const a=A[anchor]||A.panel; side='right'; left=P.x-16-236; top=a.y-h/2; top=Math.min(Math.max(top,MENU+8),H-8-h); by=a.y-top; }
+    if(anchor==='sliver'){
+      if(side==='left'){ beakSide='left'; left=CAP_GAP+CAPW+20; } else { beakSide='right'; left=W-CAP_GAP-CAPW-20-236; }
+      top=A.sliver.y-h/2; top=Math.min(Math.max(top,MENU+8),H-8-h); by=A.sliver.y-top;
+    } else {
+      const a=A[anchor]||A.panel;
+      if(side==='left'){ beakSide='left'; left=P.x+PW+16; } else { beakSide='right'; left=P.x-16-236; }
+      top=a.y-h/2; top=Math.min(Math.max(top,MENU+8),H-8-h); by=a.y-top;
+    }
     by=Math.min(Math.max(by,18),h-18);
     card.style.left=left+'px'; card.style.top=top+'px';
-    beak.className='beak '+side;
-    if(side==='top') beak.style.setProperty('--beak-x',bx+'px'); else beak.style.setProperty('--beak-y',by+'px');
+    beak.className='beak '+beakSide; beak.style.setProperty('--beak-y',by+'px');
   }
   function placeHalo(refs,scene,opts,overrideA){
-    const halo=refs.halo; const A=anchorsFor(refs.P);
+    const halo=refs.halo; const A=anchorsFor(refs.P); const side=sideFor(refs.P);
     const useAlt=scene.key==='translate'&&opts.notrans;
-    const hd=overrideA?{a:overrideA.a,w:overrideA.w,h:overrideA.h,pill:overrideA.pill,cap:overrideA.cap}:scene.halo;
+    const hd=overrideA?overrideA:scene.halo;
     if(!hd||useAlt){ halo.className='halo'; return; }
     const a=A[hd.a]; halo.style.width=hd.w+'px'; halo.style.height=hd.h+'px';
     halo.style.left=(a.x-hd.w/2)+'px'; halo.style.top=(a.y-hd.h/2)+'px';
-    if(hd.a==='sliver') halo.style.left=(714-6)+'px';
+    if(hd.a==='sliver'){ halo.style.left=(side==='left'? -6 : W-SLIVER_W-6)+'px'; }
     halo.className='halo on'+(hd.pill?' pill':'')+(hd.cap?' cap':'');
   }
   function setPanel(refs,cls){
@@ -702,7 +729,7 @@
     refs.root.classList.toggle('showglow',scene.glow==='edge'); refs.root.classList.toggle('showcorner',scene.glow==='corner');
     refs.P={...POS[scene.pos||'home']}; layoutPanel(refs);
     setPanel(refs,scene.panel); refs.route.classList.remove('on');
-    refs.inner.innerHTML=cardHTML(scene,opts); refs.card.style.opacity='1';
+    refs.inner.innerHTML=cardHTML(scene,Object.assign({side:sideFor(refs.P)},opts)); refs.card.style.opacity='1';
     placeCard(refs,scene,opts); placeHalo(refs,scene,opts);
     refs.caption.textContent=`${scene.id} · ${scene.name[opts.lang]}`+(scene.key==='translate'&&opts.notrans?' · deferred':'');
     if(!opts.static){ refs.card.classList.remove('enter'); void refs.card.offsetWidth; refs.card.classList.add('enter'); }
@@ -719,7 +746,7 @@
       if(parts.length){ raf=requestAnimationFrame(tick); } else { raf=0; last=0; ctx.clearRect(0,0,canvas.width,canvas.height); } }
     function start(){ if(!raf){ last=0; raf=requestAnimationFrame(tick); } }
     return {
-      sparks(x,y){ for(let i=0;i<16;i++){ const a=Math.random()*Math.PI*2,v=90+Math.random()*50; parts.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,g:0,drag:.88,life:0,max:.55,fadeFrom:.55,w:2+Math.random()*1.5,h:0,shape:'c',rot:0,spin:0,color:Math.random()<.6?'#FA4058':'#ffffff'}); } start(); },
+      sparks(x,y,color){ for(let i=0;i<16;i++){ const a=Math.random()*Math.PI*2,v=90+Math.random()*50; parts.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,g:0,drag:.88,life:0,max:.55,fadeFrom:.55,w:2+Math.random()*1.5,h:0,shape:'c',rot:0,spin:0,color:Math.random()<.6?color:'#ffffff'}); } start(); },
       confetti(P){ const colors=['#c8556a','#4a2f57','#e9c46a','#ffffff']; for(let i=0;i<72;i++){ const x=P.x+Math.random()*PW,y=P.y-8; const ang=(-90+(Math.random()*60-30))*Math.PI/180,v=220+Math.random()*100; const shape=['r','c','s'][i%3];
         parts.push({x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,g:360,drag:.985,life:0,max:1.8,fadeFrom:.72,w:shape==='s'?3:6*(0.6+Math.random()*.5),h:shape==='s'?10:9*(0.6+Math.random()*.5),shape,rot:Math.random()*6,spin:(Math.random()*5-2.5),color:colors[i%4]}); } start(); },
       stop(){ parts=[]; if(raf){cancelAnimationFrame(raf); raf=0;} ctx.clearRect(0,0,canvas.width,canvas.height); }
@@ -730,6 +757,7 @@
   function fit(){ const box=$('#fit'); const w=box.clientWidth; fitScale=Math.min(1,w/W); $('#stage').style.transform=`scale(${fitScale})`; box.style.height=(H*fitScale)+'px'; }
   window.addEventListener('resize',fit); fit(); setTimeout(fit,300); if(document.fonts&&document.fonts.ready){ document.fonts.ready.then(fit); }
   function currentOpts(extra){ return Object.assign({lang:state.lang,mock:state.mock,rm:state.rm,unauth:state.unauth,notrans:state.notrans,playing:state.playing,static:false},extra||{}); }
+  function accentNow(){ return state.mock==='dark'?'#FB546C':'#FA4058'; }
   function ringCenterInStage(){ const r=live.inner.querySelector('.ring'); if(!r) return {x:200,y:200}; const a=r.getBoundingClientRect(),s=live.root.getBoundingClientRect(); return {x:(a.left-s.left)/fitScale+a.width/(2*fitScale),y:(a.top-s.top)/fitScale+a.height/(2*fitScale)}; }
   function hud(el,text,ms){ if(text) el.textContent=text; const c=live.card; el.style.left=(parseFloat(c.style.left)||0)+'px'; el.style.top=((parseFloat(c.style.top)||0)-22)+'px'; el.classList.add('on'); setTimeout(()=>el.classList.remove('on'),ms||500); }
 
@@ -744,11 +772,11 @@
     if(other.fallback) lines.push(`<div><span class="k">fallback</span>${other.fallback}</div>`);
     if(other.confirm) lines.push(`<div><span class="k">confirm</span>${other.confirm}</div>`);
     $('#notes').innerHTML=`<div class="scene-id"><span class="pill">${scene.id}</span><h3>${scene.name.zh} · ${scene.name.en}</h3></div>
-      <dl><dt>教什么</dt><dd>${n.teach}</dd><dt>为什么</dt><dd>${n.why}</dd><dt>锚点</dt><dd>${n.anchor}</dd><dt>完成信号</dt><dd>${n.signal}</dd><dt>边界</dt><dd>${n.edge}</dd><dt>反馈</dt><dd>${n.level}</dd></dl>
+      <dl><dt>带他做什么</dt><dd>${n.teach}</dd><dt>为什么</dt><dd>${n.why}</dd><dt>锚点</dt><dd>${n.anchor}</dd><dt>完成信号</dt><dd>${n.signal}</dd><dt>边界</dt><dd>${n.edge}</dd><dt>反馈</dt><dd>${n.level}</dd></dl>
       <div class="copy"><div class="eyebrow">另一语言文案 · ${state.lang==='zh'?'EN':'中'}</div>${lines.join('')}</div>`;
   }
   function renderStatus(scene){
-    const filled=scene.filled.length+(scene.key==='welcome'&&state.unauth?-1:0);
+    const filled=countFor(scene)+(scene.key==='welcome'&&state.unauth?-1:0);
     $('#statusline').innerHTML=`<span>镜头 <b>${scene.id}</b></span><span>进度环 <b>${Math.max(0,filled)} / 7</b></span><span>面板 <b>${scene.panel.replace('st-','')} @ ${scene.pos||'home'}</b></span><span>锚点 <b>${scene.anchor}${(scene.key==='translate'&&state.notrans)?' (deferred)':''}</b></span><span>Reduce Motion <b>${state.rm?'on':'off'}</b></span>`;
   }
   function show(idx){
@@ -760,59 +788,58 @@
   async function doStep(){
     if(state.busy) return; state.busy=true; $('#doit').disabled=true;
     const scenes=visibleScenes(); const scene=scenes[state.idx]; const L=COPY[state.lang]; const rm=state.rm; const inner=live.inner;
-    const fillSeg=(i)=>{ const p=inner.querySelector(`.fill[data-i="${i}"]`); if(p){ p.style.strokeDashoffset='0'; if(!rm){ p.style.strokeWidth='3.5'; setTimeout(()=>p.style.strokeWidth='2.5',300);} } };
+    const grow=(cnt)=>{ const r=inner.querySelector('.ring'); if(!r) return; ringSetCount(r,cnt); const f=r.querySelector('circle.fill'); if(f&&!rm){ f.setAttribute('stroke-width','6'); setTimeout(()=>f.setAttribute('stroke-width','5'),300);} };
     const beat=async(sel)=>{ const li=inner.querySelector(sel); if(li) li.classList.add('done'); hud(live.hudH,'⌁ haptic .levelChange',500); await sleep(rm?120:260); };
     const confirm=(t)=>{ const c=inner.querySelector('.confirm'); if(c){ c.textContent=t; c.hidden=false; } };
     const ringDone=()=>{ const r=inner.querySelector('.ring'); if(r) r.classList.add('done'); };
-    const celebrate=async(segIdx)=>{ await sleep(50); fillSeg(segIdx); if(!rm){ const c=ringCenterInStage(); fx.sparks(c.x,c.y); } await sleep(50); ringDone(); };
+    const celebrate=async(cnt)=>{ await sleep(50); grow(cnt); if(!rm){ const c=ringCenterInStage(); fx.sparks(c.x,c.y,accentNow()); } await sleep(50); ringDone(); };
+    const closeRing=async()=>{ const r=inner.querySelector('.ring'); if(!r) return; const f=r.querySelector('circle.fill'); ringSetCount(r,7); r.classList.add('done');
+      await sleep(600); if(f&&!rm){ f.setAttribute('stroke-width','6.5'); f.setAttribute('stroke','#fff'); setTimeout(()=>{f.setAttribute('stroke-width','5'); f.setAttribute('stroke',accentNow());},220); r.style.transition='transform .5s cubic-bezier(.3,1.6,.5,1)'; r.style.transform='scale(1.08)'; setTimeout(()=>r.style.transform='scale(1)',260); }
+      else if(f){ f.setAttribute('stroke','#fff'); setTimeout(()=>f.setAttribute('stroke',accentNow()),200); } };
     const advance=async()=>{ if(state.idx<scenes.length-1){ live.card.style.opacity='0'; await sleep(rm?160:180); state.idx+=1; const next=scenes[state.idx]; applyScene(live,next,currentOpts()); renderNotes(next); renderStatus(next); $('#prev').disabled=false; $('#next').disabled=state.idx===scenes.length-1; } };
+    const cnt=countFor(scene);
 
     switch(scene.key){
-      case 'welcome': hud(live.hudE,'tap: 走起',500); await sleep(350); break;
-      case 'gate': hud(live.hudE,'system dialog → Allow',700); await sleep(600); confirm(L.gate.confirm); await celebrate(0); await sleep(700); break;
+      case 'welcome': hud(live.hudE,'tap: 开始',500); await sleep(350); break;
+      case 'gate': hud(live.hudE,'system dialog → Allow',700); await sleep(600); confirm(L.gate.confirm); await celebrate(1); await sleep(700); break;
       case 'reveal':
         hud(live.hudE,'hover → controlsRevealed',700); setPanel(live,'st-hover'); await sleep(rm?200:450); await beat('.b0');
         if(!state.playing){ hud(live.hudE,'click ▶ → isPlaying',600); await sleep(400); await beat('.b1'); }
-        confirm(L.reveal.confirm); await celebrate(1); await sleep(700); break;
+        confirm(L.reveal.confirm); await celebrate(cnt+1); await sleep(700); break;
       case 'corners':
         hud(live.hudE,'click top-right → audioOutputMenuPresented',900); live.route.classList.add('on'); await sleep(rm?300:700); live.route.classList.remove('on'); await beat('.b0');
         placeHalo(live,scene,currentOpts(),{a:'tl',w:74,h:34,cap:true}); await sleep(rm?150:420);
         hud(live.hudE,'click ↖ Music → musicButtonTapped',900); await sleep(500); await beat('.b1');
-        confirm(L.corners.confirm); await celebrate(2); await sleep(700); break;
+        confirm(L.corners.confirm); await celebrate(cnt+1); await sleep(700); break;
       case 'lyrics':
         hud(live.hudE,'click quote → currentPage = .lyrics',800); await sleep(300); setPanel(live,'st-lyrics-hover'); await sleep(rm?200:400);
-        confirm(L.lyrics.confirm); await celebrate(3); await sleep(700); break;
+        confirm(L.lyrics.confirm); await celebrate(cnt+1); await sleep(700); break;
       case 'translate':
         if(state.notrans){ hud(live.hudE,'canTranslate == false → defer .translate',1000); confirm(L.translateAlt.confirm); await sleep(rm?500:1100); break; }
         hud(live.hudE,'click translate → showTranslation',800); await sleep(300);
         setPanel(live,'st-translated'); await sleep(rm?200:450);
-        confirm(L.translate.confirm); await celebrate(4); await sleep(700); break;
+        confirm(L.translate.confirm); await celebrate(cnt+1); await sleep(700); break;
       case 'later':{
-        hud(live.hudE,'$canTranslate → true (new song, 3s in) → deferred tip',1000); await sleep(500);
+        hud(live.hudE,'$canTranslate → true (new song, 3s in) → deferred card',1000); await sleep(500);
         hud(live.hudE,'click translate → showTranslation',800); await sleep(300); setPanel(live,'st-translated'); await sleep(rm?200:450);
-        confirm(L.later.confirm); hud(live.hudH,'⌁ haptic .alignment',700); await sleep(50); fillSeg(4); if(!rm){ const c=ringCenterInStage(); fx.sparks(c.x,c.y); }
-        await sleep(450);
-        const ring=inner.querySelector('.ring');
-        if(ring){ ring.innerHTML=ringSVG(22,2.5,[0,1,2,3,4,5,6],true)+`<div class="num"></div><div class="chk">${G.check}</div>`; ring.classList.add('done');
-          const whole=ring.querySelector('.whole');
-          if(whole&&!rm){ whole.style.transition='stroke-width .4s cubic-bezier(.3,1.4,.5,1)'; whole.style.strokeWidth='4'; setTimeout(()=>{whole.style.strokeWidth='2.5';},220); ring.style.transition='transform .5s cubic-bezier(.3,1.6,.5,1)'; ring.style.transform='scale(1.08)'; setTimeout(()=>ring.style.transform='scale(1)',260); } }
+        confirm(L.later.confirm); hud(live.hudH,'⌁ haptic .alignment',700); await sleep(50); if(!rm){ const c=ringCenterInStage(); fx.sparks(c.x,c.y,accentNow()); }
+        await closeRing();
         await sleep(900); hud(live.hudE,'done → cancel $canTranslate sink, teardown',1000); await sleep(800);
         state.busy=false; $('#doit').disabled=true; return; }
       case 'move':{
-        hud(live.hudE,'two-finger flick → spring to corner',900);
+        hud(live.hudE,'two-finger nudge → per-axis springs (x .50s / y .74s) → corner',1000);
         live.card.style.opacity='0'; await sleep(120);
-        live.P={...POS.corner}; layoutPanel(live); await sleep(rm?250:680);
+        live.P={...POS.corner}; layoutPanel(live); await sleep(rm?250:800);
         hud(live.hudE,'.windowMovementEnded @ corner → snappedCorner',700);
-        // card re-appears beside the moved panel, beat1 done, glyph switches to swipe
-        live.inner.innerHTML=cardHTML(scene,currentOpts({afterFling:true})); placeCard(live,scene,currentOpts()); live.card.style.opacity='1';
+        live.inner.innerHTML=cardHTML(scene,currentOpts({afterNudge:true,side:sideFor(live.P)})); placeCard(live,scene,currentOpts()); live.card.style.opacity='1';
         live.root.classList.remove('showcorner'); live.root.classList.add('showglow');
         hud(live.hudH,'⌁ haptic .levelChange',500); await sleep(rm?400:1400);
-        hud(live.hudE,'two-finger swipe → .collapsing',800);
+        hud(live.hudE,'two-finger swipe into edge → .collapsing',800);
         live.card.style.opacity='0'; live.root.classList.remove('showglow'); await sleep(120);
         setPanel(live,'st-tucked'); await sleep(rm?250:620);
         hud(live.hudE,'.tucked (settled)',600); await sleep(200);
         const next=scenes[state.idx+1]; state.idx+=1; applyScene(live,next,currentOpts()); renderNotes(next); renderStatus(next);
-        await sleep(rm?200:380); hud(live.hudH,'⌁ haptic .levelChange',600); fillSeg(5); if(!rm){ const c=ringCenterInStage(); fx.sparks(c.x,c.y); }
+        await sleep(rm?200:380); hud(live.hudH,'⌁ haptic .levelChange',600); grow(countFor(next)); if(!rm){ const c=ringCenterInStage(); fx.sparks(c.x,c.y,accentNow()); }
         $('#prev').disabled=false; $('#next').disabled=state.idx===scenes.length-1; state.busy=false; $('#doit').disabled=false;
         if(state.auto){ await sleep(900); return doStep(); } return; }
       case 'ret':{
@@ -820,25 +847,19 @@
         hud(live.hudE,'click → .expanding → .card',900); live.root.classList.add('expanding'); await sleep(rm?150:260);
         setPanel(live,'st-rest'); live.root.classList.remove('expanding'); await sleep(rm?200:420); await beat('.b1');
         confirm(L.ret.confirm);
-        hud(live.hudH,'⌁ haptic .alignment',700); await sleep(50); fillSeg(6); if(!rm){ const c=ringCenterInStage(); fx.sparks(c.x,c.y); }
-        await sleep(450);
-        const ring=inner.querySelector('.ring');
-        if(ring&&!state.notrans){ ring.innerHTML=ringSVG(22,2.5,[0,1,2,3,4,5,6],true)+`<div class="num"></div><div class="chk">${G.check}</div>`; ring.classList.add('done');
-          const whole=ring.querySelector('.whole');
-          if(whole&&!rm){ whole.style.transition='stroke-width .4s cubic-bezier(.3,1.4,.5,1), stroke .4s ease'; whole.style.strokeWidth='4'; whole.style.stroke='#fff'; setTimeout(()=>{whole.style.strokeWidth='2.5'; whole.style.stroke='var(--accent)';},220); ring.style.transition='transform .5s cubic-bezier(.3,1.6,.5,1)'; ring.style.transform='scale(1.10)'; setTimeout(()=>ring.style.transform='scale(1)',260); }
-          else if(whole){ whole.style.transition='stroke .2s'; whole.style.stroke='#fff'; setTimeout(()=>whole.style.stroke='var(--accent)',200); } }
-        else if(ring){ ring.classList.add('done'); }
+        hud(live.hudH,'⌁ haptic .alignment',700); await sleep(50); if(!rm){ const c=ringCenterInStage(); fx.sparks(c.x,c.y,accentNow()); }
+        if(state.notrans){ grow(6); await sleep(600); } else { await closeRing(); }
         await sleep(100); if(!rm) fx.confetti(live.P);
         await sleep(350);
         const next=scenes[state.idx+1]; state.idx+=1; live.card.style.opacity='0'; await sleep(160);
         applyScene(live,next,currentOpts()); renderNotes(next); renderStatus(next);
         $('#prev').disabled=false; $('#next').disabled=state.idx===scenes.length-1; state.busy=false; $('#doit').disabled=!state.notrans; state.auto=false; $('#auto').setAttribute('aria-pressed','false'); return; }
       case 'done':
-        if(state.notrans){ hud(live.hudE,'好了 → completed; keep ONE sink on $canTranslate',1100); await sleep(900); await advance(); state.busy=false; $('#doit').disabled=false; return; }
-        hud(live.hudE,'好了 → status = completed, teardown',900); await sleep(600); state.busy=false; return;
+        if(state.notrans){ hud(live.hudE,'好 → completed; keep ONE sink on $canTranslate',1100); await sleep(900); await advance(); state.busy=false; $('#doit').disabled=false; return; }
+        hud(live.hudE,'好 → status = completed, teardown',900); await sleep(600); state.busy=false; return;
     }
     await advance();
-    state.busy=false; $('#doit').disabled=(scenes[state.idx].key==='done');
+    state.busy=false; $('#doit').disabled=(scenes[state.idx].key==='done'&&!state.notrans);
     if(state.auto&&scenes[state.idx].key!=='done'){ await sleep(1100); return doStep(); }
   }
 
@@ -856,19 +877,19 @@
   document.addEventListener('keydown',e=>{ if(e.target.closest('input,button,select,textarea')) return; if(e.key==='ArrowRight') $('#next').click(); else if(e.key==='ArrowLeft') $('#prev').click(); else if(e.key==='Enter') $('#doit').click(); });
 
   const FRAME_DEFS=[
-    {sc:'S0', opts:{}, cap:{n:'S0',t:'欢迎 · 1/7 起步',d:'点「走起」或「先不用」。第 1 段 Music 已连上，预填。'}},
+    {sc:'S0', opts:{}, cap:{n:'S0',t:'见面 · 1/7 起步',d:'点「开始」或「以后再说」。第 1 步 Music 已连上，预填。'}},
     {sc:'G', opts:{unauth:true}, cap:{n:'G（条件）',t:'和 Music 打招呼',d:'只在自动化权限未授时出现；用户点按钮才触发系统询问。'}},
-    {sc:'S1', opts:{}, cap:{n:'S1',t:'悬停 · 播放',d:'高亮环先标出隐藏按钮的位置；悬停后按钮在环里浮现。'}},
+    {sc:'S1', opts:{}, cap:{n:'S1',t:'鼠标挪过来',d:'高亮环先标出隐藏按钮的位置；悬停后按钮在环里浮现。'}},
     {sc:'S2', opts:{}, cap:{n:'S2',t:'专辑页的两个角',d:'右上换输出、左上 ↖ Music 合成一步两个 beat；高亮环在两角之间跳。'}},
     {sc:'S3', opts:{}, cap:{n:'S3',t:'歌词',d:'卡片不动，只换内容与箭头位置；去左下角对话气泡。'}},
     {sc:'S4', opts:{}, cap:{n:'S4',t:'翻译',d:'歌词页右下角翻译按钮，检测 showTranslation 翻真。'}},
-    {sc:'S4', opts:{notrans:true}, cap:{n:'S4′（条件）',t:'翻译 · 延后',d:'当前歌不可翻译：卡片说一句先跳过，第 5 段变粉红虚线轨道，往 S5 走。'}},
-    {sc:'S4L', opts:{notrans:true}, cap:{n:'S4L（之后）',t:'翻译 · 补课',d:'引导结束后第一首能翻的歌播起来时，这张卡在翻译按钮旁出现；做完环安静合拢，不再放礼花。'}},
-    {sc:'S5', opts:{}, cap:{n:'S5',t:'甩到角落',d:'触控板示意演「斜甩」，右下角亮角落光；检测 snappedCorner。'}},
-    {sc:'S5', opts:{afterFling:true, posOverride:'corner', glowOverride:'edge'}, cap:{n:'S5b（中间态）',t:'再划进边',d:'面板已落角，卡片跟过来；示意换成「横划」，右缘亮边缘光；检测 .tucked。'}},
-    {sc:'S6', opts:{}, cap:{n:'S6',t:'回来',d:'卡在胶囊探出区之外；两个 beat：hover 探出、点击回来。'}},
-    {sc:'S7', opts:{}, cap:{n:'S7',t:'终局',d:'整圈合拢、脉冲、礼花一次；递出「录个快捷键」。'}},
-    {sc:'S1', opts:{mockOverride:'light'}, cap:{n:'S1 · 浅色',t:'浅色外观',d:'同一张玻璃卡在浅色外观下。'}}
+    {sc:'S4', opts:{notrans:true}, cap:{n:'S4′（条件）',t:'翻译 · 延后',d:'当前歌不可翻译：卡片说一句「这首不用翻」，环不长，往 S5 走。'}},
+    {sc:'S4L', opts:{notrans:true}, cap:{n:'S4L（之后）',t:'翻译 · 之后',d:'引导结束后第一首外文歌播起来时，这张卡在翻译按钮旁出现；做完环安静合上，不再放礼花。'}},
+    {sc:'S5', opts:{}, cap:{n:'S5',t:'放到角落',d:'触控板示意演「往角落推」，左下角亮角落光；落定信号 snappedCorner。'}},
+    {sc:'S5', opts:{afterNudge:true, posOverride:'corner', glowOverride:'edge'}, cap:{n:'S5b（中间态）',t:'再推进边',d:'面板已落到左下角，卡片从它右侧长出；示意换成「横推」，左缘亮边缘光；检测 .tucked。'}},
+    {sc:'S6', opts:{}, cap:{n:'S6',t:'回来',d:'小条在左缘；卡在胶囊探出区之外；两个 beat：hover 探出、点击回来。'}},
+    {sc:'S7', opts:{}, cap:{n:'S7',t:'就这些了',d:'环合上、脉冲、礼花一次；说一句走心的话，递出「录个快捷键」。'}},
+    {sc:'S1', opts:{mockOverride:'light'}, cap:{n:'S1 · 浅色',t:'浅色外观',d:'同一张玻璃卡在浅色外观下，环的轨道是浅粉。'}}
   ];
   const frameRefs=[];
   function renderFrames(){
@@ -876,7 +897,7 @@
     for(const f of FRAME_DEFS){
       const scene=SCENES.find(s=>s.id===f.sc);
       const el=document.createElement('div'); el.className='frame';
-      el.innerHTML=`<div class="thumb"><div class="stage" data-mock="${state.mock}"></div></div><div class="cap"><div class="n">${f.cap.n}</div><div class="t">${f.cap.t}</div><div class="d">${f.cap.d}</div></div>`;
+      el.innerHTML=`<div class="thumb"><div class="stage" data-mock="${state.mock}" data-side="right"></div></div><div class="cap"><div class="n">${f.cap.n}</div><div class="t">${f.cap.t}</div><div class="d">${f.cap.d}</div></div>`;
       grid.appendChild(el);
       const st=el.querySelector('.stage'); const refs=buildStage(st,true);
       const opts=currentOpts(Object.assign({static:true},f.opts)); if(f.opts.mockOverride) opts.mock=f.opts.mockOverride; if(f.sc==='G') opts.unauth=true; if(f.sc==='S4L') opts.notrans=true;
@@ -892,20 +913,42 @@
   function renderRings(){
     const row=$('#rings'); row.innerHTML='';
     const defs=[
-      {f:[],n:'0',lab:'未连接 Music 的用户从 0 起步',b:'0 / 7'},
-      {f:[0],n:'1',lab:'首启常态：已连接，预填一段',b:'1 / 7'},
-      {f:[0,1],n:'2',lab:'悬停·播放 完成',b:'2 / 7'},
-      {f:[0,1,2],n:'3',lab:'两个角 完成',b:'3 / 7'},
-      {f:[0,1,2,3],n:'4',lab:'歌词 完成',b:'4 / 7'},
-      {f:[0,1,2,3,4],n:'5',lab:'翻译 完成',b:'5 / 7'},
-      {f:[0,1,2,3,4,5],n:'6',lab:'甩·收 完成',b:'6 / 7'},
-      {f:[0,1,2,3,4,5,6],n:'✓',lab:'回来 完成：七段缝合成整圈并脉冲',b:'7 / 7',closed:true},
-      {f:[0,1,2,3,5,6],n:'6',lab:'翻译延后：第 5 段粉红虚线，等一首能翻的歌再补',b:'6 / 7',p:[4]}
+      {c:0,n:'0',lab:'未连接 Music 的用户从 0 起',b:'0 / 7'},
+      {c:1,n:'1',lab:'首启常态：已连接，预填一截',b:'1 / 7'},
+      {c:3,n:'3',lab:'两个角 完成',b:'3 / 7'},
+      {c:5,n:'5',lab:'翻译 完成',b:'5 / 7'},
+      {c:2,n:'2',lab:'鼠标挪过来 完成',b:'2 / 7',dark:true},
+      {c:4,n:'4',lab:'歌词 完成',b:'4 / 7',dark:true},
+      {c:6,n:'6',lab:'角落·收边 完成（翻译延后时终局停在这儿）',b:'6 / 7',dark:true},
+      {c:7,n:'✓',lab:'回来 完成：圆头碰到起点，合圈脉冲',b:'7 / 7',dark:true,closed:true}
     ];
-    for(const d of defs){ const cell=document.createElement('div'); cell.className='ringcell';
-      cell.innerHTML=`<div class="big" style="--mock-track:var(--line);">${ringSVG(64,5,d.f,!!d.closed,d.p)}<div class="num">${d.n}</div></div><div class="lab"><b>${d.b}</b>${d.lab}</div>`; row.appendChild(cell); }
+    for(const d of defs){ const cell=document.createElement('div'); cell.className='ringcell'+(d.dark?' dark':'');
+      const vars=d.dark?'--mock-accent:#FB546C;--mock-ring-track:rgba(251,84,108,.28);':'--mock-accent:#FA4058;--mock-ring-track:rgba(250,64,88,.22);';
+      cell.innerHTML=`<div class="big" style="${vars}">${ringSVG(64,13,d.c,!!d.closed)}<div class="num">${d.n}</div></div><div class="lab"><b>${d.b}</b>${d.lab}</div>`; row.appendChild(cell); }
   }
 
-  renderRings(); renderFrames(); show(0);
+  // 轨迹示意：两轴弹簧 x .50s / y .74s 的位置采样 vs 直线
+  function renderTraj(){
+    const box=$('#traj');
+    // Apple Spring 近似：response→ω=2π/response，临界阻尼附近的解析解（bounce 小时用 damping 0.9 近似）
+    function springVal(t,duration,bounce){ const zeta=1-bounce; const omega=2*Math.PI/duration; if(zeta>=1){ return 1-Math.exp(-omega*t)*(1+omega*t); } const wd=omega*Math.sqrt(1-zeta*zeta); return 1-Math.exp(-zeta*omega*t)*(Math.cos(wd*t)+ (zeta*omega/wd)*Math.sin(wd*t)); }
+    const x0=560,y0=60,x1=120,y1=220; const pts=[]; let maxDev=0;
+    for(let i=0;i<=90;i++){ const t=i/90*0.9; const px=x0+(x1-x0)*springVal(t,0.50,0.15), py=y0+(y1-y0)*springVal(t,0.74,0.10); pts.push([px,py]);
+      const dx=x1-x0,dy=y1-y0,len=Math.hypot(dx,dy); const dev=Math.abs((px-x0)*dy-(py-y0)*dx)/len; maxDev=Math.max(maxDev,dev); }
+    const chord=Math.hypot(x1-x0,y1-y0); const ratio=(maxDev/chord*100).toFixed(0);
+    const d=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+    box.innerHTML=`<svg viewBox="0 0 640 260" role="img" aria-label="两轴弹簧轨迹与直线对照">
+      <rect x="0" y="0" width="640" height="260" rx="10" fill="var(--surface-2)"/>
+      <line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}" stroke="var(--line)" stroke-width="2" stroke-dasharray="6 6"/>
+      <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"/>
+      <rect x="${x0-25}" y="${y0-28}" width="50" height="56" rx="5" fill="none" stroke="var(--muted)" stroke-width="1.5"/>
+      <rect x="${x1-25}" y="${y1-28}" width="50" height="56" rx="5" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+      <text x="${x0}" y="${y0-36}" text-anchor="middle" font-size="11" fill="var(--muted)" font-family="var(--mono)">起点</text>
+      <text x="${x1}" y="${y1+44}" text-anchor="middle" font-size="11" fill="var(--muted)" font-family="var(--mono)">角落</text>
+      <text x="330" y="236" text-anchor="middle" font-size="12" fill="var(--ink)">粉线：x Spring(duration .50, bounce .15) · y Spring(duration .74, bounce .10)；虚线：两轴同一段弹簧、零初速度（今天的真实面板）。此例（近水平）弧高 ≈ 位移的 ${ratio}%。</text>
+    </svg>`;
+  }
+
+  renderRings(); renderTraj(); renderFrames(); show(0);
 })();
 </script>

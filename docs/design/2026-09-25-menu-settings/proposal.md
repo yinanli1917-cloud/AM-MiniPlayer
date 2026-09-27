@@ -1,309 +1,268 @@
-# nanoPod 菜单栏菜单与设置窗口重做方案（v2，2026-09-26）
+# nanoPod 菜单栏菜单与设置窗口重做方案（v3，2026-09-26 下午）
 
-作者：设计会话（只出方案，不改 `Sources/`）。配套视觉稿：同目录 `mockup.html`（1pt = 1px，深浅色各一份）。调研原文在 `research/`。v1（09-25）推荐的 toolbar 分页已按创始人 09-26 反馈作废，改为系统设置式 sidebar；本文是唯一有效版本。
+作者：设计会话（只出方案，不改 `Sources/`）。配套视觉稿：同目录 `mockup.html`（1pt = 1px，深浅色各一份）。调研原文在 `research/`。本文是唯一有效版本；v1（toolbar 分页）、v2（系统设置式 sidebar）均已作废。
 
-数值标注：「实测」= 对创始人截图做脚本量化（`research/measure_*.py`；两张图都是 144 dpi，1pt = 2px）；「代码」= 仓库常量；「系统」= 由 AppKit / SwiftUI 决定、我们不写数值；「取值」= 设计取值，Apple 没有公开数字。
+## v3 改了什么（对照创始人 09-26 下午第二批反馈）
 
-## 强调色（先放最前，给 onboarding 会话对齐）
+| 反馈 | v3 的处理 |
+|---|---|
+| 菜单一行同时有勾选和图标难看；整体还是小胖 | 整份菜单不带任何图标、主菜单不用任何勾选；能切换的项用动词换标题；去掉 `⌘,`；「全屏封面」移出菜单（§3.3 论证）；4 项 3 组 2 条分隔线。实测（`NSMenu.size`，不显示菜单）：146 × 128，比现状 203 × 189.5 窄 28%、矮 33%，比 v2 窄 36%、矮 21%（§3.5 对比表） |
+| 「只要任何一项带状态，AppKit 就会留勾选列」 | 实测：一项 `state = .on` 整份菜单宽 +8pt；子菜单里的勾选**不**影响父菜单（146 = 146）。所以主菜单零勾选，「翻译为 ▸」子菜单内保留单选勾选（§3.2） |
+| 设置不要 sidebar，太重；要的是「触控板」页右侧那种插图 + 小动画示意 | 单窗口 480 × 562、无 sidebar、无工具栏：顶部一个 440 × 120 的演示台（stage），下面 4 段分段控件（面板 · 通用 · 快捷键 · 关于），再下面分组行。悬停某一行，演示台播放这一行的效果动画；切换开关时播一次。13 段演示全部 SwiftUI 矢量绘制，无第三方依赖；Reduce Motion 给静帧（§4） |
+| Apple Music 粉保留 | 强调色规格不变（§强调色），用在 switch、分段控件选中段、演示台里的面板高亮 |
+| 关于页只留占位 | 「关于」是第 4 段，整块内容区留给动画会话（§4.2） |
+| 「继续引导」名字由 Onboarding 设计师定 | 已定名（onboarding proposal §9.2）：整套引导叫「认识 nanoPod / Getting to know nanoPod」；设置「通用」段一行「认识 nanoPod」，按钮文字随状态变——没走完（skipped 或中途停下）显示「接着认识 nanoPod / Keep getting to know nanoPod」，点了从上次停下处接着走；走完了显示「重新认识 nanoPod / Get to know nanoPod again」，点了从头走（§4.3） |
+| 主会话 09-26 晚：菜单里不放引导入口 | v3 初稿曾在引导未完成时临时多一行「接着认识 nanoPod…」，实测把菜单撑到 EN 259 × 152 / ZH 182 × 152；onboarding 稿里点「以后再说」后状态是 skipped、入口会长期挂着，正撞上「胖」。已删：菜单始终 4 项 146 × 128，回头接着走引导只从设置「通用」段那一行进（次高频规矩） |
+
+## 强调色（给 onboarding 会话对齐，v2 起不变）
 
 | 项 | 值 |
 |---|---|
-| 名称 | `AccentColor`（asset catalog 里的 color set；Info.plist `NSAccentColorName = AccentColor`） |
+| 名称 | `AccentColor`（asset catalog color set；Info.plist `NSAccentColorName = AccentColor`） |
 | 浅色 | `#FA4058`（250, 64, 88） |
 | 深色 | `#FB546C`（251, 84, 108） |
-| 性质 | **取样色，不是 Apple 公布的官方色值。** Apple 没有公布 Apple Music 的品牌色：marketing.services.apple 的《Apple Music Identity Guidelines》只提供黑 / 白 / 彩色三版素材，要求「原样使用 Apple 提供的素材」，全文没有任何 hex / RGB / Pantone。 |
-| 取样来源 | 本机 `/System/Applications/Music.app`（1.6.2，macOS 26.2）的 `AppIcon.icns` 256px 位图（`sips` 转 PNG 后 PIL 取样，脚本命令在 §8）：渐变上段 `#FB546C`、中段 `#FA4058`、下段 `#FA2B43`，饱和像素均值 `#F93F57`。浅色取中段（图标主体色）；深色取上段（更亮，与系统色深色版一律更亮的惯例一致：systemPink `#FF2D55` → `#FF375F`）。 |
-| 对照 | 系统 Pink `#FF2D55` / `#FF375F`、Red `#FF383C` / `#FF4245`（HIG Color 表，本机 `NSColor.systemPink/systemRed` 实测一致）——都不是 Apple Music 的颜色，不用。仓库专辑页已在用 `Color(red: 0.99, green: 0.24, blue: 0.27)` = `#FC3D45` 当「Apple Music 红」（`PlaylistView.swift:490/859/878`、`MiniPlayerView.swift:529`），比取样色偏橙红；建议后续统一到 `AccentColor`（后续项，本次不改）。 |
-| 用法 | 控件、选中态、sidebar 选中行：`Color.accentColor` / `NSColor.controlAccentColor`。按 HIG，这只在系统设置「强调色 = 多彩」时生效；用户选了具体颜色时系统把整个 app 的强调色换成用户色——这是原生行为，不抵抗（Music.app 自己就这么做：Info.plist `NSAccentColorName = KeyColor`）。品牌元素（引导页进度环、卡片描边）想固定粉色，用 `Color("AccentColor")` 直接读资源值，不随用户覆盖。 |
-| 对比度 | 白字压 `#FA4058` ≈ 3.5:1（systemBlue `#0088FF` 压白字 ≈ 4.0:1），和系统强调色一个量级；需要 Increase Contrast 变体时用下段 `#FA2B43`。 |
-| 实现 | color set 放新建的 `Sources/MusicMiniPlayerApp/Resources/AppAssets.xcassets`（放 app target，不放 Core——Core 资源包 release 不随 app 发布），`build_app.sh` 现有的 actool 步骤一并编进 `Contents/Resources/Assets.car`，Info.plist 手写 `NSAccentColorName`（Apple 文档允许直接写）；出包门禁：`assetutil -I Assets.car` 里没有 `AccentColor` 就拒绝交付（同 icns 门禁）。 |
+| 性质 | **取样色，不是 Apple 公布的官方色值。** Apple 没有公布 Apple Music 的品牌色：《Apple Music Identity Guidelines》只提供黑 / 白 / 彩色三版素材，全文没有任何 hex / RGB / Pantone。 |
+| 取样来源 | 本机 `/System/Applications/Music.app`（1.6.2，macOS 26.2）的 `AppIcon.icns` 256px 位图：渐变上段 `#FB546C`、中段 `#FA4058`、下段 `#FA2B43`，饱和像素均值 `#F93F57`。浅色取中段；深色取上段（更亮，与系统色深色版一律更亮的惯例一致：systemPink `#FF2D55` → `#FF375F`）。 |
+| 对照 | 系统 Pink `#FF2D55` / `#FF375F`、Red `#FF383C` / `#FF4245` 都不是 Apple Music 的颜色，不用。仓库专辑页现有 `Color(red: 0.99, green: 0.24, blue: 0.27)` = `#FC3D45`（`PlaylistView.swift:490/859/878`、`MiniPlayerView.swift:529`）偏橙红，建议后续统一到 `AccentColor`（后续项）。 |
+| 用法 | 控件、选中态：`Color.accentColor` / `NSColor.controlAccentColor`（系统「强调色 = 多彩」时生效；用户选了具体颜色时系统按 HIG 覆盖，这是原生行为；Music.app 自己 `NSAccentColorName = KeyColor`）。品牌元素要固定粉色时用 `Color("AccentColor")`。 |
+| 对比度 | 白字压 `#FA4058` ≈ 3.5:1（systemBlue ≈ 4.0:1）；Increase Contrast 变体用下段 `#FA2B43`。 |
+| 实现 | color set 放新建的 `Sources/MusicMiniPlayerApp/Resources/AppAssets.xcassets`（app target，不放 Core），随 `build_app.sh` 现有 actool 步骤编进 `Assets.car`；Info.plist 手写 `NSAccentColorName`；出包门禁 `assetutil -I Assets.car` 必须含 `AccentColor`。 |
 
 ## 0. 结论先行
 
-1. 菜单「胖」的来源是两行 `NSMenuItem.view` 自定义行：行高 26 比原生 24 高 2pt，图标墨迹 15–16pt 比原生行的 12–13.5pt 大 20–30%，标签 13.5pt 比原生 13pt 大且右偏 2pt，再加一个 33×18 自绘开关。整份菜单改成纯原生 `NSMenuItem`，尺寸全部交给系统。
-2. 菜单只放「次高频」：面板里没有、又不值得为它打开设置的操作。定稿 5 项 4 组：显示/隐藏面板 · 全屏封面 ✓ · 翻译为 ▸ · 设置… · 退出 nanoPod；引导没做完时在设置…上方临时多一项「继续引导…」。功能项带图标，App 项不带（CleanShot 规则）。「显示翻译」按创始人规则移出菜单（面板歌词页已有翻译按钮），这是本文唯一与主会话清单不同的地方，见 §3.3。
-3. 设置窗口做成系统设置式：左 sidebar（220pt，彩色圆角方块图标）+ 右内容区（500pt，圆角分组卡片，每行标题 + 灰色说明 + 右侧 switch），5 页：通用 / 面板 / 歌词 / 快捷键 / 关于。实现走 SwiftUI `NavigationSplitView` + `NSHostingController`（macOS 14 起 `sceneBridgingOptions` 默认把 `.navigationTitle` / `.toolbar` 桥到宿主窗口）。强调色 Apple Music 粉，见上表。
-4. 关于页只留占位（图标、名称、版本、链接），动画另开会话。
-5. 剩一个要创始人拍板的点：「显示翻译」是否留在菜单（§7）。
+1. 菜单：纯文字、零勾选、零图标、零 `⌘,`，4 项 3 组——隐藏面板/显示面板 · 翻译为 ▸ | 设置… | 退出 nanoPod。始终 146 × 128（录了面板快捷键时 174 × 128）；没有任何临时项。
+2. 「全屏封面」从菜单移到设置（§3.3）：它是设一次不动的显示偏好，在菜单里要么带勾选（宽 +8、正是创始人嫌的组合），要么用「封面铺满面板 / 封面留边」这种绕口的动词对（宽 +39、高 +24）。
+3. 设置窗口：480 × 562 单窗口，演示台 + 分段控件 + 分组行，无 sidebar 无工具栏；13 段矢量小动画对应 13 行设置，悬停即演示、切换即回放；Reduce Motion 静帧；一次只动一段，不悬停不动。通用段多一行「认识 nanoPod」，按钮随引导状态在「接着认识 / 重新认识」之间切换（Onboarding 定名）。
+4. 剩一个要创始人拍板的点：菜单里「翻译为 ▸」去留（§7）——它是宽度的主要来源（子菜单箭头列 +31pt）。推荐留。
 
-## 1. 现状诊断
+## 1. 现状诊断（不变部分从略，见 v2；这里只列 v3 用到的数）
 
-### 1.1 菜单（`Sources/MusicMiniPlayerAppKit/MusicMiniPlayerApp.swift`：`populateMenuBarMenu` 627 行起；自定义 view 995–1227 行）
+### 1.1 菜单
 
-实测几何（`research/measure_menu.py`，pt，纵向从菜单顶边起）：菜单 203 × 189.5；分隔线在 34 / 121 / 156.5；行中心 Show Window 15.5、Fullscreen Cover 51、Lyrics Translation 78、Translate To 102.7、Settings... 138、Quit 173。由此解出：上下内边距 5、原生行 24、分隔线 11、自定义行 26（代码 `rowHeight = 26`）。原生行 24 / 分隔线 11 与开源 muri 项目对 macOS 菜单的目测值一致（§8）。
+现状实测（创始人截图，`research/measure_menu.py`）：203 × 189.5；原生行 24、自定义开关行 26、分隔线 11、上下内边距 5；自定义行标签 13.5pt、文字右偏 2pt；图标墨迹 15–16 vs 12–13.5；自绘开关 33 × 18。
 
-| 项 | 现状 | 问题 |
+本机 `NSMenu.size` 实测（macOS 26.2，不显示菜单、不依赖 NSApp；脚本在 scratchpad `menusize.swift` / `menusize2.swift`，不进仓库）：
+
+| 因素 | 宽度变化 | 高度 |
 |---|---|---|
-| 容器 | 4 个原生项 + 2 个 `NSMenuItem.view` 自定义项 | Apple 文档：设 `view` 后标题、勾选态、字体等系统绘制全部作废，键盘事件不送达自定义 view；系统高亮、方向键导航、VoiceOver「菜单项，已选中」全部要自己补，现在都没补 |
-| 行高 | 原生 24（实测）；自定义 26（代码） | 自定义行高 2pt |
-| 标签 | 原生 13pt 系统菜单字体；自定义 `systemFont(ofSize: 13.5)`（代码 1067 行） | 大 0.5pt |
-| 文字起点 | 原生 38.0–38.5（实测）；自定义 40.5（实测；代码 `textX = 39`） | 右偏 2pt，一列文字不对齐 |
-| 图标 | 全部 `SymbolConfiguration(pointSize: 15, weight: .medium)`；原生行被系统缩成 12–13.5pt 墨迹，自定义行 `NSImageView` 原样画出 15×16 / 14.5×13.5（实测） | 同一菜单两种图标尺寸；`.medium` 比 13pt Regular 文字重一档（HIG SF Symbols：符号字重匹配相邻文字） |
-| 开关 | 自绘 `CompactSwitchControl` 33×18（实测 32×17），右内边距 9 | Control Center 的语言；HIG Toggles（macOS）：switch/checkbox 属于 window body，不进 toolbar / status bar 这类临时 chrome；菜单里的状态从来用勾选或 Show/Hide 标题 |
-| hover | 自定义行自画 12% `selectedContentBackgroundColor`、圆角 4，只响应鼠标 | 与系统高亮不一致；方向键选到该行不高亮 |
-| 宽度 | 自定义行 `intrinsicContentSize` 宽 206 | 菜单宽度不再由最长标题决定 |
-| 图标语义 | Quit 用 `power`；Fullscreen Cover 用 `rectangle.expand.vertical` | `power` 在 macOS 是关机；`rectangle.expand.vertical` 只表达纵向拉伸 |
-| 文案 | `"Settings..."` 三个句点；`"Quit"` 无 app 名；「Show Window」「Show/Hide Panel」「显示浮窗」「面板」四个名字 | 省略号应为 U+2026；同一物体多名 |
-| 与面板重复 | 「Lyrics Translation」开关 | 面板歌词页底部控件已有同一开关（`TranslationButtonView`，`HoverableButtons.swift:256–325`，挂在 `SharedControls.swift:280–295`） |
+| 基线：4 个纯文字项（最长「Quit nanoPod」） | 115 | 行 24；上下各 5；分隔线 11 |
+| 任一项 `state = .on` | +8（123） | — |
+| 一项带 16pt 符号图 | +15（130）；全部带 +21（136）；图 + 勾 +23（138） | — |
+| 一项带子菜单（箭头列） | +31（146） | — |
+| 子菜单内部有勾选 vs 没有 | 父菜单不变（146 = 146）；子菜单自身 128 vs 120 | — |
+| `Settings… ⌘,` | 无子菜单时 +40（155）；已有子菜单时 +9（155） | — |
+| 「Hide Player ⌥⌘P」 | 174（有子菜单） | — |
 
-历史：2026-05-23 `ed2e126` 把点击图标从「切换面板」改成弹菜单并引入自绘开关行，当时行高 22、符号 12pt；同日 `6df3adb` 调成 26 / 15 / 13.5，即今天的样子。
+### 1.2 设置窗口
 
-### 1.2 设置窗口（`SettingsView.swift`；窗口创建 `createSettingsWindow` 751 行起）
+现状：普通 `NSWindow` 里 SwiftUI `TabView` 分段控件 + 20pt 外边距 + `Form(.grouped)`，450 × 400 定死，通用页滚动；`Toggle` 未指定样式（macOS 分组表单默认 checkbox）；标题旧名；每次打开 `center()`；关于页永久脉冲动画；无「登录时启动」；强调色系统蓝。v2 的 sidebar 方案已否：sidebar 220pt 让 app 显大，无轻盈感。
 
-| 项 | 现状 | 问题 |
-|---|---|---|
-| 结构 | 普通 `NSWindow` 里放 SwiftUI `TabView` + `.tabItem`，渲染为 NSTabView 顶部分段控件 + 内容框 | 分段控件是「文档窗口里的子页签」语言；创始人要的是系统设置的 sidebar + 内容区 |
-| 尺寸 | `setContentSize(450×400)` + `.frame(minWidth: 450, minHeight: 350)` + `.padding(20)` 包 TabView，再套 `Form(.grouped)` 自带内边距 | 双层边距；四页同高，短页大片空白，长页（通用）在 400pt 里滚动 |
-| 布尔项 | `Toggle` 未指定样式 | Apple 文档（`ToggleStyle.automatic` / `.checkbox` / `LabeledContent`）：macOS 分组表单里 `Toggle` 默认 checkbox，不是系统设置那种 switch；Ice、Rectangle 都是显式 `.toggleStyle(.switch)` |
-| 标题 | `"Music Mini Player Settings"`；主菜单 About / Hide / Quit 也是「Music Mini Player」 | 旧产品名 |
-| 位置 | 每次 `showSettingsWindow` 都 `center()` | 不记用户放哪 |
-| 通用页 | Apple Music 状态（圆点 + 中文硬编码 `musicKitAuthStatus` + 按钮塞一行）、Show in Dock、5 个快捷键录制器、清除播放记录 | 权限、启动、快捷键、数据四类混一页；状态文案英文界面下仍是中文 |
-| 外观页 | 全屏封面模式、换歌时显示歌曲（贴边行为）、翻译语言 | 「换歌时显示」不是外观；翻译开关缺席 |
-| 关于页 | 56pt 渐变 `music.note` 永久 `symbolEffect(.pulse)`、圆体「nanoPod」、版本、GitHub | 永久动画不看 Reduce Motion；圆体与全 app 不一致；无致谢（KeyboardShortcuts 为 MIT 许可） |
-| 控件反馈 | `settingsFeedbackPulse`（C4 臂，默认 `.custom`）切换时把标签缩放一下 | 系统设置没有这种反馈 |
-| 强调色 | 跟随系统默认（蓝） | 创始人要 Apple Music 粉 |
-| 缺项 | 无「登录时启动」 | 常驻菜单栏 app 的标准项；Ice、Rectangle、Raycast、Dropover、Amphetamine 都放在 General 第一组 |
-
-### 1.3 系统设置参考图实测（`ref-system-settings-trackpad.webp`，macOS 26 Tahoe，2x；`research/measure_system_settings*.py`）
-
-| 项 | 实测（pt） |
-|---|---|
-| 窗口 | 723 × 632；交通灯 14pt，中心 (26, 26) |
-| sidebar | 宽 222；底色 (249,249,249)，内容区白 (254)；搜索框 195×28 顶 61（nanoPod 不用）；行距 32；选中行 194×31、圆角 ≈8、左缩进 18.5；图标方块 20×20、圆角 ≈5、左 24.5；标签起点 50，13pt；组间空 ≈13 |
-| 内容区 | 列宽 500；卡片宽 460（两侧 20 边距）、圆角 ≈10、底色 (246) 压白底；标题 + 说明行距 53（标题 13pt 墨迹 12.5–24.5，说明 11pt 墨迹 30–40）；文字左缩进 10；分隔线 1pt 通宽 (234)；switch 轨道 36×16、右缩进 10；分段控件 24 高通卡片宽；按钮 24 高 |
-| 标题 | 工具栏标题 13pt 粗体 + 副标题 11pt——就是 `.unified` 工具栏的标准 title / subtitle，不是自定义大标题 |
+创始人要的参照是系统设置「触控板」页右侧（`ref-system-settings-trackpad.webp`，实测）：顶部两块 150pt 高的演示区、24pt 分段控件、圆角卡片行（标题 13 + 说明 11，行距 53，switch 36 × 16）；悬停行时演示区播放对应手势。
 
 ## 2. 设计原则
 
-1. 原生优先：`NSMenuItem` / `NavigationSplitView` / `Form(.grouped)` 能表达的不写自定义 view。系统组件在 macOS 26 自动获得 Liquid Glass（sidebar 自动成浮动玻璃面板），自动响应 Reduce Transparency / Increase Contrast，自带键盘导航与 VoiceOver。
-2. 菜单只放次高频（创始人 09-26）：高频操作都在常驻面板里；菜单放「面板里没有、又不值得为它打开设置」的操作。
-3. 有 Show 就有 Hide：能切换的窗口用动词换标题，模式用勾选。
-4. 图标规则（CleanShot）：功能项带图标，App 项（设置、退出、引导）不带；HIG 同组要么全有要么全无，按组各自成立。
-5. 同词同物：一个东西在菜单、设置、快捷键名里只有一个名字。
-6. 尺寸交给系统：行高、图标框、勾选列、快捷键列、sidebar 行高、卡片圆角都不手写数值。
+1. 原生优先：`NSMenuItem`、`Form(.grouped)`、`Picker(.segmented)`、`PhaseAnimator` / `KeyframeAnimator`（macOS 14），不引第三方。
+2. 菜单只放次高频，且瘦：不带图标、不带勾选、不带只在菜单打开时才生效的快捷键。
+3. 有 Show 就有 Hide：能切换的窗口用动词换标题。
+4. 设置靠演示说话：每一行的效果用动画示意，说明文字只留一行；不悬停不动，一次只动一段。
+5. 尺寸交给系统：菜单行高、宽度、分组行、switch 全由 AppKit / SwiftUI 决定；只有演示台与窗口尺寸是取值。
 
 ## 3. 菜单方案
 
 ### 3.1 菜单项清单
 
-| # | 英文 | 中文 | SF Symbol | 状态表达 | 快捷键列 | 动作 | 理由 |
-|---|---|---|---|---|---|---|---|
-| 1 | Show Player / Hide Player | 显示面板 / 隐藏面板 | `macwindow` | 动词换标题：面板可见且未贴边收起 → Hide；隐藏或已贴边 → Show | 用户录的「显示/隐藏面板」快捷键，`item.setShortcut(for: .togglePanel)` 自动跟随改键；未录则空 | `toggleFloatingWindow()` | 面板隐藏后自己无法把自己叫出来，这是菜单存在的第一理由；HIG Menus 对显隐命令给的第一种写法就是换标题 |
-| — | 分隔线 | | | | | | |
-| 2 | Fullscreen Cover | 全屏封面 | `arrow.up.left.and.arrow.down.right` | 勾选 | 无 | 翻转 `fullscreenAlbumCover` | 面板上没有这个开关（消费方只轮询 UserDefaults，`PlaylistView.swift:361`、`LyricsView.swift:923`）；模式类偏好用勾选；符号换成系统「全屏」同款 |
-| 3 | Translate To ▸ | 翻译为 ▸ | `translate` | 子菜单单选勾选 | 无 | 子菜单：Follow System / 中文 / English / 日本語 / 한국어 / Français / Deutsch / Español（macOS 15+ 才有此行） | 切目标语言面板上没有，也不值得为它开设置；`translate` 是 SF Symbols 5 的翻译专用符号（macOS 14 起可用，本机实测存在） |
-| — | 分隔线 | | | | | | |
-| 4 | Continue Setup… | 继续引导… | 无 | — | 无 | `showOnboardingWindow()`；仅当 `!OnboardingState.shared.hasCompletedOnboarding` 时出现 | 临时项，做完引导即消失；App 项不带图标；放在设置…上方而不是菜单顶部，因为它和设置同属「App」组，不打断面板入口 |
-| 5 | Settings… | 设置… | 无 | — | ⌘, | `openSettings` | App 项不带图标（CleanShot 同款）；⌘, 在菜单打开期间生效，与 app 菜单一致；省略号用 U+2026 |
-| — | 分隔线 | | | | | | |
-| 6 | Quit nanoPod | 退出 nanoPod | 无 | — | 无 | `NSApp.terminate` | 菜单栏 app 惯例带 app 名（Ice「Quit Ice」）；不标 ⌘Q——app 是 LSUIElement、面板是 nonactivating panel，几乎不在前台，标了等于承诺一个菜单外按不出来的快捷键；CleanShot 的 Quit 同样不标；去掉 `power` |
+| # | 英文 | 中文 | 状态表达 | 快捷键列 | 动作 | 理由 |
+|---|---|---|---|---|---|---|
+| 1 | Show Player / Hide Player | 显示面板 / 隐藏面板 | 动词换标题：面板可见且未贴边 → Hide；隐藏或已贴边 → Show | 用户录的「显示/隐藏面板」快捷键（`setShortcut(for: .togglePanel)`），未录则空 | `toggleFloatingWindow()` | 面板隐藏后自己叫不回自己，这是菜单存在的第一理由；录了的快捷键是用户自己的信息，值 +28pt 宽 |
+| 2 | Translate To ▸ | 翻译为 ▸ | 子菜单单选勾选（不影响父菜单宽度，实测） | 无 | 子菜单：Follow System / 中文 / English / 日本語 / 한국어 / Français / Deutsch / Español（macOS 15+） | 切目标语言面板上没有，也不值得为它开设置 |
+| — | 分隔线 | | | | | |
+| 3 | Settings… | 设置… | — | 无（去掉 `⌘,`） | `openSettings` | `⌘,` 只在菜单打开期间生效，是个空承诺，还占一列；app 菜单里的 ⌘, 照旧 |
+| — | 分隔线 | | | | | |
+| 4 | Quit nanoPod | 退出 nanoPod | — | 无 | `NSApp.terminate` | 菜单栏 app 惯例带 app 名；不标 ⌘Q（同上理由） |
 
-英文用 HIG 的 title-style capitalization；中文不加空格、不加标点。分组：[显隐面板] | [全屏封面 · 翻译为] | [继续引导 · 设置…] | [退出]——功能组两项都有图标，App 组两项都没有，HIG「同组一致」按组成立。
+英文 title-style capitalization；中文不加空格、不加标点。整份菜单没有图标，没有勾选，没有随状态增减的临时项（引导入口只在设置里，§4.3）。
 
-### 3.2 度量
+### 3.2 度量（全部实测或系统）
 
-| 属性 | 方案 | 标注 |
+| 属性 | 值 | 标注 |
 |---|---|---|
-| 行高 / 上下内边距 / 分隔线 | 24 / 5 / 11 | 系统（实测值，仅用于视觉稿） |
-| 整体高度 | 5 项 4 组约 163pt（今天 6 项 189.5）；带「继续引导…」约 187 | 少一行不是目的，一致才是 |
-| 字体 | 13pt Regular 系统菜单字体 | 系统；HIG Typography Body 13 |
-| 图标 | `NSImage(systemSymbolName:)`，`isTemplate = true`，**不加** `SymbolConfiguration` | 系统按自己给菜单符号的尺寸绘制（macOS 26 自动插入的菜单符号实测约 12×12，与今天原生行上的 12–13.5 一致）；若创始人肉眼觉得偏小，回退 `pointSize: 13, weight: .regular` |
-| 勾选列 / 图标列 / 文字起点 | 系统 | 有勾选时勾号落在最左状态列、图标列不动——AppKit 文档「状态图显示在项目左侧」+ WWDC25「同组图标成列」的推断，Apple 没写两者并存的几何，以真机为准 |
-| 快捷键列 / 子菜单箭头 | 系统 | `keyEquivalent` / `submenu` |
-| 宽度 | 系统按最长标题 + 快捷键列自算；英文约 190，中文约 140 | 不再强制 206 |
+| 行高 / 上下内边距 / 分隔线 | 24 / 5 / 11 | 实测（`NSMenu.size` 与截图一致） |
+| 宽 × 高（EN，未录快捷键） | 146 × 128 | 实测 |
+| 宽 × 高（EN，录了 ⌥⌘P） | 174 × 128 | 实测 |
+| 宽 × 高（ZH） | 146 × 128；录了 174 × 128 | 实测（子菜单箭头列决定宽度，中英同宽） |
+| 文字起点 | 系统（纯文字项约 21pt；没有勾选列、没有图标列） | 系统 |
+| 字体 | 13pt 系统菜单字体 | 系统 |
+| 子菜单「翻译为」 | 128 × 202（8 项，勾选列 +8 只在子菜单自身） | 实测 |
 | 高亮 / 键盘导航 / VoiceOver | 系统 | 原生项自带 |
-| macOS 27 | `preferredImageVisibility = .visible`（`#available(macOS 27, *)`） | 27 起菜单符号图默认隐藏（§8）；创始人机器现为 26.2 |
 
-### 3.3 砍掉与不加的项（含对主会话清单的一处反驳）
+### 3.3 砍掉与不加的项（含论证）
 
-| 项 | 处理 | 去处 / 理由 |
+| 项 | 处理 | 理由 |
 |---|---|---|
-| **显示翻译（主会话清单里保留，本文建议移出）** | 不进菜单 | 面板歌词页底部控件已有同一开关：`TranslationButtonView`（`HoverableButtons.swift:256–325`，符号 `translate`，辅助标签「开启翻译 / 关闭翻译」），挂在 `SharedBottomControls`（`SharedControls.swift:280–295`），由 `LyricsView.swift:1712` 传入。按创始人 09-26 规则「菜单只放面板里没有的次高频操作」，它是重复项。保留意见：这个按钮随底部控件一起 hover 才出现、且只在歌词页；若创始人认为这算「面板里没有」，就在第 2 组加回「Show Translation / Hide Translation」（动词换标题，图标 `translate`，此时「翻译为 ▸」改用 `globe`），视觉稿多一行即可。 |
-| 自绘开关 `CompactSwitchControl`、自定义行 `MenuBarCustomItemView` / `MenuBarSwitchItemView`、`MenuBarMenuMetrics` | 删除（约 230 行） | 无 |
-| Play/Pause、Next、Previous（L10n 残留键） | 不进菜单 | 面板、媒体键与全局快捷键已覆盖 |
-| Open Music（L10n 残留键） | 不进菜单 | 面板封面可跳 Music；非高频 |
-| About nanoPod | 不进菜单 | 设置「关于」页；主菜单 About 保留 |
-| Check for Updates… | 不进菜单 | 完整版放「关于」页；纯净版不得自更新（App Store 审核指南 2.4.5(vii)、2.5.2） |
-| Section header、badge、subtitle | 不用 | 5 项 4 组分隔线足够；badge / subtitle 的行内排布 Apple 未描述 |
+| **全屏封面**（v2 在菜单里带勾选 + 图标） | 移出菜单，只在设置「面板」页（带演示动画） | 它改的是专辑页封面尺寸（`MiniPlayerView.swift:461/821`：铺满 = 面板宽，否则 68%，悬停 48%），是设一次不动的显示偏好，不是听歌时反复切的动作。留在菜单只有两种写法：勾选（宽 +8，正是创始人嫌难看的组合的一半）或动词对「封面铺满面板 / 封面留边」（EN「Fill Panel with Cover / Fit Cover in Panel」，实测宽 +39、高 +24，且「留边」不是用户会主动想的词）。移出后菜单 146 × 128。若创始人仍要留：用动词对，185 × 152。 |
+| 显示翻译 | 不进菜单 | 面板歌词页底部已有同一开关（`HoverableButtons.swift:256–325` 的 `TranslationButtonView`，挂在 `SharedControls.swift:280–295`）；v2 已论证，创始人未反对 |
+| `⌘,`、⌘Q | 不标 | 只在菜单打开期间生效；`⌘,` 有子菜单时仍占 +9pt |
+| 图标 | 全部不带 | 创始人 09-26：不必每项都有图标；再瘦一些。实测一个图标 +15、全部 +21 |
+| Play/Pause、Next、Previous、Open Music、About、Check for Updates… | 不进菜单 | 同 v2：面板/媒体键/设置/关于页/完整版 |
+| 自绘开关与自定义行 4 个类型 | 删除 | 同 v2 |
 
-### 3.4 子菜单
+### 3.4 分组与分隔线（反馈 c）
 
-「翻译为 ▸」保持一层；当前语言 `state = .on`；「跟随系统」第一项。不用 `indentationLevel` 表达层级（HIG Menus 明文不建议）。
+| 方案 | 结构 | 高 | 判断 |
+|---|---|---|---|
+| 1 条分隔线 | [隐藏面板 · 翻译为 ▸ · 设置…] \| [退出] | 117 | 「设置…」混进操作组，读起来像面板功能；省 11pt 不值 |
+| **2 条（推荐）** | [隐藏面板 · 翻译为 ▸] \| [设置…] \| [退出] | 128 | 操作 / app / 退出三组，与 Time Machine、Ice 等菜单栏菜单一致 |
+| 3 条 | [隐藏面板] \| [翻译为 ▸] \| [设置…] \| [退出] | 139 | 4 项 3 线，松 |
 
-## 4. 设置方案（系统设置式 sidebar）
+### 3.5 对比表（反馈 d）
 
-### 4.1 信息架构
+| 版本 | 宽 × 高（pt） | 项 / 分隔线 | 图标 | 勾选 | 快捷键列 | 来源 |
+|---|---|---|---|---|---|---|
+| 现状 | 203 × 189.5 | 6 / 3 | 6 个 | 0（两个自绘开关） | 无 | 创始人截图实测 |
+| v2 | 227 × 163（录了 ⌥⌘P）；208 × 163（未录） | 5 / 3 | 3 个 | 1 | ⌥⌘P、⌘, | `NSMenu.size` 近似（原生项复刻 v2 结构） |
+| **v3** | **146 × 128**（未录）；174 × 128（录了） | 4 / 2 | 0 | 0 | 仅用户录的快捷键 | `NSMenu.size` 实测 |
+| v3 若保留全屏封面（动词对） | 185 × 152 | 5 / 2 | 0 | 0 | — | `NSMenu.size` 实测 |
+| v3 若去掉「翻译为 ▸」 | 115 × 104 | 3 / 2 | 0 | 0 | — | 推算：箭头列 −31，一行 −24 |
 
-| 序 | 英文 | 中文 | sidebar 图标（20pt 圆角方块 + 白色符号） | 组 · 行 |
-|---|---|---|---|---|
-| 1 | General | 通用 | `gearshape` 于 systemGray（系统设置「通用」同色） | 启动 2 · 权限 2 · 数据 1 |
-| 2 | Player | 面板 | `macwindow` 于 systemBlue | 封面 1 · 贴边 1 |
-| 3 | Lyrics | 歌词 | `text.quote` 于 AccentColor（Apple Music 粉；与引导页「同步歌词」行同符号） | 翻译 2 |
-| — | （组间空） | | | |
-| 4 | Shortcuts | 快捷键 | `keyboard` 于 systemGray（系统设置「键盘」同色） | 1 组 5 行 |
-| 5 | About | 关于 | app 图标本身（`NSApp.applicationIconImage`，20pt） | 占位 |
-| (6) | Diagnostics | — | `waveform.path.ecg` 于 systemGray；仅 DEBUG / LOCAL_DEVELOPER_BUILD | 现有面板原样 |
+v3 对现状：宽 −28%，高 −33%；对 v2：宽 −30%～−36%，高 −21%。
 
-为什么 5 页：sidebar 不怕页薄（系统设置的「登录密码」「Game Center」都只有一两行），换来每页语义单一；歌词单独成页是因为菜单「翻译为 ▸」要有一个同词的家。为什么彩色方块而不是单色符号：创始人点名系统设置的样子；HIG Color 明文固定色 sidebar 图标不被用户强调色覆盖，是允许的固定色用法；只用两种系统色 + 品牌粉，三个灰，不成彩虹。Ice 用单色 `systemSymbol("gearshape")`，列作备选。
+### 3.6 实现要点（菜单）
 
-sidebar 不做搜索框（5 页用不上），不做前进 / 后退（没有子页面）。
+- `populateMenuBarMenu` 只产生纯文字 `NSMenuItem`：不设 `image`、不设 `state`、不设 `keyEquivalent`（#1 除外：`setShortcut(for: .togglePanel)`）。`menuNeedsUpdate` 每次打开重建。
+- #1 标题：`floatingWindow?.isVisible == true && liquidEdge?.isActive != true` → Hide，否则 Show。
+- 菜单不读引导状态，不插任何临时项；引导入口只在设置「通用」段（§4.3）。
+- 菜单打开期间禁用全局热键：`menuWillOpen` → `GlobalShortcutRegistrar.deactivate()`，`menuDidClose` → `activate()`（KeyboardShortcuts 文档要求）。
+- 子菜单：当前语言 `state = .on`，「跟随系统」第一项。
+- 删除 `MenuBarMenuMetrics`、`MenuBarCustomItemView`、`MenuBarSwitchItemView`、`CompactSwitchControl`；L10n 删 `mb.*`、`showWindow`，加 `showPlayer` / `hidePlayer` / `translateTo` / `quitApp`；`settings` 改「Settings…」/「设置…」；`GlobalShortcutAction.togglePanel` 标题改「Show/Hide Player」/「显示/隐藏面板」。
 
-### 4.2 逐页逐项（每页一个 `Form(.grouped)`）
+## 4. 设置方案（演示台 + 分段 + 分组行）
 
-**General / 通用**
+### 4.1 为什么这样更轻
 
-| 组 | 行 | 英文 | 中文 | 控件 | 说明文字 |
-|---|---|---|---|---|---|
-| 启动（无组标题） | 1 | Launch at Login | 登录时启动 | switch（`SMAppService.mainApp`）；`status == .requiresApproval` 时行下加一行说明「Approval required in System Settings」+「Open Login Items…」链接（`SMAppService.openSystemSettingsLoginItems()`），Dropover 5.2.2 同款 | 无 |
-| | 2 | Show in Dock | 在 Dock 显示 | switch | 无 |
-| Permissions / 权限 | 3 | Music Automation | Music 自动化 | 右侧状态文字 + 按钮：未决定 → Grant Access…；已拒绝 → Open System Settings… | 组脚注：nanoPod reads what's playing and controls Music through Automation. Apple Music access adds artwork and song info. / nanoPod 通过自动化读取播放状态并控制 Music；Apple Music 访问用于封面与歌曲信息。 |
-| | 4 | Apple Music | Apple Music | 同上（MusicKit） | |
-| Data / 数据 | 5 | Playback History | 播放记录 | 右侧 `Clear…` / `清除…`，点后 `confirmationDialog` 确认 | 行内说明：nanoPod's own record of played tracks. / nanoPod 自己记录的播放历史。 |
+- 无 sidebar、无工具栏：窗口 480 宽（v2 720），一眼一列；标题栏只有「Settings / 设置」。
+- 顶部少量分页而不是单页滚动：全部 14 行摊开约 700pt，再加演示台就要滚；4 段各 4–5 行，一屏放完不滚动。分段控件是「触控板」页自己的语言（Point & Click / Scroll & Zoom / More Gestures）。
+- 演示台一个、共用：一次只播一段，不悬停不动，空闲零合成成本（创始人对 WindowServer 成本敏感，见 defect 5）；比每行各配一段常驻动画轻得多。
+- 行只留标题 + 一行说明 + switch，效果交给演示台讲。
 
-状态文字复用 `OnboardingAuthorizationStatus` 的双语文案，替换 `musicKitAuthStatus` 的中文硬编码。
+### 4.2 结构与尺寸
+
+| 部件 | 尺寸 / 位置 | 内容 |
+|---|---|---|
+| 窗口 | 内容 480 × 562（取值：20 + 120 + 14 + 24 + 14 + 350 + 20），标题栏 28；`styleMask [.titled, .closable]`；不可缩放、不可最小化（HIG Settings）；`setFrameAutosaveName`；⌘W 关闭 | 标题「Settings」/「设置」 |
+| 演示台 stage | 440 × 120（取值），圆角 10，卡片色底（与分组卡片同色）；左下角 11pt secondary 说明当前演示的行名 | 当前段第一行的静帧；悬停某行 → 播该行动画循环；切换该行的开关/选项 → 播一次到新状态；离开 → 停在最后一帧 |
+| 分段控件 | 440 × 24，`Picker(.segmented)`：Player · General · Shortcuts · About / 面板 · 通用 · 快捷键 · 关于 | 选中段 = 强调色（多彩时 Apple Music 粉） |
+| 分组行 | `Form(.grouped)`，固定高 350（最长的通用段 6 行 + 脚注约 350），仅内容溢出（放大字体）时滚动 | 见 4.3 |
+| 关于段 | 演示台 + 分组行整块换成 `AboutPageView` 占位（图标、名称、版本、三条链接） | 动画另开会话 |
+| 边距 | 四周 20；stage–分段 14；分段–Form 14 | 取值 |
+
+### 4.3 逐段逐行 + 演示动画
+
+演示台的画面全部由 SwiftUI 形状拼成，四个共用部件：`MiniScreen`（200 × 125 圆角矩形 + 顶部 10pt 菜单栏条 + 可选 Dock 胶囊）、`MiniPanel`（62.5 × 71 = 真实面板 250 × 284 的 1/4，圆角 4，里面封面方块 + 两条文字条 + 三个控制点）、`LyricSheet`（三条歌词条，中间一条亮，下方可出译文条）、`Keycap`（圆角键帽，显示用户录的快捷键 `Shortcut.description`；未录则虚线空键帽）。
 
 **Player / 面板**
 
-| 组 | 行 | 英文 | 中文 | 控件 | 说明文字 |
-|---|---|---|---|---|---|
-| 封面（无组标题） | 1 | Fullscreen Cover | 全屏封面 | switch | Fill the panel with the album cover. / 专辑封面铺满面板。 |
-| Edge / 贴边 | 2 | Show Song on Track Change | 换歌时显示歌曲 | switch | 沿用现文案：When tucked into the screen edge, briefly show the new song. Turn off if Music already notifies you. / 贴边收起时短暂显示新歌；Music 已有换歌通知的话可以关掉。 |
+| 行 | 控件 | 说明文字 | 演示动画（悬停循环 / 切换回放） | Reduce Motion 静帧 |
+|---|---|---|---|---|
+| Fullscreen Cover / 全屏封面 | switch | Fill the panel with the album cover. / 专辑封面铺满面板。 | `MiniPanel` 专辑页：封面从 68% 宽居中（真实值 `artSize = 0.68 × width`）弹到铺满面板宽，文字条压到底部渐变上；停 1.2s 弹回。弹簧用面板自己的常数 `.spring(response: 0.5 / 0.4, dampingFraction: 0.85)`（`MiniPlayerView.swift:461`） | 按当前值定格 |
+| Show Song on Track Change / 换歌时显示歌曲 | switch | When tucked into the screen edge, briefly show the new song. / 贴边收起时短暂显示新歌。 | `MiniScreen` 右缘一道 6 × 56（按比例）的贴边条带进度光；「换歌」→ 胶囊（封面 + 标题条）从边缘滑出，停 2.5s（LiquidEdge 自动探出的真实时长），缩回。关：只有条上的光换色，不探出 | 条 + 胶囊探出态 / 条 |
+| Show Translation / 显示翻译 | switch | Translated lines appear under the original. / 译文显示在原文下方。 | `LyricSheet`：亮行下方译文条淡入（0.35s），上下行让位；关 → 淡出并合拢 | 有/无译文 |
+| Translate To / 翻译为 | Picker（menu） | 无 | `LyricSheet` 的译文条换成所选语言的样句（交叉淡入 0.25s）：Let's go see the sea → 我们去看海吧 / 海を見に行こう / 바다 보러 가자 / Allons voir la mer / Lass uns ans Meer fahren / Vamos a ver el mar；「跟随系统」按系统语言 | 当前语言样句 |
 
-**Lyrics / 歌词**（macOS 14 整页不出现在 sidebar，与现有 `#available(macOS 15.0, *)` 一致）
+**General / 通用**
 
-| 组 | 行 | 英文 | 中文 | 控件 | 说明文字 |
-|---|---|---|---|---|---|
-| 翻译（无组标题） | 1 | Show Translation | 显示翻译 | switch（与面板歌词页按钮同一状态 `LyricsService.showTranslation`） | Translated lines appear under the original. / 译文显示在原文下方。 |
-| | 2 | Translate To | 翻译为 | Picker（menu 样式），选项数组与菜单子菜单同一份 `L10n.translationLanguageOptions` | 无 |
+| 行 | 控件 | 说明文字 | 演示动画 | 静帧 |
+|---|---|---|---|---|
+| Launch at Login / 登录时启动 | switch（`SMAppService.mainApp`；`.requiresApproval` 时行下加「Approval required in System Settings」+「Open Login Items…」） | 无 | `MiniScreen` 从暗到亮（0.4s，像刚登录），菜单栏条上 ♪ 弹出（scale 0.6 → 1）。关：亮起后菜单栏没有 ♪ | 亮屏 + 有/无 ♪ |
+| Show in Dock / 在 Dock 显示 | switch | 无 | `MiniScreen` 底部 Dock 胶囊 4 个灰块，nanoPod 块插入（邻块让位、块弹入）；关：抽出、Dock 收窄 | 有/无块 |
+| Getting to know nanoPod / 认识 nanoPod | 右侧按钮，文字随引导状态变（Onboarding §9.2 定名）：没走完（skipped 或中途停下）→「Keep getting to know nanoPod」/「接着认识 nanoPod」，点了从上次停下处接着走（不重置进度，`showOnboardingWindow()`）；走完了 →「Get to know nanoPod again」/「重新认识 nanoPod」，点了从头走（重置 `OnboardingState` 完成标志再 `showOnboardingWindow()`）。按钮宽度按较长的英文「Keep getting to know nanoPod」排，两种文字同宽不跳 | 无 | 静态示意：`MiniPanel` 旁一张小引导卡（圆角卡 + 进度环轮廓）；不动 | 同左 |
+| Music Automation / Music 自动化 | 状态文字 + 按钮（未决定 → Grant Access…；已拒绝 → Open System Settings…） | 组脚注：nanoPod reads what's playing and controls Music through Automation. Apple Music access adds artwork and song info. | 静态示意：Music 图标（圆角方块 ♪）→ 箭头 → `MiniPanel`；已授权箭头实线、面板有曲名条；未授权箭头虚线、面板空 | 同左（本行本来就是静态） |
+| Apple Music | 同上（MusicKit） | | 静态示意：`MiniPanel` 封面方块有色（已授权）/ 灰色占位（未授权） | 同左 |
+| Playback History / 播放记录 | `Clear…` 按钮 + `confirmationDialog` | nanoPod's own record of played tracks. / nanoPod 自己记录的播放历史。 | 静态：`MiniPanel` 历史页三行；点「清除」后三行淡出（一次） | 三行 |
 
-**Shortcuts / 快捷键**
+**Shortcuts / 快捷键**（5 行 `KeyboardShortcuts.Recorder`，库自带标签左录制框右；脚注 Shortcuts work in any app. None are set by default. / 快捷键全局生效；默认未设置）
 
-一组五行 `KeyboardShortcuts.Recorder("标题", name:)`：库内部已用 `LabeledContent` 做「标签左、录制框右」，录制框 `NSSearchField` 外观，最小 130 宽、24 高，zh-Hans 本地化内置。顺序：Play/Pause · Next Track · Previous Track · Show/Hide Player · Hide to Edge。「Show/Hide Panel」改「Show/Hide Player」/「显示/隐藏面板」与菜单第一项同词。组脚注：Shortcuts work in any app. None are set by default. / 快捷键全局生效；默认未设置。录制冲突时库默认弹 `NSAlert`（菜单项冲突 block、系统快捷键 warn、沙盒不允许的组合 block），是用户主动录键时的即时反馈，保留默认。
-
-**About / 关于（占位）**
-
-真实 app 图标 64pt、「nanoPod」Title 2（17pt）、「Version 0.28 (build …)」Subheadline 11pt secondary、一句定位「A menu bar companion for Apple Music.」/「常驻菜单栏的 Apple Music 伴生小窗。」、链接行 GitHub · Acknowledgements（KeyboardShortcuts，MIT）· Report an Issue；完整版多一个「Check for Updates…」按钮（`UpdateService`），纯净版不编入。去掉永久脉冲。**动画不在本次范围**：创始人的 Pinterest 参考另开会话；这页的整块内容区就是给它的预留位，实现时把占位内容放进一个独立的 `AboutPageView`，动画会话只改这一个文件。
-
-### 4.3 窗口与布局
-
-| 属性 | 方案 | 依据 / 标注 |
+| 行 | 演示动画（键帽显示已录组合；未录则虚线空键帽） | 静帧 |
 |---|---|---|
-| 结构 | `NavigationSplitView { sidebar } detail: { page }`，sidebar `List(selection:)` + `.listStyle(.sidebar)`，`.navigationSplitViewStyle(.balanced)` | Ice `SettingsView.swift:40-44` 同款；macOS 13+ |
-| sidebar 宽 | `.navigationSplitViewColumnWidth(220)` 固定 | 参考图实测 222 |
-| sidebar 折叠钮 | `.toolbar(removing: .sidebarToggle)` | macOS 14+，Apple 文档示例就是 NavigationSplitView 去掉折叠钮 |
-| 窗口 | `NSWindow(contentViewController: NSHostingController(rootView:))`；`styleMask [.titled, .closable, .miniaturizable, .resizable]`；`toolbarStyle = .unified`；`titlebarSeparatorStyle = .automatic` | 系统设置本身可最小化、可纵向缩放（参考图三个交通灯都亮），跟它 |
-| 尺寸 | 720 × 520 起始；`minSize (720, 460)`，`maxSize (720, 900)`——宽固定、高可调 | 取值：sidebar 220 + 内容 500；最长页（通用）内容约 400pt |
-| 标题 | detail 上 `.navigationTitle(page.title)`；`NSHostingController.sceneBridgingOptions` 在作为 `contentViewController` 时默认 `.all`（`.title` + `.toolbars`），标题自动写进窗口、显示在内容列上方工具栏区 | Apple 文档，macOS 14+；参考图标题就是 13pt 粗体工具栏标题 |
-| 位置 | `setFrameAutosaveName("Settings")`；仅首次 `center()` | 记住放置 |
-| 记住页 | 上次页写 UserDefaults；`nanopod://settings/<general|player|lyrics|shortcuts|about>`，`appearance` 作 `player` 别名 | HIG Settings：重开回到上次页 |
-| 快捷键 | ⌘, 打开（主菜单已有），⌘W 关闭 | 标准 |
-| 卡片 / 行 | `Form(.grouped)` 自带：卡片圆角、20pt 边距、行分隔线、组 header/footer | 系统；参考图卡片圆角 ≈10、宽 460、行距 53 是 Tahoe 的系统值，不手写 |
-| 行内排版 | 标题 `Text` 13pt；说明 `.font(.subheadline)`（11pt）`.foregroundStyle(.secondary)`；两行放同一个 `VStack(alignment: .leading, spacing: 2)` 当 `Toggle` 的 label；switch `.toggleStyle(.switch)` 常规尺寸 | HIG Typography Body 13 / Subheadline 11；参考图实测 13 / 11 |
-| sidebar 行 | `Label { Text } icon: { 20×20 RoundedRectangle(cornerRadius: 5, style: .continuous).fill(color) + Image(systemName:).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white) }`；行高、选中胶囊、选中色由 `List(.sidebar)` 决定 | 参考图：方块 20 / 圆角 5 / 行距 32 / 选中行圆角 8；选中色 = 强调色（多彩时为 Apple Music 粉） |
-| 分段控件 / 预览图 | 本次不用 | 系统设置在「触控板」用预览是因为手势看不见；nanoPod 每个开关的效果都在常驻面板上直接可见；日后某页出现 ≥2 个面向（例如面板页分「封面 / 贴边」）再上 `Picker(.segmented)` 通卡片宽（参考图 24pt 高） |
-| 强调色 | 见文首表 | |
+| Play/Pause | 键帽按下（scale 0.92，120ms）→ `MiniPanel` 播放图标 ▶︎ ⇄ ❚❚（`contentTransition(.symbolEffect(.replace))`），进度条停/走 | 键帽 + ▶︎ |
+| Next Track | 键帽按下 → 封面方块向左滑出、新封面（另一色）滑入，标题条换宽度 | 键帽 + 面板 |
+| Previous Track | 同上镜像 | 同上 |
+| Show/Hide Player | 键帽按下 → `MiniScreen` 里的面板淡出（用 `MicroInteractionFeel.Tokens.windowFadeOutDuration`），再按淡入 | 键帽 + 面板 |
+| Hide to Edge | 键帽按下 → 面板滑向右缘并收成贴边条（弹簧），再按展回 | 键帽 + 贴边条 |
 
-### 4.4 菜单与设置的一致性
+**About / 关于**：占位——真实 app 图标 64pt、「nanoPod」17pt、「Version 0.28 (build …)」11pt secondary、GitHub · Acknowledgements · Report an Issue；完整版多「Check for Updates…」，纯净版不编入；无动画。整块区域预留给动画会话，实现放独立 `AboutPageView`。
 
-| 菜单项 | 设置位置 | 文案 |
-|---|---|---|
-| Show Player / Hide Player | 快捷键页「Show/Hide Player」 | 同词 |
-| Fullscreen Cover ✓ | 面板页 · 封面组 · switch | 同词 |
-| Translate To ▸ | 歌词页 · Picker | 同词、同选项数组 |
-| （面板歌词页翻译按钮） | 歌词页「Show Translation」switch | 同一状态 |
-| Continue Setup… | 引导窗口 | — |
-| Settings… | 打开上次页 | — |
+### 4.4 实现要点（设置）
 
-## 5. 实现要点
-
-### 5.1 菜单（`MusicMiniPlayerApp.swift`）
-
-- `populateMenuBarMenu` 只产生原生 `NSMenuItem`：`title` / `image` / `state` / `keyEquivalent` / `submenu`，不设 `view`。`menuNeedsUpdate` 继续每次打开重建（≤6 项）。
-- 图标只给 #1 #2 #3：`NSImage(systemSymbolName:accessibilityDescription:)`，不调 `withSymbolConfiguration`；`#available(macOS 27, *)` 下 `preferredImageVisibility = .visible`。
-- #1 `setShortcut(for: .togglePanel)`（KeyboardShortcuts 3.0.1 `NSMenuItem++.swift:108`），自动跟随改键并在清除时还原。库文档要求菜单打开期间禁用全局热键：`menuWillOpen` → `GlobalShortcutRegistrar.deactivate()`，`menuDidClose` → `activate()`（两者已存在，`@MainActor`）。
-- #1 标题：`floatingWindow?.isVisible == true && liquidEdge?.isActive != true` → Hide，否则 Show。
-- #4 只在 `!OnboardingState.shared.hasCompletedOnboarding` 时插入；动作 `showOnboardingWindow()`（已存在）。
-- 「Settings…」`keyEquivalent = ","`、`keyEquivalentModifierMask = .command`；Quit 不设。
-- L10n：新增 `showPlayer` / `hidePlayer` / `translateTo` / `continueSetup` / `quitApp`；`settings` 改「Settings…」/「设置…」；删除 `mb.*` 与 `showWindow`；`GlobalShortcutAction.togglePanel` 标题改「Show/Hide Player」/「显示/隐藏面板」。
-- 删除 `MenuBarMenuMetrics`、`MenuBarCustomItemView`、`MenuBarSwitchItemView`、`CompactSwitchControl`。
-
-### 5.2 设置（`SettingsView.swift` + `createSettingsWindow`）
-
-- `SettingsTab` 改为 `general / player / lyrics / shortcuts / about (/ diagnostics)`，各带 `title`、`symbolName`、`tileColor`；`visibleCases` 在 macOS 14 去掉 `lyrics`。
-- `SettingsWindowView` = `NavigationSplitView`；sidebar `List(selection: $state.selectedTab)`，两个 `Section`（前四页 / 关于 + 诊断）做组间空；detail 按页切 `Form`。
-- 窗口按 §4.3；`NSHostingController` 直接当 `contentViewController`，不手设 `sceneBridgingOptions`（默认 `.all`）。若真机上标题没桥过去，显式 `controller.sceneBridgingOptions = [.title, .toolbars]`。
-- 备选路线（只在 SwiftUI 桥接出问题时用）：AppKit `NSSplitViewController` + `NSSplitViewItem(sidebarWithViewController:)`（`allowsFullHeightLayout = true`）装两个 `NSHostingController`，外观相同，多约 60 行。
-- 每页 `Form { … }.formStyle(.grouped)`；`Toggle(...).toggleStyle(.switch)`；权限行与数据行用 `LabeledContent`。
-- 强调色：新建 `Sources/MusicMiniPlayerApp/Resources/AppAssets.xcassets/AccentColor.colorset`（Any = `#FA4058`，Dark = `#FB546C`，sRGB）；`build_app.sh` 的 actool 命令输入里加上这个 catalog（与 `AppIcon.icon` 一起 `--compile` 进同一个 `Assets.car`）；`Info.plist` 加 `NSAccentColorName = AccentColor`；出包门禁 `assetutil -I nanoPod.app/Contents/Resources/Assets.car | grep -q AccentColor`。Xcode 的 Global Accent Color Name 设置对应 actool 的 `--accent-color` 参数，可加可不加——色集编进 catalog + plist 键就够。
-- 登录时启动：`SMAppService.mainApp.register()` / `unregister()`，`status` 回读（`.enabled` / `.requiresApproval` / `.notRegistered`）；macOS 13+ 公开 API。
-- 权限状态复用 `OnboardingState.automationStatus` / `musicKitStatus`（不在渲染路径触发系统弹窗，按钮点击才请求）。
-- 手感臂：`settingsTab` 自定义臂随 TabView 删除；`settingsToggle` 脉冲臂默认改 `.system`（代码可留作对照）。
+- 结构：`VStack { DemoStage; Picker(.segmented); Form(.grouped) }` 装进 `NSHostingController`，`NSWindow(contentViewController:)`，`styleMask [.titled, .closable]`，`setContentSize(480 × 562)`，`setFrameAutosaveName("Settings")`。不用 `NavigationSplitView`、不用工具栏。
+- 每行 `Toggle(...).toggleStyle(.switch)`；说明文字 `.font(.subheadline).foregroundStyle(.secondary)`；权限行 `LabeledContent`。
+- 演示台：`enum SettingsDemo`（13 个 case + `about`）；`DemoStage(demo:state:playToken:)`。动画驱动：macOS 14 的 `PhaseAnimator(phases, trigger: playToken)`——每次 `playToken` 变化把各阶段走一遍、停在末态（正好是「切换回放一次」）；悬停循环 = 悬停期间每个周期结束时再 +1 `playToken`（`TimelineView(.periodic)` 或 `Task.sleep` 循环，离开即停）；贴边探出这种多段时间轴用 `KeyframeAnimator`。播放/暂停图标用 `Image(systemName:)` + `.contentTransition(.symbolEffect(.replace))`。全部 `RoundedRectangle` / `Capsule` / `Text` / `Image(systemName:)`，无位图、无第三方。
+- 时间常数复用 app 自己的：封面弹簧 `response 0.5/0.4, damping 0.85`（`MiniPlayerView`）；窗口淡出 `MicroInteractionFeel.Tokens.windowFadeOutDuration`；贴边探出停留 2.5s（LiquidEdge autoPeek）。演示演的就是真实曲线。
+- 悬停意图：复用 `SharedControls.swift` 的 `ProgressHoverIntentEngine`（指针停留 150ms 且期间移动不超过 4pt 才算停住，按鼠标事件判定、不定时采样；`docs/craft-notes.md` 09-25 条，创始人 09-26 真机验收通过）——路过的行不切换演示。离开行不清空，停在最后一帧。
+- Reduce Motion：`@Environment(\.accessibilityReduceMotion)` 为真时不挂 `PhaseAnimator`，直接画 `demo.restingFrame(state:)`；悬停只切静帧，无过渡。
+- 成本：一次只有一段动画；无悬停、无切换时演示台是静态视图，不挂 `TimelineView`；窗口 `orderOut` / 遮挡（`NSWindow.didChangeOcclusionStateNotification`）时停循环。
+- 辅助功能：演示台 `.accessibilityHidden(true)`（纯装饰），行自带标签；键帽文字随录制值更新。
+- 强调色：`AccentColor`（见文首）；演示台里面板的「当前行」高亮与贴边光用 `Color.accentColor`。
+- 记住段：上次段写 UserDefaults；`nanopod://settings/<player|general|shortcuts|about>`，`appearance` 与 `lyrics` 作 `player` 别名；`showSettingsWindow(selectedTab: .shortcuts)` 供引导最后一张卡「录个快捷键」直达。
+- L10n 新键：`tour.settings.title`（「Getting to know nanoPod」/「认识 nanoPod」）、`tour.settings.keepGoing`（「Keep getting to know nanoPod」/「接着认识 nanoPod」）、`tour.settings.again`（「Get to know nanoPod again」/「重新认识 nanoPod」）。按钮用 `fixedSize` + 以 keepGoing 文案测出的最小宽度，切换文字不改行宽。
+- 手感臂：`settingsTab` 自定义 crossfade 臂随 TabView 删除；`settingsToggle` 脉冲臂默认 `.system`（演示台回放已是切换反馈）。
 - 主菜单三处「Music Mini Player」与窗口标题改 nanoPod。
-- 关于页：`AboutPageView` 独立文件，只放占位内容，给动画会话。
 
-### 5.3 风险与边界
+### 4.5 风险与边界
 
 | 边界 | 处理 |
 |---|---|
-| 深浅色 | 菜单、sidebar、grouped Form、switch 全部系统绘制；自绘只剩 sidebar 方块（系统色 + AccentColor 两态）与关于页文字（`.primary` / `.secondary`） |
-| Liquid Glass（macOS 26） | 原生 NSMenu 与 `List(.sidebar)` 自动获得（sidebar 自动成浮动玻璃）；不加 `NSVisualEffectView` / `glassEffect` |
-| Reduce Transparency / Increase Contrast | 系统组件自动响应；自绘文字不用 `opacity`，用语义色；AccentColor 可加 High Contrast 变体 `#FA2B43` |
-| Reduce Motion | 关于页去掉永久 `symbolEffect`；sidebar 切页无自定义动画 |
-| 用户强调色 ≠ 多彩 | 系统把选中态、switch 换成用户色（HIG 明文），sidebar 固定色方块不变；不硬编码粉色去抵抗 |
-| 辅助功能 | 原生菜单项自带「已选中」朗读与方向键高亮；sidebar `List` 自带；switch 自带 |
-| 中英文长度 | 菜单宽度系统自算；内容列 500pt 下英文最长行「Show Song on Track Change」+ 两行说明 + switch 不折行；zh 更短 |
-| macOS 14 | 歌词页与菜单「翻译为」按 `#available(macOS 15.0, *)` 隐藏；`translate` 符号 macOS 14 起可用（本机 26.2 实测 169 个候选符号名 168 个存在，仅 `ipod.nano` 不存在）；`sceneBridgingOptions`、`toolbar(removing:)` 均 macOS 14+ |
+| 深浅色 | 分组行、switch、分段控件系统绘制；演示台用语义色（`.primary/.secondary/.quaternary` + `Color.accentColor`），两套外观自动成立 |
+| Liquid Glass | 不加任何材质；窗口是普通不透明设置窗口 |
+| Reduce Motion / Reduce Transparency / Increase Contrast | 静帧；无透明材质；`AccentColor` 高对比变体 |
+| 用户强调色 ≠ 多彩 | switch、分段选中、演示台高亮跟用户色（HIG），不硬编码粉 |
+| macOS 14 | `PhaseAnimator` / `KeyframeAnimator` / `contentTransition(.symbolEffect)` 均 macOS 14+；翻译两行与菜单「翻译为」按 `#available(macOS 15.0, *)` 隐藏 |
 | macOS 15 沙盒 | 录快捷键时单独 Option 不允许，库自带中文提示 |
-| macOS 27 | 菜单符号图默认隐藏，需 `preferredImageVisibility = .visible` |
-| 沙盒 / App Store | `SMAppService`、`NSApp.terminate`、`x-apple.systempreferences:`、KeyboardShortcuts（README：fully sandboxed and Mac App Store compatible）均公开 API；「Check for Updates…」只在完整版 target 编入（2.4.5(vii)、2.5.2） |
-| actool 中止 | build_app.sh 现在允许 actool 失败回退 icns；AccentColor 同样会静默丢失（系统回落蓝色）——所以要门禁 |
-| 面板是 `.nonactivatingPanel` | 打开设置已 `NSApp.activate`，不改 activation policy（banned-patterns：只有 `updateDockVisibility` 可改） |
-| `NSHostingView` 尺寸探测 | 每页 `Form` 给 `.frame(minWidth: 500)` 即可，窗口尺寸由 `minSize/maxSize` 管，不靠 `preferredContentSize` |
+| 放大字体 | Form 区固定 320 高，溢出时 Form 自身滚动 |
+| 沙盒 / App Store | `SMAppService`、`NSApp.terminate`、`x-apple.systempreferences:`、KeyboardShortcuts 均公开 API；「Check for Updates…」只在完整版 |
+| 演示与真实不一致 | 演示只用比例和真实时间常数，不承诺像素；说明文字仍是权威 |
+| 面板是 `.nonactivatingPanel` | 打开设置已 `NSApp.activate`，不改 activation policy |
 
-## 6. 代码层验收项（创始人禁止截图 / 录屏 / computer use；最终视觉由他本人验收）
+## 5. 代码层验收项（创始人禁止截图 / 录屏 / computer use；最终视觉由他本人验收）
 
 菜单：
-1. `populateMenuBarMenu` 产出的每个 item `view == nil`。
-2. 标题序列快照（en / zh 各一份）与分隔线位置等于 §3.1；引导未完成时多「Continue Setup…」于 Settings… 之前，完成后不出现。
-3. `image != nil` 且 `isTemplate` 仅限 #1 #2 #3；#4 #5 #6 `image == nil`；符号名经 `NSImage(systemSymbolName:)` 解析非空；macOS 27 下 `preferredImageVisibility == .visible`。
-4. 面板可见且未贴边 → 第一项「Hide Player」；隐藏或贴边 → 「Show Player」（注入可见性与 liquidEdge 状态）。
-5. `fullscreenAlbumCover` 为 true 时 #2 `state == .on`，false 时 `.off`；执行 action 后 UserDefaults 翻转。
-6. Settings… `keyEquivalent == ","` 且 modifier `.command`；Quit 与 Continue Setup `keyEquivalent == ""`；#1 在隔离 defaults 里录入快捷键后 `keyEquivalent` 随之变化、清除后为空。
-7. 标题不含 `"..."`，需要处含 U+2026。
-8. `menuWillOpen` 触发 `deactivate()`、`menuDidClose` 触发 `activate()`（注入假注册器计数）。
-9. 「翻译为」子菜单恰一项 `.on`，与 `translationLanguage`（含 system 映射）一致。
+1. `populateMenuBarMenu` 产出的每个 item：`view == nil`、`image == nil`、`state == .off`（子菜单项除外）。
+2. 标题序列快照（en / zh）与分隔线位置等于 §3.1；引导状态取 completed / skipped / 中途停下三种时，菜单项数与标题都不变（菜单不含任何引导入口）。
+3. 面板可见且未贴边 → 「Hide Player」；否则「Show Player」。
+4. 只有 #1 可能有 `keyEquivalent`（隔离 defaults 录入后出现、清除后为空）；Settings… 与 Quit `keyEquivalent == ""`。
+5. `menuWillOpen` → `deactivate()`、`menuDidClose` → `activate()`。
+6. 「翻译为」子菜单恰一项 `.on`，与 `translationLanguage` 一致。
+7. 尺寸门：把 `populateMenuBarMenu` 产出的菜单交给 `NSMenu.size`，EN 未录快捷键时宽 ≤ 150、高 ≤ 130（当前实测 146 × 128）；这条测试就是本文数字的回归线。
+8. 标题不含 `"..."`，需要处含 U+2026。
 
 设置：
-1. `SettingsTab.visibleCases` 在 macOS 15+ 为 `[general, player, lyrics, shortcuts, about]`，DEBUG 下末尾多 `diagnostics`；macOS 14 无 `lyrics`；每页 title 双语、symbolName 可解析。
-2. 窗口 `minSize == (720, 460)`、`maxSize.width == 720`、`toolbarStyle == .unified`；选中页切换后 `window.title == 该页 title`。
-3. 选中页持久化：设为 `.shortcuts` 后新建状态对象读回 `.shortcuts`。
-4. `openSettingsPage(named: "appearance")` 落到 `.player`；`"lyrics"` 落到 `.lyrics`。
-5. 登录时启动通过协议调用 register / unregister；`status` 回读驱动 switch 初值与「需批准」说明行（注入假 service 三态）。
-6. 每个新 L10n 键 en / zh 都有值，`localized(key) != key`。
-7. `MicroInteractionFeel.settingsToggle` 默认解析值为 `.system`。
-8. AppKit 目标源码不再出现「Music Mini Player」（脚本断言）。
-9. 每页 `Toggle` 均显式 `.toggleStyle(.switch)`（源码断言：`Toggle(` 出现次数 == `.toggleStyle(.switch)` 出现次数）。
-10. 出包：`Assets.car` 含 `AccentColor`（`assetutil -I`），`Info.plist` `NSAccentColorName == "AccentColor"`；`AccentColor.colorset/Contents.json` 的 Any / Dark 分量等于 `#FA4058` / `#FB546C`。
-11. `AboutPageView` 不含 `symbolEffect`（源码断言）。
+1. 段序列 `[player, general, shortcuts, about]`（DEBUG 末尾多 `diagnostics`）；macOS 14 下 Player 段不含翻译两行。
+2. 窗口 `styleMask` 不含 `.resizable` / `.miniaturizable`；内容尺寸 480 × 562；`title` 双语。
+2a. 通用段「认识 nanoPod」行：引导未走完（skipped 或中途停下）时按钮标题为「Keep getting to know nanoPod」/「接着认识 nanoPod」，点击不重置进度、引导窗口被请求显示；走完时标题为「Get to know nanoPod again」/「重新认识 nanoPod」，点击后 `hasCompletedOnboarding == false` 且引导窗口被请求显示（注入假窗口所有者计数、假状态三态）；两种标题下按钮宽度相同。
+3. 选中段持久化；`openSettingsPage(named: "appearance" | "lyrics")` 落到 `.player`。
+4. 每个 `Toggle` 显式 `.toggleStyle(.switch)`（源码断言计数相等）。
+5. `SettingsDemo.allCases` 与设置行一一对应（每行声明 `demo`，`Set` 相等）；每个 case 有 `restingFrame(state:)`。
+6. Reduce Motion 注入为真时，`DemoStage` 的 body 不含 `PhaseAnimator` / `KeyframeAnimator` / `TimelineView`（用 `Mirror` 或类型断言）。
+7. 悬停意图：假时钟驱动 `ProgressHoverIntentEngine`，快速掠过（停留不足 150ms）不切换 demo，停住 150ms 后切换。
+8. 登录时启动通过协议 register / unregister；`status` 三态驱动 switch 与说明行。
+9. `Assets.car` 含 `AccentColor`；`Info.plist` `NSAccentColorName == "AccentColor"`；color set 分量 `#FA4058` / `#FB546C`。
+10. `AboutPageView` 不含 `symbolEffect` / `PhaseAnimator`；AppKit 目标源码不再出现「Music Mini Player」。
+
+## 6. 视觉稿说明
+
+`mockup.html`：菜单「现状 vs v3」（深/浅/中文，1:1）；设置窗口三段（面板 浅色、通用 深色、快捷键 浅色）+ 关于占位；一排 8 个演示台缩略图，说明每段动画演什么。演示台画面是静帧示意，动效只能真机看。
 
 ## 7. 需创始人拍板（唯一）
 
-**「显示翻译」是否留在菜单。** 本文按创始人 09-26 规则移出（面板歌词页已有同一开关，`HoverableButtons.swift:256–325`），主会话清单里保留。推荐移出；若创始人认为 hover 才出现的面板按钮不算「面板里有」，加回一行「Show Translation / Hide Translation」即可，其余方案不变。
+**「翻译为 ▸」是否留在菜单。** 它是 v3 宽度的主要来源：子菜单箭头列 +31pt（146 → 115），少它菜单是 115 × 104。推荐留：切目标语言是听多语种歌时会做、面板上又没有的操作，设置里翻两层不如菜单一层。若创始人要更瘦，去掉它，语言只在设置「面板」段切。
 
-其他小项已按推荐值写定，创始人看稿时可直接改：sidebar 图标彩色方块（备选：Ice 式单色符号）；「登录时启动」新增；「继续引导…」放设置…上方；关于页占位内容。
+其余按推荐值写定：全屏封面移出菜单；`⌘,` 不标；2 条分隔线；设置 4 段 + 演示台；关于占位。
 
-## 8. 调研来源
+## 8. 调研与实测来源
 
-- 创始人反馈 09-26（主会话转述）：系统设置式 sidebar；Apple Music 粉强调色、要写出处；关于页动画另议；菜单只放次高频、功能项才带图标、有 Show 就有 Hide。
-- 参考图：`ref-current-menu.png`（现菜单，2x）、`ref-cleanshot-menu.jpg`、`ref-system-settings-trackpad.webp`（macOS 26 系统设置，2x）；量化脚本 `research/measure_menu.py`、`research/measure_system_settings.py`、`research/measure_system_settings_cards.py`。
-- 强调色取样：`sips -s format png /System/Applications/Music.app/Contents/Resources/AppIcon.icns --out music_icon.png` 后 PIL 在 x=12% 列取 y=25/50/75% 三点；`plutil -p /System/Applications/Music.app/Contents/Info.plist` → `NSAccentColorName = KeyColor`；本机 `NSColor.systemPink/systemRed/systemBlue/systemGray` 两种外观实测；Apple Music Identity Guidelines（marketing.services.apple）无色值。
-- Apple HIG（2026-09-25 抓取）：Menus、The menu bar、Settings、Toggles、SF Symbols、Materials、Typography；Color（macOS 系统色表；强调色三句：多彩时应用 app 强调色 / 用户选色则覆盖 / 固定色 sidebar 图标不覆盖）。
-- Apple 文档：`NSHostingController.sceneBridgingOptions`（macOS 14.0；作为 contentViewController 时默认 `.all`）、`NSHostingSceneBridgingOptions`（`.title` 桥 `navigationTitle/navigationSubtitle`，`.toolbars` 桥 `toolbar(content:)`）、`View.toolbar(removing:)`（macOS 14.0，示例即 NavigationSplitView 去 `.sidebarToggle`）、`NSAccentColorName`（macOS 11+，可直接写 Info.plist）、`NSMenuItem.view` / `state` / `image`、`preferredImageVisibility`（27.0）、`ToggleStyle.automatic`（macOS → checkbox）、`LabeledContent`（inset group form 里的 Toggle 是 checkbox）、`SMAppService.mainApp`（13+）。
-- WWDC25 session 310 / 356：macOS 26 菜单大量加图标，同组图标成一列。
-- macOS 26/27 菜单图标：tonsky.me、mjtsai 2025-12-10 / 2026-06-18、daringfireball 2026-03。
-- 原生菜单度量对照：github.com/MattJackson/muri `src/theme.rs`（目测校准：行高 24、分隔线 11、内边距 10/5、图标 16）。
-- CleanShot X（本机 bundle 只读）：`LSUIElement`、`menubar*` 图标资源 24×24pt、`menubarHideDesktopIcons` / `menubarShowDesktopIcons` 成对；About / Check for Updates / Settings / Quit 无图标（创始人截图）。
-- 第三方设置窗口（`research/` 六份）：Ice（`NavigationSplitView` 侧栏 6 页、900×625、`.toggleStyle(.switch)`、Launch at Login 在 General 第一组、sidebar 图标 `systemSymbol("gearshape")` 单色）；Rectangle（`NSTabViewController.toolbar`，本版不用）；CleanShot v5 / Raycast / iStat Menus 7 / Dropover 均为 sidebar；Dropover 5.2.2 登录启动旁提示需在系统设置批准。
-- App Store 审核指南（2026-09-25 三方交叉核实）：2.4.5(vii)、2.5.2。
-- KeyboardShortcuts 3.0.1：`NSMenuItem++.swift` `setShortcut(for:)`；`RecorderCocoa` 130×24；`ConflictPolicy` 默认 block / warn / block；README「fully sandboxed and Mac App Store compatible」；zh-Hans 本地化。
-- 本仓库：`MusicMiniPlayerApp.swift`、`SettingsView.swift`、`LocalizedStrings.swift`、`GlobalShortcuts.swift`、`MicroInteractionFeel.swift`、`OnboardingState.swift`（`hasCompletedOnboarding`）、`HoverableButtons.swift`（`TranslationButtonView`）、`SharedControls.swift`（`SharedBottomControls.translationButton`）、`LyricsView.swift:1712`、`PlaylistView.swift` / `MiniPlayerView.swift`（`#FC3D45`）、`Package.swift`（`.macOS(.v14)`）、`build_app.sh`（actool 步骤、`NANOPOD_EDITION`）；`git log` `ed2e126` / `6df3adb` / `1a4eb79`。
+- 创始人反馈 09-26 上午（sidebar、粉色、菜单次高频）与下午（去勾选加图标、再瘦、不要 sidebar、要触控板页式演示）。
+- `NSMenu.size` 实测（macOS 26.2，本机，不显示菜单）：scratchpad `menusize.swift` / `menusize2.swift`（按要求不进仓库）；关键数字：行 24、分隔线 11、上下 5；`.on` +8、图标 +15/+21、子菜单箭头 +31、子菜单内勾选不影响父菜单、`⌘,` +40（无子菜单）/ +9（有子菜单）；v3 146 × 128、v2 近似 227 × 163。
+- 参考图实测：`research/measure_menu.py`（现菜单 203 × 189.5）、`research/measure_system_settings*.py`（触控板页：演示区 150 高、分段 24、卡片行距 53、标题 13 / 说明 11、switch 36 × 16）。
+- 强调色取样：Music.app 1.6.2 `AppIcon.icns`；`NSAccentColorName = KeyColor`；本机系统色实测；Apple Music Identity Guidelines 无色值。
+- 仓库：`MiniPlayerView.swift:461/821`（全屏封面 = 封面宽 100% vs 68%/48%）、`:141/153/206…`（弹簧 0.5/0.4, 0.85）；`HoverableButtons.swift` `TranslationButtonView`；`SharedControls.swift` `ProgressHoverIntentEngine`；`docs/craft-notes.md`（hover intent 100ms / 4pt）；`OnboardingState.hasCompletedOnboarding`；`docs/design/2026-09-25-onboarding/proposal.md` §9.2（「认识 nanoPod」「接着认识 nanoPod」「重新认识 nanoPod」定名）；`MicroInteractionFeel.Tokens.windowFadeOutDuration`；LiquidEdge autoPeek 2.5s（memory 09-22）。
+- Apple 文档 / HIG（v2 已列）：HIG Menus / The menu bar / Settings / Toggles / Color；`NSMenuItem.view` / `state` / `image`；`ToggleStyle.automatic`（macOS → checkbox）；`PhaseAnimator`、`KeyframeAnimator`、`contentTransition(.symbolEffect)`（macOS 14）；`NSAccentColorName`（macOS 11）；`SMAppService.mainApp`（13）。
+- KeyboardShortcuts 3.0.1：`setShortcut(for:)`、`Shortcut.description`、`RecorderCocoa` 130 × 24、README 沙盒兼容。

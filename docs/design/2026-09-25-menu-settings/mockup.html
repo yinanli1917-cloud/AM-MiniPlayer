@@ -50,30 +50,30 @@ table{border-collapse:collapse;width:100%;font-size:13px;margin:8px 0 4px}
 th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--hair);vertical-align:top}
 th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
 .tw{overflow-x:auto}
-.mark{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:var(--issue);color:#fff;font-size:11px;font-weight:700;font-family:ui-monospace,"SF Mono",Menlo,monospace}
-/* swatches */
 .swatches{display:flex;flex-wrap:wrap;gap:14px;margin:10px 0 4px}
-.sw-card{display:flex;gap:12px;align-items:center;border:1px solid var(--hair);border-radius:10px;padding:10px 14px 10px 10px;background:var(--surface);min-width:0}
+.sw-card{display:flex;gap:12px;align-items:center;border:1px solid var(--hair);border-radius:10px;padding:10px 14px 10px 10px;background:var(--surface)}
 .sw-chip{width:44px;height:44px;border-radius:10px;flex:none;box-shadow:inset 0 0 0 1px rgba(0,0,0,.06)}
 .sw-card .t{font-size:13px;font-weight:600}
 .sw-card .s{font-size:12px;color:var(--fg2)}
 
-/* ===== mock palettes (independent of page theme) ===== */
+/* ===== mock palettes ===== */
 .mock{position:relative;display:inline-block;vertical-align:top}
 .mock.light{
   --m-menu-bg:rgba(246,246,246,.86); --m-menu-border:rgba(0,0,0,.12); --m-menu-fg:rgba(0,0,0,.85); --m-menu-fg2:rgba(0,0,0,.5); --m-sep:rgba(0,0,0,.12);
-  --m-win:#ececec; --m-winborder:rgba(0,0,0,.18); --m-title:rgba(0,0,0,.85); --m-fg:rgba(0,0,0,.85); --m-fg2:rgba(0,0,0,.5);
-  --m-sidebar:#f9f9f9; --m-content:#fefefe; --m-card:#f6f6f6; --m-cardsep:#eaeaea; --m-hair:rgba(0,0,0,.09); --m-hair2:rgba(0,0,0,.2);
-  --m-field:#ffffff; --m-btn:#ffffff; --m-btnshadow:0 .5px 1px rgba(0,0,0,.18);
-  --m-off:rgba(0,0,0,.22); --m-accent:#FA4058; --m-blue:#0a84ff; --m-gray:#8E8E93; --m-tile-blue:#0088FF; --m-tile-gray:#8E8E93; --m-tile-pink:#FA4058;
+  --m-win:#fefefe; --m-winborder:rgba(0,0,0,.18); --m-title:rgba(0,0,0,.85); --m-fg:rgba(0,0,0,.85); --m-fg2:rgba(0,0,0,.5); --m-fg3:rgba(0,0,0,.28);
+  --m-titlebar:#ececec; --m-card:#f4f4f5; --m-cardsep:#e6e6e8; --m-hair:rgba(0,0,0,.09); --m-hair2:rgba(0,0,0,.2);
+  --m-field:#ffffff; --m-btn:#ffffff; --m-btnshadow:0 .5px 1px rgba(0,0,0,.18); --m-segbg:#e9e9eb;
+  --m-off:rgba(0,0,0,.22); --m-accent:#FA4058; --m-blue:#0a84ff;
+  --m-screen:#dfe3ea; --m-screenbar:rgba(255,255,255,.75); --m-panel:#2b2b30; --m-panel2:#3a3a41; --m-cover:#7aa2e8; --m-cover2:#e8a06a; --m-ink:rgba(255,255,255,.9); --m-ink2:rgba(255,255,255,.45); --m-dock:rgba(255,255,255,.7);
   --m-tabsel:rgba(0,0,0,.08); --m-tabbox:#f2f2f2; --m-scroll:rgba(0,0,0,.28);
 }
 .mock.dark{
   --m-menu-bg:rgba(44,44,48,.78); --m-menu-border:rgba(255,255,255,.16); --m-menu-fg:rgba(255,255,255,.88); --m-menu-fg2:rgba(255,255,255,.5); --m-sep:rgba(255,255,255,.14);
-  --m-win:#2a2a2c; --m-winborder:rgba(255,255,255,.14); --m-title:rgba(255,255,255,.85); --m-fg:rgba(255,255,255,.86); --m-fg2:rgba(255,255,255,.55);
-  --m-sidebar:#242426; --m-content:#1e1e20; --m-card:#2a2a2d; --m-cardsep:rgba(255,255,255,.09); --m-hair:rgba(255,255,255,.1); --m-hair2:rgba(255,255,255,.22);
-  --m-field:#1f1f21; --m-btn:#5a5a5e; --m-btnshadow:0 .5px 1px rgba(0,0,0,.5);
-  --m-off:rgba(255,255,255,.26); --m-accent:#FB546C; --m-blue:#3d8bff; --m-gray:#98989D; --m-tile-blue:#0091FF; --m-tile-gray:#98989D; --m-tile-pink:#FB546C;
+  --m-win:#1f1f21; --m-winborder:rgba(255,255,255,.14); --m-title:rgba(255,255,255,.85); --m-fg:rgba(255,255,255,.86); --m-fg2:rgba(255,255,255,.55); --m-fg3:rgba(255,255,255,.3);
+  --m-titlebar:#2a2a2c; --m-card:#2a2a2d; --m-cardsep:rgba(255,255,255,.09); --m-hair:rgba(255,255,255,.1); --m-hair2:rgba(255,255,255,.22);
+  --m-field:#1a1a1c; --m-btn:#5a5a5e; --m-btnshadow:0 .5px 1px rgba(0,0,0,.5); --m-segbg:#3a3a3e;
+  --m-off:rgba(255,255,255,.26); --m-accent:#FB546C; --m-blue:#3d8bff;
+  --m-screen:#34363c; --m-screenbar:rgba(255,255,255,.14); --m-panel:#151518; --m-panel2:#24242a; --m-cover:#5f86d4; --m-cover2:#d18a58; --m-ink:rgba(255,255,255,.9); --m-ink2:rgba(255,255,255,.4); --m-dock:rgba(255,255,255,.14);
   --m-tabsel:rgba(255,255,255,.12); --m-tabbox:#2f2f31; --m-scroll:rgba(255,255,255,.3);
 }
 .desk{padding:26px 28px 30px;border-radius:14px;background:radial-gradient(120% 90% at 20% 0%,var(--desk1),var(--desk2) 70%);background-color:var(--desk2);display:inline-block;vertical-align:top}
@@ -85,9 +85,9 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
   border:1px solid var(--m-menu-border);border-radius:10px;padding:5px 0;box-shadow:0 12px 30px rgba(0,0,0,.28),0 1px 2px rgba(0,0,0,.2);
   font-size:13px;line-height:1;white-space:nowrap;display:inline-block;vertical-align:top}
 .mi{position:relative;height:24px;display:flex;align-items:center;padding:0 12px 0 38px}
+.mi.plain{padding-left:21px}
 .mi .ic{position:absolute;left:17px;top:4px;width:16px;height:16px;display:flex;align-items:center;justify-content:center}
 .mi .ic svg{width:100%;height:100%;display:block}
-.mi .chk{position:absolute;left:5px;top:6px;width:11px;height:11px}
 .mi .kbd{margin-left:auto;padding-left:22px;color:var(--m-menu-fg2);letter-spacing:.02em}
 .mi .chev{margin-left:auto;padding-left:22px;width:6px;height:9px;display:flex;align-items:center}
 .mi .chev svg{width:6px;height:9px;display:block}
@@ -97,19 +97,19 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
 .mi.custom .ic{left:15px;top:3.5px;width:19px;height:19px}
 .sw{position:absolute;right:9px;top:4px;width:33px;height:18px;border-radius:9px;background:rgba(10,132,255,.82);border:.5px solid rgba(255,255,255,.1)}
 .sw::after{content:"";position:absolute;right:2px;top:1.5px;width:14px;height:14px;border-radius:50%;background:rgba(255,255,255,.94)}
-.badge{position:absolute;z-index:3;width:18px;height:18px;border-radius:50%;background:var(--issue);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;font-family:ui-monospace,"SF Mono",Menlo,monospace;box-shadow:0 1px 3px rgba(0,0,0,.35)}
 .dim{position:absolute;z-index:2;font-size:10px;font-family:ui-monospace,"SF Mono",Menlo,monospace;color:#fff;background:rgba(0,0,0,.55);padding:1px 4px;border-radius:3px;white-space:nowrap}
 
-/* generic window chrome */
+/* window chrome */
 .win{position:relative;background:var(--m-win);color:var(--m-fg);border:1px solid var(--m-winborder);border-radius:11px;overflow:hidden;
   box-shadow:0 18px 40px rgba(0,0,0,.28),0 1px 2px rgba(0,0,0,.2);font-size:13px;line-height:1.3;display:inline-block;vertical-align:top;text-align:left}
-.tb{height:28px;position:relative;display:flex;align-items:center;justify-content:center;font-weight:600;color:var(--m-title);font-size:13px}
+.tb{height:28px;position:relative;display:flex;align-items:center;justify-content:center;font-weight:600;color:var(--m-title);font-size:13px;background:var(--m-titlebar);border-bottom:1px solid var(--m-hair)}
 .tl{position:absolute;left:12px;top:8px;display:flex;gap:8px}
 .tl span{width:12px;height:12px;border-radius:50%;display:block}
 .tl .r{background:#ff5f57;border:.5px solid rgba(0,0,0,.15)}
 .tl .y{background:#febc2e;border:.5px solid rgba(0,0,0,.15)}
 .tl .g{background:#28c840;border:.5px solid rgba(0,0,0,.15)}
-/* current settings window (v1 look) */
+.tl .d{background:rgba(127,127,127,.35);border:.5px solid rgba(0,0,0,.12)}
+/* current settings (v1 look) */
 .seg{position:absolute;left:50%;transform:translateX(-50%);top:9px;display:flex;border:1px solid var(--m-hair);border-radius:6px;background:var(--m-btn);box-shadow:var(--m-btnshadow);font-size:12px;z-index:2}
 .seg span{padding:0 12px;height:20px;display:flex;align-items:center;border-right:1px solid var(--m-hair)}
 .seg span:last-child{border-right:0}
@@ -126,37 +126,30 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
 .row .desc{font-size:11px;color:var(--m-fg2);margin-top:2px;line-height:1.35;white-space:normal}
 .row .val{color:var(--m-fg2);font-size:13px}
 .row .red{color:#e0443e}
-.cb{width:14px;height:14px;border-radius:3.5px;border:1px solid var(--m-hair2);background:var(--m-field);flex:none;position:relative}
-.cb.on{background:var(--m-blue);border-color:var(--m-blue)}
-.cb.on::after{content:"";position:absolute;left:4px;top:1px;width:4px;height:8px;border:solid #fff;border-width:0 1.6px 1.6px 0;transform:rotate(45deg)}
-.btn{font-size:12px;line-height:1;padding:0 9px;height:20px;border-radius:5px;background:var(--m-btn);border:1px solid var(--m-hair);box-shadow:var(--m-btnshadow);display:inline-flex;align-items:center;gap:4px;white-space:nowrap;flex:none;color:var(--m-fg)}
+.cb{width:14px;height:14px;border-radius:3.5px;border:1px solid var(--m-hair2);background:var(--m-field);flex:none}
+.btn{font-size:12px;line-height:1;padding:0 9px;height:20px;border-radius:5px;background:var(--m-btn);border:1px solid var(--m-hair);box-shadow:var(--m-btnshadow);display:inline-flex;align-items:center;white-space:nowrap;flex:none;color:var(--m-fg)}
 .btn.prom{background:var(--m-blue);color:#fff;border-color:transparent}
 .rec{width:130px;height:24px;border-radius:6px;background:var(--m-field);border:1px solid var(--m-hair);display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--m-fg2);flex:none}
 .rec.set{color:var(--m-fg);font-size:13px}
 .dot{width:8px;height:8px;border-radius:50%;background:#f0a020;display:inline-block;margin-right:6px;vertical-align:middle}
 .scrollbar{position:absolute;right:3px;width:6px;border-radius:3px;background:var(--m-scroll)}
 
-/* ===== plan: sidebar settings window (System Settings style) ===== */
-.win.sb{width:720px;height:520px;display:grid;grid-template-columns:220px 500px;background:var(--m-content)}
-.sbar{position:relative;background:var(--m-sidebar);border-right:1px solid var(--m-hair);padding:56px 8px 0}
-.sbar .tl{left:19px;top:19px}
-.sbar .tl span{width:14px;height:14px}
-.sitem{height:32px;display:flex;align-items:center;gap:6px;padding:0 6px;border-radius:8px;margin-left:10px;width:194px;font-size:13px;color:var(--m-fg);white-space:nowrap}
-.sitem.sel{background:var(--m-accent);color:#fff}
-.tile{width:20px;height:20px;border-radius:5px;display:flex;align-items:center;justify-content:center;color:#fff;flex:none;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.08)}
-.tile svg{width:12px;height:12px;display:block}
-.tile.gray{background:var(--m-tile-gray)} .tile.blue{background:var(--m-tile-blue)} .tile.pink{background:var(--m-tile-pink)}
-.tile.app{background:linear-gradient(160deg,#5ac8fa,#0a60ff 60%,#3a2c8a)}
-.sgap{height:13px}
-.detail{position:relative;padding:52px 20px 20px;overflow:hidden}
-.dtitle{position:absolute;left:20px;top:0;height:52px;display:flex;align-items:center;font-size:13px;font-weight:700;color:var(--m-title)}
+/* ===== v3 settings window: stage + segmented + grouped rows ===== */
+.win.v3{width:480px}
+.v3body{padding:20px}
+.stage{position:relative;width:440px;height:120px;border-radius:10px;background:var(--m-card);overflow:hidden}
+.stage .capt{position:absolute;left:10px;bottom:8px;font-size:11px;color:var(--m-fg2)}
+.segc{display:flex;width:440px;height:24px;margin:14px 0;background:var(--m-segbg);border-radius:7px;padding:2px;font-size:12px}
+.segc span{flex:1;display:flex;align-items:center;justify-content:center;border-radius:5px;color:var(--m-fg)}
+.segc span.on{background:var(--m-accent);color:#fff;font-weight:600}
 .card{background:var(--m-card);border-radius:10px;overflow:hidden}
 .card + .cgh{margin-top:18px}
 .cgh{font-size:12px;font-weight:600;color:var(--m-fg2);margin:0 0 6px 2px}
-.cgf{font-size:11px;color:var(--m-fg2);margin:6px 10px 0;line-height:1.4;max-width:440px}
+.cgf{font-size:11px;color:var(--m-fg2);margin:6px 10px 0;line-height:1.4;max-width:420px}
 .cgf + .cgh{margin-top:18px}
 .crow{min-height:40px;padding:8px 10px;display:flex;align-items:center;gap:12px}
 .crow + .crow{border-top:1px solid var(--m-cardsep)}
+.crow.hov{background:rgba(127,127,127,.08)}
 .crow .lbl{flex:1;min-width:0}
 .crow .t{font-size:13px}
 .crow .d{font-size:11px;color:var(--m-fg2);margin-top:2px;line-height:1.35;white-space:normal}
@@ -165,26 +158,64 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
 .tg.on{background:var(--m-accent)}
 .tg::after{content:"";position:absolute;top:1px;left:1px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 .5px 1.5px rgba(0,0,0,.3)}
 .tg.on::after{left:21px}
-.pbtn{font-size:12px;line-height:1;padding:0 10px;height:24px;border-radius:6px;background:var(--m-btn);border:1px solid var(--m-hair);box-shadow:var(--m-btnshadow);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;flex:none;color:var(--m-fg)}
-.pbtn.prom{background:var(--m-accent);color:#fff;border-color:transparent}
+.pbtn{font-size:12px;line-height:1;padding:0 10px;height:24px;border-radius:6px;background:var(--m-btn);border:1px solid var(--m-hair);box-shadow:var(--m-btnshadow);display:inline-flex;align-items:center;white-space:nowrap;flex:none;color:var(--m-fg)}
 .pop{font-size:12px;line-height:1;padding:0 6px 0 9px;height:22px;border-radius:6px;background:var(--m-btn);border:1px solid var(--m-hair);box-shadow:var(--m-btnshadow);display:inline-flex;align-items:center;gap:8px;flex:none;color:var(--m-fg)}
 .pop i{display:block;width:10px;height:14px;background:var(--m-accent);border-radius:3px;position:relative}
 .pop i::before,.pop i::after{content:"";position:absolute;left:2.5px;border:2.5px solid transparent}
 .pop i::before{top:2px;border-bottom-color:#fff}
 .pop i::after{bottom:2px;border-top-color:#fff}
 .link{color:var(--m-accent)}
-.subrow{font-size:11px;color:var(--m-fg2);padding:0 10px 8px;margin-top:-4px}
-.about{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding:28px 0 10px}
+.about{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding:44px 0 10px}
 .about .appicon{width:64px;height:64px;border-radius:15px;background:linear-gradient(160deg,#5ac8fa,#0a60ff 60%,#3a2c8a);display:flex;align-items:center;justify-content:center;box-shadow:0 3px 8px rgba(0,0,0,.25)}
 .about .appicon svg{width:36px;height:36px}
 .about .name{font-size:17px;font-weight:600;margin-top:4px}
 .about .ver{font-size:11px;color:var(--m-fg2)}
 .about .tag{font-size:13px;color:var(--m-fg2)}
 .about .links{display:flex;gap:14px;font-size:12px;margin-top:6px}
-.about .copy{font-size:11px;color:var(--m-fg2);margin-top:10px}
-.reserve{margin:14px 20px 0;border:1px dashed var(--m-hair2);border-radius:10px;height:150px;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--m-fg2);letter-spacing:.02em}
-.bignote{width:56px;height:56px;color:var(--m-blue)}
-.rounded{font-family:"SF Pro Rounded",-apple-system,BlinkMacSystemFont,sans-serif;font-weight:700;font-size:24px}
+.reserve{margin:18px 0 0;border:1px dashed var(--m-hair2);border-radius:10px;height:150px;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--m-fg2);letter-spacing:.02em}
+
+/* ===== demo scenes (static frames) ===== */
+.scene{position:absolute;inset:0}
+.mscreen{position:absolute;width:200px;height:125px;border-radius:8px;background:var(--m-screen);overflow:hidden;box-shadow:inset 0 0 0 1px rgba(0,0,0,.06)}
+.mscreen .bar{position:absolute;left:0;right:0;top:0;height:10px;background:var(--m-screenbar)}
+.mscreen .bar i{position:absolute;top:2px;width:6px;height:6px;border-radius:2px;background:var(--m-fg3)}
+.mscreen .note{position:absolute;right:8px;top:1px;font-size:8px;line-height:8px;color:var(--m-fg)}
+.mscreen .dock{position:absolute;left:50%;transform:translateX(-50%);bottom:5px;height:16px;padding:2px 4px;border-radius:5px;background:var(--m-dock);display:flex;gap:3px;align-items:center}
+.mscreen .dock i{width:12px;height:12px;border-radius:3px;background:var(--m-fg3)}
+.mscreen .dock i.np{background:linear-gradient(160deg,#5ac8fa,#0a60ff 60%,#3a2c8a)}
+.mpanel{position:absolute;width:62.5px;height:71px;border-radius:4px;background:var(--m-panel);overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.mpanel .cover{position:absolute;border-radius:2px;background:linear-gradient(140deg,var(--m-cover),#3f5fa8)}
+.mpanel .cover.alt{background:linear-gradient(140deg,var(--m-cover2),#a3552a)}
+.mpanel .l1{position:absolute;height:3px;border-radius:2px;background:var(--m-ink)}
+.mpanel .l2{position:absolute;height:3px;border-radius:2px;background:var(--m-ink2)}
+.mpanel .ctl{position:absolute;bottom:5px;left:0;right:0;display:flex;justify-content:center;gap:5px}
+.mpanel .ctl i{width:4px;height:4px;border-radius:50%;background:var(--m-ink2)}
+.mpanel .ctl i.p{background:var(--m-ink)}
+.mpanel .grad{position:absolute;left:0;right:0;bottom:0;height:26px;background:linear-gradient(to top,rgba(0,0,0,.65),transparent)}
+.strip{position:absolute;width:6px;height:56px;border-radius:3px 0 0 3px;background:var(--m-panel);overflow:hidden}
+.strip i{position:absolute;left:0;bottom:0;width:100%;height:60%;background:var(--m-accent);opacity:.9}
+.capsule{position:absolute;height:22px;border-radius:11px;background:var(--m-panel);display:flex;align-items:center;gap:5px;padding:0 8px 0 4px;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.capsule .cv{width:14px;height:14px;border-radius:3px;background:linear-gradient(140deg,var(--m-cover2),#a3552a)}
+.capsule .tx{width:34px;height:3px;border-radius:2px;background:var(--m-ink)}
+.lyr{position:absolute;left:0;right:0;top:0;bottom:0;display:flex;flex-direction:column;justify-content:center;gap:9px;padding:0 60px}
+.lyr .ln{height:6px;border-radius:3px;background:var(--m-fg3);width:60%}
+.lyr .ln.act{background:var(--m-fg);width:78%;height:7px}
+.lyr .tr{font-size:11px;color:var(--m-fg2);margin-top:-4px;line-height:1}
+.arrow{position:absolute;font-size:16px;color:var(--m-fg2)}
+.keycap{position:absolute;height:22px;padding:0 8px;border-radius:6px;background:var(--m-field);border:1px solid var(--m-hair2);box-shadow:0 1.5px 0 var(--m-hair2);font-size:11px;display:flex;align-items:center;gap:3px;color:var(--m-fg);font-family:-apple-system,BlinkMacSystemFont,sans-serif}
+.keycap.empty{border-style:dashed;box-shadow:none;color:var(--m-fg2)}
+.keycap.press{transform:scale(.92);box-shadow:none}
+.musicicon{position:absolute;width:26px;height:26px;border-radius:7px;background:linear-gradient(160deg,#FB546C,#FA2B43);display:flex;align-items:center;justify-content:center}
+.musicicon svg{width:14px;height:14px}
+.dash{position:absolute;height:0;border-top:1.5px dashed var(--m-fg3)}
+.solid{position:absolute;height:0;border-top:1.5px solid var(--m-fg2)}
+.playglyph{position:absolute;font-size:12px;color:var(--m-ink)}
+/* gallery */
+.gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:14px;margin-top:8px}
+.gal .g{border:1px solid var(--hair);border-radius:10px;overflow:hidden;background:var(--surface)}
+.gal .g .st{position:relative;width:100%;height:110px;background:var(--m-card)}
+.gal .g .ct{padding:8px 10px 10px;font-size:12px;color:var(--fg2);line-height:1.4}
+.gal .g .ct b{display:block;color:var(--fg);font-size:13px;margin-bottom:2px}
 .footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--hair);color:var(--fg2);font-size:13px}
 .footer ul{margin:6px 0 0 18px;padding:0}
 .footer li{margin:2px 0}
@@ -194,32 +225,28 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
 <div class="wrap">
   <h1>nanoPod 菜单与设置视觉稿</h1>
   <div class="meta">
-    <span>v2 · 2026-09-26（按创始人 09-26 反馈重画：sidebar 设置窗口、Apple Music 粉、菜单图标规则）</span>
-    <span>比例 <b class="num">1 pt = 1 px</b>（Mac 上 100% 缩放即真实大小）</span>
+    <span>v3 · 2026-09-26 下午（按创始人第二批反馈重画：菜单纯文字零勾选、设置去 sidebar 改「演示台」）</span>
+    <span>比例 <b class="num">1 pt = 1 px</b></span>
     <span>字体：系统 SF Pro</span>
     <span>方案文档：<code>proposal.md</code></span>
   </div>
   <div class="legend">
     <span><span class="pill now">现在</span> 按代码常量与截图实测绘制</span>
-    <span><span class="pill plan">方案</span> 原生 NSMenu / NavigationSplitView / Form(.grouped)，尺寸交给系统</span>
-    <span><span class="mark">1</span> 红圈 = 现状问题编号</span>
+    <span><span class="pill plan">v3</span> 菜单尺寸为本机 <code>NSMenu.size</code> 实测；设置窗口部件由系统绘制，演示台画面为静帧示意</span>
     <span>设置区外观：<span class="ctl" id="appearance" role="group" aria-label="mock 外观">
       <button type="button" data-v="auto" aria-pressed="true" id="ap-auto">跟随页面</button><button type="button" data-v="light" aria-pressed="false" id="ap-light">浅色</button><button type="button" data-v="dark" aria-pressed="false" id="ap-dark">深色</button></span></span>
   </div>
 
-  <h2>零、强调色 AccentColor</h2>
-  <p>Apple 没有公布 Apple Music 的品牌色值（Identity Guidelines 只给素材，不给数字）。下面两个值是从本机 Music.app 1.6.2 的 <code>AppIcon.icns</code> 位图取样的：浅色用图标渐变中段，深色用更亮的上段。控件与选中态走 <code>Color.accentColor</code>（系统强调色为「多彩」时生效，用户选了具体颜色时按 HIG 被覆盖）；引导页进度环等品牌元素要固定粉色时用 <code>Color("AccentColor")</code>。</p>
+  <h2>零、强调色 AccentColor（不变）</h2>
   <div class="swatches">
-    <div class="sw-card"><span class="sw-chip" style="background:#FA4058"></span><div><div class="t">浅色 <span class="num">#FA4058</span></div><div class="s">rgb 250 64 88 · 图标渐变中段取样</div></div></div>
-    <div class="sw-card"><span class="sw-chip" style="background:#FB546C"></span><div><div class="t">深色 <span class="num">#FB546C</span></div><div class="s">rgb 251 84 108 · 图标渐变上段取样</div></div></div>
-    <div class="sw-card"><span class="sw-chip" style="background:#FA2B43"></span><div><div class="t">高对比变体 <span class="num">#FA2B43</span></div><div class="s">图标渐变下段取样，Increase Contrast 用</div></div></div>
-    <div class="sw-card"><span class="sw-chip" style="background:#FC3D45"></span><div><div class="t">仓库现有 <span class="num">#FC3D45</span></div><div class="s">专辑页 shuffle/repeat 的「Apple Music 红」，偏橙，后续统一</div></div></div>
-    <div class="sw-card"><span class="sw-chip" style="background:#FF2D55"></span><div><div class="t">系统 Pink <span class="num">#FF2D55</span></div><div class="s">HIG 系统色，不是 Apple Music 的色，不用</div></div></div>
+    <div class="sw-card"><span class="sw-chip" style="background:#FA4058"></span><div><div class="t">浅色 <span class="num">#FA4058</span></div><div class="s">Music.app 图标渐变中段取样</div></div></div>
+    <div class="sw-card"><span class="sw-chip" style="background:#FB546C"></span><div><div class="t">深色 <span class="num">#FB546C</span></div><div class="s">图标渐变上段取样</div></div></div>
+    <div class="sw-card"><span class="sw-chip" style="background:#FA2B43"></span><div><div class="t">高对比 <span class="num">#FA2B43</span></div><div class="s">图标渐变下段，Increase Contrast 用</div></div></div>
   </div>
 
   <!-- ================= 菜单 ================= -->
   <h2>一、菜单栏菜单</h2>
-  <p>左边是今天的菜单（截图量化：203 × 189.5 pt，原生行 24、自定义开关行 26、分隔线 11、上下内边距 5）。右边是方案：只放次高频——面板里没有、又不值得为它开设置的操作——5 项 4 组；功能项带图标，App 项不带；快捷键列由系统画。「显示翻译」按创始人规则移出（面板歌词页底部已有同一按钮），是否加回见 proposal.md §7。</p>
+  <p>v3：整份菜单不带图标、主菜单不带勾选、不标 ⌘,；能切换的项用动词换标题；「全屏封面」移到设置。本机 <code>NSMenu.size</code> 实测（不显示菜单）：146 × 128 pt，录了面板快捷键时 174 × 128；现状 203 × 189.5，v2 227 × 163。子菜单「翻译为 ▸」里的单选勾选不影响父菜单宽度（实测 146 = 146）。</p>
 
   <div class="cmp">
     <div class="cell">
@@ -236,37 +263,28 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
             <div class="mi"><span class="ic" data-ic="gear"></span>Settings...</div>
             <div class="sep"></div>
             <div class="mi"><span class="ic" data-ic="power"></span>Quit</div>
-            <span class="badge" style="left:-9px;top:44px">1</span>
-            <span class="badge" style="left:190px;top:46px">2</span>
-            <span class="badge" style="left:-9px;top:70px">3</span>
-            <span class="badge" style="left:170px;top:128px">4</span>
-            <span class="badge" style="left:190px;top:162px">5</span>
-            <span class="dim" style="left:214px;top:40px">26 pt</span>
-            <span class="dim" style="left:214px;top:66px">26 pt</span>
-            <span class="dim" style="left:214px;top:93px">24 pt</span>
           </div>
         </div></div>
       </div>
     </div>
     <div class="cell">
-      <div class="cap"><span class="pill plan">方案</span><b>深色 · 面板可见、已录快捷键</b><span class="num">≈190 × 163 pt（宽度系统自算）</span></div>
+      <div class="cap"><span class="pill plan">v3</span><b>深色 · 面板可见、未录快捷键</b><span class="num">146 × 128 pt（实测）</span></div>
       <div class="scroll">
         <div class="mock dark"><div class="desk">
-          <div class="menu">
-            <div class="mi"><span class="ic" data-ic="macwindow"></span>Hide Player<span class="kbd">⌥⌘P</span></div>
+          <div class="menu" style="width:146px">
+            <div class="mi plain">Hide Player</div>
+            <div class="mi plain">Translate To<span class="chev" data-ic="chev"></span></div>
             <div class="sep"></div>
-            <div class="mi"><span class="chk" data-ic="check"></span><span class="ic" data-ic="fullscreen"></span>Fullscreen Cover</div>
-            <div class="mi"><span class="ic" data-ic="translate"></span>Translate To<span class="chev" data-ic="chev"></span></div>
+            <div class="mi plain">Settings…</div>
             <div class="sep"></div>
-            <div class="mi">Settings…<span class="kbd">⌘,</span></div>
-            <div class="sep"></div>
-            <div class="mi">Quit nanoPod</div>
-            <span class="dim" style="left:200px;top:40px">24 pt</span>
-            <span class="dim" style="left:200px;top:64px">24 pt</span>
+            <div class="mi plain">Quit nanoPod</div>
+            <span class="dim" style="left:156px;top:6px">24 pt</span>
+            <span class="dim" style="left:156px;top:30px">24 pt</span>
+            <span class="dim" style="left:156px;top:54px">11 pt</span>
           </div>
         </div></div>
       </div>
-      <p class="note">「⌥⌘P」是示例：用户在设置里录了「显示/隐藏面板」快捷键时，这一列由 KeyboardShortcuts 的 <code>setShortcut(for:)</code> 自动写入并随改键更新；没录则空。</p>
+      <p class="note">纯文字项文字起点由系统定（约 21pt），没有勾选列、没有图标列；宽度由「翻译为 ▸」的子菜单箭头列决定（+31pt），中英同宽。</p>
     </div>
     <div class="cell">
       <div class="cap"><span class="pill now">现在</span><b>浅色</b></div>
@@ -287,59 +305,51 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
       </div>
     </div>
     <div class="cell">
-      <div class="cap"><span class="pill plan">方案</span><b>浅色 · 面板已隐藏、引导未完成（英）· 中文</b></div>
+      <div class="cap"><span class="pill plan">v3</span><b>浅色 · 面板已隐藏、录了 ⌥⌘P（英）· 中文</b><span class="num">174 × 128 · 146 × 128</span></div>
       <div class="scroll">
         <div class="mock light"><div class="desk" style="display:inline-flex;gap:22px;align-items:flex-start">
-          <div class="menu">
-            <div class="mi"><span class="ic" data-ic="macwindow"></span>Show Player</div>
+          <div class="menu" style="width:174px">
+            <div class="mi plain">Show Player<span class="kbd">⌥⌘P</span></div>
+            <div class="mi plain">Translate To<span class="chev" data-ic="chev"></span></div>
             <div class="sep"></div>
-            <div class="mi"><span class="ic" data-ic="fullscreen"></span>Fullscreen Cover</div>
-            <div class="mi"><span class="ic" data-ic="translate"></span>Translate To<span class="chev" data-ic="chev"></span></div>
+            <div class="mi plain">Settings…</div>
             <div class="sep"></div>
-            <div class="mi">Continue Setup…</div>
-            <div class="mi">Settings…<span class="kbd">⌘,</span></div>
-            <div class="sep"></div>
-            <div class="mi">Quit nanoPod</div>
+            <div class="mi plain">Quit nanoPod</div>
           </div>
-          <div class="menu">
-            <div class="mi"><span class="ic" data-ic="macwindow"></span>隐藏面板<span class="kbd">⌥⌘P</span></div>
+          <div class="menu" style="width:146px">
+            <div class="mi plain">隐藏面板</div>
+            <div class="mi plain">翻译为<span class="chev" data-ic="chev"></span></div>
             <div class="sep"></div>
-            <div class="mi"><span class="chk" data-ic="check"></span><span class="ic" data-ic="fullscreen"></span>全屏封面</div>
-            <div class="mi"><span class="ic" data-ic="translate"></span>翻译为<span class="chev" data-ic="chev"></span></div>
+            <div class="mi plain">设置…</div>
             <div class="sep"></div>
-            <div class="mi">设置…<span class="kbd">⌘,</span></div>
-            <div class="sep"></div>
-            <div class="mi">退出 nanoPod</div>
+            <div class="mi plain">退出 nanoPod</div>
           </div>
         </div></div>
       </div>
-      <p class="note">左：面板已隐藏（第一项变「Show Player」）、全屏封面关着（无勾）、没录快捷键、引导没做完（临时多出「Continue Setup…」，做完即消失）。右：中文界面，宽度随最长标题收窄。</p>
+      <p class="note">左：面板已隐藏（第一项「Show Player」）、用户录了 ⌥⌘P（右列只在录了时出现，宽 174）。右：中文，146 × 128。菜单没有随引导状态增减的临时项，始终 4 项。</p>
     </div>
   </div>
 
-  <h3>现状问题对照</h3>
+  <h3>尺寸对比（pt）</h3>
   <div class="tw">
   <table>
-    <tr><th style="width:36px"></th><th>现状</th><th>数值</th><th>方案</th></tr>
-    <tr><td><span class="mark">1</span></td><td>两行开关行是 <code>NSMenuItem.view</code> 自定义视图，比原生行高、字大、文字右偏</td><td class="num">行高 26 vs 24；标签 13.5 vs 13 pt；文字起点 40.5 vs 38 pt</td><td>全部原生项，行高、字号、缩进由系统统一</td></tr>
-    <tr><td><span class="mark">2</span></td><td>自绘 Control Center 式开关 <code>CompactSwitchControl</code></td><td class="num">33 × 18 pt，右内边距 9</td><td>模式用勾选 <code>state = .on</code>；窗口显隐用 Show / Hide 换标题（有 Show 就有 Hide）</td></tr>
-    <tr><td><span class="mark">3</span></td><td>自定义行的符号按 15 pt medium 原样画出；原生行的同配置符号被系统缩成约 12–13 pt</td><td class="num">墨迹 15 × 16 vs 12 × 12 pt</td><td>不加 <code>SymbolConfiguration</code>，系统按自己给菜单符号的尺寸画；符号字重跟 13 pt Regular 文字</td></tr>
-    <tr><td><span class="mark">4</span></td><td>「Settings...」三个句点且带图标；Quit 无 app 名且带 <code>power</code></td><td>—</td><td>App 项不带图标：「Settings…」（U+2026）⌘,、「Quit nanoPod」、「Continue Setup…」；功能项才带图标（CleanShot 规则）</td></tr>
-    <tr><td><span class="mark">5</span></td><td>「Lyrics Translation」开关与面板歌词页底部的翻译按钮重复</td><td>—</td><td>移出菜单（次高频规则）；语言切换「Translate To ▸」留下并改用 <code>translate</code> 符号</td></tr>
-    <tr><td></td><td>hover 高亮自画、方向键选到自定义行不高亮、VoiceOver 读不出「菜单项，已选中」</td><td>—</td><td>原生项自带</td></tr>
-    <tr><td></td><td>自定义行强制菜单最小宽 206</td><td class="num">206 pt</td><td>宽度按最长标题 + 快捷键列自算（英文约 190，中文约 140）</td></tr>
+    <tr><th>版本</th><th>宽 × 高</th><th>项 / 分隔线</th><th>图标</th><th>勾选</th><th>快捷键列</th><th>来源</th></tr>
+    <tr><td>现状</td><td class="num">203 × 189.5</td><td>6 / 3</td><td>6</td><td>0（两个自绘开关）</td><td>无</td><td>创始人截图实测</td></tr>
+    <tr><td>v2</td><td class="num">227 × 163（录了）· 208 × 163（未录）</td><td>5 / 3</td><td>3</td><td>1</td><td>⌥⌘P、⌘,</td><td>NSMenu.size 近似</td></tr>
+    <tr><td><b>v3</b></td><td class="num"><b>146 × 128</b>（未录）· 174 × 128（录了）</td><td>4 / 2</td><td>0</td><td>0</td><td>仅用户录的</td><td>NSMenu.size 实测</td></tr>
+    <tr><td>v3 若保留全屏封面（动词对）</td><td class="num">185 × 152</td><td>5 / 2</td><td>0</td><td>0</td><td>—</td><td>NSMenu.size 实测</td></tr>
+    <tr><td>v3 若去掉翻译为 ▸</td><td class="num">115 × 104</td><td>3 / 2</td><td>0</td><td>0</td><td>—</td><td>推算（箭头列 −31、一行 −24）</td></tr>
   </table>
   </div>
-  <p class="note">勾号与图标并存时的排布（勾号落最左状态列、图标列不动）按 AppKit 文档「状态图显示在项目左侧」画；Apple 没写明两者并存的几何，以真机为准。</p>
+  <p class="note">其他实测：一项 <code>state = .on</code> 整份菜单宽 +8；一个图标 +15、全部 +21；子菜单箭头列 +31；⌘, 无子菜单时 +40、有子菜单时 +9；行 24、分隔线 11、上下内边距 5。</p>
 
   <!-- ================= 设置 ================= -->
-  <h2>二、设置窗口（系统设置式 sidebar）</h2>
-  <p>参考创始人给的 macOS 26 系统设置截图（实测：窗口 723 × 632，sidebar 222，选中行 194 × 31 圆角 8，图标方块 20 圆角 5，行距 32；内容列 500，卡片 460 圆角 10，标题 13 + 说明 11，行距 53，switch 36 × 16）。方案窗口 720 × 520（宽固定、高可调），sidebar 220 + 内容 500，五页：通用 · 面板 · 歌词 · 快捷键 | 关于。卡片、行、switch 全由 <code>Form(.grouped)</code> 系统绘制；下图按参考图观感画，标注为取值处不是规范值。</p>
+  <h2>二、设置窗口（演示台 + 分段 + 分组行）</h2>
+  <p>去掉 sidebar 与工具栏：480 × 562 单窗口。顶部 440 × 120 演示台，悬停某一行就播放这一行效果的小动画（切换开关时回放一次）；下面 4 段分段控件（面板 · 通用 · 快捷键 · 关于）；再下面分组行，标题 + 一行说明 + switch。演示台画面全部 SwiftUI 形状，无第三方依赖；Reduce Motion 给静帧。下图演示台是静帧示意，动效只能真机看。</p>
 
-  <h3>通用 General（对照今天的通用页）</h3>
   <div class="cmp">
     <div class="cell">
-      <div class="cap"><span class="pill now">现在</span><b>General</b><span class="num">450 × 400 pt 内容 + 标题栏</span></div>
+      <div class="cap"><span class="pill now">现在</span><b>General</b><span class="num">450 × 400</span></div>
       <div class="scroll">
         <div class="mock follow">
           <div class="win" style="width:450px;height:428px">
@@ -370,27 +380,69 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
           </div>
         </div>
       </div>
-      <p class="note">分段控件是文档窗口的子页签语言；四类内容混一页在 400 pt 里滚动；Toggle 未指定样式（macOS 分组表单默认 checkbox）；状态文字中文硬编码；窗口标题旧名；强调色跟随系统蓝。</p>
+      <p class="note">分段控件 + 内容框、双层边距、通用页滚动、checkbox、旧标题、蓝色强调。</p>
     </div>
     <div class="cell">
-      <div class="cap"><span class="pill plan">方案</span><b>通用</b><span class="num">720 × 520 pt，sidebar 220 + 内容 500</span></div>
+      <div class="cap"><span class="pill plan">v3</span><b>面板 Player</b><span class="num">480 × 562（内容）</span></div>
       <div class="scroll">
         <div class="mock follow">
-          <div class="win sb">
-            <div class="sbar">
-              <div class="tl"><span class="r"></span><span class="y"></span><span class="g"></span></div>
-              <div class="sitem sel"><span class="tile gray" data-ic="gear"></span>General</div>
-              <div class="sitem"><span class="tile blue" data-ic="macwindow"></span>Player</div>
-              <div class="sitem"><span class="tile pink" data-ic="quote"></span>Lyrics</div>
-              <div class="sitem"><span class="tile gray" data-ic="keyboard"></span>Shortcuts</div>
-              <div class="sgap"></div>
-              <div class="sitem"><span class="tile app" data-ic="note"></span>About</div>
+          <div class="win v3">
+            <div class="tb"><div class="tl"><span class="r"></span><span class="d"></span><span class="d"></span></div>Settings</div>
+            <div class="v3body">
+              <div class="stage">
+                <div class="scene">
+                  <!-- Fullscreen Cover demo: fit -> fill -->
+                  <div class="mpanel" style="left:118px;top:34px"><div class="cover" style="left:10px;top:8px;width:42.5px;height:42.5px"></div><div class="l1" style="left:14px;top:54px;width:34px"></div><div class="l2" style="left:20px;top:60px;width:22px"></div></div>
+                  <span class="arrow" style="left:200px;top:58px">→</span>
+                  <div class="mpanel" style="left:236px;top:34px"><div class="cover" style="left:0;top:0;width:62.5px;height:62.5px;border-radius:0"></div><div class="grad"></div><div class="l1" style="left:6px;top:56px;width:34px"></div><div class="l2" style="left:6px;top:62px;width:22px"></div></div>
+                </div>
+                <div class="capt">Fullscreen Cover</div>
+              </div>
+              <div class="segc"><span class="on">Player</span><span>General</span><span>Shortcuts</span><span>About</span></div>
+              <div class="card">
+                <div class="crow hov"><div class="lbl"><div class="t">Fullscreen Cover</div><div class="d">Fill the panel with the album cover.</div></div><span class="tg on"></span></div>
+              </div>
+              <div class="cgh">Edge</div>
+              <div class="card">
+                <div class="crow"><div class="lbl"><div class="t">Show Song on Track Change</div><div class="d">When tucked into the screen edge, briefly show the new song.</div></div><span class="tg on"></span></div>
+              </div>
+              <div class="cgh">Lyrics</div>
+              <div class="card">
+                <div class="crow"><div class="lbl"><div class="t">Show Translation</div><div class="d">Translated lines appear under the original.</div></div><span class="tg on"></span></div>
+                <div class="crow"><div class="lbl"><div class="t">Translate To</div></div><span class="pop">Follow System <i></i></span></div>
+              </div>
             </div>
-            <div class="detail">
-              <div class="dtitle">General</div>
+          </div>
+        </div>
+      </div>
+      <p class="note">悬停「Fullscreen Cover」行：演示台播放封面从 68% 宽弹到铺满（用面板自己的弹簧常数 0.5 / 0.85），停 1.2s 弹回；静帧示意画成两个端点。分段控件选中段 = 强调色。</p>
+    </div>
+  </div>
+
+  <div class="cmp">
+    <div class="cell">
+      <div class="cap"><span class="pill plan">v3</span><b>通用 General</b><span class="num">深色</span></div>
+      <div class="scroll">
+        <div class="mock dark">
+          <div class="win v3">
+            <div class="tb"><div class="tl"><span class="r"></span><span class="d"></span><span class="d"></span></div>Settings</div>
+            <div class="v3body">
+              <div class="stage">
+                <div class="scene">
+                  <!-- Show in Dock demo -->
+                  <div class="mscreen" style="left:120px;top:8px">
+                    <div class="bar"><i style="left:6px"></i><i style="left:16px"></i><i style="left:26px"></i><span class="note">♪</span></div>
+                    <div class="mpanel" style="left:126px;top:22px;transform:scale(.7);transform-origin:top left"><div class="cover" style="left:10px;top:8px;width:42.5px;height:42.5px"></div><div class="l1" style="left:14px;top:54px;width:34px"></div><div class="l2" style="left:20px;top:60px;width:22px"></div></div>
+                    <div class="dock"><i></i><i></i><i class="np"></i><i></i><i></i></div>
+                  </div>
+                </div>
+                <div class="capt">Show in Dock</div>
+              </div>
+              <div class="segc"><span>Player</span><span class="on">General</span><span>Shortcuts</span><span>About</span></div>
               <div class="card">
                 <div class="crow"><div class="lbl"><div class="t">Launch at Login</div></div><span class="tg on"></span></div>
-                <div class="crow"><div class="lbl"><div class="t">Show in Dock</div></div><span class="tg"></span></div>
+                <div class="crow hov"><div class="lbl"><div class="t">Show in Dock</div></div><span class="tg on"></span></div>
+                <div class="crow"><div class="lbl"><div class="t">Getting to know nanoPod</div></div><span class="pbtn">Keep getting to know nanoPod</span></div>
               </div>
               <div class="cgh">Permissions</div>
               <div class="card">
@@ -406,92 +458,32 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
           </div>
         </div>
       </div>
-      <p class="note">选中行 = 强调色（多彩时为 Apple Music 粉，用户选了系统强调色则跟用户）；sidebar 图标是 20 pt 圆角方块 + 白色符号，通用/快捷键用系统灰（系统设置同色）、面板系统蓝、歌词品牌粉、关于用 app 图标本身；标题是 <code>.unified</code> 工具栏的 13 pt 粗体标题（参考图同款）。</p>
-    </div>
-  </div>
-
-  <h3>面板 Player · 歌词 Lyrics</h3>
-  <div class="cmp">
-    <div class="cell">
-      <div class="cap"><span class="pill plan">方案</span><b>面板</b><span class="num">深色</span></div>
-      <div class="scroll">
-        <div class="mock dark">
-          <div class="win sb">
-            <div class="sbar">
-              <div class="tl"><span class="r"></span><span class="y"></span><span class="g"></span></div>
-              <div class="sitem"><span class="tile gray" data-ic="gear"></span>General</div>
-              <div class="sitem sel"><span class="tile blue" data-ic="macwindow"></span>Player</div>
-              <div class="sitem"><span class="tile pink" data-ic="quote"></span>Lyrics</div>
-              <div class="sitem"><span class="tile gray" data-ic="keyboard"></span>Shortcuts</div>
-              <div class="sgap"></div>
-              <div class="sitem"><span class="tile app" data-ic="note"></span>About</div>
-            </div>
-            <div class="detail">
-              <div class="dtitle">Player</div>
-              <div class="card">
-                <div class="crow"><div class="lbl"><div class="t">Fullscreen Cover</div><div class="d">Fill the panel with the album cover.</div></div><span class="tg on"></span></div>
-              </div>
-              <div class="cgh">Edge</div>
-              <div class="card">
-                <div class="crow"><div class="lbl"><div class="t">Show Song on Track Change</div><div class="d">When tucked into the screen edge, briefly show the new song. Turn off if Music already notifies you.</div></div><span class="tg on"></span></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <p class="note">深色按系统设置深色观感取值（内容区、卡片、分隔线为 mock 取值，真机由系统绘制）；深色强调色 #FB546C。</p>
+      <p class="note">悬停「Show in Dock」：Dock 胶囊里 nanoPod 块插入、邻块让位；关则抽出、Dock 收窄。第三行「Getting to know nanoPod」的按钮随引导状态换字：没走完显示「Keep getting to know nanoPod」（图中）接着走，走完了显示「Get to know nanoPod again」从头走；按钮按较长的英文排宽，换字不跳。这是引导的唯一入口，菜单里不放。演示台给静态示意。深色为 mock 取值。</p>
     </div>
     <div class="cell">
-      <div class="cap"><span class="pill plan">方案</span><b>歌词</b><span class="num">浅色 · 中文</span></div>
+      <div class="cap"><span class="pill plan">v3</span><b>快捷键 Shortcuts</b><span class="num">浅色</span></div>
       <div class="scroll">
         <div class="mock light">
-          <div class="win sb">
-            <div class="sbar">
-              <div class="tl"><span class="r"></span><span class="y"></span><span class="g"></span></div>
-              <div class="sitem"><span class="tile gray" data-ic="gear"></span>通用</div>
-              <div class="sitem"><span class="tile blue" data-ic="macwindow"></span>面板</div>
-              <div class="sitem sel"><span class="tile pink" data-ic="quote"></span>歌词</div>
-              <div class="sitem"><span class="tile gray" data-ic="keyboard"></span>快捷键</div>
-              <div class="sgap"></div>
-              <div class="sitem"><span class="tile app" data-ic="note"></span>关于</div>
-            </div>
-            <div class="detail">
-              <div class="dtitle">歌词</div>
-              <div class="card">
-                <div class="crow"><div class="lbl"><div class="t">显示翻译</div><div class="d">译文显示在原文下方。</div></div><span class="tg on"></span></div>
-                <div class="crow"><div class="lbl"><div class="t">翻译为</div></div><span class="pop">跟随系统 <i></i></span></div>
+          <div class="win v3">
+            <div class="tb"><div class="tl"><span class="r"></span><span class="d"></span><span class="d"></span></div>Settings</div>
+            <div class="v3body">
+              <div class="stage">
+                <div class="scene">
+                  <!-- Show/Hide Player demo -->
+                  <div class="keycap press" style="left:40px;top:58px"><span>⌥</span><span>⌘</span><span>P</span></div>
+                  <div class="mscreen" style="left:150px;top:8px">
+                    <div class="bar"><i style="left:6px"></i><i style="left:16px"></i><i style="left:26px"></i><span class="note">♪</span></div>
+                    <div class="mpanel" style="left:126px;top:22px;transform:scale(.7);transform-origin:top left;opacity:.35"><div class="cover" style="left:10px;top:8px;width:42.5px;height:42.5px"></div><div class="l1" style="left:14px;top:54px;width:34px"></div><div class="l2" style="left:20px;top:60px;width:22px"></div></div>
+                  </div>
+                </div>
+                <div class="capt">Show/Hide Player</div>
               </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <p class="note">与菜单「翻译为 ▸」同词、同选项数组；「显示翻译」与面板歌词页底部按钮同一状态。macOS 14 上这一页不出现在 sidebar。</p>
-    </div>
-  </div>
-
-  <h3>快捷键 Shortcuts · 关于 About（占位）</h3>
-  <div class="cmp">
-    <div class="cell">
-      <div class="cap"><span class="pill plan">方案</span><b>快捷键</b><span class="num">浅色</span></div>
-      <div class="scroll">
-        <div class="mock follow">
-          <div class="win sb">
-            <div class="sbar">
-              <div class="tl"><span class="r"></span><span class="y"></span><span class="g"></span></div>
-              <div class="sitem"><span class="tile gray" data-ic="gear"></span>General</div>
-              <div class="sitem"><span class="tile blue" data-ic="macwindow"></span>Player</div>
-              <div class="sitem"><span class="tile pink" data-ic="quote"></span>Lyrics</div>
-              <div class="sitem sel"><span class="tile gray" data-ic="keyboard"></span>Shortcuts</div>
-              <div class="sgap"></div>
-              <div class="sitem"><span class="tile app" data-ic="note"></span>About</div>
-            </div>
-            <div class="detail">
-              <div class="dtitle">Shortcuts</div>
+              <div class="segc"><span>Player</span><span>General</span><span class="on">Shortcuts</span><span>About</span></div>
               <div class="card">
                 <div class="crow"><div class="lbl"><div class="t">Play/Pause</div></div><span class="rec">Record Shortcut</span></div>
                 <div class="crow"><div class="lbl"><div class="t">Next Track</div></div><span class="rec">Record Shortcut</span></div>
                 <div class="crow"><div class="lbl"><div class="t">Previous Track</div></div><span class="rec">Record Shortcut</span></div>
-                <div class="crow"><div class="lbl"><div class="t">Show/Hide Player</div></div><span class="rec set">⌥⌘P</span></div>
+                <div class="crow hov"><div class="lbl"><div class="t">Show/Hide Player</div></div><span class="rec set">⌥⌘P</span></div>
                 <div class="crow"><div class="lbl"><div class="t">Hide to Edge</div></div><span class="rec">Record Shortcut</span></div>
               </div>
               <div class="cgf">Shortcuts work in any app. None are set by default.</div>
@@ -499,24 +491,31 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
           </div>
         </div>
       </div>
-      <p class="note">录制框是 KeyboardShortcuts 库自带的 130 × 24 <code>NSSearchField</code> 外观，标签左、控件右由库内的 <code>LabeledContent</code> 排；录了的快捷键同时出现在菜单第一项右侧。</p>
+      <p class="note">悬停「Show/Hide Player」：键帽显示用户录的组合并按下，屏幕里的面板淡出再淡入（用 windowFadeOutDuration）。未录时键帽为虚线空帽。</p>
     </div>
+  </div>
+
+  <h3>演示台各段静帧示意（悬停对应行时播放）</h3>
+  <div class="gal mock follow">
+    <div class="g"><div class="st"><div class="mpanel" style="left:44px;top:20px"><div class="cover" style="left:10px;top:8px;width:42.5px;height:42.5px"></div><div class="l1" style="left:14px;top:54px;width:34px"></div><div class="l2" style="left:20px;top:60px;width:22px"></div></div><span class="arrow" style="left:110px;top:44px">→</span><div class="mpanel" style="left:132px;top:20px"><div class="cover" style="left:0;top:0;width:62.5px;height:62.5px;border-radius:0"></div><div class="grad"></div><div class="l1" style="left:6px;top:56px;width:34px"></div><div class="l2" style="left:6px;top:62px;width:22px"></div></div></div><div class="ct"><b>Fullscreen Cover</b>封面 68% 宽 → 铺满面板；面板自己的弹簧 0.5 / 0.85</div></div>
+    <div class="g"><div class="st"><div class="mscreen" style="left:16px;top:-8px;width:200px;height:125px"><div class="bar"><i style="left:6px"></i><i style="left:16px"></i><span class="note">♪</span></div><div class="strip" style="right:0;top:30px"><i></i></div><div class="capsule" style="right:6px;top:47px"><span class="cv"></span><span class="tx"></span></div></div></div><div class="ct"><b>Show Song on Track Change</b>贴边条带进度光；换歌时胶囊探出 2.5s 缩回</div></div>
+    <div class="g"><div class="st"><div class="lyr"><div class="ln"></div><div class="ln act"></div><div class="tr">我们去看海吧</div><div class="ln"></div></div></div><div class="ct"><b>Show Translation · Translate To</b>亮行下方译文淡入；换语言时样句交叉淡入</div></div>
+    <div class="g"><div class="st"><div class="mscreen" style="left:16px;top:-8px"><div class="bar"><i style="left:6px"></i><i style="left:16px"></i><span class="note">♪</span></div></div></div><div class="ct"><b>Launch at Login</b>屏幕亮起，菜单栏 ♪ 弹出；关则没有 ♪</div></div>
+    <div class="g"><div class="st"><div class="mscreen" style="left:16px;top:-8px"><div class="bar"><i style="left:6px"></i><i style="left:16px"></i><span class="note">♪</span></div><div class="dock"><i></i><i></i><i class="np"></i><i></i><i></i></div></div></div><div class="ct"><b>Show in Dock</b>Dock 里 nanoPod 块插入 / 抽出</div></div>
+    <div class="g"><div class="st"><div class="musicicon" style="left:36px;top:42px"><span data-ic="note"></span></div><div class="solid" style="left:70px;top:55px;width:40px"></div><span class="arrow" style="left:104px;top:44px">›</span><div class="mpanel" style="left:126px;top:20px"><div class="cover" style="left:10px;top:8px;width:42.5px;height:42.5px"></div><div class="l1" style="left:14px;top:54px;width:34px"></div><div class="l2" style="left:20px;top:60px;width:22px"></div></div></div><div class="ct"><b>Music Automation · Apple Music</b>静态示意：已授权实线 + 有曲名；未授权虚线 + 空面板</div></div>
+    <div class="g"><div class="st"><div class="keycap press" style="left:28px;top:44px"><span>⌥</span><span>⌘</span><span>P</span></div><div class="mpanel" style="left:132px;top:20px"><div class="cover" style="left:10px;top:8px;width:42.5px;height:42.5px"></div><div class="l1" style="left:14px;top:54px;width:34px"></div><div class="l2" style="left:20px;top:60px;width:22px"></div><span class="playglyph" style="left:27px;top:56px">❚❚</span></div></div><div class="ct"><b>Play/Pause · Next · Previous</b>键帽按下 → ▶︎⇄❚❚ 图标替换；封面左右滑换</div></div>
+    <div class="g"><div class="st"><div class="keycap press" style="left:28px;top:44px"><span>⌥</span><span>⌘</span><span>E</span></div><div class="mscreen" style="left:110px;top:-8px;width:120px"><div class="bar"><i style="left:6px"></i><span class="note">♪</span></div><div class="strip" style="right:0;top:30px"><i></i></div></div></div><div class="ct"><b>Hide to Edge · Show/Hide Player</b>面板滑向屏幕边收成贴边条 / 淡出淡入</div></div>
+  </div>
+
+  <h3>关于 About（占位）</h3>
+  <div class="cmp">
     <div class="cell">
-      <div class="cap"><span class="pill plan">方案</span><b>关于 · 占位</b><span class="num">动画另开会话</span></div>
       <div class="scroll">
         <div class="mock follow">
-          <div class="win sb">
-            <div class="sbar">
-              <div class="tl"><span class="r"></span><span class="y"></span><span class="g"></span></div>
-              <div class="sitem"><span class="tile gray" data-ic="gear"></span>General</div>
-              <div class="sitem"><span class="tile blue" data-ic="macwindow"></span>Player</div>
-              <div class="sitem"><span class="tile pink" data-ic="quote"></span>Lyrics</div>
-              <div class="sitem"><span class="tile gray" data-ic="keyboard"></span>Shortcuts</div>
-              <div class="sgap"></div>
-              <div class="sitem sel"><span class="tile app" data-ic="note"></span>About</div>
-            </div>
-            <div class="detail" style="padding:52px 0 20px">
-              <div class="dtitle">About</div>
+          <div class="win v3">
+            <div class="tb"><div class="tl"><span class="r"></span><span class="d"></span><span class="d"></span></div>Settings</div>
+            <div class="v3body">
+              <div class="segc" style="margin-top:0"><span>Player</span><span>General</span><span>Shortcuts</span><span class="on">About</span></div>
               <div class="about">
                 <div class="appicon"><span data-ic="note"></span></div>
                 <div class="name">nanoPod</div>
@@ -524,22 +523,24 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
                 <div class="tag">A menu bar companion for Apple Music.</div>
                 <div class="links"><span class="link">GitHub</span><span class="link">Acknowledgements</span><span class="link">Report an Issue</span></div>
               </div>
-              <div class="reserve">动画预留位 · 内容与动效由创始人的 Pinterest 参考另议</div>
+              <div class="reserve">动画预留位 · 内容与动效另开会话</div>
             </div>
           </div>
         </div>
       </div>
-      <p class="note">本次只留占位：真实 app 图标、名称、版本、三条链接；无动画。完整版在链接行下多一个「Check for Updates…」按钮，纯净版（App Store）不编入。</p>
+      <p class="note">关于段把演示台与分组行整块换成占位：真实 app 图标、名称、版本、三条链接，无动画。完整版多「Check for Updates…」，纯净版不编入。</p>
+    </div>
+    <div class="cell">
+      <p class="note" style="margin-top:0"><b>为什么这样更轻</b><br>无 sidebar、无工具栏，480 宽一列到底；4 段各 4–5 行一屏放完不滚动；一个演示台共用，一次只播一段，不悬停不动（空闲零合成成本）；行只留标题 + 一行说明 + switch，效果交给演示台讲。悬停判定复用进度条的 hover intent（停留 150ms 且移动不超过 4pt 才算停住），路过的行不切换演示。</p>
     </div>
   </div>
 
   <div class="footer">
     <b>数值说明</b>
     <ul>
-      <li>实测（现菜单）：菜单 203 × 189.5、原生行 24、自定义行 26、分隔线 11、上下内边距 5、文字起点 38 / 40.5、开关 33 × 18、符号墨迹 12–16——创始人截图（144 dpi）脚本量化与代码常量。</li>
-      <li>实测（系统设置参考图，macOS 26）：窗口 723 × 632、sidebar 222、行距 32、选中行 194 × 31 圆角 8、图标方块 20 圆角 5、卡片 460 圆角 10、行距 53、标题 13 / 说明 11、switch 36 × 16、工具栏标题 13 粗体——脚本在 <code>research/measure_system_settings*.py</code>。</li>
-      <li>系统：方案菜单的行高、勾选列、图标列、快捷键列、宽度；方案设置窗口的 sidebar 行高与选中胶囊、卡片圆角与边距、switch 与按钮尺寸，全部由 AppKit / SwiftUI 决定；稿中按参考图观感画。</li>
-      <li>取值：窗口 720 × 520、sidebar 220、深色模式的内容区 / 卡片 / 分隔线颜色、组间空 13——Apple 没有公开这些数字。</li>
+      <li>菜单：v3 尺寸与各因素增量为本机 macOS 26.2 <code>NSMenu.size</code> 实测（不显示菜单、不依赖 NSApp）；现状 203 × 189.5 为创始人截图量化；纯文字项文字起点约 21pt 为绘制取值，真机由系统定。</li>
+      <li>设置：窗口 480 × 562、演示台 440 × 120、分段 24、边距 20 为取值；通用段「认识 nanoPod」行的两种按钮文案出自 Onboarding 方案 §9.2；分组行、switch（画作 36 × 16，随参考图）、分段控件由系统绘制；深色内容区/卡片色为 mock 取值。</li>
+      <li>演示台画面为静帧示意；每段动画演什么、时长、静帧见 proposal.md §4.3。</li>
       <li>强调色 #FA4058 / #FB546C 为 Music.app 图标取样色，出处见 proposal.md 文首。</li>
     </ul>
   </div>
@@ -550,50 +551,31 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
   var ICONS = {
     macwindow:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M1.5 6h13"/></svg>',
     expandv:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="11" height="8" rx="1.6"/><path d="M8 1v2M6.6 2.2 8 1l1.4 1.2M8 15v-2M6.6 13.8 8 15l1.4-1.2"/></svg>',
-    fullscreen:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.5v-4h4M2.5 2.5l4.2 4.2M13.5 9.5v4h-4M13.5 13.5 9.3 9.3"/></svg>',
     charbubble:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6a1.5 1.5 0 0 1-1.5 1.5H7l-3.2 2.6V11H3.5A1.5 1.5 0 0 1 2 9.5z"/><path d="M6 9l2-5 2 5M6.7 7.6h2.6" stroke-width="1.1"/></svg>',
-    translate:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 3.5h6M4.5 2v1.5M2.5 3.5c.4 2.6 2 4.5 4.3 5.6M6.5 3.5C6.1 6.1 4.5 8 2.2 9.1"/><path d="M8.6 14 11.5 6.5 14.4 14M9.6 11.5h3.8"/></svg>',
     globe:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="8" cy="8" r="6.2"/><path d="M1.8 8h12.4M8 1.8c-2.2 2-2.2 10.4 0 12.4M8 1.8c2.2 2 2.2 10.4 0 12.4M3.2 4.5h9.6M3.2 11.5h9.6"/></svg>',
     gear:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6" stroke-dasharray="1.6 2.02" stroke-width="2.4"/><circle cx="8" cy="8" r="4.3" stroke-width="1.1"/></svg>',
     power:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M5.2 4.3a5 5 0 1 0 5.6 0"/><path d="M8 1.8v6"/></svg>',
-    keyboard:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="1.5" y="3.5" width="13" height="9" rx="1.6"/><path d="M4 6h1M6.5 6h1M9 6h1M11.5 6h1M4 8.2h1M6.5 8.2h1M9 8.2h1M11.5 8.2h1M5 10.4h6"/></svg>',
-    quote:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3.5 4.5h9M3.5 8h9M3.5 11.5h6"/><path d="M1.3 4.2v1.6M1.3 7.7v1.6" stroke-width="1.2"/></svg>',
-    info:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><circle cx="8" cy="8" r="6.2"/><path d="M8 7v4.2"/><circle cx="8" cy="4.9" r=".6" fill="currentColor"/></svg>',
-    check:'<svg viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 6 4.3 8.8 9.6 2.4"/></svg>',
     chev:'<svg viewBox="0 0 6 9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l3.5 3.5L1 8"/></svg>',
-    note:'<svg viewBox="0 0 24 24" fill="#fff"><path d="M15 3v10.2a3.6 3.6 0 1 1-2-3.2V6.6l-4 1v8.6a3.6 3.6 0 1 1-2-3.2V5.4z"/></svg>',
-    bignote:'<svg viewBox="0 0 56 56" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 44V12l20-4v30"/><circle cx="16" cy="44" r="6"/><circle cx="36" cy="38" r="6"/></svg>'
+    note:'<svg viewBox="0 0 24 24" fill="#fff"><path d="M15 3v10.2a3.6 3.6 0 1 1-2-3.2V6.6l-4 1v8.6a3.6 3.6 0 1 1-2-3.2V5.4z"/></svg>'
   };
   document.querySelectorAll('[data-ic]').forEach(function(el){
     var svg = ICONS[el.getAttribute('data-ic')];
     if (svg) el.innerHTML = svg;
   });
-
   var KEY='nanopod-mock-appearance';
   var buttons = document.querySelectorAll('#appearance button');
   var mq = window.matchMedia('(prefers-color-scheme: dark)');
-  function pageIsDark(){
-    var t = document.documentElement.getAttribute('data-theme');
-    if (t === 'dark') return true;
-    if (t === 'light') return false;
-    return mq.matches;
-  }
-  var current = 'auto';
-  try { var s = localStorage.getItem(KEY); if (s === 'light' || s === 'dark' || s === 'auto') current = s; } catch(e){}
+  function pageIsDark(){ var t=document.documentElement.getAttribute('data-theme'); if(t==='dark')return true; if(t==='light')return false; return mq.matches; }
+  var current='auto';
+  try{ var s=localStorage.getItem(KEY); if(s==='light'||s==='dark'||s==='auto') current=s; }catch(e){}
   function apply(){
-    var v = current === 'auto' ? (pageIsDark() ? 'dark' : 'light') : current;
+    var v = current==='auto' ? (pageIsDark()?'dark':'light') : current;
     document.querySelectorAll('.mock.follow').forEach(function(m){ m.classList.remove('light','dark'); m.classList.add(v); });
-    buttons.forEach(function(b){ b.setAttribute('aria-pressed', b.getAttribute('data-v') === current ? 'true' : 'false'); });
+    buttons.forEach(function(b){ b.setAttribute('aria-pressed', b.getAttribute('data-v')===current ? 'true':'false'); });
   }
-  buttons.forEach(function(b){
-    b.addEventListener('click', function(){
-      current = b.getAttribute('data-v');
-      try { localStorage.setItem(KEY, current); } catch(e){}
-      apply();
-    });
-  });
+  buttons.forEach(function(b){ b.addEventListener('click', function(){ current=b.getAttribute('data-v'); try{localStorage.setItem(KEY,current);}catch(e){} apply(); }); });
   if (mq.addEventListener) mq.addEventListener('change', apply); else if (mq.addListener) mq.addListener(apply);
-  new MutationObserver(apply).observe(document.documentElement, {attributes:true, attributeFilter:['data-theme']});
+  new MutationObserver(apply).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
   apply();
 })();
 </script>

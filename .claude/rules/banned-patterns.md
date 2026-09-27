@@ -73,6 +73,8 @@ Full architecture reference: `docs/playlist-architecture.md`
 - ✅ Catalog-alias consensus: only a song-scoped ("<title> <artist>") query whose surviving candidates collapse to ONE normalized (title, artist) identity may bridge a translated title (`titleQueryAliasCandidate`); artist/title dumps never qualify; stamp rows with `evidence` (v8) so replay trusts them without re-deriving script heuristics
 - ❌ Trusting test suite pass rate as proxy for lyrics correctness → Benchmark covers ~100 songs, false positives in uncovered songs go undetected
 - ✅ Always verify matched song name in debug log matches requested song; check lyrics TEXT content, not just scores
+- ❌ (2026-09-26) Finding a marker in `title.lowercased()` and slicing `title` with that range → the lowercased copy is a native UTF-8 String, but a ScriptingBridge/AppleScript title is a bridged UTF-16 NSString; any CJK before the marker makes the copy's offset exceed the original's length ("练声曲 (feat." = 16 vs 15) and the slice traps. '练声曲 (feat. 窦靖童)' crashed nanoPod 7 times in one day, looping at launch via the recent-history lyrics preload.
+- ✅ An index is only valid for the string that produced it: search the string you slice (`title.range(of: marker, options: .caseInsensitive)`). Pinned by `CollaborationCreditIndexSafetyTests` (bridged UTF-16 fixtures; a native-string test cannot reproduce it).
 
 ### Translation Traps
 
