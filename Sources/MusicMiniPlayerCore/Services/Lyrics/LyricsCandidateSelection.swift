@@ -1137,12 +1137,18 @@ extension LyricsFetcher {
         return Array(NSOrderedSet(array: variants).compactMap { $0 as? String }).prefix(4).map { $0 }
     }
 
+    /// Note: currently only reached with `isPureASCII(title)` inputs, where
+    /// ASCII case-folding never changes UTF-8/UTF-16 code-unit counts, so the
+    /// old `title.lowercased()`-derived index was not exploitable here today.
+    /// Still fixed to the same same-string pattern as
+    /// `LyricsFetcher.asciiTitleCollaborators`/`titleWithoutCollaborationCredit`
+    /// (2026-09-26 crash) so this call site can't regress if the ASCII guard
+    /// is ever loosened. See CollaborationCreditIndexSafetyTests.
     static func collaborationEvidenceTitleQuery(from title: String) -> String? {
         guard LanguageUtils.isPureASCII(title) else { return nil }
-        let lower = title.lowercased()
         let markers = [" feat. ", " feat ", " featuring ", " ft. ", " ft ", " with ", "(feat.", "(feat ", "(featuring ", "(ft.", "(ft ", "[feat.", "[feat "]
         guard let markerRange = markers
-            .compactMap({ marker -> Range<String.Index>? in lower.range(of: marker) })
+            .compactMap({ marker -> Range<String.Index>? in title.range(of: marker, options: .caseInsensitive) })
             .min(by: { $0.lowerBound < $1.lowerBound }) else {
             return nil
         }

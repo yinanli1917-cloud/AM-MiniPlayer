@@ -2980,26 +2980,43 @@ public final class LyricsFetcher {
         )
     }
 
-    private func titleHasCollaborationCredit(_ title: String) -> Bool {
+    // NOTE: visibility widened from `private` to `internal` (no other change)
+    // so `CollaborationCreditIndexSafetyTests` can exercise these directly
+    // via `@testable import`.
+    func titleHasCollaborationCredit(_ title: String) -> Bool {
         !asciiTitleCollaborators(from: title).isEmpty
     }
 
-    private func titleWithoutCollaborationCredit(_ title: String) -> String? {
-        let lower = title.lowercased()
+    /// 2026-09-26 crash fix: every `String.Index` used to slice `title` MUST
+    /// come from searching `title` itself (via `.caseInsensitive`), never
+    /// from a `title.lowercased()` copy. A ScriptingBridge/AppleScript title
+    /// is a bridged NSString (UTF-16-backed); `.lowercased()` always returns
+    /// a fresh NATIVE String (UTF-8-backed). Reusing an index minted against
+    /// one string's encoding to slice the other is only safe by coincidence
+    /// (pure ASCII, where 1 byte == 1 UTF-16 code unit per character) — any
+    /// CJK character before the match point (3 UTF-8 bytes vs 1 UTF-16 code
+    /// unit) desyncs the offsets and traps. Crashed on '练声曲 (feat. 窦靖童)'
+    /// (nanoPod-2026-09-26-*.ips, 7/7, EXC_BREAKPOINT/SIGTRAP). See
+    /// CollaborationCreditIndexSafetyTests.
+    func titleWithoutCollaborationCredit(_ title: String) -> String? {
         let markers = [" feat. ", " feat ", " featuring ", " ft. ", " ft ", " with ", "(feat.", "(feat ", "(featuring ", "(ft.", "(ft "]
         guard let match = markers
-            .compactMap({ marker -> String.Index? in lower.range(of: marker)?.lowerBound })
+            .compactMap({ marker -> String.Index? in title.range(of: marker, options: .caseInsensitive)?.lowerBound })
             .min() else { return nil }
         let prefix = title[..<match]
             .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "([{-–—")))
         return prefix.isEmpty ? nil : String(prefix)
     }
 
-    private func asciiTitleCollaborators(from title: String) -> [String] {
-        let lower = title.lowercased()
+    /// See `titleWithoutCollaborationCredit` above for why every index here
+    /// must be derived from `title` itself (`.caseInsensitive`), never from
+    /// `title.lowercased()`. This is the exact function/line
+    /// (LyricsFetcher.swift, `var suffix = String(title[suffixStart...])`)
+    /// that crashed in all 7 of the 2026-09-26 reports.
+    func asciiTitleCollaborators(from title: String) -> [String] {
         let markers = [" feat. ", " feat ", " featuring ", " ft. ", " ft ", " with ", "(feat.", "(feat ", "(featuring ", "(ft.", "(ft ", "[feat.", "[feat ", "（feat.", "（feat "]
         guard let markerRange = markers
-            .compactMap({ marker -> Range<String.Index>? in lower.range(of: marker) })
+            .compactMap({ marker -> Range<String.Index>? in title.range(of: marker, options: .caseInsensitive) })
             .min(by: { $0.lowerBound < $1.lowerBound }) else {
             return []
         }
