@@ -393,7 +393,10 @@ if [ -d "AppIcon.icon" ] && command -v xcrun &> /dev/null && xcrun --find actool
         # compiled catalog — a malformed/missing colorset would silently ship
         # the system accent color instead of the Apple Music pink.
         if command -v xcrun &> /dev/null && xcrun --find assetutil &> /dev/null; then
-            if ! xcrun assetutil -I nanoPod.app/Contents/Resources/Assets.car 2>/dev/null | grep -q "AccentColor"; then
+            # Capture first: `grep -q` exits early and SIGPIPEs assetutil,
+            # which pipefail reports as a miss (same trap as the strings gate).
+            ASSET_INFO=$(xcrun assetutil -I nanoPod.app/Contents/Resources/Assets.car 2>/dev/null || true)
+            if [[ "$ASSET_INFO" != *AccentColor* ]]; then
                 echo "❌ AccentColor missing from compiled Assets.car — refusing to ship"
                 exit 1
             fi
