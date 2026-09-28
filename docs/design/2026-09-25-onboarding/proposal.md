@@ -5,11 +5,13 @@
 ## v3 改了什么
 
 1. **口吻**：整套文案重写。立场从「教会用户」改成「陪他走一遍」——没有「学会」「掌握」「恭喜」「试试看你能不能」，没有「甩」；句子短、真诚、克制，像朋友顺手递东西。结束那一屏不总结做了哪几样，只说一句走心的话。中英各自成立，不是互译；§9 有全表，§9.1 有 v2.1 → v3 逐句对照表，方便直接挑。
-2. **移到角落的轨迹**：演示改成柔和的弧线——x、y 两轴各走一段弹簧，x 快（0.50 s）y 慢（0.74 s），轨迹自然成弧，不手画路径；弧高随方向变，对角线移动约为位移的 12%、近水平或近竖直约 5–8%，最高点在行程约 1/3 处，两轴落定约 0.6 s（§8.8）。查了真实面板：`SnappablePanel.renderFrame` 两轴共用同一段 `Spring(duration: 0.5, bounce: 0.15)`，各带自己的初速度——零速度或推的方向正对角落时是直线，方向偏一点才自然弯。演示与实机是否一致，作为待创始人定的问题单列在 §13.2，只写两种选择的影响。
+2. **移到角落的轨迹**：演示改成柔和的弧线——x、y 两轴各走一段弹簧，x 快（0.50 s）y 慢（0.74 s），轨迹自然成弧，不手画路径；弧高随方向变，对角线移动约为位移的 12%、近水平或近竖直约 5–8%，最高点在行程约 1/3 处，两轴落定约 0.6 s（§8.8）。查了真实面板：`SnappablePanel.renderFrame` 两轴共用同一段 `Spring(duration: 0.5, bounce: 0.15)`，各带自己的初速度——零速度或推的方向正对角落时是直线，方向偏一点才自然弯。演示与实机是否一致曾单列为待定问题；v3.2 已定：弧线只在演示里，实机不改（§13）。
 3. **进度环**：分段环改成 Apple Watch 活动环那种连续粗环：外径 24pt、线宽 5pt（≈21%）、圆头；前景 浅 `#FA4058` / 深 `#FB546C`；背景轨道是同一色相的低透明度（浅 22%、深 28%），不透明底上等价于 浅 `#FED5DA` / 深 `#5C2D36`。每完成一步弧长 +1/7，0.6 s ease-out；合圈脉冲一次；小火花保留（§4.7、§8.1、§8.2）。翻译被延后时环停在 6/7，不再有虚线段。
 4. **不变**：卡片 Liquid Glass 材质；专辑页两个角那一步；双指示意动画的逐帧规格；翻译延后到第一首外文歌再出现；7 步结构。
 5. **命名与入口**：这套引导叫「认识 nanoPod / Getting to know nanoPod」。接着走的入口只在设置里：设置 › 通用 的「认识 nanoPod」一行，按钮随状态变——没走完显示「接着认识 nanoPod / Keep getting to know nanoPod」，点了从停下的地方接着走；走完了显示「重新认识 nanoPod / Get to know nanoPod again」，点了从头走（§9.2）。
-6. 「几段」的问题改成「几步」：环连续之后，7 步与 6 步的取舍仍等创始人定（§13.1）。
+6. 「几段」的问题改成「几步」：环连续之后，7 步与 6 步的取舍曾等创始人定；v3.2 已定 7 步（§13）。
+9. **v3.3（09-27）**：演示轨迹改成固定路径，不再靠两轴弹簧之差生成——二次 Bézier，向屏幕中心一侧鼓出，弧高 = 位移的 9%，最高点在行程 45%，沿路径 0.6 s ease-out，落点仍是右下角 16pt 边距（§8.8）；真实面板不变。
+8. **v3.2（09-27，创始人看过 v3.1）**：卡片排版改成标题、正文左对齐，进度环挪到卡片右上角、靠右对齐并放大——外径 24 → 28pt、线宽 5 → 5.5pt（≈20% 不变），环内数字 8.5 → 9.5pt、勾 10 → 12pt（§4.7）。「放到角落」演示改回真实默认位置：右上角推到右下角、从右缘收边；这一段近竖直（x 只差 4pt），两轴弹簧的弧线浅得看不出来——v3.3 改成固定路径弧；左缘镜像只作分支说明（§3.3 S5、§8.8）。§13 两问已定：7 步；弧线只放在引导演示里，真实面板吸附不改、不加开关。
 7. **v3.1（09-26 晚，与菜单稿对齐）**：菜单里不再放「接着认识 nanoPod…」这一项——菜单实测它会把菜单撑宽（英文 259×152、中文 182×152，平时 146×128），点「以后再说」的人会长期看到它，与创始人嫌菜单「胖」的判断相撞，且回头接着走引导很少发生。「以后再说」「先到这里」之后菜单栏都不出入口，只留设置里那一个随状态变的按钮；welcome.foot 与所有指向菜单栏的文案改成指向设置。
 
 ## 0. 一段话结论
@@ -123,6 +125,7 @@
 - **S4L 之后**：引导结束（走完或停下）后，只保留一个 `LyricsService.$canTranslate` 订阅。它翻真且面板可见、开播 ≥ 3 s、本次启动还没出过 → 在翻译按钮旁出这一张卡（同 S4 的锚与高亮环）：「这首可以翻译 / 鼠标挪过来，右下角的按钮点一下。」；`showTranslation` 翻真 → 最后一截长满 + 小火花 + haptic `.alignment` → 环安静合上、脉冲一次，不放礼花（礼花在 S7 放过了）→ 取消订阅、销毁。`showTranslation` 在触发时已经是 true（用户早在设置里开了）→ 不出卡，静默补上、取消订阅。这首没做 → 换歌时卡淡出，下一首外文歌再来，最多 3 首；20 次启动都没遇到 → 静默标 skipped、取消订阅。设置「重新认识 nanoPod」随时可以整套重来。
 
 **S5 放到角落 · 收边**
+- 演示（分镜页）按真实默认位置：右上角推到右下角、从右缘收边，走一条向屏幕中心鼓出的固定弧线（弧高 9% 位移、最高点 45%、0.6 s ease-out，§8.8）。
 - 锚：面板朝屏幕中心一侧的边中点；无高亮环（动作是手势）；卡内触控板手势示意先演「往角落推」（§8.7），目标角亮一团角落光；beat ① 完成后卡片从面板的新位置长出，正文换成「落好了。往右边再推一下，它会藏进屏幕边。」（落在左边角则「往左边」），示意换成「横推」，目标边亮边缘光。
 - beats：① 「推到一个角落」← `snappedCorner`（新钩子：弹簧动画结束且 origin 落在四角目标 ±1pt）；② 「再往屏幕边上推一下」← `.collapsing` 一出现卡立刻淡出，`.tucked` settled 记完成。
 - 替代路径：「替我收起来」→ `hideToNearestEdge()`（`SnappablePanel.swift:423`），用户没做手势但看到结果、能走完 S6；脚注「用鼠标的话，在 设置 › 快捷键 给「贴边隐藏」录个键就好。」鼠标拖拽不吸角：beat ① 对鼠标用户 8 秒后也显示「这一步先不做」。Stage Manager 开着 → 只用右边的角。
@@ -138,7 +141,7 @@
 
 ### 3.4 步数与总长的取舍
 
-7 步是步骤条建议区间（3–7）的上限：创始人点名的动作有五个（歌词、翻译、收边、两个角、移动），加上必要的前置（鼠标挪过来·播放）与必要的收尾（回来），能合的已经合了——两个角合成一步两个 beat，推到角落与收边合成一步两个 beat。再往下合只剩两种：把歌词与翻译合成「歌词页」一步两个 beat（6 步，省约 15 秒，代价是创始人点名的两个时刻只剩一次长环），或把第 1 步从环里拿掉当成卡外的前置（6 步，代价是失去预填带来的 endowed progress）。都不推荐；创始人若要更短，第一刀是合并歌词与翻译。见 §13.1。
+7 步是步骤条建议区间（3–7）的上限：创始人点名的动作有五个（歌词、翻译、收边、两个角、移动），加上必要的前置（鼠标挪过来·播放）与必要的收尾（回来），能合的已经合了——两个角合成一步两个 beat，推到角落与收边合成一步两个 beat。再往下合只剩两种：把歌词与翻译合成「歌词页」一步两个 beat（6 步，省约 15 秒，代价是创始人点名的两个时刻只剩一次长环），或把第 1 步从环里拿掉当成卡外的前置（6 步，代价是失去预填带来的 endowed progress）。都不推荐。创始人 09-27 已定：7 步（§13）。
 
 ## 4. 卡片系统
 
@@ -203,8 +206,8 @@ place(cardSize, anchor, panelFrame, visibleFrame) -> (origin, beakSide, beakOffs
 |---|---|
 | 尺寸 | 宽 236pt 固定；高随内容（92–190pt）；圆角 14pt continuous；箭头 12pt 等腰，同一形状 |
 | 材质 | §4.6。顶部 1px 内高光（玻璃自带）；外 0.5px 8% 描边 |
-| 字 | SF Pro Text：标题 13 semibold；正文 12 regular 次级色；beat 12；脚注 10.5；环内数字 8.5 semibold tabular |
-| 进度环 | **连续粗环**：外径 24pt、线宽 5pt（≈21%）、圆头（`lineCap: .round`），12 点钟起顺时针。前景 Apple Music 粉红：浅色外观 `#FA4058`、深色外观 `#FB546C`（菜单 / 设置 v2 定稿，取自本机 Music.app 图标渐变取样）。背景轨道 = 前景色同色相的低透明度：浅 22%、深 28%，用 `Color("AccentColor").opacity(...)` 叠在玻璃上；不透明底上的等价色 浅 `#FED5DA`（`#FA4058` @22% 叠白）/ 深 `#5C2D36`（`#FB546C` @28% 叠 `#1E1E21`，暗酒红）。每完成一步弧长 +1/7；环内数字 8.5pt 标当前步，做完换勾 |
+| 字 | SF Pro Text：标题 13 semibold；正文 12 regular 次级色；beat 12；脚注 10.5；环内数字 9.5 semibold tabular；标题、正文、beats 一律左对齐 |
+| 进度环 | **连续粗环**：外径 28pt、线宽 5.5pt（≈20%）、圆头（`lineCap: .round`），12 点钟起顺时针；放在卡片右上角、右缘与标题顶对齐，标题与正文左对齐（v3.2，创始人：24/5 看着太粗太挤）。前景 Apple Music 粉红：浅色外观 `#FA4058`、深色外观 `#FB546C`（菜单 / 设置 v2 定稿，取自本机 Music.app 图标渐变取样）。背景轨道 = 前景色同色相的低透明度：浅 22%、深 28%，用 `Color("AccentColor").opacity(...)` 叠在玻璃上；不透明底上的等价色 浅 `#FED5DA`（`#FA4058` @22% 叠白）/ 深 `#5C2D36`（`#FB546C` @28% 叠 `#1E1E21`，暗酒红）。每完成一步弧长 +1/7；环内数字 9.5pt 标当前步，做完换 12pt 的勾 |
 | 强调色派生 | 文字 ink 档：浅 `#D42640`（同色相压暗到 4.5:1 以上）、深 `#FF8497`（提亮）；柔底 soft：浅 rgba(250,64,88,.12)、深 rgba(251,84,108,.16)；高亮环光晕 用轨道色；火花 60% 主色、40% 白 |
 | beat | 14pt 圆点描边 → 实心粉红 + 白勾；完成行文字转次级色 |
 | 按钮 | 主按钮胶囊 11pt semibold 反色；次按钮 12% 对比色底；链接 11pt 次级色 |
@@ -332,7 +335,7 @@ enum TourEvent { case start, stopTour, skipStep, signal(TourSignal), anchorUnava
 |---|---|---|---|
 | 0 ms | 检测到完成 | haptic `.levelChange`，`.drawCompleted`，每次取新的 `defaultPerformer` | 保留 |
 | 0 ms | beat 打勾 | 圆点 → 实心勾，scale 1→1.22→1，spring(response .28, damping .60) | 直接切换 |
-| 50 ms | 进度环长一截 | 弧长 +1/7：`trim(to:)` 0.6 s ease-out（cubic-bezier(.2,.8,.2,1)，等价 `.timingCurve`），圆头领着走；线宽 5→6→5 spring(.30, .60) | linear 0.30，线宽不变 |
+| 50 ms | 进度环长一截 | 弧长 +1/7：`trim(to:)` 0.6 s ease-out（cubic-bezier(.2,.8,.2,1)，等价 `.timingCurve`），圆头领着走；线宽 5.5→6.5→5.5 spring(.30, .60) | linear 0.30，线宽不变 |
 | 50 ms | 火花 | 16 粒 2–3.5pt 圆点，初速 90–140 pt/s 全向，阻尼 .88/帧，寿命 0.55 s，粉红 60% / 白 40%，起点环心；`Canvas` + `TimelineView(.animation(paused:))`，结束 `paused = true` | 不放 |
 | 100 ms | 环内数字 → 勾 | `.contentTransition(.symbolEffect(.replace.downUp))` 0.30 s | `.replace` |
 | 750 ms | 卡内容淡出 | opacity 1→0，0.14 s easeIn | 同 |
@@ -346,7 +349,7 @@ beat 完成（不是步完成）只做前两行。
 | t | 发生什么 | 规格 | Reduce Motion |
 |---|---|---|---|
 | 0 ms | 最后一截长满 | 同上 0.6 s；haptic `.alignment`（合圈的语义） | 保留 |
-| 600 ms | 圆头碰到起点：合圈脉冲 | scale 1→1.08→1 spring(.50, .62)；线宽 5→6.5→5；描边 粉红→白→粉红 0.35 s | 只做描边色闪一次 |
+| 600 ms | 圆头碰到起点：合圈脉冲 | scale 1→1.08→1 spring(.50, .62)；线宽 5.5→7→5.5；描边 粉红→白→粉红 0.35 s | 只做描边色闪一次 |
 | 650 ms | 礼花 | 72 粒自面板上沿一线缓缓喷出：初速 220–320 pt/s 向上、锥角 ±30°、重力 360 pt/s²、阻力 .985/帧（末段飘落）、自旋 ±2.5 rad/s、6×9pt 矩形/圆/细条三形、色取封面主色 3（`NSImage+AverageColor` 采样，过暗过灰回退粉红/白/金，哑光）+ 白，寿命 1.8 s，末 0.5 s 淡出；独立点击透传窗口（面板宽 + 160 × 320，面板上方），2.2 s 后关闭 | 不放 |
 | 1000 ms | 卡长成最后一张 | 高度 spring(.40, .85)，文案与按钮错峰淡入 0.2 s | opacity |
 | 8 s | 自动收起 | opacity 0.16 s easeIn，scale 1→.97；teardown | opacity |
@@ -373,7 +376,7 @@ beat 完成（不是步完成）只做前两行。
 tourCardPresentResponse = 0.36, tourCardPresentDamping = 0.86
 tourCardTravelResponse  = 0.50, tourCardTravelDamping  = 0.86
 tourCardDismissDuration = 0.16, tourContentStagger = 0.04
-tourRingOuterDiameter = 24, tourRingLineWidth = 5
+tourRingOuterDiameter = 28, tourRingLineWidth = 5.5
 tourRingFillDuration    = 0.60
 tourRingPulseResponse   = 0.50, tourRingPulseDamping = 0.62
 tourBeatCheckResponse   = 0.28, tourBeatCheckDamping = 0.60
@@ -406,17 +409,22 @@ feel channels：`tourCelebration: .sparks（默认）| .quiet`；`tourCard: .gla
 
 创始人 09-26：要柔和的抛物线，带一点小弧度，不要直线。
 
-**演示规格（分镜页「移到角落的轨迹」一节）**：不手画路径。x、y 两轴各走一段弹簧、响应时间不同：x `Spring(duration: 0.50, bounce: 0.15)`（今天的参数不变），y `Spring(duration: 0.74, bounce: 0.10)`。x 先到位、y 后到位，轨迹自然成弧，弧向位移的「上方」（先横着走、后落下来，像轻轻推出去再落好）。按 Apple Spring 解析解采样（分镜页里的算式）：
+**演示规格（v3.3，分镜页「移到角落的轨迹」一节）**：弧线只在引导演示里，不绑真实物理，所以直接走一条固定路径：
 
-| 移动方向 | 弧高 / 位移 | 最高点位置 | 两轴到 1% 以内 |
-|---|---|---|---|
-| 对角线（300, 300） | ≈ 12.5% | 行程 32% | ≈ 0.61 s |
-| 近水平（434, 96） | ≈ 5.3% | 32% | 0.61 s |
-| 近竖直（100, 300） | ≈ 7.5% | 32% | 0.61 s |
+| 项 | 值 |
+|---|---|
+| 路径 | 二次 Bézier：起点 = 面板当前位置，终点 = 目标角（边距 16pt） |
+| 鼓出方向 | 弦的法向里指向屏幕中心的那一侧（右上 → 右下时向左鼓） |
+| 弧高（最大偏离弦） | 位移的 9%（右上 20pt → 右下 16pt 这一下位移 ≈ 96pt，弧高 ≈ 8.6pt） |
+| 最高点位置 | 行程 45% 处（控制点放在弦上 45% 处、向鼓出侧偏 2 × 弧高——二次 Bézier 的最大偏离是控制点偏离的一半） |
+| 时长与缓动 | 沿路径参数 0.6 s，ease-out cubic-bezier(.2, .8, .2, 1)，等价 `Spring(duration: 0.6, bounce: 0)`；无过冲 |
+| Reduce Motion | 直接落到目标 |
 
-对照：y 用 0.62 s 时对角线只有 7.4%、近水平 3.1%，弧度太浅；0.80 s 时对角线 14.6% 但落定拖到 0.65 s。取 0.74。CSS 近似：`left .50s cubic-bezier(.2,1.12,.32,1)`、`top .74s cubic-bezier(.22,1,.36,1)`。Reduce Motion：直接落到目标。
+实现（引导的演示层，不碰 `SnappablePanel`）：`TourDemoPath.quadratic(from:to:sagittaRatio: 0.09, peak: 0.45, bulgeToward: screenCenter)` 给出路径，`TimelineView` 或 `CADisplayLink` 按 ease-out 采样 `point(at:)` 驱动演示用的面板影子；分镜页的 `arcControl` / `arcPoint` / `movePanelAlongArc` 就是这套算式。
 
-**真实面板现在怎么走**（§2.1）：两轴共用同一段 `Spring(duration: 0.5, bounce: 0.15)`，各带松手时的初速度。零速度（快捷键、程序触发）或推的方向正对角落时是直线；推的方向偏一点，两轴初速度不同，轨迹自然弯，弧形取决于那一下的速度，每次不一样。也就是说，演示画成固定的小弧线，与实机在「零速度 / 正对角落」的情形下不一致。两种选择留给创始人，见 §13.2。
+曾试过（v3–v3.2）用 x、y 两轴不同响应的弹簧（x 0.50 s / y 0.74 s）生成弧：对角线 ≈12%、近竖直 (100,300) ≈7.5%，但真实默认位置到右下角近竖直（x 只差 4pt），弧不到 1%，弃用。
+
+**真实面板现在怎么走**（§2.1）：两轴共用同一段 `Spring(duration: 0.5, bounce: 0.15)`，各带松手时的初速度。零速度（快捷键、程序触发）或推的方向正对角落时是直线；推的方向偏一点，两轴初速度不同，轨迹自然弯，弧形取决于那一下的速度，每次不一样。创始人 09-27 已定：弧线只放在引导演示里，真实面板的吸附不改、不加开关（§13）。
 
 ## 9. 文案
 
@@ -523,7 +531,7 @@ Sources/MusicMiniPlayerAppKit/Tour/
   TourRingView.swift（连续粗环）/ TourHaloWindow.swift / TourCelebrationView.swift（Canvas + TimelineView）/ TourGestureGlyph.swift（§8.7）/ TourStrings.swift
 现有改动：
   LiquidEdgeController.swift   + statePublisher / tuckedRegionInScreen / floatingHitRegionInScreen
-  SnappablePanel.swift         + tuckableEdge() / currentCorner() / snappedToCorner 通知（§13.2 若选 B 再改弹簧）
+  SnappablePanel.swift         + tuckableEdge() / currentCorner() / snappedToCorner 通知（吸附弹簧不改，创始人 09-27 已定）
   MiniPlayerView.swift / LyricsView.swift  + controlsRevealed、audioOutputMenuPresented 通知、封面 .tourAnchor(.artwork)
   HoverableButtons.swift       + musicButtonTapped 通知、.tourAnchor(.music / .translate)
   SharedControls.swift / AudioOutputSwitcherView.swift  + .tourAnchor(.playPause / .lyricsNav / .audioOutput)
@@ -591,17 +599,9 @@ Sources/MusicMiniPlayerAppKit/Tour/
 - 歌单页定位裁定后若保留，第 8 步与 3–7 上限冲突，届时得合并歌词 + 翻译。
 - 情境提示（TipKit）属于后续项。
 
-## 13. 待创始人定的两个问题
+## 13. 已定（创始人 2026-09-27）
 
-### 13.1 几步：7 步还是 6 步
+1. **7 步**。不合并歌词与翻译；总长按一般用户 75–110 秒。§3.4 的两刀作废。
+2. **移到角落的弧线只放在引导演示里**。真实面板的吸附不改（仍是两轴共用一段 `Spring(duration: 0.5, bounce: 0.15)`、各带初速度），也不加开关；演示走固定的二次 Bézier 弧（弧高 9% 位移、最高点 45%、0.6 s ease-out，向屏幕中心鼓出），落点仍是右下角 16pt（§8.8）。
 
-7 步、一般用户 75–110 秒（推荐：创始人点名的五个动作各自都有一次长环），还是把「歌词 + 翻译」合成一步两个 beat，做成 6 步、约 60–90 秒。其余（材质 glass / clear / vibrancy、火花有无）都做成运行时 feel channel，他在真机上比完再定。
-
-### 13.2 移到角落的轨迹：演示与实机要不要一致
-
-事实（§2.1、§8.8）：真实面板吸角时两轴共用同一段 `Spring(duration: 0.5, bounce: 0.15)`，各带松手时的初速度——零速度或推的方向正对角落时是直线，方向偏一点才自然弯，弧形随那一下的速度变化。分镜里演示的是固定的小弧线（x 0.50 s / y 0.74 s 两段弹簧）。
-
-- **选择 A：真实面板不动，演示改回按今天的算法画**。影响：引导卡里的示意与用户手上的感觉一致；但弧度取决于用户的手势，零速度（快捷键、程序触发）时就是直线，看不到创始人要的那道小弧。
-- **选择 B：真实面板改成 x、y 两轴各自一段弹簧、响应时间不同（如 x 0.50 s / y 0.74 s），演示按它画**。影响：每次吸角都有固定的小弧（对角线约 12%、近水平约 5%），含快捷键与程序触发的吸角；改动 `SnappablePanel` 里标注为 WWDC23 推荐的弹簧参数，落定从约 0.5 s 变约 0.6 s，需要他真机验收手感；液态贴边不受影响。
-
-只列影响，不展开成改真实面板的方案；他定了再动。
+余下由他真机比完再定的都是运行时 feel channel：卡片材质 glass / clear / vibrancy、火花有无。

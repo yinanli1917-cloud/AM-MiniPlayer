@@ -225,7 +225,7 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
 <div class="wrap">
   <h1>nanoPod 菜单与设置视觉稿</h1>
   <div class="meta">
-    <span>v3 · 2026-09-26 下午（按创始人第二批反馈重画：菜单纯文字零勾选、设置去 sidebar 改「演示台」）</span>
+    <span>v3.2 · 2026-09-27（创始人裁定：功能项图标加回、任何一行不图标与勾选并存；「翻译为 ▸」保留；设置沿用 v3 演示台）</span>
     <span>比例 <b class="num">1 pt = 1 px</b></span>
     <span>字体：系统 SF Pro</span>
     <span>方案文档：<code>proposal.md</code></span>
@@ -246,7 +246,7 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
 
   <!-- ================= 菜单 ================= -->
   <h2>一、菜单栏菜单</h2>
-  <p>v3：整份菜单不带图标、主菜单不带勾选、不标 ⌘,；能切换的项用动词换标题；「全屏封面」移到设置。本机 <code>NSMenu.size</code> 实测（不显示菜单）：146 × 128 pt，录了面板快捷键时 174 × 128；现状 203 × 189.5，v2 227 × 163。子菜单「翻译为 ▸」里的单选勾选不影响父菜单宽度（实测 146 = 146）。</p>
+  <p>v3.2：功能项带图标（显示/隐藏面板 <code>macwindow</code>、翻译为 <code>translate</code>），App 项（设置…、退出）不带——CleanShot 规则，且 HIG「同组一致」按组成立；主菜单零勾选，所以没有一行同时有图标和勾选；不标 ⌘,；「全屏封面」移到设置；「翻译为 ▸」保留（创始人定），子菜单语言项单选勾选、不带图标。本机 <code>NSMenu.size</code> 实测（不显示菜单）：166 × 128 pt，录了面板快捷键时 194 × 128；无图标的 v3 是 146 / 174；现状 203 × 189.5，v2 227 × 163。</p>
 
   <div class="cmp">
     <div class="cell">
@@ -268,23 +268,23 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
       </div>
     </div>
     <div class="cell">
-      <div class="cap"><span class="pill plan">v3</span><b>深色 · 面板可见、未录快捷键</b><span class="num">146 × 128 pt（实测）</span></div>
+      <div class="cap"><span class="pill plan">v3.2</span><b>深色 · 面板可见、未录快捷键</b><span class="num">166 × 128 pt（实测）</span></div>
       <div class="scroll">
         <div class="mock dark"><div class="desk">
-          <div class="menu" style="width:146px">
-            <div class="mi plain">Hide Player</div>
-            <div class="mi plain">Translate To<span class="chev" data-ic="chev"></span></div>
+          <div class="menu" style="width:166px">
+            <div class="mi"><span class="ic" data-ic="macwindow"></span>Hide Player</div>
+            <div class="mi"><span class="ic" data-ic="translate"></span>Translate To<span class="chev" data-ic="chev"></span></div>
             <div class="sep"></div>
             <div class="mi plain">Settings…</div>
             <div class="sep"></div>
             <div class="mi plain">Quit nanoPod</div>
-            <span class="dim" style="left:156px;top:6px">24 pt</span>
-            <span class="dim" style="left:156px;top:30px">24 pt</span>
-            <span class="dim" style="left:156px;top:54px">11 pt</span>
+            <span class="dim" style="left:176px;top:6px">24 pt</span>
+            <span class="dim" style="left:176px;top:30px">24 pt</span>
+            <span class="dim" style="left:176px;top:54px">11 pt</span>
           </div>
         </div></div>
       </div>
-      <p class="note">纯文字项文字起点由系统定（约 21pt），没有勾选列、没有图标列；宽度由「翻译为 ▸」的子菜单箭头列决定（+31pt），中英同宽。</p>
+      <p class="note">功能项图标一列 +20pt（146 → 166）；App 项无图标，文字起点由系统定；没有勾选列；宽度另含「翻译为 ▸」的子菜单箭头列（+31pt），中英同宽。</p>
     </div>
     <div class="cell">
       <div class="cap"><span class="pill now">现在</span><b>浅色</b></div>
@@ -305,20 +305,20 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
       </div>
     </div>
     <div class="cell">
-      <div class="cap"><span class="pill plan">v3</span><b>浅色 · 面板已隐藏、录了 ⌥⌘P（英）· 中文</b><span class="num">174 × 128 · 146 × 128</span></div>
+      <div class="cap"><span class="pill plan">v3.2</span><b>浅色 · 面板已隐藏、录了 ⌥⌘P（英）· 中文</b><span class="num">194 × 128 · 166 × 128</span></div>
       <div class="scroll">
         <div class="mock light"><div class="desk" style="display:inline-flex;gap:22px;align-items:flex-start">
-          <div class="menu" style="width:174px">
-            <div class="mi plain">Show Player<span class="kbd">⌥⌘P</span></div>
-            <div class="mi plain">Translate To<span class="chev" data-ic="chev"></span></div>
+          <div class="menu" style="width:194px">
+            <div class="mi"><span class="ic" data-ic="macwindow"></span>Show Player<span class="kbd">⌥⌘P</span></div>
+            <div class="mi"><span class="ic" data-ic="translate"></span>Translate To<span class="chev" data-ic="chev"></span></div>
             <div class="sep"></div>
             <div class="mi plain">Settings…</div>
             <div class="sep"></div>
             <div class="mi plain">Quit nanoPod</div>
           </div>
-          <div class="menu" style="width:146px">
-            <div class="mi plain">隐藏面板</div>
-            <div class="mi plain">翻译为<span class="chev" data-ic="chev"></span></div>
+          <div class="menu" style="width:166px">
+            <div class="mi"><span class="ic" data-ic="macwindow"></span>隐藏面板</div>
+            <div class="mi"><span class="ic" data-ic="translate"></span>翻译为<span class="chev" data-ic="chev"></span></div>
             <div class="sep"></div>
             <div class="mi plain">设置…</div>
             <div class="sep"></div>
@@ -326,7 +326,7 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
           </div>
         </div></div>
       </div>
-      <p class="note">左：面板已隐藏（第一项「Show Player」）、用户录了 ⌥⌘P（右列只在录了时出现，宽 174）。右：中文，146 × 128。菜单没有随引导状态增减的临时项，始终 4 项。</p>
+      <p class="note">左：面板已隐藏（第一项「Show Player」）、用户录了 ⌥⌘P（右列只在录了时出现，宽 194）。右：中文，166 × 128。菜单没有随引导状态增减的临时项，始终 4 项。</p>
     </div>
   </div>
 
@@ -336,9 +336,10 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
     <tr><th>版本</th><th>宽 × 高</th><th>项 / 分隔线</th><th>图标</th><th>勾选</th><th>快捷键列</th><th>来源</th></tr>
     <tr><td>现状</td><td class="num">203 × 189.5</td><td>6 / 3</td><td>6</td><td>0（两个自绘开关）</td><td>无</td><td>创始人截图实测</td></tr>
     <tr><td>v2</td><td class="num">227 × 163（录了）· 208 × 163（未录）</td><td>5 / 3</td><td>3</td><td>1</td><td>⌥⌘P、⌘,</td><td>NSMenu.size 近似</td></tr>
-    <tr><td><b>v3</b></td><td class="num"><b>146 × 128</b>（未录）· 174 × 128（录了）</td><td>4 / 2</td><td>0</td><td>0</td><td>仅用户录的</td><td>NSMenu.size 实测</td></tr>
+    <tr><td><b>v3.2（定稿）</b></td><td class="num"><b>166 × 128</b>（未录）· 194 × 128（录了）</td><td>4 / 2</td><td>2（功能项）</td><td>0</td><td>仅用户录的</td><td>NSMenu.size 实测</td></tr>
+    <tr><td>v3（无图标，对照）</td><td class="num">146 × 128（未录）· 174 × 128（录了）</td><td>4 / 2</td><td>0</td><td>0</td><td>仅用户录的</td><td>NSMenu.size 实测</td></tr>
+    <tr><td>v3.2 若 App 项也带图标</td><td class="num">172 × 128</td><td>4 / 2</td><td>4</td><td>0</td><td>—</td><td>NSMenu.size 实测</td></tr>
     <tr><td>v3 若保留全屏封面（动词对）</td><td class="num">185 × 152</td><td>5 / 2</td><td>0</td><td>0</td><td>—</td><td>NSMenu.size 实测</td></tr>
-    <tr><td>v3 若去掉翻译为 ▸</td><td class="num">115 × 104</td><td>3 / 2</td><td>0</td><td>0</td><td>—</td><td>推算（箭头列 −31、一行 −24）</td></tr>
   </table>
   </div>
   <p class="note">其他实测：一项 <code>state = .on</code> 整份菜单宽 +8；一个图标 +15、全部 +21；子菜单箭头列 +31；⌘, 无子菜单时 +40、有子菜单时 +9；行 24、分隔线 11、上下内边距 5。</p>
@@ -538,7 +539,7 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
   <div class="footer">
     <b>数值说明</b>
     <ul>
-      <li>菜单：v3 尺寸与各因素增量为本机 macOS 26.2 <code>NSMenu.size</code> 实测（不显示菜单、不依赖 NSApp）；现状 203 × 189.5 为创始人截图量化；纯文字项文字起点约 21pt 为绘制取值，真机由系统定。</li>
+      <li>菜单：v3.2 尺寸与各因素增量为本机 macOS 26.2 <code>NSMenu.size</code> 实测（不显示菜单、不依赖 NSApp）；现状 203 × 189.5 为创始人截图量化；图标列与文字起点的具体像素为绘制取值，真机由系统定。</li>
       <li>设置：窗口 480 × 562、演示台 440 × 120、分段 24、边距 20 为取值；通用段「认识 nanoPod」行的两种按钮文案出自 Onboarding 方案 §9.2；分组行、switch（画作 36 × 16，随参考图）、分段控件由系统绘制；深色内容区/卡片色为 mock 取值。</li>
       <li>演示台画面为静帧示意；每段动画演什么、时长、静帧见 proposal.md §4.3。</li>
       <li>强调色 #FA4058 / #FB546C 为 Music.app 图标取样色，出处见 proposal.md 文首。</li>
@@ -552,6 +553,7 @@ th{font-weight:600;color:var(--fg2);font-size:12px;letter-spacing:.02em}
     macwindow:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M1.5 6h13"/></svg>',
     expandv:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="11" height="8" rx="1.6"/><path d="M8 1v2M6.6 2.2 8 1l1.4 1.2M8 15v-2M6.6 13.8 8 15l1.4-1.2"/></svg>',
     charbubble:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6a1.5 1.5 0 0 1-1.5 1.5H7l-3.2 2.6V11H3.5A1.5 1.5 0 0 1 2 9.5z"/><path d="M6 9l2-5 2 5M6.7 7.6h2.6" stroke-width="1.1"/></svg>',
+    translate:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 3.5h6M4.5 2v1.5M2.5 3.5c.4 2.6 2 4.5 4.3 5.6M6.5 3.5C6.1 6.1 4.5 8 2.2 9.1"/><path d="M8.6 14 11.5 6.5 14.4 14M9.6 11.5h3.8"/></svg>',
     globe:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="8" cy="8" r="6.2"/><path d="M1.8 8h12.4M8 1.8c-2.2 2-2.2 10.4 0 12.4M8 1.8c2.2 2 2.2 10.4 0 12.4M3.2 4.5h9.6M3.2 11.5h9.6"/></svg>',
     gear:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6" stroke-dasharray="1.6 2.02" stroke-width="2.4"/><circle cx="8" cy="8" r="4.3" stroke-width="1.1"/></svg>',
     power:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M5.2 4.3a5 5 0 1 0 5.6 0"/><path d="M8 1.8v6"/></svg>',

@@ -101,9 +101,9 @@
   /* 面板 250×284（全屏封面开）。移动：x、y 各走自己的过渡，x 快 y 慢，轨迹自然成弧 */
   .panel{position:absolute;width:250px;height:284px;border-radius:16px;overflow:hidden;
     box-shadow:0 18px 40px rgba(0,0,0,.35), 0 1px 0 rgba(255,255,255,.08) inset;background:#1a1626;
-    transition:transform .52s cubic-bezier(.3,.9,.3,1), opacity .4s ease .1s, left .50s cubic-bezier(.2,1.12,.32,1), top .74s cubic-bezier(.22,1,.36,1);transform-origin:100% 50%}
+    transition:transform .52s cubic-bezier(.3,.9,.3,1), opacity .4s ease .1s;transform-origin:100% 50%}   /* 位置由 JS 沿弧线路径逐帧驱动（v3.3） */
   .stage[data-side="left"] .panel{transform-origin:0 50%}
-  .stage.rm .panel{transition:opacity .16s linear, left .2s linear, top .2s linear}
+  .stage.rm .panel{transition:opacity .16s linear}
   .panel .art{position:absolute;inset:0;background:
       radial-gradient(60% 55% at 70% 30%, rgba(255,255,255,.22), transparent 60%),
       radial-gradient(45% 45% at 30% 75%, rgba(255,120,150,.35), transparent 65%),
@@ -185,7 +185,7 @@
   .edgeglow{position:absolute;right:0;width:12px;height:284px;opacity:0;transition:opacity .4s ease;background:linear-gradient(90deg,transparent,rgba(255,200,120,.55));filter:blur(2px)}
   .stage[data-side="left"] .edgeglow{right:auto;left:0;background:linear-gradient(270deg,transparent,rgba(255,200,120,.55))}
   .stage.showglow .edgeglow{opacity:1}
-  .cornerglow{position:absolute;left:0;bottom:0;width:140px;height:140px;opacity:0;transition:opacity .4s ease;background:radial-gradient(circle at 0% 100%, rgba(255,200,120,.45), transparent 70%);filter:blur(4px)}
+  .cornerglow{position:absolute;right:0;bottom:0;width:140px;height:140px;opacity:0;transition:opacity .4s ease;background:radial-gradient(circle at 100% 100%, rgba(255,200,120,.45), transparent 70%);filter:blur(4px)}
   .stage.showcorner .cornerglow{opacity:1}
 
   /* 高亮环 */
@@ -210,13 +210,15 @@
   .card .beak{position:absolute;width:12px;height:12px;background:var(--mock-card-bg);backdrop-filter:blur(18px) saturate(1.5);-webkit-backdrop-filter:blur(18px) saturate(1.5);transform:rotate(45deg)}
   .card .beak.right{right:-6px;top:var(--beak-y,50%);margin-top:-6px;box-shadow:.5px -.5px 0 var(--mock-card-line2)}
   .card .beak.left{left:-6px;top:var(--beak-y,50%);margin-top:-6px;box-shadow:-.5px .5px 0 var(--mock-card-line2)}
-  .card .head{display:flex;align-items:center;gap:10px}
-  /* 进度环：连续粗环，外径 24、线宽 5（≈21%），圆头；轨道=前景色低透明度 */
-  .card .ring{flex:none;width:24px;height:24px;position:relative}
-  .card .ring svg{width:24px;height:24px;display:block;overflow:visible}
-  .card .ring .num{position:absolute;inset:0;display:grid;place-items:center;font-size:8.5px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+  /* v3.2：标题左对齐、进度环靠右上角（DOM 里环在前，row-reverse 让它落到右侧） */
+  .card .head{display:flex;flex-direction:row-reverse;justify-content:space-between;align-items:flex-start;gap:12px}
+  .card .title{flex:1;min-width:0;padding-top:4px}
+  /* 进度环：连续粗环，外径 28、线宽 5.5（≈20%），圆头；轨道=前景色低透明度 */
+  .card .ring{flex:none;width:28px;height:28px;position:relative}
+  .card .ring svg{width:28px;height:28px;display:block;overflow:visible}
+  .card .ring .num{position:absolute;inset:0;display:grid;place-items:center;font-size:9.5px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
   .card .ring .chk{position:absolute;inset:0;display:grid;place-items:center;opacity:0;transform:scale(.6)}
-  .card .ring .chk svg{width:10px;height:10px;stroke:var(--mock-accent);stroke-width:2.6;fill:none;stroke-linecap:round;stroke-linejoin:round}
+  .card .ring .chk svg{width:12px;height:12px;stroke:var(--mock-accent);stroke-width:2.6;fill:none;stroke-linecap:round;stroke-linejoin:round}
   .card .ring.done .num{opacity:0;transform:translateY(-6px);transition:all .2s ease}
   .card .ring.done .chk{opacity:1;transform:scale(1);transition:all .3s cubic-bezier(.3,1.4,.5,1) .08s}
   .card .title{font-size:13px;font-weight:600;letter-spacing:-.005em;line-height:1.3}
@@ -237,8 +239,8 @@
   .card .tp .pad.swipe .f.b{left:40px;top:30px}
   .card .tp .pad.swipeL .f.a{left:44px;top:30px}
   .card .tp .pad.swipeL .f.b{left:60px;top:30px}
-  .card .tp .pad.nudge .f.a{left:52px;top:22px}
-  .card .tp .pad.nudge .f.b{left:68px;top:22px}
+  .card .tp .pad.nudge .f.a{left:20px;top:22px}
+  .card .tp .pad.nudge .f.b{left:36px;top:22px}
   .card .tp .pad.swipe .f{animation:tpSwipe 3.55s linear 2 both}
   .card .tp .pad.swipe .f::after{animation:tpTrailH 3.55s linear 2 both}
   .card .tp .pad.swipeL .f{animation:tpSwipeL 3.55s linear 2 both}
@@ -250,10 +252,10 @@
   /* 时间轴（3.55s = 100%）：0–.45s 淡入 → 停 .35s → .95s 位移 cubic-bezier(.42,0,.58,1) → 停 .35s → .3s 到 .31 → 平台 .58s → .42s 到 0 → 隐 .15s */
   @keyframes tpSwipe{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(36px,0)}59.2%{opacity:1;transform:translate(36px,0)}67.6%{opacity:.31;transform:translate(36px,0)}83.9%{opacity:.31;transform:translate(36px,0)}95.8%,100%{opacity:0;transform:translate(36px,0)}}
   @keyframes tpSwipeL{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(-36px,0)}59.2%{opacity:1;transform:translate(-36px,0)}67.6%{opacity:.31;transform:translate(-36px,0)}83.9%{opacity:.31;transform:translate(-36px,0)}95.8%,100%{opacity:0;transform:translate(-36px,0)}}
-  @keyframes tpNudge{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(-30px,18px)}59.2%{opacity:1;transform:translate(-30px,18px)}67.6%{opacity:.31;transform:translate(-30px,18px)}83.9%{opacity:.31;transform:translate(-30px,18px)}95.8%,100%{opacity:0;transform:translate(-30px,18px)}}
+  @keyframes tpNudge{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(30px,18px)}59.2%{opacity:1;transform:translate(30px,18px)}67.6%{opacity:.31;transform:translate(30px,18px)}83.9%{opacity:.31;transform:translate(30px,18px)}95.8%,100%{opacity:0;transform:translate(30px,18px)}}
   @keyframes tpTrailH{0%,22.5%{opacity:0;transform:scaleX(1)}36%{opacity:.45;transform:translateX(-4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:scaleX(1)}}
   @keyframes tpTrailHL{0%,22.5%{opacity:0;transform:scaleX(1)}36%{opacity:.45;transform:translateX(4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:scaleX(1)}}
-  @keyframes tpTrailN{0%,22.5%{opacity:0;transform:rotate(-31deg) scaleX(1)}36%{opacity:.45;transform:rotate(-31deg) translateX(4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:rotate(-31deg) scaleX(1)}}
+  @keyframes tpTrailN{0%,22.5%{opacity:0;transform:rotate(31deg) scaleX(1)}36%{opacity:.45;transform:rotate(31deg) translateX(-4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:rotate(31deg) scaleX(1)}}
   .card .foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px}
   .card .link{font-size:11px;color:var(--mock-card-muted);text-decoration:none;cursor:default}
   .card .link:hover{text-decoration:underline}
@@ -324,7 +326,7 @@
   <header>
     <div class="eyebrow">nanoPod · 认识 nanoPod · 分镜 v3 · 2026-09-26</div>
     <h1>认识 nanoPod</h1>
-    <p class="lede">分镜 v3。这不是教程，是陪着用户把 nanoPod 走一遍：玻璃卡片贴在要操作的地方，做完自动打勾、连续的粗进度环长一截、火花一闪；最后一步说句走心的话。较 v2.1：文案全部改成真诚克制的口吻（不再有「教会」这类字，移动面板的动作一律说「推」）；面板移到角落的演示改成 x、y 两轴各走一段弹簧、x 快（0.50s）y 慢（0.74s）的柔和弧线；进度环改成 Apple Watch 活动环那种连续粗环，轨道带同色相暗色。纯前端模拟：「做这一步」代替用户的真实操作；可切深浅色、中英、Reduce Motion 和三条边界分支。真实手感以 app 内为准，由创始人终验。</p>
+    <p class="lede">分镜 v3.2。这不是教程，是陪着用户把 nanoPod 走一遍：玻璃卡片贴在要操作的地方，做完自动打勾、连续的粗进度环长一截、火花一闪；最后一步说句走心的话。较 v2.1：文案全部改成真诚克制的口吻（不再有「教会」这类字，移动面板的动作一律说「推」）；面板移到角落的演示走一条向屏幕中心鼓出的固定弧线（二次 Bézier，弧高 9% 位移、最高点在行程 45%、0.6s ease-out）；进度环改成 Apple Watch 活动环那种连续粗环，轨道带同色相暗色。纯前端模拟：「做这一步」代替用户的真实操作；可切深浅色、中英、Reduce Motion 和三条边界分支。真实手感以 app 内为准，由创始人终验。</p>
     <div class="legend">
       <span class="l-card">引导卡（Liquid Glass；macOS 14/15 回退 NSVisualEffectView .popover）</span>
       <span class="l-halo">高亮环（点击透传覆盖窗）</span>
@@ -336,7 +338,7 @@
   <section id="demo">
     <div class="sec-head">
       <h2>演示台</h2>
-      <p>720×440 当作一整块屏幕。面板从真实默认位置（距可视区右上各 20pt）出发；「放到角落」一步演示推到左下角（角边距 16pt）——选对角线的移动才看得出弧度，随后从左缘收边。</p>
+      <p>720×440 当作一整块屏幕。面板从真实默认位置（距可视区右上各 20pt）出发；「放到角落」一步按真实默认位置演示：从右上角推到右下角（角边距 16pt），再从右缘收边。这一段本身几乎竖直，所以演示走一条向屏幕中心（向左）鼓出的固定弧线：弧高 = 位移的 9%，最高点在行程 45% 处，0.6s ease-out 落到右下角；左缘收边的镜像版本只作分支说明。</p>
     </div>
 
     <div class="toolbar" role="toolbar" aria-label="演示控制">
@@ -388,7 +390,7 @@
   <section>
     <div class="sec-head">
       <h2>进度环八态</h2>
-      <p>连续粗环，没有分段缝：每完成一步弧长增加 1/7。外径 24pt、线宽 5pt（≈21%）、圆头；前景 浅 #FA4058 / 深 #FB546C；轨道是同一色相的低透明度（浅 22%、深 28%），不透明底上等价于 浅 #FED5DA / 深 #5C2D36。下面用 64pt 放大：线宽 13pt。左四个浅色底，右四个深色底。</p>
+      <p>连续粗环，没有分段缝：每完成一步弧长增加 1/7。外径 28pt、线宽 5.5pt（≈20%）、圆头；前景 浅 #FA4058 / 深 #FB546C；轨道是同一色相的低透明度（浅 22%、深 28%），不透明底上等价于 浅 #FED5DA / 深 #5C2D36。下面用 64pt 放大：线宽 13pt。左四个浅色底，右四个深色底。</p>
     </div>
     <div class="rings" id="rings"></div>
   </section>
@@ -396,7 +398,7 @@
   <section>
     <div class="sec-head">
       <h2>移到角落的轨迹</h2>
-      <p>柔和的弧线：x、y 各走一段弹簧，x 快（0.50s）y 慢（0.74s），轨迹自然成弧，不手画路径。弧高随方向变：对角线移动约为位移的 12%，近水平或近竖直约 5–8%；最高点在行程约 1/3 处；两轴都落定约 0.6s。真实面板现在是两轴共用一段弹簧、各带初速度：零速度或推的方向正对角落时是直线，方向偏一点才自然弯——两种选择的取舍见 proposal §13.2。</p>
+      <p>演示里的移动走一条固定路径：二次 Bézier，起点 = 面板当前位置，终点 = 目标角（边距 16pt），控制点在弦上 45% 处向屏幕中心一侧偏出 2 × 弧高；弧高 = 位移的 9%（下图按同一算式画，量出来 ≈ 9%）。沿路径的进度用 0.6s ease-out（cubic-bezier(.2,.8,.2,1)，等价 Spring(duration .6, bounce 0)）。创始人已定：弧线只在引导演示里，真实面板的吸附不改、不加开关（真实面板两轴共用一段弹簧、各带初速度：零速度或正对角落时是直线）。曾试过用 x、y 两轴不同响应的弹簧生成弧，近竖直移动时弧不到 1%，弃用。</p>
     </div>
     <div class="traj" id="traj"></div>
   </section>
@@ -449,7 +451,7 @@
             <tr><td>尺寸</td><td>宽 236pt 固定，高随内容（92–190pt）；圆角 14pt continuous；箭头 12pt 等腰与卡同一形状</td></tr>
             <tr><td>材质</td><td><b>macOS 26：Liquid Glass</b>，SwiftUI <span class="mono">.glassEffect(.regular, in: TourBubbleShape)</span>（卡体 + 箭头一个形状），整张卡包在一个 <span class="mono">GlassEffectContainer</span> 里，无 tint；卡内按钮是实色胶囊，不再叠玻璃。<b>macOS 14/15</b>：<span class="mono">NSVisualEffectView</span> <span class="mono">.popover</span> 材质 + <span class="mono">maskImage</span> 同一形状。不用 <span class="mono">.hudWindow</span>。理由与三条教训的处理见 proposal §4.6</td></tr>
             <tr><td>字</td><td>SF Pro Text：标题 13 semibold；正文 12 regular 次级色；beat 12；脚注 10.5；环内数字 8.5 semibold tabular</td></tr>
-            <tr><td>进度环</td><td>连续粗环：外径 24pt、线宽 5pt、圆头、12 点钟起顺时针；前景 浅 #FA4058 / 深 #FB546C；轨道同色相 浅 22% / 深 28% 透明度（不透明底等价 #FED5DA / #5C2D36）；每步 +1/7，0.6 s ease-out；合圈脉冲一次</td></tr>
+            <tr><td>进度环</td><td>连续粗环：外径 28pt、线宽 5.5pt（≈20%）、圆头、12 点钟起顺时针；卡内靠右上角、与标题顶对齐，标题正文左对齐；环内数字 9.5pt、勾 12pt；前景 浅 #FA4058 / 深 #FB546C；轨道同色相 浅 22% / 深 28% 透明度（不透明底等价 #FED5DA / #5C2D36）；每步 +1/7，0.6 s ease-out；合圈脉冲一次</td></tr>
             <tr><td>放置</td><td>面板内锚点：卡放在面板朝屏幕中心的一侧，间距 16pt，垂直对齐锚点；绝不盖住面板。贴边小条锚点：胶囊探出区域之外再留 20pt。面板被移走时卡从新位置长出</td></tr>
             <tr><td>层级</td><td>与面板同 level（.floating）并排在其上；菜单打开时卡片暂隐</td></tr>
             <tr><td>跟随</td><td>只订阅面板的 didMove / didResize / didChangeScreen 与已有的 windowMovementBegan/Ended 通知：移动中卡片隐去，落定后从新位置长出；不轮询</td></tr>
@@ -475,7 +477,7 @@
 (function(){
   'use strict';
   const W=720,H=440,MENU=24;
-  const POS={ home:{x:450,y:44}, corner:{x:16,y:140} };   // 默认（右上、20pt）与推到左下角（16pt）
+  const POS={ home:{x:450,y:44}, corner:{x:454,y:140} };   // 默认（右上、20pt）与推到右下角（16pt）；左缘版本只作分支说明
   const PW=250,PH=284, CAPW=120,CAPH=204, SLIVER_W=6, CAP_GAP=14;
   const STEPS=7;
 
@@ -521,7 +523,7 @@
       translate:{title:'翻译', body:'右下角的按钮。译文会跟在每一句下面。', confirm:'译文来了。'},
       translateAlt:{title:'这首不用翻', body:'等有一首外文歌的时候，我再来告诉你翻译在哪。', confirm:'记下了。'},
       later:{title:'这首可以翻译', body:'鼠标挪过来，右下角的按钮点一下。', confirm:'译文来了。'},
-      move:{title:'放到你喜欢的角落', body:'双指按住面板，轻轻往一个角推过去，它会自己落好。', beats:['推到一个角落','再往屏幕边上推一下'], bodyTuck:'落好了。往左边再推一下，它会藏进屏幕边。', fallback:'替我收起来', note:'用鼠标的话，在 设置 › 快捷键 给「贴边隐藏」录个键就好。', confirm:'收好了。'},
+      move:{title:'放到你喜欢的角落', body:'双指按住面板，轻轻往一个角推过去，它会自己落好。', beats:['推到一个角落','再往屏幕边上推一下'], bodyTuck:'落好了。往右边再推一下，它会藏进屏幕边。', fallback:'替我收起来', note:'用鼠标的话，在 设置 › 快捷键 给「贴边隐藏」录个键就好。', confirm:'收好了。'},
       ret:{title:'它就在这条边上', beats:['鼠标停上去，它会探出来','点一下，回来'], confirm:'回来了。'},
       done:{title:'就这些了', body:'往后它就安静地待在一边，想听的时候就在。愿有音乐陪着的时候，都是好时光。', primary:'录个快捷键', secondary:'好', foot:'想再走一遍：设置 › 重新认识 nanoPod'},
       doneDeferred:{body:'往后它就安静地待在一边，想听的时候就在。翻译那一步，等有外文歌的时候我再来。愿有音乐陪着的时候，都是好时光。'}
@@ -536,7 +538,7 @@
       translate:{title:'Translation', body:'The button at the bottom right. Each line gets one underneath.', confirm:'Translated.'},
       translateAlt:{title:"This one doesn't need it", body:"When a song in another language comes along, I'll show you where translation is.", confirm:'Noted.'},
       later:{title:'This one can be translated', body:'Bring your cursor over and press the button at the bottom right.', confirm:'Translated.'},
-      move:{title:'Put it in a corner you like', body:'Two fingers on the panel, nudge it toward a corner. It settles there on its own.', beats:['Nudge it to a corner','Now nudge it into the edge'], bodyTuck:'Settled. Nudge it left once more and it slips into the edge.', fallback:'Tuck it for me', note:'On a mouse, give Hide to Edge a key in Settings › Shortcuts.', confirm:'Tucked in.'},
+      move:{title:'Put it in a corner you like', body:'Two fingers on the panel, nudge it toward a corner. It settles there on its own.', beats:['Nudge it to a corner','Now nudge it into the edge'], bodyTuck:'Settled. Nudge it right once more and it slips into the edge.', fallback:'Tuck it for me', note:'On a mouse, give Hide to Edge a key in Settings › Shortcuts.', confirm:'Tucked in.'},
       ret:{title:"It's right here on the edge", beats:['Rest your cursor on it. It peeks out',"Click, and it's back"], confirm:"It's back."},
       done:{title:"That's all", body:'From here on it stays quietly to the side, there whenever you want it. I hope the time you spend with music, and with nanoPod, is time you enjoy.', primary:'Set a shortcut', secondary:'OK', foot:'To walk through again: Settings › Get to know nanoPod again'},
       doneDeferred:{body:"From here on it stays quietly to the side, there whenever you want it. Translation can wait for a song that needs it; I'll come back then. I hope the time you spend with music, and with nanoPod, is time you enjoy."}
@@ -564,7 +566,7 @@
       notes:{teach:'歌词页右下角的翻译按钮。', why:'创始人点名；按钮只在悬停时出现，且只有 canTranslate 为真才挂载。', anchor:'翻译按钮中心（右下角，距底 92pt）；卡放面板左侧对齐该 y。', signal:'LyricsService.$showTranslation 翻真（检测动作，不检测结果）。', edge:'canTranslate == false（无歌词 / 网络不可达 / 已是目标语言）→ S4′：这一步标为 deferred，卡就地说「这首不用翻」，环不长，1.1s 后往 S5 走；引导结束后只留一个 $canTranslate 订阅，第一首外文歌播起来（面板可见、开播 3s 后）再出 S4L 补这一步；连续 3 首没做或 20 次启动未遇到 → 静默标 skipped。不指向设置（那是总开关，当前歌不能翻时开了也看不到结果），菜单 v2 已无翻译项。翻译失败 → 不弹任何窗，卡照常完成。', level:'环 +1/7 + 小火花。'}},
     {id:'S5', key:'move', step:5, filled:[0,1,2,3,4], panel:'st-rest', pos:'home', anchor:'panel', halo:null, glow:'corner',
       name:{zh:'放到角落 · 收边',en:'Corner · Tuck'},
-      notes:{teach:'双指按住面板往一个角推，它按速度投影落到最近的角；落定后再往屏幕边推一下，藏进边里。', why:'创始人 09-26 点名的移动方式 + 招牌收边动作；两个都是双指手势，连成一步两个 beat，卡片跟着面板过去。演示选对角线（右上 → 左下）才看得出弧度，随后从左缘收边。', anchor:'面板朝屏幕中心一侧的边中点；卡内触控板示意先演「往角落推」、beat1 完成后换成「横推」；目标角亮角落光、推入时目标边亮边缘光。', signal:'beat1：新增 SnappablePanel.snappedCorner 通知（弹簧动画结束且 origin 落在四角目标 ±1pt）；beat2：新增 LiquidEdgeController.statePublisher：.tucked（settled）。卡在 .collapsing 一出现就淡出。', edge:'鼠标用户：拖动不吸角、也不能推 → 「替我收起来」按钮调 hideToNearestEdge()，仍能看到小条并走完 S6；脚注指向快捷键。Stage Manager 开着 → 只用右边的角。落在右边角 → 文案改「往右边再推一下」。', level:'环 +1/7 的填充与火花在 S6 卡出现时补放（此刻卡片已隐去）。'}},
+      notes:{teach:'双指按住面板往一个角推，它按速度投影落到最近的角；落定后再往屏幕边推一下，藏进边里。', why:'创始人 09-26 点名的移动方式 + 招牌收边动作；两个都是双指手势，连成一步两个 beat，卡片跟着面板过去。演示按真实默认位置：右上角推到右下角、从右缘收边；走一条向屏幕中心鼓出的固定弧线（弧高 9% 位移、最高点在行程 45%、0.6s ease-out），只在演示里，不绑真实物理。左缘收边是镜像分支，不再单独演示。', anchor:'面板朝屏幕中心一侧的边中点；卡内触控板示意先演「往角落推」、beat1 完成后换成「横推」；目标角亮角落光、推入时目标边亮边缘光。', signal:'beat1：新增 SnappablePanel.snappedCorner 通知（弹簧动画结束且 origin 落在四角目标 ±1pt）；beat2：新增 LiquidEdgeController.statePublisher：.tucked（settled）。卡在 .collapsing 一出现就淡出。', edge:'鼠标用户：拖动不吸角、也不能推 → 「替我收起来」按钮调 hideToNearestEdge()，仍能看到小条并走完 S6；脚注指向快捷键。Stage Manager 开着 → 只用右边的角。落在左边角 → 文案改「往左边再推一下」，小条与胶囊镜像到左缘。', level:'环 +1/7 的填充与火花在 S6 卡出现时补放（此刻卡片已隐去）。'}},
     {id:'S6', key:'ret', step:6, filled:[0,1,2,3,4,5], panel:'st-tucked', pos:'corner', anchor:'sliver', halo:{a:'sliver',w:18,h:72,pill:true},
       name:{zh:'回来',en:'Back'},
       notes:{teach:'它在哪、怎么探出胶囊、怎么回来。', why:'收了就得让他知道怎么拿回来——否则第一次收边就「丢」了窗口。', anchor:'贴边小条（6×56，落角那一侧的屏幕边缘，面板中线高度）；卡放在胶囊探出区域之外再留 20pt。', signal:'beat1：state == .floating（hover 停留 80ms）；beat2：.expanding 后 settled 回 .card。', edge:'用户直接双指向内推展开 → 两个 beat 同时勾。鼠标移开胶囊又缩回 → beat1 保持已勾。', level:'最后一步：最后一截长满 → 圆头碰到起点合圈脉冲 → 礼花 → 卡长成最后一张。haptic .alignment。'}},
@@ -652,7 +654,7 @@
   function cardHTML(scene,opts){
     const L=COPY[opts.lang], sc=scene.key;
     const count=scene.filled.filter(i=>!(opts.notrans && i===4)).length;
-    const ring=(cnt,closed,num,done)=>`<div class="ring ${done?'done':''}">${ringSVG(24,5,cnt,closed)}<div class="num">${num}</div><div class="chk">${G.check}</div></div>`;
+    const ring=(cnt,closed,num,done)=>`<div class="ring ${done?'done':''}">${ringSVG(28,5.5,cnt,closed)}<div class="num">${num}</div><div class="chk">${G.check}</div></div>`;
     const stop=`<a class="link">${L.stop}</a>`;
     let head='',body='',extra='',foot='';
     const stepNum = scene.step==null ? '' : String(scene.step+1);
@@ -735,6 +737,32 @@
     if(!opts.static){ refs.card.classList.remove('enter'); void refs.card.offsetWidth; refs.card.classList.add('enter'); }
   }
 
+  // v3.3 演示轨迹：二次 Bézier，向屏幕中心鼓出，弧高 = 位移 × ARC_SAGITTA，控制点在弦上 ARC_PEAK 处
+  const ARC_SAGITTA=0.09, ARC_PEAK=0.45, ARC_DURATION=600;
+  function arcControl(from,to){
+    const dx=to.x-from.x, dy=to.y-from.y, len=Math.hypot(dx,dy)||1;
+    // 弦的法向，取指向屏幕中心的那一侧（按面板中心判断）
+    let nx=-dy/len, ny=dx/len;
+    const mid={x:from.x+dx*ARC_PEAK, y:from.y+dy*ARC_PEAK};
+    const toCenter={x:W/2-(mid.x+PW/2), y:H/2-(mid.y+PH/2)};
+    if(nx*toCenter.x+ny*toCenter.y<0){ nx=-nx; ny=-ny; }
+    const off=2*ARC_SAGITTA*len;   // 二次 Bézier 的最大偏离 = 控制点偏离的一半
+    return {x:mid.x+nx*off, y:mid.y+ny*off};
+  }
+  function arcPoint(from,c,to,t){ const u=1-t; return {x:u*u*from.x+2*u*t*c.x+t*t*to.x, y:u*u*from.y+2*u*t*c.y+t*t*to.y}; }
+  const easeOut=t=>{ // cubic-bezier(.2,.8,.2,1) 近似
+    return 1-Math.pow(1-t,2.6); };
+  function movePanelAlongArc(refs,to,rm){
+    return new Promise(res=>{
+      const from={...refs.P}; if(rm){ refs.P={...to}; layoutPanel(refs); return res(); }
+      const c=arcControl(from,to); const t0=performance.now();
+      function frame(now){ const k=Math.min(1,(now-t0)/ARC_DURATION); const p=arcPoint(from,c,to,easeOut(k));
+        refs.P={x:p.x,y:p.y}; layoutPanel(refs);
+        if(k<1) requestAnimationFrame(frame); else { refs.P={...to}; layoutPanel(refs); res(); } }
+      requestAnimationFrame(frame);
+    });
+  }
+
   function makeFX(canvas){
     const ctx=canvas.getContext('2d'); let parts=[],raf=0,last=0;
     function tick(t){ if(!last) last=t; const dt=Math.min(0.05,(t-last)/1000); last=t; ctx.clearRect(0,0,canvas.width,canvas.height);
@@ -788,13 +816,13 @@
   async function doStep(){
     if(state.busy) return; state.busy=true; $('#doit').disabled=true;
     const scenes=visibleScenes(); const scene=scenes[state.idx]; const L=COPY[state.lang]; const rm=state.rm; const inner=live.inner;
-    const grow=(cnt)=>{ const r=inner.querySelector('.ring'); if(!r) return; ringSetCount(r,cnt); const f=r.querySelector('circle.fill'); if(f&&!rm){ f.setAttribute('stroke-width','6'); setTimeout(()=>f.setAttribute('stroke-width','5'),300);} };
+    const grow=(cnt)=>{ const r=inner.querySelector('.ring'); if(!r) return; ringSetCount(r,cnt); const f=r.querySelector('circle.fill'); if(f&&!rm){ f.setAttribute('stroke-width','6.5'); setTimeout(()=>f.setAttribute('stroke-width','5.5'),300);} };
     const beat=async(sel)=>{ const li=inner.querySelector(sel); if(li) li.classList.add('done'); hud(live.hudH,'⌁ haptic .levelChange',500); await sleep(rm?120:260); };
     const confirm=(t)=>{ const c=inner.querySelector('.confirm'); if(c){ c.textContent=t; c.hidden=false; } };
     const ringDone=()=>{ const r=inner.querySelector('.ring'); if(r) r.classList.add('done'); };
     const celebrate=async(cnt)=>{ await sleep(50); grow(cnt); if(!rm){ const c=ringCenterInStage(); fx.sparks(c.x,c.y,accentNow()); } await sleep(50); ringDone(); };
     const closeRing=async()=>{ const r=inner.querySelector('.ring'); if(!r) return; const f=r.querySelector('circle.fill'); ringSetCount(r,7); r.classList.add('done');
-      await sleep(600); if(f&&!rm){ f.setAttribute('stroke-width','6.5'); f.setAttribute('stroke','#fff'); setTimeout(()=>{f.setAttribute('stroke-width','5'); f.setAttribute('stroke',accentNow());},220); r.style.transition='transform .5s cubic-bezier(.3,1.6,.5,1)'; r.style.transform='scale(1.08)'; setTimeout(()=>r.style.transform='scale(1)',260); }
+      await sleep(600); if(f&&!rm){ f.setAttribute('stroke-width','7'); f.setAttribute('stroke','#fff'); setTimeout(()=>{f.setAttribute('stroke-width','5.5'); f.setAttribute('stroke',accentNow());},220); r.style.transition='transform .5s cubic-bezier(.3,1.6,.5,1)'; r.style.transform='scale(1.08)'; setTimeout(()=>r.style.transform='scale(1)',260); }
       else if(f){ f.setAttribute('stroke','#fff'); setTimeout(()=>f.setAttribute('stroke',accentNow()),200); } };
     const advance=async()=>{ if(state.idx<scenes.length-1){ live.card.style.opacity='0'; await sleep(rm?160:180); state.idx+=1; const next=scenes[state.idx]; applyScene(live,next,currentOpts()); renderNotes(next); renderStatus(next); $('#prev').disabled=false; $('#next').disabled=state.idx===scenes.length-1; } };
     const cnt=countFor(scene);
@@ -827,9 +855,9 @@
         await sleep(900); hud(live.hudE,'done → cancel $canTranslate sink, teardown',1000); await sleep(800);
         state.busy=false; $('#doit').disabled=true; return; }
       case 'move':{
-        hud(live.hudE,'two-finger nudge → per-axis springs (x .50s / y .74s) → corner',1000);
+        hud(live.hudE,'two-finger nudge → arc path (sagitta 9%, peak 45%) → corner',1000);
         live.card.style.opacity='0'; await sleep(120);
-        live.P={...POS.corner}; layoutPanel(live); await sleep(rm?250:800);
+        await movePanelAlongArc(live, POS.corner, rm); await sleep(rm?250:160);
         hud(live.hudE,'.windowMovementEnded @ corner → snappedCorner',700);
         live.inner.innerHTML=cardHTML(scene,currentOpts({afterNudge:true,side:sideFor(live.P)})); placeCard(live,scene,currentOpts()); live.card.style.opacity='1';
         live.root.classList.remove('showcorner'); live.root.classList.add('showglow');
@@ -885,9 +913,9 @@
     {sc:'S4', opts:{}, cap:{n:'S4',t:'翻译',d:'歌词页右下角翻译按钮，检测 showTranslation 翻真。'}},
     {sc:'S4', opts:{notrans:true}, cap:{n:'S4′（条件）',t:'翻译 · 延后',d:'当前歌不可翻译：卡片说一句「这首不用翻」，环不长，往 S5 走。'}},
     {sc:'S4L', opts:{notrans:true}, cap:{n:'S4L（之后）',t:'翻译 · 之后',d:'引导结束后第一首外文歌播起来时，这张卡在翻译按钮旁出现；做完环安静合上，不再放礼花。'}},
-    {sc:'S5', opts:{}, cap:{n:'S5',t:'放到角落',d:'触控板示意演「往角落推」，左下角亮角落光；落定信号 snappedCorner。'}},
-    {sc:'S5', opts:{afterNudge:true, posOverride:'corner', glowOverride:'edge'}, cap:{n:'S5b（中间态）',t:'再推进边',d:'面板已落到左下角，卡片从它右侧长出；示意换成「横推」，左缘亮边缘光；检测 .tucked。'}},
-    {sc:'S6', opts:{}, cap:{n:'S6',t:'回来',d:'小条在左缘；卡在胶囊探出区之外；两个 beat：hover 探出、点击回来。'}},
+    {sc:'S5', opts:{}, cap:{n:'S5',t:'放到角落',d:'触控板示意演「往角落推」，右下角亮角落光；落定信号 snappedCorner。'}},
+    {sc:'S5', opts:{afterNudge:true, posOverride:'corner', glowOverride:'edge'}, cap:{n:'S5b（中间态）',t:'再推进边',d:'面板已落到右下角，卡片从它左侧长出；示意换成「横推」，右缘亮边缘光；检测 .tucked。'}},
+    {sc:'S6', opts:{}, cap:{n:'S6',t:'回来',d:'小条在右缘；卡在胶囊探出区之外；两个 beat：hover 探出、点击回来。'}},
     {sc:'S7', opts:{}, cap:{n:'S7',t:'就这些了',d:'环合上、脉冲、礼花一次；说一句走心的话，递出「录个快捷键」。'}},
     {sc:'S1', opts:{mockOverride:'light'}, cap:{n:'S1 · 浅色',t:'浅色外观',d:'同一张玻璃卡在浅色外观下，环的轨道是浅粉。'}}
   ];
@@ -927,25 +955,28 @@
       cell.innerHTML=`<div class="big" style="${vars}">${ringSVG(64,13,d.c,!!d.closed)}<div class="num">${d.n}</div></div><div class="lab"><b>${d.b}</b>${d.lab}</div>`; row.appendChild(cell); }
   }
 
-  // 轨迹示意：两轴弹簧 x .50s / y .74s 的位置采样 vs 直线
+  // 轨迹示意：演示用的二次 Bézier 弧（弧高 9%、最高点 45%）vs 直线对照
   function renderTraj(){
     const box=$('#traj');
-    // Apple Spring 近似：response→ω=2π/response，临界阻尼附近的解析解（bounce 小时用 damping 0.9 近似）
-    function springVal(t,duration,bounce){ const zeta=1-bounce; const omega=2*Math.PI/duration; if(zeta>=1){ return 1-Math.exp(-omega*t)*(1+omega*t); } const wd=omega*Math.sqrt(1-zeta*zeta); return 1-Math.exp(-zeta*omega*t)*(Math.cos(wd*t)+ (zeta*omega/wd)*Math.sin(wd*t)); }
-    const x0=560,y0=60,x1=120,y1=220; const pts=[]; let maxDev=0;
-    for(let i=0;i<=90;i++){ const t=i/90*0.9; const px=x0+(x1-x0)*springVal(t,0.50,0.15), py=y0+(y1-y0)*springVal(t,0.74,0.10); pts.push([px,py]);
-      const dx=x1-x0,dy=y1-y0,len=Math.hypot(dx,dy); const dev=Math.abs((px-x0)*dy-(py-y0)*dx)/len; maxDev=Math.max(maxDev,dev); }
-    const chord=Math.hypot(x1-x0,y1-y0); const ratio=(maxDev/chord*100).toFixed(0);
-    const d=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
-    box.innerHTML=`<svg viewBox="0 0 640 260" role="img" aria-label="两轴弹簧轨迹与直线对照">
+    // 用演示台同一套几何：面板 250×284 从右上（450,44）到右下角（454,140），按 0.55 缩到图里
+    const k=0.55, ox=240, oy=20;
+    const from=POS.home, to=POS.corner, c=arcControl(from,to);
+    const P=(p)=>[ox+p.x*k, oy+p.y*k];
+    const pts=[]; let maxDev=0; const dx=to.x-from.x, dy=to.y-from.y, len=Math.hypot(dx,dy);
+    for(let i=0;i<=60;i++){ const p=arcPoint(from,c,to,i/60); pts.push(p); const dev=Math.abs((p.x-from.x)*dy-(p.y-from.y)*dx)/len; maxDev=Math.max(maxDev,dev); }
+    const ratio=(maxDev/len*100).toFixed(1);
+    const d=pts.map((p,i)=>(i?'L':'M')+P(p).map(v=>v.toFixed(1)).join(' ')).join(' ');
+    const [x0,y0]=P(from),[x1,y1]=P(to); const w=PW*k,h=PH*k;
+    box.innerHTML=`<svg viewBox="0 0 640 260" role="img" aria-label="演示轨迹：向屏幕中心鼓出的二次 Bézier">
       <rect x="0" y="0" width="640" height="260" rx="10" fill="var(--surface-2)"/>
+      <rect x="${x0}" y="${y0}" width="${w}" height="${h}" rx="9" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="4 4"/>
+      <rect x="${x1}" y="${y1}" width="${w}" height="${h}" rx="9" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
       <line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}" stroke="var(--line)" stroke-width="2" stroke-dasharray="6 6"/>
       <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"/>
-      <rect x="${x0-25}" y="${y0-28}" width="50" height="56" rx="5" fill="none" stroke="var(--muted)" stroke-width="1.5"/>
-      <rect x="${x1-25}" y="${y1-28}" width="50" height="56" rx="5" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
-      <text x="${x0}" y="${y0-36}" text-anchor="middle" font-size="11" fill="var(--muted)" font-family="var(--mono)">起点</text>
-      <text x="${x1}" y="${y1+44}" text-anchor="middle" font-size="11" fill="var(--muted)" font-family="var(--mono)">角落</text>
-      <text x="330" y="236" text-anchor="middle" font-size="12" fill="var(--ink)">粉线：x Spring(duration .50, bounce .15) · y Spring(duration .74, bounce .10)；虚线：两轴同一段弹簧、零初速度（今天的真实面板）。此例（近水平）弧高 ≈ 位移的 ${ratio}%。</text>
+      <circle cx="${x0}" cy="${y0}" r="4" fill="var(--muted)"/><circle cx="${x1}" cy="${y1}" r="4" fill="var(--accent)"/>
+      <text x="${x0-8}" y="${y0+4}" text-anchor="end" font-size="11" fill="var(--muted)" font-family="var(--mono)">起点 · 右上 20pt</text>
+      <text x="${x1-8}" y="${y1+4}" text-anchor="end" font-size="11" fill="var(--muted)" font-family="var(--mono)">落点 · 右下角 16pt</text>
+      <text x="120" y="236" text-anchor="middle" font-size="12" fill="var(--ink)">粉线：二次 Bézier，控制点在弦上 45% 处向屏幕中心偏 2×弧高；弧高 ≈ 位移的 ${ratio}%；0.6s ease-out。虚线：直线对照。</text>
     </svg>`;
   }
 
