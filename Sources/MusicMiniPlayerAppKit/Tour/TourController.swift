@@ -47,6 +47,17 @@ final class TourController: ObservableObject {
     static var debugForceShow = false
     #endif
 
+    /// Test seam (§11.1 TourTeardownTests): how many of the three overlay
+    /// windows are currently allocated, and whether any of the three timers
+    /// (transition / finale auto-dismiss / closing-flash) are still armed.
+    var debugAllocatedWindowCount: Int {
+        [cardWindow != nil, haloWindow != nil, celebrationWindow != nil].filter { $0 }.count
+    }
+    var debugHasPendingTimers: Bool {
+        transitionWork != nil || finaleWork != nil || closingFlashWork != nil
+    }
+    var debugIsDeferredWatcherArmed: Bool { deferredWatcher.isArmed }
+
     init(panel: SnappablePanel, liquidEdge: LiquidEdgeController,
          musicController: MusicController = .shared, lyricsService: LyricsService = .shared) {
         self.panel = panel
@@ -127,7 +138,9 @@ final class TourController: ObservableObject {
 
     // MARK: - Event pump
 
-    private func send(_ event: TourEvent) {
+    /// Internal (not `private`) so tests can drive the machine directly via
+    /// `@testable import` without hosting real button clicks.
+    func send(_ event: TourEvent) {
         let snapshot = TourSnapshot(
             automationAuthorized: OnboardingState.shared.automationStatus == .authorized,
             canTranslate: lyricsService.canTranslate,
@@ -207,15 +220,22 @@ final class TourController: ObservableObject {
         TourAnchorRegistry.shared.reset()
     }
 
+    /// Fully releases the three overlay windows (not just orders them out) —
+    /// §11.2's "结束后无窗口...effectViews 清单必须回到引导前" means the
+    /// window OBJECTS must go, not just become invisible. Nothing else holds
+    /// a strong reference to them, so dropping these is deinit or nothing.
     private func hideCard() {
         closingFlashWork?.cancel(); closingFlashWork = nil
         lastPresentedModel = nil
-        cardWindow?.orderOut(nil)
         cardWindow?.contentViewController = nil
-        haloWindow?.orderOut(nil)
+        cardWindow?.orderOut(nil)
+        cardWindow = nil
         haloWindow?.contentViewController = nil
-        celebrationWindow?.orderOut(nil)
+        haloWindow?.orderOut(nil)
+        haloWindow = nil
         celebrationWindow?.contentViewController = nil
+        celebrationWindow?.orderOut(nil)
+        celebrationWindow = nil
     }
 
     // MARK: - Card content assembly (proposal §3.3/§9)
@@ -535,6 +555,7 @@ final class TourController: ObservableObject {
         celebrationWindow?.orderFront(nil)
         let longest = field.particles.map(\.lifetime).max() ?? 0
         DispatchQueue.main.asyncAfter(deadline: .now() + longest + 0.1) { [weak self] in
+            self?.celebrationWindow?.contentViewController = nil
             self?.celebrationWindow?.orderOut(nil)
         }
     }
