@@ -31,14 +31,27 @@ import QuartzCore
 public final class LiquidEdgeController {
     public static let autoPeekDefaultsKey = "liquidEdgeShowSongOnTrackChange"
 
-    public private(set) var state: LiquidEdgeState = .card
+    public private(set) var state: LiquidEdgeState = .card {
+        didSet {
+            guard oldValue != state else { return }
+            stateSubject.send(state)
+        }
+    }
     public var isActive: Bool { state != .card }
+    /// Onboarding tour hook (§6 "贴边状态"): every `state` change, current
+    /// value first (`CurrentValueSubject`) so a subscriber that attaches
+    /// mid-collapse still sees where things stand.
+    private let stateSubject = CurrentValueSubject<LiquidEdgeState, Never>(.card)
+    public var statePublisher: AnyPublisher<LiquidEdgeState, Never> { stateSubject.eraseToAnyPublisher() }
     var isAnimating: Bool { motion != nil }
 
     private weak var card: SnappablePanel?
     private(set) var stageWindow: LiquidEdgeStageWindow?
     private var stage: LiquidEdgeStageView?
-    private var side: LiquidEdgeSide = .right
+    /// Onboarding tour hook: which screen edge the sliver/capsule is
+    /// currently on — read alongside `tuckedRegionInScreen`/
+    /// `floatingHitRegionInScreen` to mirror the S6 card/halo correctly.
+    public private(set) var side: LiquidEdgeSide = .right
     private(set) var geometry = LiquidEdgeGeometry.reference
     /// The card's rect in stage coordinates as it is on screen (not mirrored).
     private var cardInStage = CGRect.zero
@@ -87,6 +100,26 @@ public final class LiquidEdgeController {
 
     private var reduceMotion: Bool { reduceMotionOverride ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     private var poses: LiquidEdgePoses { LiquidEdgePoses(geometry) }
+
+    // MARK: - Onboarding tour hooks (§6 "贴边小条"/"面板边")
+
+    /// The tucked sliver's screen rect — `.zero` before the first
+    /// `collapse(to:)` has ever run (no stage exists yet to be screen-relative to).
+    public var tuckedRegionInScreen: CGRect { toScreen(poses.tuckedRect) }
+    /// The floating capsule's padded hit region, screen space — matches
+    /// exactly what the stage view itself hit-tests against while `.floating`.
+    public var floatingHitRegionInScreen: CGRect { toScreen(poses.hitRegion(for: .floating)) }
+
+    /// Canonical-local (edge always conceptually "right") → screen: un-mirror
+    /// for the left edge, then offset by the stage window's own origin (the
+    /// stage's canonical space and `card.frame` share the same reference —
+    /// see `prepareStage`).
+    private func toScreen(_ r: CGRect) -> CGRect {
+        guard let stageWindow else { return .zero }
+        var out = r
+        if side == .left, let w = stage?.bounds.width { out.origin.x = w - out.maxX }
+        return out.offsetBy(dx: stageWindow.frame.origin.x, dy: stageWindow.frame.origin.y)
+    }
 
     // MARK: - Entry points
 

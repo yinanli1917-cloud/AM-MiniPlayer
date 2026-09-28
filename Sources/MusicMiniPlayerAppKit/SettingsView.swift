@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 MusicMiniPlayerCore 的 MusicController/LyricsService/OnboardingState/
+ * [INPUT]: 依赖 MusicMiniPlayerCore 的 MusicController/LyricsService/TourPersistence/
  *          GlobalShortcutAction；依赖 LocalizedStrings 的 L10n/UserDefaultsBinding；
  *          依赖 SettingsDemoStage 的 DemoStage/SettingsDemo/SettingsRowHoverIntentHost；
  *          依赖 AboutPageView。
@@ -115,23 +115,24 @@ enum LaunchAtLoginBridge {
 // MARK: - "Getting to know nanoPod" row (pure action + title policy)
 // ──────────────────────────────────────────────
 
-/// Pure title-key decision (proposal §4.3 / onboarding proposal §9.2 naming).
+/// Pure title-key decision (onboarding proposal §9.2 naming): not-yet-
+/// finished (never started, in progress, or explicitly stopped with steps
+/// still pending) reads "接着认识 nanoPod"; only a fully completed run reads
+/// "重新认识 nanoPod".
 enum TourButtonPolicy {
-    static func titleKey(hasCompletedOnboarding: Bool) -> String {
-        hasCompletedOnboarding ? "tour.settings.again" : "tour.settings.keepGoing"
+    static func titleKey(status: TourRunStatus) -> String {
+        status == .completed ? "tour.settings.again" : "tour.settings.keepGoing"
     }
 }
 
 /// Decoupled from the View so tests can call it directly without hosting a
 /// SwiftUI hierarchy: not-yet-completed resumes from where the user left off
-/// (no reset); completed starts over (reset first, then request the window).
+/// (`fromStart: false` — `TourEvent.resume`); completed starts over
+/// (`fromStart: true` — persistence is reset, then `TourEvent.start`).
 @MainActor
 enum GettingToKnowNanoPodAction {
-    static func perform(onboardingState: OnboardingState, requestOnboarding: () -> Void) {
-        if onboardingState.hasCompletedOnboarding {
-            onboardingState.reset()
-        }
-        requestOnboarding()
+    static func perform(status: TourRunStatus, requestTour: (_ fromStart: Bool) -> Void) {
+        requestTour(status == .completed)
     }
 }
 
@@ -143,12 +144,23 @@ struct SettingsWindowView: View {
     @EnvironmentObject var musicController: MusicController
     @ObservedObject var state: SettingsWindowState
     @StateObject private var lyricsService = LyricsService.shared
+    /// Kept for its Automation/MusicKit authorization queries (still used by
+    /// `automationStatusControl` below AND by the tour's "connect" step) —
+    /// its old `hasCompletedOnboarding`/`markCompleted`/schema-1 bookkeeping
+    /// is superseded by `TourPersistence` and no longer read here.
     @StateObject private var onboardingState = OnboardingState.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Read fresh on every body evaluation — the tour isn't expected to be
+    /// running while its own "keep going / again" button is on screen, so a
+    /// plain re-read (not a live subscription) is enough.
+    private var tourStatus: TourRunStatus { TourPersistence.load().status }
+
     /// Overridable for tests — the production default reaches through the
     /// app-layer singleton, which is nil in a plain unit-test process.
-    var onRequestOnboarding: () -> Void = { AppMain.shared?.showOnboardingWindow() }
+    /// `fromStart`: true restarts the tour from step 1 (persistence reset
+    /// first); false resumes from wherever it left off.
+    var onRequestTour: (_ fromStart: Bool) -> Void = { AppMain.shared?.showTour(fromStart: $0) }
 
     @State private var activeDemo: SettingsDemo?
     @State private var playToken = 0
@@ -412,8 +424,8 @@ struct SettingsWindowView: View {
                     HStack {
                         Text(L10n.localized("tour.settings.title"))
                         Spacer()
-                        Button(L10n.localized(TourButtonPolicy.titleKey(hasCompletedOnboarding: onboardingState.hasCompletedOnboarding))) {
-                            GettingToKnowNanoPodAction.perform(onboardingState: onboardingState, requestOnboarding: onRequestOnboarding)
+                        Button(L10n.localized(TourButtonPolicy.titleKey(status: tourStatus))) {
+                            GettingToKnowNanoPodAction.perform(status: tourStatus, requestTour: onRequestTour)
                         }
                         .frame(minWidth: 210)
                         .fixedSize()

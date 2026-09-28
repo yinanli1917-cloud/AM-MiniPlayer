@@ -200,6 +200,8 @@ struct MusicButtonView: View {
             action: {
                 let url = URL(fileURLWithPath: "/System/Applications/Music.app")
                 NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+                // Onboarding tour hook (§6 "↖ Music 点击").
+                TourHookBus.shared.musicButtonTapped.send(())
             },
             label: AnyView(HStack(spacing: 4) {
                 Image(systemName: "arrow.up.left").font(.system(size: 10, weight: .semibold))
@@ -210,6 +212,7 @@ struct MusicButtonView: View {
             artworkBrightness: artworkBrightness,
             isAlbumPage: isAlbumPage
         )
+        .tourAnchor(.musicButton)
     }
 }
 
@@ -323,6 +326,7 @@ struct TranslationButtonView: View {
         }
         .help("Toggle Translation")
         .accessibilityLabel(lyricsService.showTranslation ? "关闭翻译" : "开启翻译")
+        .tourAnchor(.translate)
     }
 }
 

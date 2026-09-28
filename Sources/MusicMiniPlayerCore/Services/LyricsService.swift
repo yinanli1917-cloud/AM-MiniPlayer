@@ -188,6 +188,13 @@ public class LyricsService: ObservableObject {
         lyrics.contains { $0.hasTranslation }
     }
 
+    /// Public read of `displayState.isSearchPhase` — exposed only for the
+    /// onboarding tour's translate-deferral timing (proposal §3.3 S4:
+    /// "displayState 仍在 searching 超过 3 s" is one of the deferral
+    /// triggers). `displayState` itself stays internal; nothing about the
+    /// lyrics pipeline changes.
+    public var isSearchingForLyrics: Bool { displayState.isSearchPhase }
+
     public func diagnosticsWorkloadMetrics() -> [String: Double] {
         let translationStats = Self.translationCoverageStats(in: lyrics)
         return [

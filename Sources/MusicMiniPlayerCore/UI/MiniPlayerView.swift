@@ -192,7 +192,10 @@ public struct MiniPlayerView: View {
                     AudioOutputSwitcherView(
                         artworkBrightness: lum,
                         isAlbumPage: true,
-                        onMenuPresentedChanged: { isAudioOutputMenuPresented = $0 }
+                        onMenuPresentedChanged: { presented in
+                            isAudioOutputMenuPresented = presented
+                            if presented { TourHookBus.shared.audioOutputMenuOpened.send(()) }
+                        }
                     )
                         .padding(12)
                         .transition(.opacity)
@@ -215,6 +218,10 @@ public struct MiniPlayerView: View {
                     controlsBlurAmount = 0
                     controlsOffsetY = 0
                 }
+                // Onboarding tour hook (§6 "控件出现"): the machine ignores
+                // repeats of an already-resolved beat, so no local
+                // "first time only" bookkeeping is needed here.
+                TourHookBus.shared.controlsRevealed.send(())
             case .ended:
                 if hoverLocked { return }
                 let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
@@ -326,6 +333,10 @@ public struct MiniPlayerView: View {
                 }
             }
         }
+        // Onboarding tour anchors (§4.2): every `.tourAnchor(_:)` in the page
+        // stack (play/pause, ↖ Music, audio output, lyrics nav, translate,
+        // artwork) bubbles its screen rect up to here.
+        .onPreferenceChange(TourAnchorKey.self) { TourAnchorRegistry.shared.update($0) }
     }
 
     // C2 三时钟：geometry(hero) / content(文案控件) / material(整页crossfade)
@@ -843,6 +854,7 @@ extension MiniPlayerView {
                         x: geo.size.width / 2,
                         y: artCenterY
                     )
+                    .tourAnchor(.artwork)
             }
         } else {
             VStack {
