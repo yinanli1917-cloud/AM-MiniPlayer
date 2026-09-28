@@ -136,7 +136,15 @@ final class PlaybackHistoryInsertionScrollStabilityTests: XCTestCase {
     /// This corner case is left as a follow-up rather than risking an
     /// under-verified scroll-management patch.
     func test_appendingHistoryEntry_atDefaultNowPlayingAnchor_currentlyShiftsNowPlaying_knownLimitation() {
-        let controller = makeController(historyCount: 12)
+        // 2026-09-27: historyCount must stay UNDER PlaybackHistoryDisplayPolicy.
+        // maxDisplayedCount (10) — the founder's new "History shows at most 10"
+        // ruling caps the displayed row count independent of how much is
+        // stored, so once at/over that cap, appending a new entry no longer
+        // changes the DISPLAYED row count (the newest entry simply replaces
+        // the one that falls off the cap) and this known limitation would no
+        // longer reproduce. This test's own claim is about what happens
+        // BELOW the cap, where the row count genuinely still grows by one.
+        let controller = makeController(historyCount: 5)
         let hosting = NSHostingView(rootView: ScrollStabilityProbeHost(controller: controller))
         hostInWindow(hosting)
 
