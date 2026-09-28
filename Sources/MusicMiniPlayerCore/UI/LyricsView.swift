@@ -937,6 +937,10 @@ public struct LyricsView: View {
             lyricsService: lyricsService
         ))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Onboarding tour anchors (§4.2) — same registry MiniPlayerView feeds;
+        // the lyrics page has its own instances of the translate/nav/music/
+        // audio-output controls.
+        .onPreferenceChange(TourAnchorKey.self) { TourAnchorRegistry.shared.update($0) }
     }
 
     // MARK: - Sub-views
@@ -1794,6 +1798,7 @@ public struct LyricsView: View {
 
     private func handleAudioOutputMenuPresentation(_ presented: Bool) {
         isAudioOutputMenuPresented = presented
+        if presented { TourHookBus.shared.audioOutputMenuOpened.send(()) }
         guard !presented, !isHovering else { return }
         animateControlsOut()
     }

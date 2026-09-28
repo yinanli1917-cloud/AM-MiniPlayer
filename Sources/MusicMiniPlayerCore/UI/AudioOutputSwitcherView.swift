@@ -87,6 +87,7 @@ struct AudioOutputSwitcherView: View {
         .onHover { hovering in
             if hovering { outputService.refresh() }
         }
+        .tourAnchor(.audioOutput)
     }
 
     private var routePanel: some View {

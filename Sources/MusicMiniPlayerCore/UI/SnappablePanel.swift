@@ -39,6 +39,12 @@ public class SnappablePanel: NSPanel {
     /// when set, tucking into a screen edge is handed to it instead of sliding
     /// the window off-screen. Returns true if it took the request.
     public var liquidEdgeHandler: ((Edge) -> Bool)?
+    /// Onboarding tour hook (docs/design/2026-09-25-onboarding/proposal.md
+    /// §6 "落到角落"): fires once a spring settles with its final origin
+    /// exactly on one of the four corner targets (±1pt) — never on an
+    /// edge-hide/peek/restore settle, whose targets never coincide with a
+    /// corner point. Same closure-callback convention as the others above.
+    public var onSnappedToCorner: ((NSPoint, ScreenCorner) -> Void)?
 
     // MARK: - Drag State
 
@@ -662,8 +668,19 @@ public class SnappablePanel: NSPanel {
             setFrameOrigin(animationTarget)
             stopAllAnimations()
             onGeometryMorphDidSettle?(CACurrentMediaTime())
+            notifyIfSnappedToCorner()
             let done = pendingSettle; pendingSettle = nil; done?()
         }
+    }
+
+    /// §6 "落到角落": only a real corner-snap notifies — edge-hide/peek/
+    /// restore targets never land exactly on a corner point.
+    private func notifyIfSnappedToCorner() {
+        guard onSnappedToCorner != nil, let screen = screen ?? NSScreen.main else { return }
+        guard let corner = TourCornerMatch.corner(
+            origin: frame.origin, frameSize: frame.size, visibleFrame: screen.visibleFrame, margin: cornerMargin
+        ) else { return }
+        onSnappedToCorner?(frame.origin, corner)
     }
 
     /// Reduce Motion 路径：跳过弹簧插值，直接落到 `animationTarget`，等价于
@@ -674,6 +691,7 @@ public class SnappablePanel: NSPanel {
         stopAllAnimations()
         setFrameOrigin(animationTarget)
         onGeometryMorphDidSettle?(CACurrentMediaTime())
+        notifyIfSnappedToCorner()
         let done = pendingSettle; pendingSettle = nil; done?()
     }
 
@@ -762,6 +780,22 @@ public class SnappablePanel: NSPanel {
     }
 
     // MARK: - Public API
+
+    /// Onboarding tour hook (§6 "面板近边"): which screen edge the panel is
+    /// currently close enough to tuck into, if any — the same reach/Stage-
+    /// Manager rules as the private two-finger-swipe gate (`nearEdge(towardRight:)`),
+    /// just without a travel-direction argument (checks both sides).
+    public func tuckableEdge() -> Edge? {
+        nearEdge(towardRight: true) ?? nearEdge(towardRight: false)
+    }
+
+    /// Onboarding tour hook: which corner the panel is CURRENTLY sitting in
+    /// (±1pt), if any — used to prefill S5's beat ① when the tour starts
+    /// with the panel already parked in a corner.
+    public func currentCorner() -> ScreenCorner? {
+        guard let screen = screen ?? NSScreen.main else { return nil }
+        return TourCornerMatch.corner(origin: frame.origin, frameSize: frame.size, visibleFrame: screen.visibleFrame, margin: cornerMargin)
+    }
 
     public func snapToNearestCorner() {
         animationTarget = calculateTargetCorner(velocity: .zero)

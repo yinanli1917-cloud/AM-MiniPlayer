@@ -318,6 +318,7 @@ struct SharedBottomControls: View {
                 leftNavigationButton
                     .frame(width: 26, height: 26)
                     .accessibilityLabel(currentPage == .lyrics ? "歌词（已选中）" : "歌词")
+                    .tourAnchor(.lyricsNav)
 
                 Spacer()
 
@@ -393,6 +394,7 @@ struct SharedBottomControls: View {
             }
             .frame(width: 30, height: 30)
             .accessibilityLabel(musicController.isPlaying ? "暂停" : "播放")
+            .tourAnchor(.playPause)
 
             SkipControlButton(action: {
                 musicController.nextTrack()
