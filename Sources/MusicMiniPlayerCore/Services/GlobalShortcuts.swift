@@ -63,12 +63,30 @@ public protocol PanelCommands: AnyObject {
     func hideToEdge()
 }
 
+/// `GlobalShortcutRegistrar`'s activate/deactivate surface, extracted so callers
+/// that only need to gate on menu-open (e.g. `AppMain.menuWillOpen`/`menuDidClose`)
+/// can depend on a protocol instead of the concrete class. This lets tests inject
+/// a fake instead of exercising real `KeyboardShortcuts.enable/disable` — doing
+/// that against an actually-recorded shortcut inside XCTest, outside a full app
+/// context, crashes in the library's Carbon HotKey teardown path (verified
+/// 2026-09-27: SIGABRT / malloc heap corruption in `KeyboardShortcuts.unregister`).
+@MainActor
+public protocol GlobalShortcutGating: AnyObject {
+    func activate()
+    func deactivate()
+}
+
 /// 全局快捷键注册中心：把 KeyboardShortcuts 的按键事件分发到 MusicController / PanelCommands。
 /// Core 层持有；App 层在 MusicController 与面板都就绪后调用一次 `activate()`。
-public final class GlobalShortcutRegistrar {
+public final class GlobalShortcutRegistrar: GlobalShortcutGating {
     private weak var controller: MusicController?
     private weak var panel: PanelCommands?
-    private var isActive = false
+    /// Read-only for tests (e.g. verifying the menu's `menuWillOpen`/`menuDidClose`
+    /// gate this without ever binding a real global hotkey — see banned-patterns
+    /// class of hazards: exercising `KeyboardShortcuts.enable/disable` against an
+    /// actually-recorded shortcut inside XCTest can crash the Carbon HotKey
+    /// teardown path outside a full app context).
+    public private(set) var isActive = false
     private var hasRegisteredHandlers = false
 
     public init(controller: MusicController, panel: PanelCommands) {

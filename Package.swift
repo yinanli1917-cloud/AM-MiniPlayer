@@ -93,7 +93,11 @@ let package = Package(
         ),
         .testTarget(
             name: "MusicMiniPlayerTests",
-            dependencies: ["MusicMiniPlayerCore", "KeyboardShortcuts"],
+            // MusicMiniPlayerAppKit added 2026-09-27 for the menu/settings redesign
+            // (docs/design/2026-09-25-menu-settings/proposal.md §5) — its acceptance
+            // criteria test `populateMenuBarMenu`'s NSMenuItems, `SettingsDemo`,
+            // `DemoStage`, and `AboutPageView`, all of which live in that target.
+            dependencies: ["MusicMiniPlayerCore", "MusicMiniPlayerAppKit", "KeyboardShortcuts"],
             resources: [
                 .copy("Fixtures")
             ]

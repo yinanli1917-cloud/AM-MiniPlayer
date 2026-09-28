@@ -8,6 +8,7 @@
 import AppKit
 import SwiftUI
 import MusicMiniPlayerCore
+import KeyboardShortcuts
 
 // ──────────────────────────────────────────────
 // MARK: - App Entry
@@ -41,7 +42,11 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
     /// Liquid edge: tucks the panel into a screen edge as one liquid object
     /// (research/spikes/edge-collapse-spike, founder-approved 2026-09-22).
     private var liquidEdge: LiquidEdgeController?
-    private var globalShortcutRegistrar: GlobalShortcutRegistrar?
+    // Internal (not `private`), and typed as the protocol rather than the
+    // concrete class, so menu structure tests can inject a fake and assert
+    // `menuWillOpen`/`menuDidClose` toggle it without touching real
+    // KeyboardShortcuts hotkey registration (see `GlobalShortcutGating`'s doc).
+    var globalShortcutRegistrar: (any GlobalShortcutGating)?
     private var settingsWindowDelegate: SettingsWindowDelegate?
     /// Bumped on every present/dismiss transition of `floatingWindow` so a
     /// pending fade-out's `orderOut` completion can detect it was superseded
@@ -631,104 +636,85 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         populateMenuBarMenu(menu)
     }
 
-    private func populateMenuBarMenu(_ menu: NSMenu) {
+    /// KeyboardShortcuts requires disabling the global hotkeys while an
+    /// `NSMenu` is open (`NSMenu` puts the run loop in tracking mode, which
+    /// would buffer the keyboard event and fire it only after the menu
+    /// closes) — see `NSMenuItem.setShortcut(for:)`'s doc comment.
+    public func menuWillOpen(_ menu: NSMenu) {
+        guard menu === menuBarMenu else { return }
+        MainActor.assumeIsolated { globalShortcutRegistrar?.deactivate() }
+    }
+
+    public func menuDidClose(_ menu: NSMenu) {
+        guard menu === menuBarMenu else { return }
+        MainActor.assumeIsolated { globalShortcutRegistrar?.activate() }
+    }
+
+    /// v3.2 定稿（docs/design/2026-09-25-menu-settings/proposal.md §3.1）：
+    /// 4 项 3 组，零勾选（含子菜单项以外任何一行都不设 `state`），只有 #1/#2
+    /// 两个功能项带图标（App 项「设置…」「退出 nanoPod」不带——CleanShot 的
+    /// About/Settings/Quit 无图标惯例），没有随状态增减的临时项。
+    // Internal (not `private`) so MenuBarMenuStructureTests can call it directly
+    // against a hand-built NSMenu without going through applicationDidFinishLaunching.
+    func populateMenuBarMenu(_ menu: NSMenu) {
         menu.removeAllItems()
-        menu.addItem(makeMenuItem(
-            title: L10n.localized("showWindow"),
-            systemImageName: "macwindow",
-            action: #selector(showWindowFromMenu(_:))
-        ))
+
+        // Group 1: 面板动作——显示/隐藏面板 · 翻译为 ▸
+        menu.addItem(makeShowHidePlayerItem())
+        menu.addItem(makeTranslationTargetSubmenuItem())
 
         menu.addItem(.separator())
 
-        menu.addItem(makeSwitchMenuItem(
-            title: L10n.localized("mb.fullscreenCover"),
-            systemImageName: "rectangle.expand.vertical",
-            isOn: UserDefaults.standard.bool(forKey: "fullscreenAlbumCover"),
-            action: { isOn in
-                UserDefaults.standard.set(isOn, forKey: "fullscreenAlbumCover")
-            }
-        ))
-
-        if #available(macOS 15.0, *) {
-            menu.addItem(makeSwitchMenuItem(
-                title: L10n.localized("mb.translation"),
-                systemImageName: "character.bubble",
-                isOn: LyricsService.shared.showTranslation,
-                action: { isOn in
-                    LyricsService.shared.showTranslation = isOn
-                }
-            ))
-
-            menu.addItem(makeTranslationTargetSubmenuItem())
-        }
-
-        menu.addItem(.separator())
-
-        menu.addItem(makeMenuItem(
+        // Group 2: App 项——设置…
+        menu.addItem(makePlainMenuItem(
             title: L10n.localized("settings"),
-            systemImageName: "gearshape",
             action: #selector(openSettings(_:))
         ))
 
         menu.addItem(.separator())
 
-        menu.addItem(makeMenuItem(
-            title: L10n.localized("quit"),
-            systemImageName: "power",
-            action: #selector(NSApplication.terminate(_:)),
-            target: NSApp
+        // Group 3: 退出
+        //
+        // Routed through a wrapper selector (not the literal
+        // `#selector(NSApplication.terminate(_:))` + `target: NSApp` pair)
+        // because macOS 26 pattern-matches on that exact signature and
+        // silently attaches its own "Quit_app" system icon to the item —
+        // which would violate "App 项不带图标" and push the measured menu
+        // width from 166pt to 172pt (proposal §3.5's "若 App 项也带图标" row).
+        menu.addItem(makePlainMenuItem(
+            title: L10n.localized("quitApp"),
+            action: #selector(quitFromMenu(_:))
         ))
     }
 
-    private func makeMenuItem(
-        title: String,
-        systemImageName: String,
-        action: Selector?,
-        keyEquivalent: String = "",
-        modifierMask: NSEvent.ModifierFlags = [.command],
-        target: AnyObject? = nil
-    ) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
-        item.target = target ?? self
-        item.keyEquivalentModifierMask = keyEquivalent.isEmpty ? [] : modifierMask
+    @objc private func quitFromMenu(_ sender: Any?) {
+        NSApp.terminate(nil)
+    }
 
-        if let image = NSImage(systemSymbolName: systemImageName, accessibilityDescription: title) {
-            let configuration = NSImage.SymbolConfiguration(pointSize: MenuBarMenuMetrics.symbolPointSize, weight: .medium)
-            let configuredImage = image.withSymbolConfiguration(configuration) ?? image
-            configuredImage.isTemplate = true
-            item.image = configuredImage
-        }
-
+    /// #1 — 面板可见且未贴边 → 「Hide Player」；否则「Show Player」（动词换标题，
+    /// 不留勾选）。图标 `macwindow`，键位显示用户自己录的「显示/隐藏面板」快捷键
+    /// （`setShortcut(for: .togglePanel)`），未录则空——不写死 ⌥⌘P 等默认组合。
+    private func makeShowHidePlayerItem() -> NSMenuItem {
+        let isPanelShown = (floatingWindow?.isVisible == true) && MainActor.assumeIsolated({ liquidEdge?.isActive != true })
+        let title = L10n.localized(isPanelShown ? "hidePlayer" : "showPlayer")
+        let item = NSMenuItem(title: title, action: #selector(showWindowFromMenu(_:)), keyEquivalent: "")
+        item.target = self
+        item.setShortcut(for: .togglePanel)
+        applyFunctionItemIcon(item, systemImageName: "macwindow", accessibilityDescription: title)
         return item
     }
 
-    private func makeSwitchMenuItem(
-        title: String,
-        systemImageName: String,
-        isOn: Bool,
-        action: @escaping (Bool) -> Void
-    ) -> NSMenuItem {
-        let item = NSMenuItem()
-        item.view = MenuBarSwitchItemView(
-            title: title,
-            systemImageName: systemImageName,
-            isOn: isOn,
-            action: action
-        )
-        return item
-    }
-
+    /// #2 — 「翻译为 ▸」子菜单：单选勾选（`state`），不带图标；父项本身带 `translate`
+    /// 图标、无勾选、无快捷键。子菜单内的勾选不影响父菜单宽度（已实测，proposal §3.2）。
     private func makeTranslationTargetSubmenuItem() -> NSMenuItem {
         let currentLanguage = LyricsService.shared.translationLanguage
         let selectedCode = currentLanguage == L10n.systemLanguageCode ? "system" : currentLanguage
+        let title = L10n.localized("translateTo")
 
-        let item = makeMenuItem(
-            title: L10n.localized("mb.translationTarget"),
-            systemImageName: "globe",
-            action: nil
-        )
-        let submenu = NSMenu(title: L10n.localized("mb.translationTarget"))
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        applyFunctionItemIcon(item, systemImageName: "translate", accessibilityDescription: title)
+
+        let submenu = NSMenu(title: title)
         for option in L10n.translationLanguageOptions {
             let optionItem = NSMenuItem(
                 title: option.name,
@@ -742,6 +728,26 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         }
         item.submenu = submenu
         return item
+    }
+
+    /// App 项（设置…、退出 nanoPod）：无图标、无勾选、无 `keyEquivalent`
+    /// （只在菜单打开期间生效，是个空承诺——proposal §3.3）。
+    private func makePlainMenuItem(
+        title: String,
+        action: Selector?,
+        target: AnyObject? = nil
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = target ?? self
+        return item
+    }
+
+    /// 功能项图标：系统符号、`isTemplate`，不加 `SymbolConfiguration`——尺寸、
+    /// 粗细全交给系统按菜单符号规格绘制（proposal §3.2「图标…不加 SymbolConfiguration」）。
+    private func applyFunctionItemIcon(_ item: NSMenuItem, systemImageName: String, accessibilityDescription: String) {
+        guard let image = NSImage(systemSymbolName: systemImageName, accessibilityDescription: accessibilityDescription) else { return }
+        image.isTemplate = true
+        item.image = image
     }
 
     @objc private func showWindowFromMenu(_ sender: NSMenuItem) {
@@ -995,240 +1001,3 @@ struct MiniPlayerContentView: View {
     }
 }
 
-// ──────────────────────────────────────────────
-// MARK: - Menu Bar Custom Items
-// ──────────────────────────────────────────────
-
-private enum MenuBarMenuMetrics {
-    static let width: CGFloat = 206
-    static let rowHeight: CGFloat = 26
-    static let leftInset: CGFloat = 15
-    static let rightInset: CGFloat = 9
-    static let iconBoxSize: CGFloat = 19
-    static let symbolPointSize: CGFloat = 15
-    static let textX: CGFloat = 39
-    static let controlGap: CGFloat = 8
-    static let switchSize = NSSize(width: 33, height: 18)
-    static let labelHeight: CGFloat = 17
-}
-
-private class MenuBarCustomItemView: NSView {
-    private var trackingArea: NSTrackingArea?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.cornerRadius = 4
-        layer?.masksToBounds = true
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: MenuBarMenuMetrics.width, height: MenuBarMenuMetrics.rowHeight)
-    }
-
-    override func updateTrackingAreas() {
-        if let trackingArea {
-            removeTrackingArea(trackingArea)
-        }
-
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-            owner: self
-        )
-        addTrackingArea(area)
-        trackingArea = area
-        super.updateTrackingAreas()
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        layer?.backgroundColor = NSColor.selectedContentBackgroundColor.withAlphaComponent(0.12).cgColor
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        layer?.backgroundColor = NSColor.clear.cgColor
-    }
-
-    func makeIconView(systemImageName: String, accessibilityDescription: String) -> NSImageView {
-        let imageView = NSImageView()
-        if let image = NSImage(systemSymbolName: systemImageName, accessibilityDescription: accessibilityDescription) {
-            image.isTemplate = true
-            let configuration = NSImage.SymbolConfiguration(
-                pointSize: MenuBarMenuMetrics.symbolPointSize,
-                weight: .medium
-            )
-            imageView.image = image.withSymbolConfiguration(configuration) ?? image
-        }
-        imageView.imageAlignment = .alignCenter
-        imageView.imageScaling = .scaleProportionallyDown
-        imageView.contentTintColor = .labelColor
-        return imageView
-    }
-
-    func makeTitleLabel(_ title: String) -> NSTextField {
-        let label = NSTextField(labelWithString: title)
-        label.font = .systemFont(ofSize: 13.5, weight: .regular)
-        label.textColor = .labelColor
-        label.lineBreakMode = .byTruncatingTail
-        return label
-    }
-}
-
-private final class MenuBarSwitchItemView: MenuBarCustomItemView {
-    private let iconView: NSImageView
-    private let titleLabel: NSTextField
-    private let switchControl = CompactSwitchControl()
-    private let action: (Bool) -> Void
-
-    init(title: String, systemImageName: String, isOn: Bool, action: @escaping (Bool) -> Void) {
-        self.iconView = NSImageView()
-        self.titleLabel = NSTextField(labelWithString: title)
-        self.action = action
-
-        super.init(frame: NSRect(
-            x: 0,
-            y: 0,
-            width: MenuBarMenuMetrics.width,
-            height: MenuBarMenuMetrics.rowHeight
-        ))
-
-        let configuredIcon = makeIconView(systemImageName: systemImageName, accessibilityDescription: title)
-        iconView.image = configuredIcon.image
-        iconView.symbolConfiguration = configuredIcon.symbolConfiguration
-        iconView.contentTintColor = configuredIcon.contentTintColor
-
-        let configuredLabel = makeTitleLabel(title)
-        titleLabel.font = configuredLabel.font
-        titleLabel.textColor = configuredLabel.textColor
-        titleLabel.lineBreakMode = configuredLabel.lineBreakMode
-
-        switchControl.isOn = isOn
-        switchControl.target = self
-        switchControl.action = #selector(switchChanged(_:))
-
-        addSubview(iconView)
-        addSubview(titleLabel)
-        addSubview(switchControl)
-
-        toolTip = title
-        setAccessibilityLabel(title)
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func layout() {
-        super.layout()
-
-        let boundsHeight = bounds.height
-        iconView.frame = NSRect(
-            x: MenuBarMenuMetrics.leftInset,
-            y: (boundsHeight - MenuBarMenuMetrics.iconBoxSize) / 2,
-            width: MenuBarMenuMetrics.iconBoxSize,
-            height: MenuBarMenuMetrics.iconBoxSize
-        )
-
-        switchControl.frame = NSRect(
-            x: bounds.maxX - MenuBarMenuMetrics.rightInset - MenuBarMenuMetrics.switchSize.width,
-            y: (boundsHeight - MenuBarMenuMetrics.switchSize.height) / 2,
-            width: MenuBarMenuMetrics.switchSize.width,
-            height: MenuBarMenuMetrics.switchSize.height
-        )
-
-        let labelMaxX = switchControl.frame.minX - MenuBarMenuMetrics.controlGap
-        titleLabel.frame = NSRect(
-            x: MenuBarMenuMetrics.textX,
-            y: (boundsHeight - MenuBarMenuMetrics.labelHeight) / 2,
-            width: max(0, labelMaxX - MenuBarMenuMetrics.textX),
-            height: MenuBarMenuMetrics.labelHeight
-        )
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        guard !switchControl.frame.contains(point) else { return }
-        switchControl.setOn(!switchControl.isOn, notify: true)
-    }
-
-    @objc private func switchChanged(_ sender: CompactSwitchControl) {
-        action(sender.isOn)
-    }
-}
-
-private final class CompactSwitchControl: NSControl {
-    var isOn: Bool = false {
-        didSet {
-            needsDisplay = true
-            setAccessibilityValue(isOn ? "on" : "off")
-        }
-    }
-
-    override var intrinsicContentSize: NSSize {
-        MenuBarMenuMetrics.switchSize
-    }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        setAccessibilityRole(.checkBox)
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func setOn(_ newValue: Bool, notify: Bool) {
-        guard isOn != newValue else { return }
-        isOn = newValue
-        if notify {
-            sendAction(action, to: target)
-        }
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-
-        let trackRect = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let trackPath = NSBezierPath(
-            roundedRect: trackRect,
-            xRadius: trackRect.height / 2,
-            yRadius: trackRect.height / 2
-        )
-        let trackColor = isOn
-            ? NSColor.controlAccentColor.withAlphaComponent(0.82)
-            : NSColor.controlColor.withAlphaComponent(0.82)
-        trackColor.setFill()
-        trackPath.fill()
-
-        NSColor.separatorColor.withAlphaComponent(isOn ? 0.10 : 0.22).setStroke()
-        trackPath.lineWidth = 0.5
-        trackPath.stroke()
-
-        let knobDiameter = trackRect.height - 4
-        let knobX = isOn
-            ? trackRect.maxX - knobDiameter - 2
-            : trackRect.minX + 2
-        let knobRect = NSRect(
-            x: knobX,
-            y: trackRect.midY - knobDiameter / 2,
-            width: knobDiameter,
-            height: knobDiameter
-        )
-        let knobPath = NSBezierPath(
-            roundedRect: knobRect,
-            xRadius: knobDiameter / 2,
-            yRadius: knobDiameter / 2
-        )
-        NSColor.white.withAlphaComponent(0.94).setFill()
-        knobPath.fill()
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        setOn(!isOn, notify: true)
-    }
-}
