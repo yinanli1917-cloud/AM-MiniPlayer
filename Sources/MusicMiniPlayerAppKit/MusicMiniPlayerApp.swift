@@ -376,7 +376,7 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
 
         let snappableWindow = SnappablePanel(
             contentRect: windowRect,
-            styleMask: [.titled, .resizable, .fullSizeContentView, .nonactivatingPanel],
+            styleMask: PanelWindowMetrics.styleMask,
             backing: .buffered,
             defer: false
         )
@@ -395,10 +395,12 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         snappableWindow.acceptsMouseMovedEvents = true
         snappableWindow.becomesKeyOnlyIfNeeded = false
 
-        // Window aspect ratio and size limits.
-        snappableWindow.aspectRatio = PanelWindowMetrics.aspectRatio
-        snappableWindow.minSize = PanelWindowMetrics.minSize
-        snappableWindow.maxSize = PanelWindowMetrics.maxSize
+        // Founder 2026-09-27: frozen at the default size (stage 0 of the
+        // resize proposal, docs/design/2026-09-26-resize/proposal.md §9) —
+        // no `.resizable` in the style mask above, and min/max pinned to
+        // the same size as defense in depth.
+        snappableWindow.minSize = PanelWindowMetrics.defaultSize
+        snappableWindow.maxSize = PanelWindowMetrics.defaultSize
 
         // Current page provider, used to decide whether two-finger dragging applies.
         snappableWindow.currentPageProvider = { [weak self] in

@@ -30,6 +30,24 @@ public enum PanelWindowMetrics {
     public static var minSize: NSSize { size(forWidth: minWidth) }
     public static var maxSize: NSSize { size(forWidth: maxWidth) }
 
+    /// Founder 2026-09-27: free resize looked bad (no floor, no way back to
+    /// a sane layout) and the founder deferred the three-size proposal
+    /// (docs/design/2026-09-26-resize/proposal.md) rather than build it now.
+    /// Stage 0 of that proposal's §9: freeze the panel at its default size
+    /// until a real resize design ships. `minWidth`/`maxWidth`/`minSize`/
+    /// `maxSize`/`aspectRatio` above are that future design's numbers —
+    /// left in place, just unused by the window while this is `false`.
+    public static let isUserResizable = false
+
+    /// The floating panel window's style mask. `.resizable` is omitted
+    /// while `isUserResizable` is false so the window never shows a resize
+    /// cursor or honors an edge drag.
+    public static var styleMask: NSWindow.StyleMask {
+        var mask: NSWindow.StyleMask = [.titled, .fullSizeContentView, .nonactivatingPanel]
+        if isUserResizable { mask.insert(.resizable) }
+        return mask
+    }
+
     public static func size(forWidth width: CGFloat) -> NSSize {
         NSSize(width: width, height: width * defaultSize.height / defaultSize.width)
     }

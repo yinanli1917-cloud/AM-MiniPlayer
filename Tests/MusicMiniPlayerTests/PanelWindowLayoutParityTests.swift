@@ -201,4 +201,29 @@ final class PanelWindowLayoutParityTests: XCTestCase {
         XCTAssertEqual(PanelWindowMetrics.minSize.height, 180 * 284 / 250, accuracy: 1e-9)
         XCTAssertEqual(PanelWindowMetrics.maxSize.height, 400 * 284 / 250, accuracy: 1e-9)
     }
+
+    /// Founder 2026-09-27: free resize shipped with no floor and no way
+    /// back to a sane layout — stage 0 of the resize proposal
+    /// (docs/design/2026-09-26-resize/proposal.md §9) freezes the panel at
+    /// its default size instead of building the three-size design now.
+    /// `PanelWindowMetrics.styleMask` is the single source of truth the
+    /// real window (MusicMiniPlayerApp.createFloatingWindow) is built
+    /// from, so asserting on it here also pins the production window.
+    func test_panelWindow_isNotUserResizable_andFixedAtDefaultSize() {
+        XCTAssertFalse(PanelWindowMetrics.isUserResizable)
+        XCTAssertFalse(PanelWindowMetrics.styleMask.contains(.resizable),
+                        "no resize affordance/cursor while resize is frozen")
+
+        let w = SnappablePanel(contentRect: NSRect(origin: .zero, size: PanelWindowMetrics.defaultSize),
+                                styleMask: PanelWindowMetrics.styleMask,
+                                backing: .buffered, defer: false)
+        w.minSize = PanelWindowMetrics.defaultSize
+        w.maxSize = PanelWindowMetrics.defaultSize
+        windows.append(w)
+
+        XCTAssertFalse(w.styleMask.contains(.resizable))
+        XCTAssertEqual(w.minSize, PanelWindowMetrics.defaultSize)
+        XCTAssertEqual(w.maxSize, PanelWindowMetrics.defaultSize)
+        XCTAssertEqual(w.frame.size, PanelWindowMetrics.defaultSize)
+    }
 }
