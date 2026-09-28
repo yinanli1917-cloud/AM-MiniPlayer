@@ -150,6 +150,45 @@ final class PlaybackHistoryDisplayPolicyTests: XCTestCase {
 
         XCTAssertEqual(displayed.map(\.persistentID), ["", ""], "only the actual current-track row should be removed")
     }
+
+    // MARK: - Display cap (2026-09-27 founder ruling: History shows at most
+    // the 10 most recent plays, not counting the currently-playing row —
+    // nanoPod is mini, it should not display an ever-growing list)
+
+    /// Regression pin for the pre-fix bug: `displayed(...)` returned the
+    /// entire (dedupe-filtered) history uncapped — PlaylistView rendered
+    /// every stored entry (up to `PlaybackHistoryStore.capacity`, formerly
+    /// 100). This test must FAIL before the cap is added and PASS after.
+    func test_moreThan10Entries_onlyMostRecent10AreDisplayed() {
+        let history = (0..<15).map { i in
+            entry("PID-\(i)", title: "Song \(i)", startedAt: Date(timeIntervalSince1970: Double(1_000_000 - i)))
+        } // newest-first, none of them the currently-playing track
+        let displayed = PlaybackHistoryDisplayPolicy.displayed(history: history, currentTitle: "Not Playing", currentArtist: "Nobody", currentPersistentID: "not-in-history")
+
+        XCTAssertEqual(displayed.count, 10, "at most 10 entries may be displayed")
+        XCTAssertEqual(displayed.map(\.persistentID), (0..<10).map { "PID-\($0)" }, "the cap must keep the MOST RECENT 10 (history is newest-first), not an arbitrary slice")
+    }
+
+    func test_exactly10Entries_allDisplayed() {
+        let history = (0..<10).map { i in entry("PID-\(i)", startedAt: Date(timeIntervalSince1970: Double(1000 - i))) }
+        let displayed = PlaybackHistoryDisplayPolicy.displayed(history: history, currentTitle: "Not Playing", currentArtist: "Nobody", currentPersistentID: "not-in-history")
+
+        XCTAssertEqual(displayed.count, 10)
+    }
+
+    func test_capAppliesAfterCurrentRowIsHidden_stillShowsFull10() {
+        // 11 stored entries, the newest of which IS the currently-playing
+        // track (already qualified while still playing — see
+        // PendingPlaybackAccumulator). After hiding it, the remaining 10
+        // must ALL display — the cap must not double-subtract.
+        var history = (0..<10).map { i in entry("OLD-\(i)", startedAt: Date(timeIntervalSince1970: Double(1000 - i))) }
+        history.insert(entry("CURRENT", startedAt: Date(timeIntervalSince1970: 2000)), at: 0)
+
+        let displayed = PlaybackHistoryDisplayPolicy.displayed(history: history, currentTitle: "T", currentArtist: "A", currentPersistentID: "CURRENT")
+
+        XCTAssertEqual(displayed.count, 10, "hiding the current row must not also shrink the display cap below 10")
+        XCTAssertEqual(displayed.map(\.persistentID), (0..<10).map { "OLD-\($0)" })
+    }
 }
 
 /// 2026-09-26 founder ruling (research/evidence/2026-09-26-history-order-and-

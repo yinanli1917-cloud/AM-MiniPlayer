@@ -112,23 +112,25 @@ public struct PlaybackHistoryEntry: Codable, Equatable, Identifiable {
 /// are injectable so tests never touch the real filesystem or a real timer.
 public final class PlaybackHistoryStore {
 
-    /// 2026-09-25 diagnosis fix (H8), raised from 50: real NSWindow-hosted
-    /// PlaylistView measurement (PlaybackHistoryCapacityMeasurementTests) of
-    /// average body-eval+layout cost at History row counts 50/100/200/300 —
-    /// 11.2ms/12.3ms/23.6ms/32.8ms on the dev machine — put the 16.67ms
-    /// (60fps) frame budget crossover at roughly row 139 by linear
-    /// interpolation. Every UNRELATED @Published write already forces a full
-    /// PlaylistView.body re-evaluation (PlaylistViewRenderChurnTests), so
-    /// this cost multiplies by write frequency, not just History-changing
-    /// events — 100 keeps a real margin under that budget (measured 12.3ms)
-    /// while doubling coverage from ~30.75h to ~61.5h at the founder's
-    /// observed rate. At ~196 bytes/entry (measured), 100 entries is ~19.1KB
-    /// — well inside the founder's "几十 KB" 2026-09-13 ceiling. Row-level
-    /// artwork fetching is unaffected by this number: RowArtworkVisibilityPolicy
-    /// (page-visibility gate) + RowArtworkFetchGate (3 concurrent) +
-    /// RowArtworkNegativeCache (backoff) already bound worst-case fetch
-    /// activity independent of row count — see research/diagnosis-2026-09-25-history.md §3.
-    public static let capacity = 100
+    /// 2026-09-27 founder ruling, lowered from 100: History only ever
+    /// DISPLAYS the most recent `PlaybackHistoryDisplayPolicy.maxDisplayedCount`
+    /// (10) plays — nanoPod is a mini player, it should not accumulate and
+    /// show an ever-growing list. The store only needs to retain enough to
+    /// guarantee that: `PlaybackHistoryDisplayPolicy.displayed(...)` hides
+    /// `history.first` whenever it duplicates the currently-playing row —
+    /// which happens routinely, since PendingPlaybackAccumulator can commit a
+    /// play to the store WHILE it is still playing (the instant the listen
+    /// threshold is crossed, via its `tick()` cadence — see
+    /// PendingPlaybackAccumulator.swift) — so up to 1 stored entry can be
+    /// filtered before the display cap ever applies. 10 (display) + 1 (worst-
+    /// case filtered current-play row) = 11: the minimum that still
+    /// guarantees a full 10 rows whenever 11+ plays have been recorded.
+    /// Previously 100 (2026-09-25 diagnosis fix H8, based on a body-eval-cost
+    /// measurement at row counts 50/100/200/300 — PlaybackHistoryCapacityMeasurementTests
+    /// still records those numbers, but they no longer drive this constant:
+    /// the display cap above makes render cost independent of how much
+    /// history is stored).
+    public static let capacity = 11
     public static let debounceInterval: TimeInterval = 1.0
 
     /// Bumped whenever the persisted shape changes. v1 (2026-09-25): first
@@ -139,9 +141,14 @@ public final class PlaybackHistoryStore {
     public static let schemaVersion = 1
     private static let baseName = "playback-history"
 
-    /// A legitimate file this large already implies thousands of entries
-    /// (capacity × ~200B/entry, see H8 measurement) — well beyond that means
-    /// either a stale huge file from a former higher capacity, or damage.
+    /// A legitimate file this large already implies thousands of entries at
+    /// ~200B/entry (H8 measurement) — far beyond even the pre-2026-09-27
+    /// capacity of 100, let alone the current 11 — so a file over this size
+    /// means either a stale huge file from a former higher capacity, or
+    /// damage. Kept independent of `capacity` (not shrunk alongside it):
+    /// `load()` truncates a legitimately-oversized-but-valid file to
+    /// `capacity` (newest entries kept, see `load()`) rather than rejecting
+    /// it outright, so an old user's larger history file still loads.
     /// Bounding the READ (not just the decode) before touching content is
     /// the 2026-09-25 fix for H-loading-unbounded: `load()` checks this via
     /// `FileManager.attributesOfItem` before ever calling `Data(contentsOf:)`.

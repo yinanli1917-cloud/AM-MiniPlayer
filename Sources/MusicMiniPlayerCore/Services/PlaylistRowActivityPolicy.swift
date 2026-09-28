@@ -60,6 +60,13 @@ public enum PlaylistRowContinuousAnimationPolicy {
 /// and several PAST radio/URL history entries can legitimately also carry
 /// `""`, so blind `"" == ""` PID matching would hide unrelated rows too.
 public enum PlaybackHistoryDisplayPolicy {
+    /// 2026-09-27 founder ruling: History shows at most the 10 most recent
+    /// plays, not counting the currently-playing row — nanoPod is a MINI
+    /// player, it should not accumulate and display an ever-growing list.
+    /// Applied here (not just left to `PlaybackHistoryStore.capacity`) so the
+    /// cap holds regardless of how much the store retains.
+    public static let maxDisplayedCount = 10
+
     public static func displayed(
         history: [PlaybackHistoryEntry],
         currentTitle: String,
@@ -75,8 +82,8 @@ public enum PlaybackHistoryDisplayPolicy {
             isCurrentPlay = first.title == currentTitle && first.artist == currentArtist
         }
 
-        guard isCurrentPlay else { return history }
-        return Array(history.dropFirst())
+        let remainder = isCurrentPlay ? Array(history.dropFirst()) : history
+        return Array(remainder.prefix(maxDisplayedCount))
     }
 
     /// 2026-09-26 founder ruling (research/evidence/2026-09-26-history-order-and-
