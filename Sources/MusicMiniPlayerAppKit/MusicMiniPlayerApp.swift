@@ -258,12 +258,16 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         }
     }
 
+    /// v3.2: `appearance`/`lyrics` are pre-redesign aliases that now land on the
+    /// Player tab (docs/design/2026-09-25-menu-settings/proposal.md §4.4).
     func openSettingsPage(named pageName: String) {
         switch pageName.lowercased() {
         case "", "general":
             showSettingsWindow(selectedTab: .general)
-        case "appearance":
-            showSettingsWindow(selectedTab: .appearance)
+        case "player", "appearance", "lyrics":
+            showSettingsWindow(selectedTab: .player)
+        case "shortcuts":
+            showSettingsWindow(selectedTab: .shortcuts)
         case "about":
             showSettingsWindow(selectedTab: .about)
         #if DEBUG || LOCAL_DEVELOPER_BUILD
@@ -769,9 +773,12 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         let hostingController = NSHostingController(rootView: settingsContent)
 
         let window = NSWindow(contentViewController: hostingController)
-        window.title = "Music Mini Player Settings"
-        window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 450, height: 400))
+        window.title = L10n.isSystemChinese ? "设置" : "Settings"
+        // v3.2: no resize, no minimize (HIG Settings windows are fixed-size);
+        // the content view itself is a hard 480×562 (proposal §4.2).
+        window.styleMask = [.titled, .closable]
+        window.setContentSize(NSSize(width: 480, height: 562))
+        window.setFrameAutosaveName("Settings")
         window.center()
         window.isReleasedWhenClosed = false
 
@@ -901,18 +908,18 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         let appMenuItem = NSMenuItem()
         appMenuItem.submenu = appMenu
 
-        let aboutItem = NSMenuItem(title: "About Music Mini Player", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let aboutItem = NSMenuItem(title: "About nanoPod", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(aboutItem)
 
         appMenu.addItem(NSMenuItem.separator())
 
-        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings(_:)), keyEquivalent: ",")
+        let settingsItem = NSMenuItem(title: "Settings\u{2026}", action: #selector(openSettings(_:)), keyEquivalent: ",")
         settingsItem.target = self
         appMenu.addItem(settingsItem)
 
         appMenu.addItem(NSMenuItem.separator())
 
-        let hideItem = NSMenuItem(title: "Hide Music Mini Player", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideItem = NSMenuItem(title: "Hide nanoPod", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(hideItem)
 
         let hideOthersItem = NSMenuItem(title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
@@ -924,7 +931,7 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
 
         appMenu.addItem(NSMenuItem.separator())
 
-        let quitItem = NSMenuItem(title: "Quit Music Mini Player", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit nanoPod", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appMenu.addItem(quitItem)
 
         mainMenu.addItem(appMenuItem)

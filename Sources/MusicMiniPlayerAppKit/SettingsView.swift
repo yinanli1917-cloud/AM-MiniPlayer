@@ -1,8 +1,13 @@
 /**
- * [INPUT]: 依赖 MusicMiniPlayerCore 的 MusicController/LyricsService
- *          依赖 LocalizedStrings 的 L10n/UserDefaultsBinding
- * [OUTPUT]: 导出 SettingsWindowView、SettingsWindowState
- * [POS]: MusicMiniPlayerApp 的设置界面集合
+ * [INPUT]: 依赖 MusicMiniPlayerCore 的 MusicController/LyricsService/OnboardingState/
+ *          GlobalShortcutAction；依赖 LocalizedStrings 的 L10n/UserDefaultsBinding；
+ *          依赖 SettingsDemoStage 的 DemoStage/SettingsDemo/SettingsRowHoverIntentHost；
+ *          依赖 AboutPageView。
+ * [OUTPUT]: 导出 SettingsWindowView、SettingsWindowState、SettingsTab、
+ *           GettingToKnowNanoPodAction、TourButtonPolicy、LaunchAtLoginBridge、
+ *           LaunchAtLoginProviding。
+ * [POS]: MusicMiniPlayerApp 的设置界面集合（v3.2 重做：演示台 + 分段控件 + 分组行，
+ *        无 sidebar 无工具栏 — docs/design/2026-09-25-menu-settings/proposal.md）
  */
 
 import SwiftUI
@@ -10,104 +15,159 @@ import MusicMiniPlayerCore
 import Translation
 import UniformTypeIdentifiers
 import KeyboardShortcuts
+import ServiceManagement
 
 // ──────────────────────────────────────────────
-// MARK: - 设置窗口（独立 NSWindow）
+// MARK: - SettingsTab (v3.2: Player · General · Shortcuts · About)
 // ──────────────────────────────────────────────
 
-enum SettingsTab: Hashable, CaseIterable {
+enum SettingsTab: String, Hashable, CaseIterable {
+    case player
     case general
-    case appearance
-    case diagnostics
+    case shortcuts
     case about
+    #if DEBUG || LOCAL_DEVELOPER_BUILD
+    case diagnostics
+    #endif
 
-    /// `.custom` tab-transition arm 用的可见 tab 列表——DEBUG/LOCAL_DEVELOPER_BUILD 外
-    /// diagnostics 从不出现，和 `.system` 臂（TabView 内 `#if` 条件页）保持一致。
-    static var visibleCases: [SettingsTab] {
-        #if DEBUG || LOCAL_DEVELOPER_BUILD
-        return allCases
-        #else
-        return allCases.filter { $0 != .diagnostics }
-        #endif
-    }
+    /// Same list as `allCases` — kept for call-site parity with the pre-redesign
+    /// name (`SettingsTab.visibleCases`), since diagnostics is always compiled
+    /// out (not merely hidden) outside DEBUG/LOCAL_DEVELOPER_BUILD.
+    static var visibleCases: [SettingsTab] { allCases }
 
     var title: String {
         switch self {
+        case .player: return L10n.localized("player")
         case .general: return L10n.localized("general")
-        case .appearance: return L10n.localized("appearance")
-        case .diagnostics: return "Diagnostics"
+        case .shortcuts: return L10n.localized("shortcuts")
         case .about: return L10n.localized("about")
-        }
-    }
-
-    var symbolName: String {
-        switch self {
-        case .general: return "gear"
-        case .appearance: return "paintbrush"
-        case .diagnostics: return "waveform.path.ecg"
-        case .about: return "info.circle"
+        #if DEBUG || LOCAL_DEVELOPER_BUILD
+        case .diagnostics: return "Diagnostics"
+        #endif
         }
     }
 }
+
+// ──────────────────────────────────────────────
+// MARK: - SettingsWindowState (persists the last-selected tab)
+// ──────────────────────────────────────────────
 
 final class SettingsWindowState: ObservableObject {
-    @Published var selectedTab: SettingsTab = .general
+    static let selectedTabDefaultsKey = "nanoPodSettingsSelectedTab"
+
+    @Published var selectedTab: SettingsTab {
+        didSet { UserDefaults.standard.set(selectedTab.rawValue, forKey: Self.selectedTabDefaultsKey) }
+    }
+
+    init() {
+        if let raw = UserDefaults.standard.string(forKey: Self.selectedTabDefaultsKey),
+           let restored = SettingsTab(rawValue: raw) {
+            selectedTab = restored
+        } else {
+            selectedTab = .general
+        }
+    }
 }
+
+// ──────────────────────────────────────────────
+// MARK: - Launch at Login (SMAppService, test-seamed)
+// ──────────────────────────────────────────────
+
+/// `SMAppService.mainApp`'s surface, narrowed to what this row needs — lets
+/// tests inject a fake instead of registering a REAL login item on the
+/// machine running the test suite.
+public protocol LaunchAtLoginProviding: AnyObject {
+    var status: SMAppService.Status { get }
+    func register() throws
+    func unregister() throws
+}
+
+extension SMAppService: LaunchAtLoginProviding {}
+
+enum LaunchAtLoginBridge {
+    #if DEBUG
+    static var testingProvider: (any LaunchAtLoginProviding)?
+    #endif
+
+    static var provider: any LaunchAtLoginProviding {
+        #if DEBUG
+        if let testingProvider { return testingProvider }
+        #endif
+        return SMAppService.mainApp
+    }
+
+    static var status: SMAppService.Status { provider.status }
+
+    static func setEnabled(_ enabled: Bool) {
+        do {
+            if enabled {
+                try provider.register()
+            } else {
+                try provider.unregister()
+            }
+        } catch {
+            debugPrint("[LaunchAtLoginBridge] \(error)")
+        }
+    }
+}
+
+// ──────────────────────────────────────────────
+// MARK: - "Getting to know nanoPod" row (pure action + title policy)
+// ──────────────────────────────────────────────
+
+/// Pure title-key decision (proposal §4.3 / onboarding proposal §9.2 naming).
+enum TourButtonPolicy {
+    static func titleKey(hasCompletedOnboarding: Bool) -> String {
+        hasCompletedOnboarding ? "tour.settings.again" : "tour.settings.keepGoing"
+    }
+}
+
+/// Decoupled from the View so tests can call it directly without hosting a
+/// SwiftUI hierarchy: not-yet-completed resumes from where the user left off
+/// (no reset); completed starts over (reset first, then request the window).
+@MainActor
+enum GettingToKnowNanoPodAction {
+    static func perform(onboardingState: OnboardingState, requestOnboarding: () -> Void) {
+        if onboardingState.hasCompletedOnboarding {
+            onboardingState.reset()
+        }
+        requestOnboarding()
+    }
+}
+
+// ──────────────────────────────────────────────
+// MARK: - SettingsWindowView
+// ──────────────────────────────────────────────
 
 struct SettingsWindowView: View {
     @EnvironmentObject var musicController: MusicController
     @ObservedObject var state: SettingsWindowState
     @StateObject private var lyricsService = LyricsService.shared
+    @StateObject private var onboardingState = OnboardingState.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    // Tab 切换转场臂状态（settingsTab channel）：仅 `.custom` 臂使用，
-    // `.system` 臂原样走 TabView，这两个 @State 不参与渲染。
-    @State private var tabTransitionKind: SettingsTabTransitionKind = .none
-    @State private var tabTransitionAnimation: Animation?
+    /// Overridable for tests — the production default reaches through the
+    /// app-layer singleton, which is nil in a plain unit-test process.
+    var onRequestOnboarding: () -> Void = { AppMain.shared?.showOnboardingWindow() }
+
+    @State private var activeDemo: SettingsDemo?
+    @State private var playToken = 0
+    @State private var loopTask: Task<Void, Never>?
 
     var body: some View {
-        Group {
-            switch MicroInteractionFeel.settingsTab {
-            case .system:
-                systemTabView
-            case .custom:
-                customTabView
-            }
-        }
-        .padding(20)
-        .frame(minWidth: 450, minHeight: 350)
-    }
-
-    // MARK: - `.system` 臂：今天原样的 TabView（不改）
-
-    private var systemTabView: some View {
-        TabView(selection: $state.selectedTab) {
-            generalTab
-                .tabItem { Label(L10n.localized("general"), systemImage: "gear") }
-                .tag(SettingsTab.general)
-            appearanceTab
-                .tabItem { Label(L10n.localized("appearance"), systemImage: "paintbrush") }
-                .tag(SettingsTab.appearance)
-            #if DEBUG || LOCAL_DEVELOPER_BUILD
-            DiagnosticsDebugPanel(musicController: musicController)
-                .tabItem { Label("Diagnostics", systemImage: "waveform.path.ecg") }
-                .tag(SettingsTab.diagnostics)
-            #endif
-            aboutTab
-                .tabItem { Label(L10n.localized("about"), systemImage: "info.circle") }
-                .tag(SettingsTab.about)
-        }
-    }
-
-    // MARK: - `.custom` 臂：segmented Picker 页头 + ZStack 内容做 crossfade/slide
-    //
-    // 为什么不直接在 TabView 里挂 `.transition`：macOS 的 TabView 由 NSTabView host，
-    // 切页时机由 AppKit 决定，SwiftUI 的 transition/animation 不会在页内容上真正播放
-    // （已验证：内容跳变，没有可见转场）。所以 `.custom` 臂另起一套 Picker(.segmented)
-    // 驱动的头部 + ZStack 内容，`.system` 臂继续用未改动的 TabView。
-
-    private var customTabView: some View {
         VStack(spacing: 0) {
+            Group {
+                if state.selectedTab == .about {
+                    AboutPageView()
+                } else if isDiagnosticsTab {
+                    EmptyView()
+                } else {
+                    DemoStage(demo: activeDemo, context: demoContext, playToken: playToken, reduceMotion: reduceMotion, caption: activeDemo.map(captionText) ?? "")
+                }
+            }
+            .frame(height: 120)
+            .padding(.bottom, 14)
+
             Picker("", selection: $state.selectedTab) {
                 ForEach(SettingsTab.visibleCases, id: \.self) { tab in
                     Text(tab.title).tag(tab)
@@ -115,149 +175,178 @@ struct SettingsWindowView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .padding(.bottom, 16)
+            .frame(width: 440)
+            .padding(.bottom, 14)
 
-            ZStack {
-                customTabContent(state.selectedTab)
-                    .id(state.selectedTab)
-                    .transition(transitionView(for: tabTransitionKind))
+            Group {
+                switch state.selectedTab {
+                case .player: playerTab
+                case .general: generalTab
+                case .shortcuts: shortcutsTab
+                case .about: EmptyView()
+                #if DEBUG || LOCAL_DEVELOPER_BUILD
+                case .diagnostics: DiagnosticsDebugPanel(musicController: musicController)
+                #endif
+                }
             }
-            .animation(tabTransitionAnimation, value: state.selectedTab)
+            .frame(height: 350)
         }
-        .onChange(of: state.selectedTab) { oldTab, newTab in
-            let resolved = SettingsTabTransition.resolve(
-                arm: .custom,
-                from: SettingsTab.visibleCases.firstIndex(of: oldTab) ?? 0,
-                to: SettingsTab.visibleCases.firstIndex(of: newTab) ?? 0,
-                reduceMotion: reduceMotion
-            )
-            tabTransitionKind = resolved.kind
-            tabTransitionAnimation = resolved.animation
+        .padding(20)
+        .frame(width: 480, height: 562)
+        .onChange(of: activeDemo) { _, newValue in
+            restartLoop(for: newValue)
+        }
+        .onDisappear {
+            loopTask?.cancel()
         }
     }
 
-    @ViewBuilder
-    private func customTabContent(_ tab: SettingsTab) -> some View {
-        switch tab {
-        case .general: generalTab
-        case .appearance: appearanceTab
+    private var isDiagnosticsTab: Bool {
         #if DEBUG || LOCAL_DEVELOPER_BUILD
-        case .diagnostics: DiagnosticsDebugPanel(musicController: musicController)
+        return state.selectedTab == .diagnostics
         #else
-        case .diagnostics: EmptyView()
+        return false
         #endif
-        case .about: aboutTab
+    }
+
+    // MARK: Demo loop (hover-driven; never runs under Reduce Motion — proposal §4.4)
+
+    private func restartLoop(for demo: SettingsDemo?) {
+        loopTask?.cancel()
+        loopTask = nil
+        guard let demo, !reduceMotion else { return }
+        playToken += 1
+        loopTask = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_400_000_000)
+                guard !Task.isCancelled, activeDemo == demo else { return }
+                playToken += 1
+            }
         }
     }
 
-    private func transitionView(for kind: SettingsTabTransitionKind) -> AnyTransition {
-        switch kind {
-        case .none:
-            return .identity
-        case .opacity:
-            return .opacity
-        case .slideForward:
-            return .asymmetric(
-                insertion: .move(edge: .trailing).combined(with: .opacity),
-                removal: .move(edge: .leading).combined(with: .opacity)
-            )
-        case .slideBackward:
-            return .asymmetric(
-                insertion: .move(edge: .leading).combined(with: .opacity),
-                removal: .move(edge: .trailing).combined(with: .opacity)
-            )
+    private var demoContext: SettingsDemoContext {
+        SettingsDemoContext(
+            fullscreenCoverOn: UserDefaults.standard.bool(forKey: "fullscreenAlbumCover"),
+            edgeShowSongOn: UserDefaults.standard.object(forKey: LiquidEdgeController.autoPeekDefaultsKey) as? Bool ?? true,
+            showTranslationOn: lyricsService.showTranslation,
+            translationSampleText: translationSampleText,
+            launchAtLoginOn: LaunchAtLoginBridge.status == .enabled,
+            showInDockOn: AppMain.shared?.showInDock ?? true,
+            automationStatus: onboardingState.automationStatus,
+            appleMusicStatus: onboardingState.musicKitStatus,
+            shortcutDescriptions: Dictionary(uniqueKeysWithValues: GlobalShortcutAction.allCases.map {
+                ($0, KeyboardShortcuts.getShortcut(for: $0.name)?.description ?? "")
+            })
+        )
+    }
+
+    private var translationSampleText: String {
+        let currentLang = lyricsService.translationLanguage
+        switch currentLang {
+        case "zh": return "我们去看海吧"
+        case "ja": return "海を見に行こう"
+        case "ko": return "바다 보러 가자"
+        case "fr": return "Allons voir la mer"
+        case "de": return "Lass uns ans Meer fahren"
+        case "es": return "Vamos a ver el mar"
+        default: return "Let's go see the sea"
         }
     }
 
-    // MARK: - General Tab
+    private func captionText(for demo: SettingsDemo) -> String {
+        switch demo {
+        case .fullscreenCover: return L10n.localized("fullscreenCover")
+        case .edgeShowSongOnTrackChange: return L10n.localized("edgeShowSongOnTrackChange")
+        case .showTranslation: return L10n.localized("showTranslation")
+        case .translateTo: return L10n.localized("translateTo")
+        case .launchAtLogin: return L10n.localized("launchAtLogin")
+        case .showInDock: return L10n.localized("showInDock")
+        case .gettingToKnowNanoPod: return L10n.localized("tour.settings.title")
+        case .musicAutomation: return L10n.localized("automation")
+        case .appleMusicAccess: return L10n.localized("musicKit")
+        case .playbackHistory: return L10n.localized("clearPlaybackHistory")
+        case .playPauseShortcut: return GlobalShortcutAction.togglePlayPause.localizedTitle
+        case .nextTrackShortcut: return GlobalShortcutAction.nextTrack.localizedTitle
+        case .previousTrackShortcut: return GlobalShortcutAction.previousTrack.localizedTitle
+        case .showHidePlayerShortcut: return GlobalShortcutAction.togglePanel.localizedTitle
+        case .hideToEdgeShortcut: return GlobalShortcutAction.hideToEdge.localizedTitle
+        }
+    }
 
-    private var generalTab: some View {
+    // MARK: - Player Tab
+
+    private var playerTab: some View {
         Form {
-            // MusicKit 授权
             Section {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.localized("musicKit"))
-                        Text(L10n.localized("musicKitDesc"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer()
-
-                    HStack(spacing: 8) {
-                        Circle()
-                            .fill(musicController.musicKitAuthorized ? Color.green : Color.orange)
-                            .frame(width: 8, height: 8)
-
-                        Text(musicController.musicKitAuthStatus)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        if !musicController.musicKitAuthorized {
-                            Button(L10n.localized("musicKitRequest")) {
-                                Task { await musicController.requestMusicKitAccess() }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                        } else {
-                            Button(L10n.localized("musicKitOpen")) {
-                                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Media") {
-                                    NSWorkspace.shared.open(url)
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                SettingsRow(demo: .fullscreenCover, activeDemo: $activeDemo) {
+                    Toggle(isOn: UserDefaultsBinding.bool(forKey: "fullscreenAlbumCover")) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L10n.localized("fullscreenCover"))
+                            Text(L10n.localized("fullscreenCoverDesc"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
+                    .toggleStyle(.switch)
                 }
             }
 
             Section {
-                Toggle(isOn: Binding(
-                    get: { AppMain.shared?.showInDock ?? true },
-                    set: { AppMain.shared?.showInDock = $0 }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.localized("showInDock"))
-                        Text(L10n.localized("showInDockDesc"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                SettingsRow(demo: .edgeShowSongOnTrackChange, activeDemo: $activeDemo) {
+                    Toggle(isOn: edgeShowSongBinding) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L10n.localized("edgeShowSongOnTrackChange"))
+                            Text(L10n.localized("edgeShowSongOnTrackChangeDesc"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    .settingsFeedbackPulse(value: AppMain.shared?.showInDock ?? true)
+                    .toggleStyle(.switch)
                 }
             }
 
-            Section {
-                ForEach(GlobalShortcutAction.allCases) { action in
-                    KeyboardShortcuts.Recorder(action.localizedTitle, name: action.name)
+            if #available(macOS 15.0, *) {
+                Section {
+                    SettingsRow(demo: .showTranslation, activeDemo: $activeDemo) {
+                        Toggle(isOn: Binding(
+                            get: { lyricsService.showTranslation },
+                            set: { lyricsService.showTranslation = $0 }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(L10n.localized("showTranslation"))
+                                Text(L10n.localized("showTranslationDesc"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .toggleStyle(.switch)
+                    }
                 }
-            } header: {
-                Text(L10n.localized("shortcuts"))
-            } footer: {
-                Text(L10n.localized("shortcutsFooter"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
 
-            // WT-D plan H4 — minimal entry; WT-C restyles the settings page later.
-            Section {
-                Button(role: .destructive) {
-                    musicController.clearPlaybackHistory()
-                } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.localized("clearPlaybackHistory"))
-                        Text(L10n.localized("clearPlaybackHistoryDesc"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                Section {
+                    SettingsRow(demo: .translateTo, activeDemo: $activeDemo) {
+                        Picker(selection: Binding(
+                            get: {
+                                let currentLang = lyricsService.translationLanguage
+                                return currentLang == L10n.systemLanguageCode ? "system" : currentLang
+                            },
+                            set: { code in
+                                lyricsService.translationLanguage = code == "system" ? L10n.systemLanguageCode : code
+                            }
+                        )) {
+                            ForEach(L10n.translationLanguageOptions, id: \.code) { option in
+                                Text(option.name).tag(option.code)
+                            }
+                        } label: {
+                            Text(L10n.localized("translationLang"))
+                        }
                     }
                 }
             }
         }
         .formStyle(.grouped)
     }
-
-    // MARK: - Appearance Tab
 
     /// Default on (no public API tells whether the player already notifies).
     private var edgeShowSongBinding: Binding<Bool> {
@@ -268,55 +357,112 @@ struct SettingsWindowView: View {
         )
     }
 
-    private var appearanceTab: some View {
+    // MARK: - General Tab
+
+    private var generalTab: some View {
         Form {
             Section {
-                Toggle(isOn: UserDefaultsBinding.bool(forKey: "fullscreenAlbumCover")) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.localized("fullscreenCover"))
-                        Text(L10n.localized("fullscreenCoverDesc"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                SettingsRow(demo: .launchAtLogin, activeDemo: $activeDemo) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle(isOn: Binding(
+                            get: { LaunchAtLoginBridge.status == .enabled },
+                            set: { LaunchAtLoginBridge.setEnabled($0) }
+                        )) {
+                            Text(L10n.localized("launchAtLogin"))
+                        }
+                        .toggleStyle(.switch)
+
+                        if LaunchAtLoginBridge.status == .requiresApproval {
+                            HStack {
+                                Text(L10n.localized("launchAtLoginApprovalNeeded"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Button(L10n.localized("launchAtLoginOpenItems")) {
+                                    if let url = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension") {
+                                        NSWorkspace.shared.open(url)
+                                    }
+                                }
+                                .buttonStyle(.link)
+                                .controlSize(.small)
+                            }
+                        }
                     }
-                    .settingsFeedbackPulse(value: UserDefaultsBinding.bool(forKey: "fullscreenAlbumCover").wrappedValue)
                 }
             }
 
             Section {
-                Toggle(isOn: edgeShowSongBinding) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.localized("edgeShowSongOnTrackChange"))
-                        Text(L10n.localized("edgeShowSongOnTrackChangeDesc"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .settingsFeedbackPulse(value: edgeShowSongBinding.wrappedValue)
-                }
-            }
-
-            if #available(macOS 15.0, *) {
-                Section {
-                    Picker(selection: Binding(
-                        get: {
-                            let currentLang = lyricsService.translationLanguage
-                            return currentLang == L10n.systemLanguageCode ? "system" : currentLang
-                        },
-                        set: { code in
-                            let targetCode = code == "system" ? L10n.systemLanguageCode : code
-                            lyricsService.translationLanguage = targetCode
-                        }
+                SettingsRow(demo: .showInDock, activeDemo: $activeDemo) {
+                    Toggle(isOn: Binding(
+                        get: { AppMain.shared?.showInDock ?? true },
+                        set: { AppMain.shared?.showInDock = $0 }
                     )) {
-                        ForEach(L10n.translationLanguageOptions, id: \.code) { option in
-                            Text(option.name).tag(option.code)
-                        }
-                    } label: {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(L10n.localized("translationLang"))
-                            Text(L10n.localized("translationLangDesc"))
+                            Text(L10n.localized("showInDock"))
+                            Text(L10n.localized("showInDockDesc"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        .settingsFeedbackPulse(value: lyricsService.translationLanguage)
+                    }
+                    .toggleStyle(.switch)
+                }
+            }
+
+            Section {
+                SettingsRow(demo: .gettingToKnowNanoPod, activeDemo: $activeDemo) {
+                    HStack {
+                        Text(L10n.localized("tour.settings.title"))
+                        Spacer()
+                        Button(L10n.localized(TourButtonPolicy.titleKey(hasCompletedOnboarding: onboardingState.hasCompletedOnboarding))) {
+                            GettingToKnowNanoPodAction.perform(onboardingState: onboardingState, requestOnboarding: onRequestOnboarding)
+                        }
+                        .frame(minWidth: 210)
+                        .fixedSize()
+                    }
+                }
+            }
+
+            Section {
+                SettingsRow(demo: .musicAutomation, activeDemo: $activeDemo) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L10n.localized("automation"))
+                        }
+                        Spacer()
+                        automationStatusControl
+                    }
+                }
+            } footer: {
+                Text(L10n.localized("automationFooter"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                SettingsRow(demo: .appleMusicAccess, activeDemo: $activeDemo) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L10n.localized("musicKit"))
+                            Text(L10n.localized("musicKitDesc"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        musicKitStatusControl
+                    }
+                }
+            }
+
+            Section {
+                SettingsRow(demo: .playbackHistory, activeDemo: $activeDemo) {
+                    Button(role: .destructive) {
+                        musicController.clearPlaybackHistory()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L10n.localized("clearPlaybackHistory"))
+                            Text(L10n.localized("clearPlaybackHistoryDesc"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
@@ -324,39 +470,122 @@ struct SettingsWindowView: View {
         .formStyle(.grouped)
     }
 
-    // MARK: - About Tab
+    private var automationStatusControl: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(onboardingState.automationStatus == .authorized ? Color.green : Color.orange)
+                .frame(width: 8, height: 8)
+            switch onboardingState.automationStatus {
+            case .authorized:
+                Text(L10n.localized("onboarding.auth.authorized")).font(.caption).foregroundStyle(.secondary)
+            case .denied:
+                Button(L10n.localized("automationOpenSettings")) {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            case .notDetermined:
+                Button(L10n.localized("automationGrant")) {
+                    onboardingState.requestAutomationAccess()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+        }
+    }
 
-    private var aboutTab: some View {
-        VStack(spacing: 16) {
-            Spacer()
+    private var musicKitStatusControl: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(musicController.musicKitAuthorized ? Color.green : Color.orange)
+                .frame(width: 8, height: 8)
 
-            Image(systemName: "music.note")
-                .font(.system(size: 56, weight: .light))
-                .foregroundStyle(.linearGradient(
-                    colors: [.accentColor, .accentColor.opacity(0.6)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                ))
-                .symbolEffect(.pulse, options: .repeating.speed(0.3))
-
-            Text("nanoPod")
-                .font(.system(size: 24, weight: .bold, design: .rounded))
-
-            Text("\(L10n.localized("version")) \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
-                .font(.system(size: 13, design: .rounded))
+            Text(musicController.musicKitAuthStatus)
+                .font(.caption)
                 .foregroundStyle(.secondary)
 
-            Spacer()
-
-            Link(destination: URL(string: "https://github.com/yinanli1917-cloud/AM-MiniPlayer")!) {
-                Label("GitHub", systemImage: "link")
-                    .font(.system(size: 13))
+            if !musicController.musicKitAuthorized {
+                Button(L10n.localized("musicKitRequest")) {
+                    Task { await musicController.requestMusicKitAccess() }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            } else {
+                Button(L10n.localized("musicKitOpen")) {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Media") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
-            .buttonStyle(.link)
-
-            Spacer()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Shortcuts Tab
+
+    private var shortcutsTab: some View {
+        Form {
+            Section {
+                ForEach(GlobalShortcutAction.allCases) { action in
+                    SettingsRow(demo: demo(for: action), activeDemo: $activeDemo) {
+                        KeyboardShortcuts.Recorder(action.localizedTitle, name: action.name)
+                    }
+                }
+            } footer: {
+                Text(L10n.localized("shortcutsFooter"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func demo(for action: GlobalShortcutAction) -> SettingsDemo {
+        switch action {
+        case .togglePlayPause: return .playPauseShortcut
+        case .nextTrack: return .nextTrackShortcut
+        case .previousTrack: return .previousTrackShortcut
+        case .togglePanel: return .showHidePlayerShortcut
+        case .hideToEdge: return .hideToEdgeShortcut
+        }
+    }
+}
+
+// ──────────────────────────────────────────────
+// MARK: - SettingsRow (hover-intent wrapper — proposal §4.4)
+// ──────────────────────────────────────────────
+
+/// Wraps a Form row: on a genuine dwell (150ms, ≤4pt drift — the same numbers
+/// as the progress bar's hover-intent gate), tells the parent to show this
+/// row's demo. A fast pass-through never switches the stage.
+struct SettingsRow<Content: View>: View {
+    let demo: SettingsDemo
+    @Binding var activeDemo: SettingsDemo?
+    let content: Content
+    @State private var host = SettingsRowHoverIntentHost()
+
+    init(demo: SettingsDemo, activeDemo: Binding<SettingsDemo?>, @ViewBuilder content: () -> Content) {
+        self.demo = demo
+        self._activeDemo = activeDemo
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                host.onCommitChanged = { committed in
+                    if committed {
+                        activeDemo = demo
+                    } else if activeDemo == demo {
+                        activeDemo = nil
+                    }
+                }
+                host.hoverChanged(hovering)
+            }
     }
 }
 

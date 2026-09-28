@@ -80,27 +80,32 @@ enum ProgressHoverStyle {
 ///   from boundary jitter — re-entering within the grace window resumes with
 ///   zero visual change. Exiting from the merely PENDING (not yet visible)
 ///   state resets immediately: nothing is on screen there to flicker.
-enum ProgressHoverIntentEngine {
-    struct Config: Equatable {
-        var dwellDuration: TimeInterval
-        var movementTolerance: CGFloat
-        var exitGrace: TimeInterval
+// `public` (2026-09-27): the settings-window redesign reuses this exact
+// reducer + its default numbers for row hover-intent
+// (SettingsRowHoverIntentHost in MusicMiniPlayerAppKit — docs/design/
+// 2026-09-25-menu-settings/proposal.md §4.4), so it must be visible outside
+// this module.
+public enum ProgressHoverIntentEngine {
+    public struct Config: Equatable {
+        public var dwellDuration: TimeInterval
+        public var movementTolerance: CGFloat
+        public var exitGrace: TimeInterval
 
-        static let `default` = Config(
+        public static let `default` = Config(
             dwellDuration: MicroInteractionFeel.Tokens.progressHoverIntentDwellDuration,
             movementTolerance: MicroInteractionFeel.Tokens.progressHoverIntentMovementTolerance,
             exitGrace: MicroInteractionFeel.Tokens.progressHoverIntentExitGrace
         )
     }
 
-    enum State: Equatable {
+    public enum State: Equatable {
         case idle
         case pending(anchor: CGPoint, commitDeadline: TimeInterval)
         case committed
         case exitGrace(graceDeadline: TimeInterval)
     }
 
-    enum Effect: Equatable {
+    public enum Effect: Equatable {
         /// Truly hands-off: leave everything as is, INCLUDING any timer the
         /// caller already has scheduled. This is deliberately distinct from
         /// `.cancelTimer` below — both are "no visual change", but only one
@@ -125,7 +130,7 @@ enum ProgressHoverIntentEngine {
 
     /// Pointer entered the hit region (`mouseEntered`), or a passive re-sync
     /// (`resolve`) found it already inside.
-    static func enter(state: State, at point: CGPoint, now: TimeInterval, config: Config) -> (State, Effect) {
+    public static func enter(state: State, at point: CGPoint, now: TimeInterval, config: Config) -> (State, Effect) {
         switch state {
         case .idle:
             let deadline = now + config.dwellDuration
@@ -144,7 +149,7 @@ enum ProgressHoverIntentEngine {
 
     /// Pointer moved while inside the hit region (`mouseMoved`). Only
     /// meaningful while `.pending`; a no-op in every other state.
-    static func move(state: State, to point: CGPoint, now: TimeInterval, config: Config) -> (State, Effect) {
+    public static func move(state: State, to point: CGPoint, now: TimeInterval, config: Config) -> (State, Effect) {
         guard case .pending(let anchor, _) = state else { return (state, .none) }
         let dx = point.x - anchor.x
         let dy = point.y - anchor.y
@@ -160,7 +165,7 @@ enum ProgressHoverIntentEngine {
 
     /// Pointer left the hit region (`mouseExited`), or a passive re-sync
     /// found it outside.
-    static func exit(state: State, now: TimeInterval, config: Config) -> (State, Effect) {
+    public static func exit(state: State, now: TimeInterval, config: Config) -> (State, Effect) {
         switch state {
         case .committed:
             let deadline = now + config.exitGrace
@@ -178,7 +183,7 @@ enum ProgressHoverIntentEngine {
     }
 
     /// The single scheduled one-shot timer fired.
-    static func timerFired(state: State, now: TimeInterval) -> (State, Effect) {
+    public static func timerFired(state: State, now: TimeInterval) -> (State, Effect) {
         switch state {
         case .pending(_, let deadline) where now >= deadline:
             return (.committed, .commit)

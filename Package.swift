@@ -62,7 +62,11 @@ let package = Package(
             path: "Sources/MusicMiniPlayerApp",
             exclude: [
                 "Info.plist",
-                "MusicMiniPlayer.entitlements"
+                "MusicMiniPlayer.entitlements",
+                // Compiled by build_app.sh's actool step (into Assets.car), not by
+                // SwiftPM's own resource pipeline — same treatment as the repo-root
+                // AppIcon.icon catalog build_app.sh already compiles separately.
+                "Resources/AppAssets.xcassets"
             ],
             linkerSettings: [
                 .unsafeFlags([

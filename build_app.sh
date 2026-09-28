@@ -295,6 +295,8 @@ cat > nanoPod.app/Contents/Info.plist << PLIST
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>NSAccentColorName</key>
+    <string>AccentColor</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>nanoPod needs permission to control Music.app for playback control and to display track information, album artwork, and lyrics.</string>
     <key>NSAppleMusicUsageDescription</key>
@@ -374,16 +376,29 @@ if [ -f "Resources/AppIcon.icns" ]; then
     echo "✅ AppIcon.icns copied"
 fi
 # Prefer .icon native format (macOS 26 Liquid Glass) for Assets.car in addition
-# to the icns, never instead of it.
+# to the icns, never instead of it. AppAssets.xcassets (AccentColor — the Apple
+# Music-pink accent, docs/design/2026-09-25-menu-settings/proposal.md "强调色")
+# compiles into the SAME Assets.car via a second actool input catalog.
+ACCENT_CATALOG="Sources/MusicMiniPlayerApp/Resources/AppAssets.xcassets"
 if [ -d "AppIcon.icon" ] && command -v xcrun &> /dev/null && xcrun --find actool &> /dev/null; then
-    echo "🎨 Compiling AppIcon.icon using actool..."
+    echo "🎨 Compiling AppIcon.icon + AppAssets.xcassets using actool..."
     # actool on a half-initialized Xcode aborts (SIGABRT, exit 134, "required plugin failed to load").
     # Under `set -e` that abort would kill the whole build BEFORE codesign — shipping an unsigned
     # bundle (breaks AppleScript automation) with no icon. Neutralize the abort and keep the icns.
-    xcrun actool AppIcon.icon --compile nanoPod.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null 2>&1 || true
+    xcrun actool AppIcon.icon "$ACCENT_CATALOG" --compile nanoPod.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null 2>&1 || true
     if [ -f "partial_info.plist" ]; then
         echo "✅ AppIcon catalog compiled (Assets.car)"
         rm -f partial_info.plist
+        # Out-package gate: AccentColor must have actually made it into the
+        # compiled catalog — a malformed/missing colorset would silently ship
+        # the system accent color instead of the Apple Music pink.
+        if command -v xcrun &> /dev/null && xcrun --find assetutil &> /dev/null; then
+            if ! xcrun assetutil -I nanoPod.app/Contents/Resources/Assets.car 2>/dev/null | grep -q "AccentColor"; then
+                echo "❌ AccentColor missing from compiled Assets.car — refusing to ship"
+                exit 1
+            fi
+            echo "✅ AccentColor present in Assets.car"
+        fi
     else
         echo "⚠️  actool unavailable/aborted — icns fallback already copied"
         if [ -f "Resources/Assets.car" ]; then COPYFILE_DISABLE=1 cp Resources/Assets.car nanoPod.app/Contents/Resources/; fi

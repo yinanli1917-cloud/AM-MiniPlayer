@@ -42,7 +42,6 @@ public enum MicroInteractionFeel {
     public static let buttonFillDefaultsKey = "nanoPodFeelButtonFill"
     public static let windowPresentDefaultsKey = "nanoPodFeelWindowPresent"
     public static let edgeMorphDefaultsKey = "nanoPodFeelEdgeMorph"
-    public static let settingsTabDefaultsKey = "nanoPodFeelSettingsTab"
     public static let settingsToggleDefaultsKey = "nanoPodFeelSettingsToggle"
     public static let pageSwitchDefaultsKey = "nanoPodFeelPageSwitch"
     public static let artworkContrastDefaultsKey = "nanoPodFeelArtworkContrast"
@@ -142,29 +141,19 @@ public enum MicroInteractionFeel {
         }
     }
 
-    /// C4 设置页 Tab 切换转场：`.custom`（默认，crossfade + slide）vs `.system`
-    /// （今天的原样 `TabView(selection:)`，不改）。
-    public enum SettingsTabMode: String, CaseIterable {
-        case custom = "custom"
-        case system = "system"
-
-        // 2026-09-14 创始人裁决：自定义分页转场方向反了，默认回到 system；
-        // custom 臂保留，只能经 nanopod://debug/feel/settingsTab/custom 显式开启。
-        public static func resolve(from raw: String?) -> SettingsTabMode {
-            guard let raw else { return .system }
-            return SettingsTabMode(rawValue: raw.lowercased()) ?? .system
-        }
-    }
-
-    /// C4 设置页 Toggle/Picker 反馈：`.custom`（默认，标签轻微 scale pulse）vs
-    /// `.system`（不加任何反馈，控件原样）。
+    /// C4 设置页 Toggle/Picker 反馈：`.custom`（标签轻微 scale pulse）vs `.system`
+    /// （默认——不加任何反馈，控件原样）。2026-09-27 菜单/设置重做（v3.2）删除了
+    /// `SettingsTabMode`/`SettingsTabTransition`（原 TabView 分页转场臂）连同它们
+    /// 一起：新设置窗口用演示台回放代替切换反馈，不再需要 Toggle/Picker 自己的
+    /// 脉冲；`.custom` 臂保留供调试对照，只能经
+    /// `nanopod://debug/feel/settingsToggle/custom` 显式开启。
     public enum SettingsToggleMode: String, CaseIterable {
         case custom = "custom"
         case system = "system"
 
         public static func resolve(from raw: String?) -> SettingsToggleMode {
-            guard let raw else { return .custom }
-            return SettingsToggleMode(rawValue: raw.lowercased()) ?? .custom
+            guard let raw else { return .system }
+            return SettingsToggleMode(rawValue: raw.lowercased()) ?? .system
         }
     }
 
@@ -281,7 +270,6 @@ public enum MicroInteractionFeel {
     nonisolated(unsafe) public static var testingButtonFill: ButtonFillMode?
     nonisolated(unsafe) public static var testingWindowPresent: WindowPresentMode?
     nonisolated(unsafe) public static var testingEdgeMorph: EdgeMorphMode?
-    nonisolated(unsafe) public static var testingSettingsTab: SettingsTabMode?
     nonisolated(unsafe) public static var testingSettingsToggle: SettingsToggleMode?
     nonisolated(unsafe) public static var testingPageSwitch: PageSwitchMode?
 
@@ -294,7 +282,6 @@ public enum MicroInteractionFeel {
         testingButtonFill = nil
         testingWindowPresent = nil
         testingEdgeMorph = nil
-        testingSettingsTab = nil
         testingSettingsToggle = nil
         testingPageSwitch = nil
         testingArtworkContrast = nil
@@ -382,20 +369,10 @@ public enum MicroInteractionFeel {
         )
     }
 
-    public static var settingsTab: SettingsTabMode {
-        #if DEBUG
-        if let testingSettingsTab { return testingSettingsTab }
-        if isRunningTests { return .system }
-        #endif
-        return SettingsTabMode.resolve(
-            from: UserDefaults.standard.string(forKey: settingsTabDefaultsKey)
-        )
-    }
-
     public static var settingsToggle: SettingsToggleMode {
         #if DEBUG
         if let testingSettingsToggle { return testingSettingsToggle }
-        if isRunningTests { return .custom }
+        if isRunningTests { return .system }
         #endif
         return SettingsToggleMode.resolve(
             from: UserDefaults.standard.string(forKey: settingsToggleDefaultsKey)
@@ -449,9 +426,6 @@ public enum MicroInteractionFeel {
         case "edgemorph":
             UserDefaults.standard.set(EdgeMorphMode.resolve(from: value).rawValue, forKey: edgeMorphDefaultsKey)
             return true
-        case "settingstab":
-            UserDefaults.standard.set(SettingsTabMode.resolve(from: value).rawValue, forKey: settingsTabDefaultsKey)
-            return true
         case "settingstoggle":
             UserDefaults.standard.set(SettingsToggleMode.resolve(from: value).rawValue, forKey: settingsToggleDefaultsKey)
             return true
@@ -494,7 +468,6 @@ public enum MicroInteractionFeel {
         UserDefaults.standard.removeObject(forKey: buttonFillDefaultsKey)
         UserDefaults.standard.removeObject(forKey: windowPresentDefaultsKey)
         UserDefaults.standard.removeObject(forKey: edgeMorphDefaultsKey)
-        UserDefaults.standard.removeObject(forKey: settingsTabDefaultsKey)
         UserDefaults.standard.removeObject(forKey: settingsToggleDefaultsKey)
         UserDefaults.standard.removeObject(forKey: pageSwitchDefaultsKey)
         UserDefaults.standard.removeObject(forKey: artworkContrastDefaultsKey)
@@ -566,9 +539,11 @@ public enum MicroInteractionFeel {
         public static let edgeMorphMaterialSettle: TimeInterval = 0.31
         public static let edgeMorphContentDuration: TimeInterval = 0.14
 
-        // C4 settings page (design doc §10).
-        public static let settingsTabDuration: TimeInterval = 0.22
-        public static let settingsTabReducedMotionDuration: TimeInterval = 0.12
+        // C4 settings page (design doc §10). settingsTabDuration/
+        // settingsTabReducedMotionDuration removed 2026-09-27 with
+        // SettingsTabMode/SettingsTabTransition (the TabView-era tab-switch
+        // crossfade this project no longer has — v3.2 uses a segmented
+        // Picker with no page transition, see proposal.md §4.4).
         public static let settingsToggleBumpScale: Double = 1.03
         public static let settingsToggleBumpResponse: Double = 0.18
 
@@ -669,35 +644,6 @@ public enum ArtworkContrastPolicy {
         NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
     }
     #endif
-}
-
-/// C4 设置页 Tab 切换转场的纯决策函数，从 `SettingsWindowView` 拆出以便无 UI 测试。
-/// `.system` 臂 = 今天的行为，恒返回 `.none` + `nil` animation（TabView 原样，不接管转场）。
-/// `.custom` 臂按 `from`/`to` 的 tab 索引推导滑动方向；Reduce Motion 恒赢，只剩 opacity。
-public enum SettingsTabTransitionKind: Equatable {
-    case none
-    case opacity
-    case slideForward
-    case slideBackward
-}
-
-public enum SettingsTabTransition {
-    public static func resolve(
-        arm: MicroInteractionFeel.SettingsTabMode,
-        from: Int,
-        to: Int,
-        reduceMotion: Bool
-    ) -> (kind: SettingsTabTransitionKind, animation: Animation?) {
-        guard arm == .custom else { return (.none, nil) }
-
-        if reduceMotion {
-            return (.opacity, .linear(duration: MicroInteractionFeel.Tokens.settingsTabReducedMotionDuration))
-        }
-
-        let animation = Animation.smooth(duration: MicroInteractionFeel.Tokens.settingsTabDuration)
-        guard to != from else { return (.opacity, animation) }
-        return (to > from ? .slideForward : .slideBackward, animation)
-    }
 }
 
 /// C4 设置页 Toggle/Picker 反馈脉冲的纯策略函数：`.custom` 臂在非 Reduce Motion 时脉冲，

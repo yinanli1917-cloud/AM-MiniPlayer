@@ -1,9 +1,17 @@
 import XCTest
 @testable import MusicMiniPlayerCore
 
-/// C4 设置页两条 feel channel（settingsTab / settingsToggle）的纯逻辑覆盖：
-/// resolve 钳制、apply/reset 往返、SettingsTabTransition 决策表、
-/// SettingsTogglePulsePolicy 决策表、token 钉死。
+/// C4 设置页 settingsToggle feel channel 的纯逻辑覆盖：resolve 钳制、
+/// apply/reset 往返、SettingsTogglePulsePolicy 决策表、token 钉死。
+///
+/// `settingsTab`/`SettingsTabTransition` (the TabView-era tab-switch crossfade)
+/// were deleted 2026-09-27 with the menu/settings v3.2 redesign — the new
+/// settings window uses a segmented Picker with no page transition, so there
+/// is nothing left for that channel to arm (docs/design/2026-09-25-menu-
+/// settings/proposal.md §4.4). `settingsToggle`'s default flipped from
+/// `.custom` to `.system` in the same change: the redesign's demo-stage
+/// playback already gives switch-toggle feedback, so the label pulse is no
+/// longer the shipping default (it stays available for debug comparison).
 final class SettingsFeelTests: XCTestCase {
 
     override func tearDown() {
@@ -13,95 +21,33 @@ final class SettingsFeelTests: XCTestCase {
 
     // MARK: - resolve() 钳制：未知/nil 一律回落默认，不能让 typo 改变生产表现
 
-    func test_settingsTabMode_resolve_clampsUnknownAndNilToDefault() {
-        XCTAssertEqual(MicroInteractionFeel.SettingsTabMode.resolve(from: nil), .system)
-        XCTAssertEqual(MicroInteractionFeel.SettingsTabMode.resolve(from: "garbage"), .system)
-        XCTAssertEqual(MicroInteractionFeel.SettingsTabMode.resolve(from: "SYSTEM"), .system)
-        XCTAssertEqual(MicroInteractionFeel.SettingsTabMode.resolve(from: "custom"), .custom)
-    }
-
     func test_settingsToggleMode_resolve_clampsUnknownAndNilToDefault() {
-        XCTAssertEqual(MicroInteractionFeel.SettingsToggleMode.resolve(from: nil), .custom)
-        XCTAssertEqual(MicroInteractionFeel.SettingsToggleMode.resolve(from: "garbage"), .custom)
-        XCTAssertEqual(MicroInteractionFeel.SettingsToggleMode.resolve(from: "SYSTEM"), .system)
-        XCTAssertEqual(MicroInteractionFeel.SettingsToggleMode.resolve(from: "custom"), .custom)
+        XCTAssertEqual(MicroInteractionFeel.SettingsToggleMode.resolve(from: nil), .system)
+        XCTAssertEqual(MicroInteractionFeel.SettingsToggleMode.resolve(from: "garbage"), .system)
+        XCTAssertEqual(MicroInteractionFeel.SettingsToggleMode.resolve(from: "CUSTOM"), .custom)
+        XCTAssertEqual(MicroInteractionFeel.SettingsToggleMode.resolve(from: "system"), .system)
     }
 
     // MARK: - apply/reset 往返
 
-    func test_apply_settingsTab_roundTripsThroughUserDefaults() {
-        XCTAssertTrue(MicroInteractionFeel.apply(channel: "settingsTab", value: "system"))
-        MicroInteractionFeel.testingSettingsTab = nil
-        XCTAssertEqual(
-            MicroInteractionFeel.SettingsTabMode.resolve(
-                from: UserDefaults.standard.string(forKey: MicroInteractionFeel.settingsTabDefaultsKey)
-            ),
-            .system
-        )
-
-        MicroInteractionFeel.reset()
-        XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.settingsTabDefaultsKey))
-    }
-
     func test_apply_settingsToggle_roundTripsThroughUserDefaults() {
-        XCTAssertTrue(MicroInteractionFeel.apply(channel: "settingsToggle", value: "system"))
+        XCTAssertTrue(MicroInteractionFeel.apply(channel: "settingsToggle", value: "custom"))
         MicroInteractionFeel.testingSettingsToggle = nil
         XCTAssertEqual(
             MicroInteractionFeel.SettingsToggleMode.resolve(
                 from: UserDefaults.standard.string(forKey: MicroInteractionFeel.settingsToggleDefaultsKey)
             ),
-            .system
+            .custom
         )
 
         MicroInteractionFeel.reset()
         XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.settingsToggleDefaultsKey))
     }
 
-    func test_apply_reset_clearsBothNewChannels() {
-        _ = MicroInteractionFeel.apply(channel: "settingsTab", value: "system")
-        _ = MicroInteractionFeel.apply(channel: "settingsToggle", value: "system")
+    func test_apply_reset_clearsSettingsToggleChannel() {
+        _ = MicroInteractionFeel.apply(channel: "settingsToggle", value: "custom")
         MicroInteractionFeel.reset()
-        XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.settingsTabDefaultsKey))
         XCTAssertNil(UserDefaults.standard.string(forKey: MicroInteractionFeel.settingsToggleDefaultsKey))
-    }
-
-    // MARK: - SettingsTabTransition 决策表
-
-    func test_transition_systemArm_alwaysReturnsIdentityAndNilAnimation() {
-        let resolved = SettingsTabTransition.resolve(arm: .system, from: 0, to: 2, reduceMotion: false)
-        XCTAssertEqual(resolved.kind, .none)
-        XCTAssertNil(resolved.animation)
-    }
-
-    func test_transition_systemArm_ignoresReduceMotion() {
-        let resolved = SettingsTabTransition.resolve(arm: .system, from: 0, to: 1, reduceMotion: true)
-        XCTAssertEqual(resolved.kind, .none)
-        XCTAssertNil(resolved.animation)
-    }
-
-    func test_transition_customArm_forwardSlidesFromTrailing() {
-        let resolved = SettingsTabTransition.resolve(arm: .custom, from: 0, to: 2, reduceMotion: false)
-        XCTAssertEqual(resolved.kind, .slideForward)
-        XCTAssertNotNil(resolved.animation)
-    }
-
-    func test_transition_customArm_backwardSlidesFromLeading() {
-        let resolved = SettingsTabTransition.resolve(arm: .custom, from: 3, to: 1, reduceMotion: false)
-        XCTAssertEqual(resolved.kind, .slideBackward)
-        XCTAssertNotNil(resolved.animation)
-    }
-
-    func test_transition_customArm_sameIndexIsOpacityOnly() {
-        let resolved = SettingsTabTransition.resolve(arm: .custom, from: 1, to: 1, reduceMotion: false)
-        XCTAssertEqual(resolved.kind, .opacity)
-    }
-
-    func test_transition_reduceMotion_alwaysWinsOverCustomArm() {
-        let forward = SettingsTabTransition.resolve(arm: .custom, from: 0, to: 3, reduceMotion: true)
-        XCTAssertEqual(forward.kind, .opacity)
-
-        let backward = SettingsTabTransition.resolve(arm: .custom, from: 3, to: 0, reduceMotion: true)
-        XCTAssertEqual(backward.kind, .opacity)
     }
 
     // MARK: - SettingsTogglePulsePolicy 决策表
@@ -121,11 +67,6 @@ final class SettingsFeelTests: XCTestCase {
 
     // MARK: - Token 钉死（call sites 不许在现场重述这些值）
 
-    func test_tokens_settingsTab_arePinned() {
-        XCTAssertEqual(MicroInteractionFeel.Tokens.settingsTabDuration, 0.22, accuracy: 0.0001)
-        XCTAssertEqual(MicroInteractionFeel.Tokens.settingsTabReducedMotionDuration, 0.12, accuracy: 0.0001)
-    }
-
     func test_tokens_settingsToggle_arePinned() {
         XCTAssertEqual(MicroInteractionFeel.Tokens.settingsToggleBumpScale, 1.03, accuracy: 0.0001)
         XCTAssertEqual(MicroInteractionFeel.Tokens.settingsToggleBumpResponse, 0.18, accuracy: 0.0001)
@@ -133,17 +74,10 @@ final class SettingsFeelTests: XCTestCase {
 
     // MARK: - Testing overrides + isRunningTests default（同其余 channel 的既有约定）
 
-    func test_settingsTab_testingOverride_takesPrecedence() {
-        MicroInteractionFeel.testingSettingsTab = .system
-        XCTAssertEqual(MicroInteractionFeel.settingsTab, .system)
-        MicroInteractionFeel.testingSettingsTab = nil
-        XCTAssertEqual(MicroInteractionFeel.settingsTab, .system) // isRunningTests default（09-14 撤回 custom 后）
-    }
-
     func test_settingsToggle_testingOverride_takesPrecedence() {
-        MicroInteractionFeel.testingSettingsToggle = .system
-        XCTAssertEqual(MicroInteractionFeel.settingsToggle, .system)
+        MicroInteractionFeel.testingSettingsToggle = .custom
+        XCTAssertEqual(MicroInteractionFeel.settingsToggle, .custom)
         MicroInteractionFeel.testingSettingsToggle = nil
-        XCTAssertEqual(MicroInteractionFeel.settingsToggle, .custom) // isRunningTests default
+        XCTAssertEqual(MicroInteractionFeel.settingsToggle, .system) // isRunningTests default (2026-09-27 flipped to .system)
     }
 }

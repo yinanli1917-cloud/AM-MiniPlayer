@@ -27,6 +27,8 @@
 	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAccentColorName</key>
+	<string>AccentColor</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Music Mini Player needs permission to control Music.app for playback control and to display track information, album artwork, and lyrics.</string>
 	<key>NSAppleMusicUsageDescription</key>
