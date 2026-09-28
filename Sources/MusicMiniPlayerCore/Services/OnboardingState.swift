@@ -1,7 +1,13 @@
 /**
  * [INPUT]: 无外部依赖（Foundation + CoreServices AEDeterminePermissionToAutomateTarget）
  * [OUTPUT]: 导出 OnboardingState、OnboardingAuthorizationStatus
- * [POS]: C6 引导页的纯状态层——UserDefaults 读写 + 授权状态查询，不含 UI
+ * [POS]: Automation/MusicKit 授权状态查询——原 C6 引导页的完成度/schema 记录
+ *        （nanoPodOnboardingCompleted/Schema、shouldPresent、isPresented、调试
+ *        show/reset 路由）已随 C6 三页向导一起移除，由新引导的
+ *        MusicMiniPlayerCore/Onboarding/TourPersistence.swift 取代
+ *        （docs/design/2026-09-25-onboarding/proposal.md v3.3）；本文件只保留
+ *        两条授权查询，新引导的「和 Music 打招呼」步骤仍在用
+ *        automationStatus/requestAutomationAccess。
  */
 
 import Foundation
@@ -26,50 +32,12 @@ public enum OnboardingAuthorizationStatus: Equatable {
 public final class OnboardingState: ObservableObject {
     public static let shared = OnboardingState()
 
-    public static let completedKey = "nanoPodOnboardingCompleted"
-    /// 引导页内容 schema 版本——以后内容大改时把这个数值加一，老用户会再看到一次。
-    public static let schemaKey = "nanoPodOnboardingSchema"
-    public static let currentSchema = 1
+    /// App launch counter — unrelated to onboarding completion; carried over
+    /// as-is (§5.3's persistence table: "沿用"). The new tour's own launch
+    /// gating (`TourPersistence.shouldPresent`) reads this value too.
     private static let launchCountKey = "nanoPodLaunchCount"
 
-    #if DEBUG || LOCAL_DEVELOPER_BUILD
-    /// `nanopod://debug/onboarding/show` 置位；仅调试构建生效。
-    public static var debugForceShow = false
-    #endif
-
-    @Published public var isPresented = false
-
     private init() {}
-
-    // MARK: 完成状态（UserDefaults 往返）
-
-    public var hasCompletedOnboarding: Bool {
-        UserDefaults.standard.bool(forKey: Self.completedKey)
-            && UserDefaults.standard.integer(forKey: Self.schemaKey) >= Self.currentSchema
-    }
-
-    public func markCompleted() {
-        UserDefaults.standard.set(true, forKey: Self.completedKey)
-        UserDefaults.standard.set(Self.currentSchema, forKey: Self.schemaKey)
-    }
-
-    /// 供 `nanopod://debug/onboarding/reset` 与测试使用。
-    public func reset() {
-        UserDefaults.standard.removeObject(forKey: Self.completedKey)
-        UserDefaults.standard.removeObject(forKey: Self.schemaKey)
-    }
-
-    // MARK: 纯判定函数（无副作用，测试直接调用）
-
-    /// - Parameters:
-    ///   - hasCompleted: 当前 schema 下是否已完成过引导
-    ///   - launchCount: 本次是第几次启动（从 1 开始）
-    ///   - forced: 调试强制展示（`nanopod://debug/onboarding/show`）
-    public static func shouldPresent(hasCompleted: Bool, launchCount: Int, forced: Bool) -> Bool {
-        if forced { return true }
-        guard launchCount <= 1 else { return false }
-        return !hasCompleted
-    }
 
     /// 启动次数计数——每次调用自增并返回自增后的值。
     @discardableResult
@@ -78,38 +46,6 @@ public final class OnboardingState: ObservableObject {
         UserDefaults.standard.set(next, forKey: Self.launchCountKey)
         return next
     }
-
-    public func presentIfNeeded(launchCount: Int) {
-        var forced = false
-        #if DEBUG || LOCAL_DEVELOPER_BUILD
-        forced = Self.debugForceShow
-        #endif
-        if Self.shouldPresent(hasCompleted: hasCompletedOnboarding, launchCount: launchCount, forced: forced) {
-            isPresented = true
-        }
-    }
-
-    // MARK: 调试 URL 路由（由 App 层 handleAppURL 的 debug 分支调用）
-
-    /// `path` 取 `nanopod://debug/onboarding/<show|reset>` 的最后一段（已小写、已去斜杠）。
-    /// 返回 true 表示已处理。
-    #if DEBUG || LOCAL_DEVELOPER_BUILD
-    public func handleDebugAction(_ path: String) -> Bool {
-        switch path {
-        case "show":
-            Self.debugForceShow = true
-            isPresented = true
-            return true
-        case "reset":
-            reset()
-            Self.debugForceShow = false
-            isPresented = false
-            return true
-        default:
-            return false
-        }
-    }
-    #endif
 
     // MARK: 授权状态查询（只读，永不触发系统弹窗）
 

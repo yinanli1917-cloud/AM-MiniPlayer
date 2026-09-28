@@ -48,7 +48,10 @@ public final class LiquidEdgeController {
     private weak var card: SnappablePanel?
     private(set) var stageWindow: LiquidEdgeStageWindow?
     private var stage: LiquidEdgeStageView?
-    private var side: LiquidEdgeSide = .right
+    /// Onboarding tour hook: which screen edge the sliver/capsule is
+    /// currently on — read alongside `tuckedRegionInScreen`/
+    /// `floatingHitRegionInScreen` to mirror the S6 card/halo correctly.
+    public private(set) var side: LiquidEdgeSide = .right
     private(set) var geometry = LiquidEdgeGeometry.reference
     /// The card's rect in stage coordinates as it is on screen (not mirrored).
     private var cardInStage = CGRect.zero

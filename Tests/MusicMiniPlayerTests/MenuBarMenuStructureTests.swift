@@ -272,17 +272,20 @@ final class MenuBarMenuStructureTests: XCTestCase {
         XCTAssertLessThanOrEqual(size.height, 130, "proposal §3.5 pins 128pt")
     }
 
-    // MARK: - No orphaned onboarding entry (proposal §3.6: menu never reads onboarding state)
+    // MARK: - No orphaned onboarding entry (proposal §3.6: menu never reads tour state)
 
     @MainActor
-    func test_menu_itemCount_isStable_regardlessOfOnboardingState() {
+    func test_menu_itemCount_isStable_regardlessOfTourStatus() {
         let app = AppMain()
-        let originalCompleted = UserDefaults.standard.bool(forKey: OnboardingState.completedKey)
-        defer { UserDefaults.standard.set(originalCompleted, forKey: OnboardingState.completedKey) }
+        let originalStatus = UserDefaults.standard.string(forKey: TourPersistence.statusKey)
+        defer {
+            if let originalStatus { UserDefaults.standard.set(originalStatus, forKey: TourPersistence.statusKey) }
+            else { UserDefaults.standard.removeObject(forKey: TourPersistence.statusKey) }
+        }
 
-        UserDefaults.standard.set(false, forKey: OnboardingState.completedKey)
+        UserDefaults.standard.set(TourRunStatus.notStarted.rawValue, forKey: TourPersistence.statusKey)
         let incomplete = makeMenu(app: app)
-        UserDefaults.standard.set(true, forKey: OnboardingState.completedKey)
+        UserDefaults.standard.set(TourRunStatus.completed.rawValue, forKey: TourPersistence.statusKey)
         let completed = makeMenu(app: app)
 
         XCTAssertEqual(incomplete.items.count, completed.items.count)

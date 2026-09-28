@@ -94,14 +94,19 @@ public enum TourPersistence {
 
     // MARK: - Preconditions (§5.5)
 
-    /// `forced` (`nanopod://debug/tour/show`) always presents. Otherwise:
-    /// a never-started tour always presents; an in-progress one auto-resumes
-    /// up to 3 times (§5.4); a completed or explicitly-stopped one never
-    /// re-presents on its own (the Settings row is the only way back in).
-    public static func shouldPresent(status: TourRunStatus, resumeCount: Int, forced: Bool) -> Bool {
+    /// `forced` (`nanopod://debug/tour/show`) always presents. Otherwise,
+    /// same shape as C6's own gate (§5.5 "沿用 C6 思路") plus the resume cap
+    /// §5.4 adds: a never-started tour only auto-presents on the app's
+    /// actual first-ever launch (`launchCount <= 1`, C6's own rule — it is
+    /// NOT a nag shown again every subsequent launch); an in-progress one
+    /// (quit mid-tour) auto-resumes on ANY later launch, up to 3 times; a
+    /// completed or explicitly-stopped one never re-presents on its own —
+    /// the Settings row ("接着认识 nanoPod" / "重新认识 nanoPod") is the only
+    /// way back in.
+    public static func shouldPresent(status: TourRunStatus, launchCount: Int, resumeCount: Int, forced: Bool) -> Bool {
         if forced { return true }
         switch status {
-        case .notStarted: return true
+        case .notStarted: return launchCount <= 1
         case .inProgress: return resumeCount < 3
         case .completed, .skipped: return false
         }

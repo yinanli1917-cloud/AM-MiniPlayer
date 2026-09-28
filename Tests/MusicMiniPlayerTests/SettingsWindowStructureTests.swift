@@ -22,7 +22,7 @@ final class SettingsWindowStructureTests: XCTestCase {
 
     override func tearDown() {
         LaunchAtLoginBridge.testingProvider = nil
-        OnboardingState.shared.reset()
+        TourPersistence.reset()
         super.tearDown()
     }
 
@@ -94,37 +94,39 @@ final class SettingsWindowStructureTests: XCTestCase {
 
     // MARK: - 2a. "Getting to know nanoPod" title + action policy
 
-    func test_tourButtonTitleKey_notCompleted_isKeepGoing() {
-        XCTAssertEqual(TourButtonPolicy.titleKey(hasCompletedOnboarding: false), "tour.settings.keepGoing")
+    func test_tourButtonTitleKey_notStarted_isKeepGoing() {
+        XCTAssertEqual(TourButtonPolicy.titleKey(status: .notStarted), "tour.settings.keepGoing")
+    }
+
+    func test_tourButtonTitleKey_inProgress_isKeepGoing() {
+        XCTAssertEqual(TourButtonPolicy.titleKey(status: .inProgress), "tour.settings.keepGoing")
+    }
+
+    func test_tourButtonTitleKey_skipped_isKeepGoing() {
+        XCTAssertEqual(TourButtonPolicy.titleKey(status: .skipped), "tour.settings.keepGoing")
     }
 
     func test_tourButtonTitleKey_completed_isAgain() {
-        XCTAssertEqual(TourButtonPolicy.titleKey(hasCompletedOnboarding: true), "tour.settings.again")
+        XCTAssertEqual(TourButtonPolicy.titleKey(status: .completed), "tour.settings.again")
     }
 
     func test_tourButtonTitles_areDifferentKeys_bothLocalized() {
         XCTAssertNotEqual(
-            L10n.localized(TourButtonPolicy.titleKey(hasCompletedOnboarding: false)),
-            L10n.localized(TourButtonPolicy.titleKey(hasCompletedOnboarding: true))
+            L10n.localized(TourButtonPolicy.titleKey(status: .notStarted)),
+            L10n.localized(TourButtonPolicy.titleKey(status: .completed))
         )
     }
 
-    func test_gettingToKnowAction_notCompleted_doesNotReset_requestsWindow() {
-        OnboardingState.shared.reset()
-        var requestCount = 0
-        GettingToKnowNanoPodAction.perform(onboardingState: OnboardingState.shared) { requestCount += 1 }
-        XCTAssertEqual(requestCount, 1)
-        XCTAssertFalse(OnboardingState.shared.hasCompletedOnboarding)
+    func test_gettingToKnowAction_notCompleted_requestsResume_notFromStart() {
+        var requestedFromStart: Bool?
+        GettingToKnowNanoPodAction.perform(status: .inProgress) { requestedFromStart = $0 }
+        XCTAssertEqual(requestedFromStart, false, "not-yet-finished must resume from where it left off")
     }
 
-    func test_gettingToKnowAction_completed_resetsThenRequestsWindow() {
-        OnboardingState.shared.markCompleted()
-        XCTAssertTrue(OnboardingState.shared.hasCompletedOnboarding)
-
-        var requestCount = 0
-        GettingToKnowNanoPodAction.perform(onboardingState: OnboardingState.shared) { requestCount += 1 }
-        XCTAssertEqual(requestCount, 1)
-        XCTAssertFalse(OnboardingState.shared.hasCompletedOnboarding, "completed tour must reset before re-requesting")
+    func test_gettingToKnowAction_completed_requestsFromStart() {
+        var requestedFromStart: Bool?
+        GettingToKnowNanoPodAction.perform(status: .completed) { requestedFromStart = $0 }
+        XCTAssertEqual(requestedFromStart, true, "a completed tour must restart from step 1")
     }
 
     // MARK: - 3. Tab persistence + URL aliasing

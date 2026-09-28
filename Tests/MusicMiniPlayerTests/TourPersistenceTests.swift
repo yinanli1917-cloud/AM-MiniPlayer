@@ -104,13 +104,19 @@ final class TourPersistenceTests: XCTestCase {
     // MARK: - shouldPresent (§5.5)
 
     func test_shouldPresent_table() {
-        XCTAssertTrue(TourPersistence.shouldPresent(status: .notStarted, resumeCount: 0, forced: false))
-        XCTAssertTrue(TourPersistence.shouldPresent(status: .inProgress, resumeCount: 0, forced: false))
-        XCTAssertTrue(TourPersistence.shouldPresent(status: .inProgress, resumeCount: 2, forced: false))
-        XCTAssertFalse(TourPersistence.shouldPresent(status: .inProgress, resumeCount: 3, forced: false))
-        XCTAssertFalse(TourPersistence.shouldPresent(status: .completed, resumeCount: 0, forced: false))
-        XCTAssertFalse(TourPersistence.shouldPresent(status: .skipped, resumeCount: 0, forced: false))
-        XCTAssertTrue(TourPersistence.shouldPresent(status: .completed, resumeCount: 0, forced: true))
-        XCTAssertTrue(TourPersistence.shouldPresent(status: .skipped, resumeCount: 99, forced: true))
+        // notStarted: only the app's actual first-ever launch (C6's own rule).
+        XCTAssertTrue(TourPersistence.shouldPresent(status: .notStarted, launchCount: 1, resumeCount: 0, forced: false))
+        XCTAssertFalse(TourPersistence.shouldPresent(status: .notStarted, launchCount: 2, resumeCount: 0, forced: false))
+        XCTAssertFalse(TourPersistence.shouldPresent(status: .notStarted, launchCount: 50, resumeCount: 0, forced: false))
+
+        // inProgress: any later launch, up to 3 auto-resumes.
+        XCTAssertTrue(TourPersistence.shouldPresent(status: .inProgress, launchCount: 5, resumeCount: 0, forced: false))
+        XCTAssertTrue(TourPersistence.shouldPresent(status: .inProgress, launchCount: 5, resumeCount: 2, forced: false))
+        XCTAssertFalse(TourPersistence.shouldPresent(status: .inProgress, launchCount: 5, resumeCount: 3, forced: false))
+
+        XCTAssertFalse(TourPersistence.shouldPresent(status: .completed, launchCount: 1, resumeCount: 0, forced: false))
+        XCTAssertFalse(TourPersistence.shouldPresent(status: .skipped, launchCount: 1, resumeCount: 0, forced: false))
+        XCTAssertTrue(TourPersistence.shouldPresent(status: .completed, launchCount: 1, resumeCount: 0, forced: true))
+        XCTAssertTrue(TourPersistence.shouldPresent(status: .skipped, launchCount: 1, resumeCount: 99, forced: true))
     }
 }

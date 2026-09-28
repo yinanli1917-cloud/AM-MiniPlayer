@@ -27,8 +27,10 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
     var menuBarMenu: NSMenu?
     var floatingWindow: NSPanel?
     var settingsWindow: NSWindow?
-    var onboardingWindow: NSWindow?
-    private var onboardingWindowDelegate: SettingsWindowDelegate?
+    /// "认识 nanoPod" — the interactive tour that replaced the C6 three-page
+    /// OnboardingWindow (docs/design/2026-09-25-onboarding/proposal.md v3.3).
+    /// Constructed once `floatingWindow`/`liquidEdge` exist (createFloatingWindow()).
+    var tourController: TourController?
     #if DEBUG || LOCAL_DEVELOPER_BUILD
     var diagnosticsWindow: NSWindow?
     #endif
@@ -123,14 +125,11 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         globalShortcutRegistrar = registrar
 
         // ──────────────────────────────────────────────
-        // C6 引导页：仅首次启动展示（status item 已就绪之后），
-        // 非模态、不改激活策略，绝不阻塞迷你播放器本身。
+        // 「认识 nanoPod」引导：非模态自绘卡片，不抢焦点、不改激活策略，绝不
+        // 阻塞迷你播放器本身（docs/design/2026-09-25-onboarding/proposal.md）。
         // ──────────────────────────────────────────────
         let launchCount = OnboardingState.shared.incrementLaunchCount()
-        OnboardingState.shared.presentIfNeeded(launchCount: launchCount)
-        if OnboardingState.shared.isPresented {
-            showOnboardingWindow()
-        }
+        tourController?.launchIfNeeded(launchCount: launchCount)
 
         debugPrint("[AppMain] Setup complete\n")
         E2EEventLog.emit("app_ready", [
@@ -223,7 +222,7 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
             // nanopod://debug/feel/wave/<topdown|sync>
             // nanopod://debug/feel/<hoverCapsule|pressScale|progressHover|shuffleRepeat|buttonFill|windowPresent>/<arm>
             // nanopod://debug/feel/reset — resets both NativeLyricsFeelParity and MicroInteractionFeel
-            // nanopod://debug/onboarding/<show|reset> — force-show or reset the C6 onboarding window
+            // nanopod://debug/tour/<show|reset|step/<id>> — force-show, reset, or jump the "认识 nanoPod" tour
             let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
             if path == "rowdump" {
                 Task { @MainActor in NativeLyricsRowDump.dump() }
@@ -231,13 +230,9 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
             #if DEBUG || LOCAL_DEVELOPER_BUILD
             if path == "animsweep" {
                 Task { @MainActor in WindowAnimationCensus.dump() }
-            } else if path.hasPrefix("onboarding/") {
-                let action = String(path.dropFirst("onboarding/".count))
-                Task { @MainActor in
-                    if OnboardingState.shared.handleDebugAction(action), OnboardingState.shared.isPresented {
-                        self.showOnboardingWindow()
-                    }
-                }
+            } else if path.hasPrefix("tour/") {
+                let action = String(path.dropFirst("tour/".count))
+                Task { @MainActor in _ = self.tourController?.handleDebugAction(action) }
             } else if path == "feel/reset" {
                 _ = NativeLyricsFeelParity.apply(channel: "reset", value: "reset")
                 MicroInteractionFeel.reset()
@@ -492,6 +487,7 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
                 MainActor.assumeIsolated { liquidEdge?.collapse(to: edge) ?? false }
             }
             self.liquidEdge = liquidEdge
+            self.tourController = TourController(panel: snappableWindow, liquidEdge: liquidEdge)
         }
 
         debugPrint("[AppMain] Floating window created\n")
@@ -840,56 +836,12 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         showSettingsWindow()
     }
 
-    // MARK: - Onboarding Window (C6)
+    // MARK: - "认识 nanoPod" Tour
 
-    func createOnboardingWindow() {
-        guard onboardingWindow == nil else { return }
-        let onboardingContent = OnboardingWindowView(onboardingState: OnboardingState.shared) { [weak self] in
-            Task { @MainActor in
-                self?.closeOnboardingWindow()
-            }
-        }
-        .environmentObject(musicController)
-
-        let hostingController = NSHostingController(rootView: onboardingContent)
-
-        // Plain window, no Liquid Glass material — avoids glass-on-glass with the
-        // floating panel's own backdrop; same visual family as the settings window.
-        let window = NSWindow(contentViewController: hostingController)
-        window.title = ""
-        window.styleMask = [.titled, .closable, .fullSizeContentView]
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        window.isMovableByWindowBackground = true
-        window.setContentSize(NSSize(width: 460, height: 380))
-        window.center()
-        window.isReleasedWhenClosed = false
-        // Non-modal: the mini player keeps running underneath.
-        window.level = .normal
-
-        onboardingWindowDelegate = SettingsWindowDelegate()
-        window.delegate = onboardingWindowDelegate
-
-        onboardingWindow = window
-    }
-
-    func showOnboardingWindow() {
-        if onboardingWindow == nil {
-            createOnboardingWindow()
-        }
-        guard let window = onboardingWindow else { return }
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        // LSUIElement app: a newly created window needs one explicit activation
-        // to gain focus. This does NOT touch NSApp.activationPolicy — only
-        // updateDockVisibility() may do that (banned-patterns.md).
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
+    /// Settings › 通用's "接着认识 nanoPod" / "重新认识 nanoPod" row.
     @MainActor
-    func closeOnboardingWindow() {
-        OnboardingState.shared.isPresented = false
-        onboardingWindow?.close()
+    func showTour(fromStart: Bool) {
+        tourController?.requestTour(fromStart: fromStart)
     }
 
     #if DEBUG || LOCAL_DEVELOPER_BUILD
