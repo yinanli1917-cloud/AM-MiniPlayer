@@ -1,24 +1,81 @@
 /**
- * [INPUT]: SwiftUI; MusicMiniPlayerCore's TourMotionPolicy/TourCardSide;
- *          this Tour/ folder's TourCardModel/TourBubbleShape/TourRingView/
- *          TourGestureGlyph.
- * [OUTPUT]: Exports TourCardView.
- * [POS]: MusicMiniPlayerAppKit/Tour. The card's SwiftUI content (proposal
- *        §4.6/§4.7): Liquid Glass on macOS 26 via `GlassEffectContainer` +
- *        `TourBubbleShape`, `.popover`-material `NSVisualEffectView` fallback
- *        on 14/15 — ONE glass shape per card (banned-patterns.md's
- *        glass-on-glass lesson), buttons are solid capsules, not their own
- *        glass.
+ * [INPUT]: SwiftUI; MusicMiniPlayerCore's TourMotionPolicy/TourCardSide/L10n;
+ *          this Tour/ folder's TourCardModel/TourBubbleShape/TourCardStyle/
+ *          TourCardMaterial/TourCompletionFeedback/TourGestureGlyph.
+ * [OUTPUT]: Exports TourCardView (the card's content, pure values in), TourCardStore
+ *           (what the persistent card window observes), TourCardRoot.
+ * [POS]: MusicMiniPlayerAppKit/Tour. Layout pinned to storyboard.html `.card`
+ *        (proposal §4.7): head = title (left) + 28pt ring (top right), then
+ *        body, chip, beats, gesture, note, footer; footer = two text links or a
+ *        link and a capsule button, never system-styled controls. One glass
+ *        shape per card (body + beak); buttons are solid capsules.
  */
 
 import SwiftUI
 import MusicMiniPlayerCore
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Store (persistent window content state)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// The card window's content is ONE hosting view for the whole tour, fed by
+/// this object. (The first version swapped in a brand-new NSHostingController
+/// on every change, so no state could ever animate into the next.)
+@MainActor
+final class TourCardStore: ObservableObject {
+    @Published var model: TourCardModel
+    @Published var beakSide: TourCardSide = .right
+    /// Y-down / x-right distance to the beak tip (TourBubbleShape's convention).
+    @Published var beakOffset: CGFloat = 40
+    @Published var gestureKind: TourGestureKind?
+    /// Bumps when a DIFFERENT card (not just a checked beat) takes over, so
+    /// SwiftUI cross-fades the content instead of morphing it.
+    @Published var contentKey = 0
+    @Published var arm: TourCardMaterialArm
+
+    let feedback: TourCompletionFeedback
+
+    var onPrimary: (() -> Void)?
+    var onSecondary: (() -> Void)?
+    var onStop: (() -> Void)?
+    var onSkipStep: (() -> Void)?
+    var onFallback: (() -> Void)?
+
+    init(model: TourCardModel, feedback: TourCompletionFeedback, arm: TourCardMaterialArm = .current()) {
+        self.model = model
+        self.feedback = feedback
+        self.arm = arm
+    }
+}
+
+struct TourCardRoot: View {
+    @ObservedObject var store: TourCardStore
+
+    var body: some View {
+        TourCardView(
+            model: store.model, beakSide: store.beakSide, beakOffset: store.beakOffset,
+            gestureKind: store.gestureKind, arm: store.arm, feedback: store.feedback,
+            contentKey: store.contentKey,
+            onPrimary: store.onPrimary, onSecondary: store.onSecondary, onStop: store.onStop,
+            onSkipStep: store.onSkipStep, onFallback: store.onFallback
+        )
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Card
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 struct TourCardView: View {
+    typealias M = TourCardMetrics
+
     var model: TourCardModel
     var beakSide: TourCardSide
     var beakOffset: CGFloat
     var gestureKind: TourGestureKind?
+    var arm: TourCardMaterialArm = .glass
+    var feedback: TourCompletionFeedback
+    var contentKey = 0
     var onPrimary: (() -> Void)?
     var onSecondary: (() -> Void)?
     var onStop: (() -> Void)?
@@ -26,163 +83,181 @@ struct TourCardView: View {
     var onFallback: (() -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var colorScheme
 
-    private let cardWidth: CGFloat = 236
+    private var palette: TourCardPalette { .resolve(dark: colorScheme == .dark) }
     private var shape: TourBubbleShape { TourBubbleShape(beakSide: beakSide, beakOffset: beakOffset) }
+
+    /// Window width = body + beak on the beak's side.
+    static func windowWidth(beakSide: TourCardSide) -> CGFloat {
+        switch beakSide {
+        case .left, .right: return M.bodyWidth + M.beakSize
+        case .top, .bottom: return M.bodyWidth
+        }
+    }
+
+    /// Screen point (AppKit, y up) of the progress ring's center for a card
+    /// window at `f` — where the completion sparks fly out from.
+    static func ringCenter(inWindowFrame f: CGRect, beakSide: TourCardSide) -> CGPoint {
+        let r = TourMotionPolicy.Tokens.ringOuterDiameter / 2
+        return CGPoint(
+            x: f.maxX - (beakSide == .right ? M.beakSize : 0) - M.paddingSide - r,
+            y: f.maxY - (beakSide == .top ? M.beakSize : 0) - M.paddingTop - r
+        )
+    }
 
     var body: some View {
         content
-            .padding(16)
-            .frame(width: cardWidth, alignment: .leading)
-            .background(background)
-            .overlay(shape.stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+            .frame(width: M.bodyWidth, alignment: .leading)
+            .padding(.top, beakSide == .top ? M.beakSize : 0)
+            .padding(.bottom, beakSide == .bottom ? M.beakSize : 0)
+            .padding(.leading, beakSide == .left ? M.beakSize : 0)
+            .padding(.trailing, beakSide == .right ? M.beakSize : 0)
             .fixedSize(horizontal: false, vertical: true)
+            .tourCardMaterial(arm, shape: shape, dark: colorScheme == .dark)
+            .overlay(shape.stroke(palette.hairline, lineWidth: 0.5))
+            // The card window is never key. Controls and materials that dim
+            // themselves in inactive windows must still read as active here.
+            .environment(\.controlActiveState, .key)
     }
 
-    @ViewBuilder
-    private var background: some View {
-        if #available(macOS 26.0, *), !reduceTransparency {
-            GlassEffectContainer {
-                Color.clear.glassEffect(.regular, in: shape)
-            }
-        } else {
-            TourVisualEffectBackground(shape: shape)
-        }
-    }
+    // MARK: Content
 
     @ViewBuilder
     private var content: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Title + ring, ring right-aligned and top-aligned with the title (§4.7 v3.2).
-            HStack(alignment: .top) {
-                Text(model.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 8)
-                if model.ringCompleted > 0 || model.showRingCheckmark || model.ringClosed {
-                    TourRingView(
-                        completed: model.ringCompleted, closed: model.ringClosed,
-                        showCheckmark: model.showRingCheckmark, stepLabel: model.stepLabel, reduceMotion: reduceMotion
-                    )
-                }
-            }
-
+        VStack(alignment: .leading, spacing: 0) {
+            head
             if !model.body.isEmpty {
                 Text(model.body)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: M.bodySize))
+                    .foregroundStyle(palette.muted)
+                    .lineSpacing(M.bodyLineSpacing)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, M.bodyTop)
             }
-
-            if let chip = model.chip {
-                HStack(spacing: 6) {
-                    Image(systemName: "checkmark").font(.system(size: 9, weight: .bold))
-                    Text(chip).font(.system(size: 11))
-                }
-                .foregroundStyle(.secondary)
-            }
-
-            if !model.beats.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(model.beats) { beat in
-                        HStack(spacing: 8) {
-                            ZStack {
-                                Circle().strokeBorder(Color.secondary.opacity(0.4), lineWidth: 1.2)
-                                if beat.checked {
-                                    Circle().fill(Color.accentColor)
-                                    Image(systemName: "checkmark").font(.system(size: 7, weight: .bold)).foregroundStyle(.white)
-                                }
-                            }
-                            .frame(width: 14, height: 14)
-                            Text(beat.text)
-                                .font(.system(size: 12))
-                                .foregroundStyle(beat.checked ? .secondary : .primary)
-                        }
-                    }
-                }
-            }
-
+            if let chip = model.chip { chipView(chip) }
+            if !model.beats.isEmpty { beatsView }
             if let gestureKind {
-                HStack {
-                    Spacer()
-                    TourGestureGlyph(kind: gestureKind, reduceMotion: reduceMotion)
-                    Spacer()
-                }
-                .padding(.vertical, 2)
+                TourGestureGlyph(kind: gestureKind, reduceMotion: reduceMotion)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, M.gestureTop)
             }
-
+            if isMoveStep, let note = model.footNote { noteView(note) }
             if let confirm = model.confirm {
                 Text(confirm)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .transition(.opacity)
+                    .font(.system(size: M.confirmSize, weight: .semibold))
+                    .foregroundStyle(palette.ink)
+                    .padding(.top, M.confirmTop)
             }
-
             footer
+            if !isMoveStep, let note = model.footNote, hasFooter { noteView(note) }
+        }
+        .padding(.top, M.paddingTop)
+        .padding(.horizontal, M.paddingSide)
+        .padding(.bottom, M.paddingBottom)
+        .id(contentKey)
+        .transition(.opacity)
+    }
+
+    private var isMoveStep: Bool { if case .step(.moveTuck) = model.kind { return true }; return false }
+
+    private var head: some View {
+        HStack(alignment: .top, spacing: M.headGap) {
+            Text(model.title)
+                .font(.system(size: M.titleSize, weight: .semibold))
+                .foregroundStyle(palette.ink)
+                .lineSpacing(M.titleLineSpacing)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, M.titleTopInset)
+            TourFeedbackRing(
+                completed: model.ringCompleted, closed: model.ringClosed,
+                stepLabel: model.stepLabel, palette: palette, feedback: feedback
+            )
+        }
+    }
+
+    private func chipView(_ text: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "checkmark").font(.system(size: 8.5, weight: .bold)).foregroundStyle(Color(hex: 0x22A06B))
+            Text(text).font(.system(size: M.noteSize)).foregroundStyle(palette.muted)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(palette.track))
+        .padding(.top, M.chipTop)
+    }
+
+    private var beatsView: some View {
+        VStack(alignment: .leading, spacing: M.beatGap) {
+            ForEach(model.beats) { beat in
+                HStack(spacing: 8) {
+                    TourFeedbackBeatDot(index: beat.id, checked: beat.checked, palette: palette, feedback: feedback)
+                    Text(beat.text)
+                        .font(.system(size: M.beatSize))
+                        .foregroundStyle(beat.checked ? palette.muted : palette.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.top, M.beatsTop)
+    }
+
+    private func noteView(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: M.noteSize))
+            .foregroundStyle(palette.muted)
+            .lineSpacing(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, M.noteTop)
+    }
+
+    // MARK: Footer
+
+    private var hasFooter: Bool {
+        model.primaryTitle != nil || model.secondaryTitle != nil || model.showStop || model.showSkipStep || model.showFallbackButton
+    }
+
+    /// Left slot: "stop here" on step cards; the secondary action on the
+    /// welcome / connect / finale cards. Right slot: the primary capsule, the
+    /// fallback capsule (move step), or "skip this one".
+    @ViewBuilder
+    private var footer: some View {
+        if hasFooter {
+            HStack(spacing: 8) {
+                leftSlot
+                Spacer(minLength: 0)
+                rightSlot
+            }
+            .padding(.top, M.footTop)
         }
     }
 
     @ViewBuilder
-    private var footer: some View {
-        if model.primaryTitle != nil || model.secondaryTitle != nil || model.showStop || model.showSkipStep || model.showFallbackButton {
-            HStack(spacing: 12) {
-                if model.showStop, let onStop {
-                    Button(L10n.localized("tour.stop"), action: onStop).buttonStyle(.link).font(.system(size: 11))
-                }
-                if model.showSkipStep, let onSkipStep {
-                    Button(L10n.localized("tour.skipStep"), action: onSkipStep).buttonStyle(.link).font(.system(size: 11))
-                }
-                Spacer(minLength: 0)
-                if model.showFallbackButton, let title = model.secondaryTitle, let onFallback {
-                    Button(title, action: onFallback)
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                } else if let title = model.secondaryTitle, let onSecondary {
-                    Button(title, action: onSecondary)
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-                if let title = model.primaryTitle, let onPrimary {
-                    Button(title, action: onPrimary)
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                }
-            }
-            .padding(.top, 2)
-
-            if let foot = model.footNote {
-                Text(foot)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
+    private var leftSlot: some View {
+        if model.showStop, let onStop {
+            link(L10n.localized("tour.stop"), onStop)
+        } else if !model.showFallbackButton, let title = model.secondaryTitle, let onSecondary {
+            if case .finale = model.kind {
+                Button(title, action: onSecondary).buttonStyle(TourSecondaryButtonStyle(palette: palette))
+            } else {
+                link(title, onSecondary)
             }
         }
     }
-}
 
-/// macOS 14/15 fallback (§4.6): `.popover` material masked to the same
-/// `TourBubbleShape` the glass arm uses.
-private struct TourVisualEffectBackground: NSViewRepresentable {
-    var shape: TourBubbleShape
-
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .popover
-        view.blendingMode = .behindWindow
-        view.state = .active
-        return view
+    @ViewBuilder
+    private var rightSlot: some View {
+        if let title = model.primaryTitle, let onPrimary {
+            Button(title, action: onPrimary).buttonStyle(TourPrimaryButtonStyle(palette: palette))
+        } else if model.showFallbackButton, let title = model.secondaryTitle, let onFallback {
+            Button(title, action: onFallback).buttonStyle(TourSecondaryButtonStyle(palette: palette))
+        } else if model.showSkipStep, let onSkipStep {
+            link(L10n.localized("tour.skipStep"), onSkipStep)
+        }
     }
 
-    func updateNSView(_ view: NSVisualEffectView, context: Context) {
-        let bounds = view.bounds
-        guard bounds.width > 0, bounds.height > 0 else { view.maskImage = nil; return }
-        view.maskImage = NSImage(size: bounds.size, flipped: false) { rect in
-            let path = shape.path(in: rect)
-            NSColor.black.setFill()
-            NSBezierPath(cgPath: path.cgPath).fill()
-            return true
-        }
+    private func link(_ title: String, _ action: @escaping () -> Void) -> some View {
+        Button(title, action: action).buttonStyle(TourLinkStyle(palette: palette))
     }
 }

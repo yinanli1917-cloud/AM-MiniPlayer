@@ -3,8 +3,8 @@
  *          TourPersistence/TourDetectors/TourHookBus/TourDeferredWatcher/
  *          TourPlacement/TourAnchorRegistry/TourMotionPolicy/OnboardingState/
  *          MusicController/LyricsService/SnappablePanel/LiquidEdgeController;
- *          this Tour/ folder's TourCardWindow/TourCardView/TourHaloView/
- *          TourCelebrationView.
+ *          this Tour/ folder's TourCardWindow/TourCardView (+TourCardStore)/
+ *          TourCompletionFeedback/TourHaloView/TourCelebrationView.
  * [OUTPUT]: Exports TourController — the @MainActor effect executor that
  *           turns TourMachine's pure output into real windows.
  * [POS]: MusicMiniPlayerAppKit/Tour. Owned by AppMain; constructed once the
@@ -23,6 +23,7 @@ final class TourController: ObservableObject {
     private let liquidEdge: LiquidEdgeController
     private let musicController: MusicController
     private let lyricsService: LyricsService
+    private let defaults: UserDefaults
 
     private(set) var state: TourState
     private var cancellables = Set<AnyCancellable>()
@@ -30,8 +31,16 @@ final class TourController: ObservableObject {
     private let snappedCornerSubject = PassthroughSubject<ScreenCorner, Never>()
 
     private var cardWindow: TourCardWindow?
+    /// ONE persistent hosting view + store for the card window's whole life —
+    /// changes flow through `cardStore`, never through a new hosting controller.
+    private var cardStore: TourCardStore?
     private var haloWindow: TourHaloWindow?
+    private var haloStore: TourHaloStore?
+    /// Confetti only; the step-completion sparks live in `feedback`.
     private var celebrationWindow: TourCelebrationWindow?
+    /// The "you finished it" animation — the controller's only call into it
+    /// is `feedback.begin(_:)`.
+    private let feedback: TourCompletionFeedback
     private var transitionWork: DispatchWorkItem?
     private var finaleWork: DispatchWorkItem?
     private var closingFlashWork: DispatchWorkItem?
@@ -42,6 +51,8 @@ final class TourController: ObservableObject {
     /// ring-grow that's meant to flash on screen first, so there is no
     /// current-phase card model left to render at that point without this.
     private var lastPresentedModel: TourCardModel?
+    /// S4L closing flash: hide the card once the feedback has had its second.
+    private var closingFlashPending = false
 
     #if DEBUG || LOCAL_DEVELOPER_BUILD
     static var debugForceShow = false
@@ -51,20 +62,30 @@ final class TourController: ObservableObject {
     /// windows are currently allocated, and whether any of the three timers
     /// (transition / finale auto-dismiss / closing-flash) are still armed.
     var debugAllocatedWindowCount: Int {
-        [cardWindow != nil, haloWindow != nil, celebrationWindow != nil].filter { $0 }.count
+        [cardWindow != nil, haloWindow != nil, celebrationWindow != nil, feedback.debugSparkOverlay.window != nil].filter { $0 }.count
     }
+    var debugFeedback: TourCompletionFeedback { feedback }
+    var debugCardStore: TourCardStore? { cardStore }
     var debugHasPendingTimers: Bool {
         transitionWork != nil || finaleWork != nil || closingFlashWork != nil
     }
     var debugIsDeferredWatcherArmed: Bool { deferredWatcher.isArmed }
+    /// Geometry seams for TourCardPlacementIntegrationTests (screen coordinates).
+    var debugCardFrame: NSRect? { cardWindow?.frame }
+    var debugHaloFrame: NSRect? { haloWindow?.isVisible == true ? haloWindow?.frame : nil }
+    private(set) var debugLastPlacement: TourCardPlacement?
+    private(set) var debugLastAnchorRect: CGRect?
 
     init(panel: SnappablePanel, liquidEdge: LiquidEdgeController,
-         musicController: MusicController = .shared, lyricsService: LyricsService = .shared) {
+         musicController: MusicController = .shared, lyricsService: LyricsService = .shared,
+         defaults: UserDefaults = .standard, feedback: TourCompletionFeedback? = nil) {
+        self.defaults = defaults
+        self.feedback = feedback ?? TourCompletionFeedback()
         self.panel = panel
         self.liquidEdge = liquidEdge
         self.musicController = musicController
         self.lyricsService = lyricsService
-        self.state = TourPersistence.load()
+        self.state = TourPersistence.load(from: defaults)
 
         panel.onSnappedToCorner = { [weak self] _, corner in self?.snappedCornerSubject.send(corner) }
         wireDetectors()
@@ -88,7 +109,7 @@ final class TourController: ObservableObject {
     /// Settings › 通用's "接着认识 nanoPod" / "重新认识 nanoPod" row.
     func requestTour(fromStart: Bool) {
         if fromStart {
-            TourPersistence.reset()
+            TourPersistence.reset(defaults)
             state = TourState()
             send(.start)
         } else {
@@ -104,9 +125,14 @@ final class TourController: ObservableObject {
             requestTour(fromStart: false)
             return true
         }
+        if path.hasPrefix("material/") {
+            let arm = String(path.dropFirst("material/".count))
+            defaults.set(TourCardMaterialArm(rawValue: arm)?.rawValue ?? "glass", forKey: TourCardMaterialArm.defaultsKey)
+            return true
+        }
         if path == "reset" {
             teardown()
-            TourPersistence.reset()
+            TourPersistence.reset(defaults)
             state = TourState()
             Self.debugForceShow = false
             return true
@@ -148,7 +174,7 @@ final class TourController: ObservableObject {
         )
         let (next, effects) = TourMachine.reduce(state, event, snapshot: snapshot)
         state = next
-        apply(effects)
+        apply(effects, userCompletion: Self.isUserCompletion(event))
         scheduleTransitionIfNeeded()
         scheduleFinaleAutoDismissIfNeeded()
     }
@@ -172,7 +198,21 @@ final class TourController: ObservableObject {
 
     // MARK: - Effects
 
-    private func apply(_ effects: [TourEffect]) {
+    /// Events that mean the USER just did something (as opposed to a launch,
+    /// resume or skip that merely pre-fills already-done steps): only these
+    /// play the completion feedback.
+    private static func isUserCompletion(_ event: TourEvent) -> Bool {
+        switch event {
+        case .signal, .panelSettled, .panelTucked, .panelExpanded: return true
+        default: return false
+        }
+    }
+
+    private func apply(_ effects: [TourEffect], userCompletion: Bool) {
+        var pops: [Int] = []
+        var ringTo: Int?
+        var spark = false
+        var closes = false
         for effect in effects {
             switch effect {
             case .showWelcomeCard: connectDenied = false; presentCurrentCard()
@@ -181,19 +221,44 @@ final class TourController: ObservableObject {
             case .showFinaleCard: presentCurrentCard()
             case .showDeferredTipCard: presentCurrentCard()
             case .hideCard: hideCard()
-            case .checkBeat(let step, let index): flashBeatCheck(step, index)
-            case .growRing(let to): flashRingGrowth(to: to)
-            case .spark: playSpark()
-            case .pulseRing: pulseRing()
+            case .checkBeat(let step, let index):
+                if patchDisplayedCard({ model in
+                    guard model.beats.indices.contains(index), case .step(let shown) = model.kind, shown == step else { return false }
+                    model.beats[index].checked = true
+                    return true
+                }) { pops.append(index) }
+            case .growRing(let to):
+                ringTo = to
+                patchDisplayedCard { model in model.ringCompleted = to; return true }
+            case .spark: spark = true
+            case .pulseRing: closes = true
             case .confetti: playConfetti()
             case .haptic(let kind): performHaptic(kind)
             case .relocateCardToPanel: presentCurrentCard()
-            case .persist: TourPersistence.save(state)
+            case .persist: TourPersistence.save(state, to: defaults)
             case .armDeferredWatcher: armDeferredWatcher()
             case .cancelDeferredWatcher: deferredWatcher.cancel()
             case .teardown: teardown()
             }
         }
+        if userCompletion, let store = cardStore, !pops.isEmpty || ringTo != nil {
+            beginFeedback(store: store, pops: pops, ringTo: ringTo, spark: spark, closes: closes)
+        }
+        if closingFlashPending { closingFlashPending = false; scheduleClosingFlashHide() }
+    }
+
+    private func beginFeedback(store: TourCardStore, pops: [Int], ringTo: Int?, spark: Bool, closes: Bool) {
+        let total = TourStep.orderedSteps.count
+        var event = TourFeedbackEvent(ringFrom: ringTo ?? 0, ringTo: ringTo ?? 0, total: total, beatIndices: pops)
+        if let to = ringTo {
+            event.ringTo = to
+            event.ringFrom = max(0, to - 1)
+            event.closesRing = closes && to >= total
+        }
+        if spark, let window = cardWindow {
+            event.sparkOriginOnScreen = TourCardView.ringCenter(inWindowFrame: window.frame, beakSide: store.beakSide)
+        }
+        feedback.begin(event)
     }
 
     private func armDeferredWatcher() {
@@ -226,14 +291,18 @@ final class TourController: ObservableObject {
     /// a strong reference to them, so dropping these is deinit or nothing.
     private func hideCard() {
         closingFlashWork?.cancel(); closingFlashWork = nil
+        closingFlashPending = false
         lastPresentedModel = nil
-        cardWindow?.contentViewController = nil
+        feedback.cancel()
+        cardWindow?.contentView = nil
         cardWindow?.orderOut(nil)
         cardWindow = nil
-        haloWindow?.contentViewController = nil
+        cardStore = nil
+        haloWindow?.contentView = nil
         haloWindow?.orderOut(nil)
         haloWindow = nil
-        celebrationWindow?.contentViewController = nil
+        haloStore = nil
+        celebrationWindow?.contentView = nil
         celebrationWindow?.orderOut(nil)
         celebrationWindow = nil
     }
@@ -246,34 +315,22 @@ final class TourController: ObservableObject {
         presentCard(model: model, gestureKind: gestureKind(for: state.phase))
     }
 
-    /// Beat-check / ring-growth normally just re-renders the current step's
-    /// card. The one exception (§5.2's deferred-tip completion) already
-    /// moved `state.phase` to `.idle` by the time this runs — patch the last
-    /// model shown instead, flash it briefly, then hide.
-    private func flashBeatCheck(_ step: TourStep, _ index: Int) {
-        if let model = cardModel(for: state.phase) {
-            lastPresentedModel = model
-            presentCard(model: model, gestureKind: gestureKind(for: state.phase))
-            return
-        }
-        guard var model = lastPresentedModel, model.beats.indices.contains(index) else { return }
-        model.beats[index].checked = true
+    /// Updates the card that is ALREADY on screen in place (a beat turned
+    /// solid, the ring grew) — same window, same hosting view, same store —
+    /// so the feedback animation has a live view to play on. The base is the
+    /// current phase's card, or (when the reducer has already moved on to the
+    /// transition/idle phase, e.g. the last step's completion or S4L's
+    /// closing flash) the last card shown. Returns whether it changed.
+    @discardableResult
+    private func patchDisplayedCard(_ patch: (inout TourCardModel) -> Bool) -> Bool {
+        let live = cardModel(for: state.phase)
+        var model: TourCardModel
+        if let live { model = live } else if let last = lastPresentedModel { model = last } else { return false }
+        guard patch(&model) else { return false }
         lastPresentedModel = model
-        presentCard(model: model, gestureKind: nil)
-        scheduleClosingFlashHide()
-    }
-
-    private func flashRingGrowth(to: Int) {
-        if let model = cardModel(for: state.phase) {
-            lastPresentedModel = model
-            presentCard(model: model, gestureKind: gestureKind(for: state.phase))
-            return
-        }
-        guard var model = lastPresentedModel else { return }
-        model.ringCompleted = to
-        lastPresentedModel = model
-        presentCard(model: model, gestureKind: nil)
-        scheduleClosingFlashHide()
+        presentCard(model: model, gestureKind: live == nil ? nil : gestureKind(for: state.phase))
+        if live == nil, case .idle = state.phase { closingFlashPending = true }
+        return true
     }
 
     private func scheduleClosingFlashHide() {
@@ -299,7 +356,7 @@ final class TourController: ObservableObject {
                 body: L(resuming ? "tour.resume.body" : "tour.welcome.body"),
                 primaryTitle: L("tour.welcome.primary"), secondaryTitle: L("tour.welcome.secondary"),
                 footNote: L("tour.welcome.foot"),
-                ringCompleted: state.completedCount
+                ringCompleted: state.completedCount, stepLabel: "\(state.completedCount)"
             )
             model.showStop = false; model.showSkipStep = false
             if state.stepStates[.connect] == .completed { model.chip = L("tour.welcome.chip") }
@@ -393,7 +450,8 @@ final class TourController: ObservableObject {
                 body: L(deferred ? "tour.done.bodyDeferred" : "tour.done.body"),
                 primaryTitle: L("tour.done.shortcut"), secondaryTitle: L("tour.done.ok"),
                 footNote: L("tour.done.foot"),
-                ringCompleted: deferred ? total - 1 : total, ringClosed: !deferred
+                ringCompleted: deferred ? total - 1 : total, ringClosed: !deferred,
+                stepLabel: deferred ? "\(total - 1)" : ""
             )
             model.showStop = false; model.showSkipStep = false
             return model
@@ -424,19 +482,23 @@ final class TourController: ObservableObject {
     }
 
     private func currentAnchorRect() -> CGRect? {
+        guard let panel else { return nil }
+        // Anchors are stored as SwiftUI global rects; placement runs in
+        // screen space — convert through the panel's real hosting view.
+        func screen(_ id: TourAnchorID) -> CGRect? { TourAnchorRegistry.shared.screenRect(for: id, in: panel) }
         switch state.phase {
         case .step(.reveal, _):
-            return TourAnchorRegistry.shared.rect(for: .playPause)
+            return screen(.playPause)
         case .step(.corners, let beats):
-            return TourAnchorRegistry.shared.rect(for: beats[0] ? .musicButton : .audioOutput)
+            return screen(beats[0] ? .musicButton : .audioOutput)
         case .step(.lyrics, _):
-            return TourAnchorRegistry.shared.rect(for: .lyricsNav)
+            return screen(.lyricsNav)
         case .step(.translate, _), .deferredTip:
-            return TourAnchorRegistry.shared.rect(for: .translate)
+            return screen(.translate)
         case .transitioning(let from, _) where from == .translate:
-            return TourAnchorRegistry.shared.rect(for: .translate)
+            return screen(.translate)
         default:
-            return panel?.frame
+            return panel.frame
         }
     }
 
@@ -451,119 +513,158 @@ final class TourController: ObservableObject {
         }
     }
 
+    /// Places the card next to its anchor and puts `model` in it. The first
+    /// call of a tour builds the window + hosting view; every later call only
+    /// feeds the store and moves the window.
     private func presentCard(model: TourCardModel, gestureKind: TourGestureKind?) {
         guard let panel, let screen = panel.screen ?? NSScreen.main else { return }
         let visibleFrame = screen.visibleFrame
         let anchor = currentAnchorRect() ?? panel.frame
+        ensureWindows()
+        guard let store = cardStore, let window = cardWindow else { return }
 
-        let measuredHeight = measureCardHeight(model: model, gestureKind: gestureKind)
-        let cardSize = CGSize(width: 236, height: max(measuredHeight, 92))
+        // Two passes: the beak's side (hence the window's width/height) is a
+        // product of the placement, and the placement needs the size.
+        var beakSide = store.beakSide
+        var cardSize = CGSize(width: TourCardView.windowWidth(beakSide: .left), height: 150)
+        var placement = TourCardPlacement(origin: .zero, beakSide: beakSide, beakOffset: 40)
+        for _ in 0..<2 {
+            cardSize = measureCardSize(model: model, beakSide: beakSide, gestureKind: gestureKind, arm: store.arm)
+            if isSliverAnchored {
+                let edge: TourCardSide = liquidEdge.side == .left ? .left : .right
+                let region = liquidEdge.tuckedRegionInScreen
+                placement = TourPlacement.placeNearSliver(
+                    cardSize: cardSize, sliverEdge: edge,
+                    floatingHitRegion: liquidEdge.floatingHitRegionInScreen.isEmpty ? region : liquidEdge.floatingHitRegionInScreen,
+                    sliverMidY: region.isEmpty ? panel.frame.midY : region.midY, visibleFrame: visibleFrame
+                )
+            } else {
+                placement = TourPlacement.placeNearPanel(cardSize: cardSize, anchor: anchor, panelFrame: panel.frame, visibleFrame: visibleFrame)
+            }
+            if placement.beakSide == beakSide { break }
+            beakSide = placement.beakSide
+        }
+        debugLastPlacement = placement
+        debugLastAnchorRect = anchor
 
-        let placement: TourCardPlacement
-        if isSliverAnchored {
-            let edge: TourCardSide = liquidEdge.side == .left ? .left : .right
-            let region = liquidEdge.tuckedRegionInScreen
-            placement = TourPlacement.placeNearSliver(
-                cardSize: cardSize, sliverEdge: edge,
-                floatingHitRegion: liquidEdge.floatingHitRegionInScreen.isEmpty ? region : liquidEdge.floatingHitRegionInScreen,
-                sliverMidY: region.isEmpty ? panel.frame.midY : region.midY, visibleFrame: visibleFrame
-            )
+        let newContent = store.model.kind != model.kind || store.model.title != model.title
+        let apply = {
+            store.beakSide = placement.beakSide
+            store.beakOffset = placement.beakOffsetFromTop(cardHeight: cardSize.height)
+            store.gestureKind = gestureKind
+            store.model = model
+            if newContent { store.contentKey += 1 }
+        }
+        if newContent {
+            feedback.cancel()
+            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { apply() } else {
+                withAnimation(.easeOut(duration: TourMotionPolicy.Tokens.cardDismissDuration)) { apply() }
+            }
         } else {
-            placement = TourPlacement.placeNearPanel(cardSize: cardSize, anchor: anchor, panelFrame: panel.frame, visibleFrame: visibleFrame)
+            apply()
         }
 
-        ensureWindows()
-        let content = buildCardView(model: model, placement: placement, gestureKind: gestureKind)
-        cardWindow?.contentViewController = NSHostingController(rootView: content)
-        cardWindow?.setFrame(NSRect(origin: placement.origin, size: cardSize), display: true)
-        cardWindow?.orderFront(nil)
+        window.hasShadow = store.arm.needsWindowShadow
+        let target = NSRect(origin: placement.origin, size: cardSize)
+        if window.isVisible, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, window.frame != target {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = TourMotionPolicy.Tokens.cardTravelResponse
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.3, 1.0, 0.5, 1.0)
+                window.animator().setFrame(target, display: true)
+            }
+        } else {
+            window.setFrame(target, display: true)
+        }
+        window.orderFront(nil)
 
         positionHalo(anchor: anchor)
     }
 
-    private func buildCardView(model: TourCardModel, placement: TourCardPlacement, gestureKind: TourGestureKind?) -> TourCardView {
-        TourCardView(
-            model: model, beakSide: placement.beakSide, beakOffset: placement.beakOffset, gestureKind: gestureKind,
-            onPrimary: { [weak self] in self?.handlePrimary() },
-            onSecondary: { [weak self] in self?.handleSecondary() },
-            onStop: { [weak self] in self?.send(.stopTour) },
-            onSkipStep: { [weak self] in self?.handleSkipStepOrDeniedContinue() },
-            onFallback: { [weak self] in self?.handleFallback() }
-        )
-    }
-
-    private func measureCardHeight(model: TourCardModel, gestureKind: TourGestureKind?) -> CGFloat {
-        let view = buildCardView(model: model, placement: TourCardPlacement(origin: .zero, beakSide: .left, beakOffset: 40), gestureKind: gestureKind)
-        let hosting = NSHostingView(rootView: view)
-        hosting.frame = NSRect(x: 0, y: 0, width: 236, height: 1)
+    private func measureCardSize(model: TourCardModel, beakSide: TourCardSide, gestureKind: TourGestureKind?, arm: TourCardMaterialArm) -> CGSize {
+        let view = TourCardView(model: model, beakSide: beakSide, beakOffset: 40, gestureKind: gestureKind, arm: arm, feedback: feedback)
+        let hosting = TourHostingView(rootView: view)
+        let width = TourCardView.windowWidth(beakSide: beakSide)
+        hosting.frame = NSRect(x: 0, y: 0, width: width, height: 1)
         let fitting = hosting.fittingSize
-        return fitting.height > 0 ? fitting.height : 150
+        return CGSize(width: width, height: max(fitting.height > 0 ? fitting.height : 150, 92))
     }
 
     private func positionHalo(anchor: CGRect) {
         guard let size = haloSize(for: state.phase) else {
             haloWindow?.orderOut(nil)
+            haloStore?.appeared = false
             return
         }
         ensureWindows()
+        guard let haloWindow, let haloStore else { return }
         let frame = NSRect(x: anchor.midX - size.width / 2, y: anchor.midY - size.height / 2, width: size.width, height: size.height)
-        let alreadyVisible = haloWindow?.isVisible == true
-        haloWindow?.contentViewController = NSHostingController(rootView: TourHaloView(size: size, appeared: true, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion))
-        haloWindow?.setFrame(frame, display: true)
-        if !alreadyVisible {
-            haloWindow?.contentViewController = NSHostingController(rootView: TourHaloView(size: size, appeared: false, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion))
-            haloWindow?.orderFront(nil)
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.haloWindow?.contentViewController = NSHostingController(rootView: TourHaloView(size: size, appeared: true, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion))
+        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if haloWindow.isVisible {
+            haloStore.size = size
+            if reduce || haloWindow.frame == frame {
+                haloWindow.setFrame(frame, display: true)
+            } else {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.42
+                    context.timingFunction = CAMediaTimingFunction(controlPoints: 0.3, 1.1, 0.4, 1.0)
+                    haloWindow.animator().setFrame(frame, display: true)
+                }
             }
         } else {
-            haloWindow?.orderFront(nil)
+            haloStore.size = size
+            haloStore.appeared = false
+            haloWindow.setFrame(frame, display: true)
+            haloWindow.orderFront(nil)
+            DispatchQueue.main.async { haloStore.appeared = true }
         }
     }
 
     private func ensureWindows() {
-        if cardWindow == nil { cardWindow = TourCardWindow() }
-        if haloWindow == nil { haloWindow = TourHaloWindow() }
-        if celebrationWindow == nil { celebrationWindow = TourCelebrationWindow() }
+        if cardWindow == nil {
+            let store = TourCardStore(
+                model: TourCardModel(kind: .welcome, title: "", body: "", ringCompleted: 0),
+                feedback: feedback, arm: TourCardMaterialArm.current(defaults)
+            )
+            store.onPrimary = { [weak self] in self?.handlePrimary() }
+            store.onSecondary = { [weak self] in self?.handleSecondary() }
+            store.onStop = { [weak self] in self?.send(.stopTour) }
+            store.onSkipStep = { [weak self] in self?.handleSkipStepOrDeniedContinue() }
+            store.onFallback = { [weak self] in self?.handleFallback() }
+            let window = TourCardWindow()
+            window.contentView = TourHostingView(rootView: TourCardRoot(store: store))
+            cardStore = store
+            cardWindow = window
+        }
+        if haloWindow == nil {
+            let store = TourHaloStore()
+            let window = TourHaloWindow()
+            window.contentView = TourHostingView(rootView: TourHaloRoot(store: store))
+            haloStore = store
+            haloWindow = window
+        }
     }
 
-    // MARK: - Celebration
+    // MARK: - Confetti (finale)
 
-    private func playSpark() {
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, let cardWindow else { return }
-        ensureWindows()
-        let origin = CGPoint(x: cardWindow.frame.maxX - 28, y: cardWindow.frame.maxY - 28)
-        let field = TourParticleField.sparks(origin: origin, at: Date().timeIntervalSinceReferenceDate)
-        showCelebration(field: field, frame: cardWindow.frame.insetBy(dx: -60, dy: -60))
-    }
-
+    /// §8.2's 72 confetti from the panel's top edge. The field lives in the
+    /// celebration window's LOCAL y-down space (the first version fed it
+    /// screen coordinates, so nothing was ever on screen).
     private func playConfetti() {
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, let panel else { return }
-        ensureWindows()
-        let edge = CGRect(x: panel.frame.minX, y: panel.frame.maxY, width: panel.frame.width, height: 1)
-        let field = TourParticleField.confetti(along: edge, at: Date().timeIntervalSinceReferenceDate)
-        showCelebration(field: field, frame: panel.frame.insetBy(dx: -80, dy: -160).union(panel.frame))
-    }
-
-    private func showCelebration(field: TourParticleField, frame: CGRect) {
-        celebrationWindow?.contentViewController = NSHostingController(
-            rootView: TourCelebrationView(field: field, startTime: Date().timeIntervalSinceReferenceDate)
-                .frame(width: frame.width, height: frame.height)
-        )
+        let frame = panel.frame.insetBy(dx: -80, dy: -160).union(panel.frame)
+        if celebrationWindow == nil { celebrationWindow = TourCelebrationWindow() }
+        let edge = CGRect(x: panel.frame.minX - frame.minX, y: frame.maxY - panel.frame.maxY, width: panel.frame.width, height: 1)
+        let now = Date().timeIntervalSinceReferenceDate
+        let field = TourParticleField.confetti(along: edge, at: now)
+        celebrationWindow?.contentView = TourHostingView(rootView: TourCelebrationView(field: field, startTime: now))
         celebrationWindow?.setFrame(frame, display: true)
         celebrationWindow?.orderFront(nil)
         let longest = field.particles.map(\.lifetime).max() ?? 0
         DispatchQueue.main.asyncAfter(deadline: .now() + longest + 0.1) { [weak self] in
-            self?.celebrationWindow?.contentViewController = nil
+            self?.celebrationWindow?.contentView = nil
             self?.celebrationWindow?.orderOut(nil)
+            self?.celebrationWindow = nil
         }
-    }
-
-    private func pulseRing() {
-        // The ring's own view animates the pulse on `growRing`'s content
-        // rebuild (scale/stroke handled inside TourRingView's animation
-        // modifiers); nothing further to trigger here.
     }
 
     // MARK: - Button handlers

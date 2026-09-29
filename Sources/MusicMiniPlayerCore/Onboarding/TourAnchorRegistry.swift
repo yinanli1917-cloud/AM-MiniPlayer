@@ -1,7 +1,8 @@
 /**
  * [INPUT]: SwiftUI (PreferenceKey/GeometryReader), Combine (ObservableObject).
  * [OUTPUT]: Exports TourAnchorID, TourAnchorKey, `View.tourAnchor(_:active:)`,
- *           TourAnchorRegistry.
+ *           TourAnchorRegistry (+ `screenRect(for:in:)` — the ONLY place a
+ *           SwiftUI global rect becomes an AppKit screen rect).
  * [POS]: MusicMiniPlayerCore/Onboarding. Screen-space frames for the six
  *        controls the tour points at (proposal §4.2/§6), collected the same
  *        way `PlaylistView.swift`'s `SectionOffsetKey` already does —
@@ -10,6 +11,7 @@
  */
 
 import SwiftUI
+import AppKit
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - TourAnchorID
@@ -72,7 +74,31 @@ public final class TourAnchorRegistry: ObservableObject {
         }
     }
 
+    /// The raw rect exactly as SwiftUI published it: `.global` space =
+    /// the panel's HOSTING VIEW, top-left origin, y down. NOT a screen rect
+    /// (the 2026-09-29 bug: it was fed straight into the screen-space
+    /// placement math, so the card landed in the screen's lower-left).
     public func rect(for id: TourAnchorID) -> CGRect? { anchors[id] }
+
+    /// The anchor as an AppKit SCREEN rect (bottom-left origin, y up) for the
+    /// panel `window` it was published from. Follows the window: the stored
+    /// rect is window-relative, so a moved panel needs no re-registration.
+    public func screenRect(for id: TourAnchorID, in window: NSWindow) -> CGRect? {
+        guard let global = anchors[id] else { return nil }
+        return Self.screenRect(forGlobal: global, in: window)
+    }
+
+    /// Hosting-view (SwiftUI `.global`) rect -> screen rect. Goes through
+    /// the real hosting view, so the panel's 32pt-taller hosting view
+    /// (PanelWindowMetrics) and any future geometry change are handled by
+    /// AppKit instead of a hardcoded offset.
+    public static func screenRect(forGlobal rect: CGRect, in window: NSWindow) -> CGRect {
+        let host = PanelWindowMetrics.hostingView(in: window)
+        let inHost = host.isFlipped
+            ? rect
+            : CGRect(x: rect.minX, y: host.bounds.height - rect.maxY, width: rect.width, height: rect.height)
+        return window.convertToScreen(host.convert(inHost, to: nil))
+    }
 
     /// Called once the tour tears down — a stale rect from a torn-down tour
     /// must never leak into the next run's first placement.

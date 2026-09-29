@@ -39,7 +39,6 @@ struct TourCardModel: Equatable {
     var chip: String?
     var ringCompleted: Int
     var ringClosed: Bool = false
-    var showRingCheckmark: Bool = false
     var stepLabel: String = ""
     var showStop: Bool = true
     var showSkipStep: Bool = true
