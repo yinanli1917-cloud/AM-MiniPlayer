@@ -9,7 +9,7 @@
   --bg:#f5f5f7; --fg:#1d1d1f; --fg2:#6e6e73; --fg3:#8e8e93; --hair:rgba(0,0,0,.1); --hair2:rgba(0,0,0,.18);
   --surface:#ffffff; --code:rgba(0,0,0,.05);
   --accent:#FA4058; --accent-ink:#D42640; --accent-soft:#FF8FA0; --gold:#FFB93F; --violet:#7A6BFF;
-  --ring-track:rgba(250,64,88,.22); --dot-track:rgba(60,60,67,.30);
+  --ring-track:rgba(250,64,88,.22); --dot-track:rgba(60,60,67,.30); --accent-soft-c:rgba(250,64,88,.12); --ts:1;
   /* 设置窗口 */
   --win:#FBFBFC; --card:#F3F3F5; --card-hover:#E8E8EC; --row-line:rgba(0,0,0,.08);
   --seg-bg:#E7E7EA; --seg-fg:#1d1d1f; --win-shadow:0 18px 50px rgba(30,30,60,.22), 0 0 0 .5px rgba(0,0,0,.18);
@@ -29,7 +29,7 @@
     --bg:#161618; --fg:#f5f5f7; --fg2:#a1a1a6; --fg3:#8e8e93; --hair:rgba(255,255,255,.1); --hair2:rgba(255,255,255,.2);
     --surface:#232326; --code:rgba(255,255,255,.08);
     --accent:#FB546C; --accent-ink:#FF8497; --accent-soft:#FF8FA0; --gold:#FFC65A; --violet:#8F82FF;
-    --ring-track:rgba(251,84,108,.30); --dot-track:rgba(235,235,245,.30);
+    --ring-track:rgba(251,84,108,.30); --dot-track:rgba(235,235,245,.30); --accent-soft-c:rgba(251,84,108,.18);
     --win:#262628; --card:#303033; --card-hover:#3B3B3F; --row-line:rgba(255,255,255,.08);
     --seg-bg:#3A3A3D; --seg-fg:#f5f5f7; --win-shadow:0 18px 50px rgba(0,0,0,.55), 0 0 0 .5px rgba(255,255,255,.14);
     --sw-off:rgba(120,120,128,.4);
@@ -47,7 +47,7 @@
   --bg:#161618; --fg:#f5f5f7; --fg2:#a1a1a6; --fg3:#8e8e93; --hair:rgba(255,255,255,.1); --hair2:rgba(255,255,255,.2);
   --surface:#232326; --code:rgba(255,255,255,.08);
   --accent:#FB546C; --accent-ink:#FF8497; --accent-soft:#FF8FA0; --gold:#FFC65A; --violet:#8F82FF;
-  --ring-track:rgba(251,84,108,.30); --dot-track:rgba(235,235,245,.30);
+  --ring-track:rgba(251,84,108,.30); --dot-track:rgba(235,235,245,.30); --accent-soft-c:rgba(251,84,108,.18);
   --win:#262628; --card:#303033; --card-hover:#3B3B3F; --row-line:rgba(255,255,255,.08);
   --seg-bg:#3A3A3D; --seg-fg:#f5f5f7; --win-shadow:0 18px 50px rgba(0,0,0,.55), 0 0 0 .5px rgba(255,255,255,.14);
   --sw-off:rgba(120,120,128,.4);
@@ -199,25 +199,39 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 /* ---------- Section B ---------- */
 .b-grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:24px;margin-top:22px;align-items:start}
 @media (max-width:900px){.b-grid{grid-template-columns:minmax(0,1fr)}}
-.bstage{position:relative;height:470px;border-radius:16px;overflow:hidden;isolation:isolate;
+.bstage{position:relative;height:500px;border-radius:16px;overflow:hidden;isolation:isolate;
   background:radial-gradient(60% 100% at 12% 0%,var(--w1),transparent 70%),radial-gradient(70% 100% at 96% 100%,var(--w2),transparent 72%),linear-gradient(160deg,var(--w3),var(--w4))}
 .bstage canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:6}
-.cardbox{position:absolute;left:50%;top:calc(100px / var(--z,1.55));transform:translateX(-50%);zoom:var(--z,1.55)}
-.tcard{position:relative;width:236px;padding:14px 14px 12px;border-radius:14px;color:var(--tcard-ink);
+.cardbox{position:absolute;left:50%;top:calc(90px / var(--z,1.35));transform:translateX(-50%);zoom:var(--z,1.35)}
+.tcard{position:relative;width:260px;padding:0;border-radius:14px;color:var(--tcard-ink);
   background:var(--tcard-bg);backdrop-filter:blur(18px) saturate(1.5);-webkit-backdrop-filter:blur(18px) saturate(1.5);
   box-shadow:var(--tcard-shadow),0 0 0 .5px var(--tcard-line);will-change:transform}
+.tcard .tin{padding:16px 16px 14px;border-radius:inherit;overflow:hidden;height:100%}
 .tcard .head{display:flex;flex-direction:row-reverse;justify-content:space-between;align-items:flex-start;gap:12px}
-.tcard .title{flex:1;min-width:0;padding-top:4px;font-size:13px;font-weight:600;letter-spacing:-.005em;line-height:1.3}
-.tcard .body{font-size:12px;color:var(--tcard-muted);margin-top:8px;line-height:1.45;min-height:34px}
-.tcard .beats{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
-.tcard .beats li{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--tcard-ink);transition:color .2s ease}
+.tcard .title{flex:1;min-width:0;padding-top:3px;font-size:15px;font-weight:600;letter-spacing:-.008em;line-height:1.3}
+.tcard .body{font-size:13px;color:var(--tcard-muted);margin-top:8px;line-height:1.45}
+.tcard .beats{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:2px}
+.tcard .beats li{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--tcard-ink);margin:0 -8px;padding:4px 8px;border-radius:8px;
+  transition:color calc(.2s*var(--ts)) ease,background-color calc(.12s*var(--ts)) ease}
 .tcard .beats li.done{color:var(--tcard-muted)}
-.tcard .dot{flex:none;width:14px;height:14px;display:block}
-.tcard .dot svg{width:14px;height:14px;display:block;overflow:visible}
+.tcard .beats li:hover{background:var(--accent-soft-c)}
+.tcard .beats li:hover .dot circle:first-child{stroke:var(--accent)}
+.tcard .beats li.skip{color:var(--tcard-muted)}
+.tcard .beats li.skip .dot circle:first-child{stroke-dasharray:2.2 2.2;opacity:.55}
+.tcard .beats li.pending .dot{animation:pend calc(1.4s*var(--ts)) ease-in-out 3}
+.tcard .beats li.pending .dot circle:first-child{stroke:var(--accent)}
+@keyframes pend{0%,100%{filter:drop-shadow(0 0 0 rgba(250,64,88,0))}50%{filter:drop-shadow(0 0 4px rgba(250,64,88,.75))}}
+.tcard .dot{flex:none;width:16px;height:16px;display:block}
+.tcard .dot svg{width:16px;height:16px;display:block;overflow:visible}
 .tcard .ringbox{flex:none;width:28px;height:28px;position:relative}
 .tcard .ringbox svg{width:28px;height:28px;display:block;overflow:visible}
-.tcard .num{position:absolute;inset:0;display:grid;place-items:center;font-size:9.5px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
-.tcard .foot2{margin-top:10px;font-size:10.5px;color:var(--tcard-muted);font-variant-numeric:tabular-nums}
+.tcard .num{position:absolute;inset:0;display:grid;place-items:center;font-size:10px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.tcard .foot2{margin-top:12px;font-size:11.5px;color:var(--tcard-muted);font-variant-numeric:tabular-nums}
+.tcard .acts{margin-top:2px}
+.tcard .body:empty{display:none}
+.beak{position:absolute;width:11px;height:22px;background:var(--tcard-bg);backdrop-filter:blur(18px) saturate(1.5);-webkit-backdrop-filter:blur(18px) saturate(1.5)}
+.beak.R{right:-10.5px;clip-path:polygon(0 0,100% 50%,0 100%)}
+.beak.L{left:-10.5px;clip-path:polygon(100% 0,0 50%,100% 100%)}
 .haptic{position:absolute;left:14px;top:14px;z-index:7;display:flex;flex-direction:column;gap:6px;pointer-events:none}
 .haptic span{font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:999px;background:var(--glass);color:var(--glass-ink);box-shadow:0 0 0 .5px var(--glass-line);opacity:0;transform:translateY(4px);transition:opacity .15s,transform .15s}
 .haptic span.on{opacity:1;transform:none}
@@ -238,12 +252,123 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 .tag{font-size:11px;color:var(--fg2)}
 .small{font-size:12.5px;color:var(--fg2)}
 @media (prefers-reduced-motion: reduce){ .sw::after{transition:none} }
+  .tcard .tp .pad.swipeL .f{animation:tpSwipeL calc(3.55s*var(--ts)) linear 2 both}
+  .tcard .tp .pad.swipeL .f::after{animation:tpTrailHL calc(3.55s*var(--ts)) linear 2 both}
+  .tcard .tp .pad.nudge .f{animation:tpNudge calc(3.55s*var(--ts)) linear 2 both}
+  .tcard .tp .pad.nudge .f::after{animation:tpTrailN calc(3.55s*var(--ts)) linear 2 both}
+  .stage.rm .tcard .tp .f{animation:none!important;opacity:.31;transform:none}
+  .stage.rm .tcard .tp .f::after{animation:none!important;opacity:0}
+  /* 时间轴（3.55s = 100%）：0–.45s 淡入 → 停 .35s → .95s 位移 cubic-bezier(.42,0,.58,1) → 停 .35s → .3s 到 .31 → 平台 .58s → .42s 到 0 → 隐 .15s */
+  @keyframes tpSwipe{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(36px,0)}59.2%{opacity:1;transform:translate(36px,0)}67.6%{opacity:.31;transform:translate(36px,0)}83.9%{opacity:.31;transform:translate(36px,0)}95.8%,100%{opacity:0;transform:translate(36px,0)}}
+  @keyframes tpSwipeL{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(-36px,0)}59.2%{opacity:1;transform:translate(-36px,0)}67.6%{opacity:.31;transform:translate(-36px,0)}83.9%{opacity:.31;transform:translate(-36px,0)}95.8%,100%{opacity:0;transform:translate(-36px,0)}}
+  @keyframes tpNudge{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(30px,18px)}59.2%{opacity:1;transform:translate(30px,18px)}67.6%{opacity:.31;transform:translate(30px,18px)}83.9%{opacity:.31;transform:translate(30px,18px)}95.8%,100%{opacity:0;transform:translate(30px,18px)}}
+  @keyframes tpTrailH{0%,22.5%{opacity:0;transform:scaleX(1)}36%{opacity:.45;transform:translateX(-4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:scaleX(1)}}
+  @keyframes tpTrailHL{0%,22.5%{opacity:0;transform:scaleX(1)}36%{opacity:.45;transform:translateX(4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:scaleX(1)}}
+  @keyframes tpTrailN{0%,22.5%{opacity:0;transform:rotate(31deg) scaleX(1)}36%{opacity:.45;transform:rotate(31deg) translateX(-4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:rotate(31deg) scaleX(1)}}
+
+  .tcard .tp .f{position:absolute;width:11px;height:11px;border-radius:50%;background:#6B9CFD;opacity:.31}
+  .tcard .tp .f::after{content:"";position:absolute;inset:0;border-radius:50%;background:#6B9CFD;opacity:0;filter:blur(1.5px);transform-origin:50% 50%}
+  .tcard .tp .pad.swipe .f.a{left:24px;top:30px}
+  .tcard .tp .pad.swipe .f.b{left:40px;top:30px}
+  .tcard .tp .pad.swipeL .f.a{left:44px;top:30px}
+  .tcard .tp .pad.swipeL .f.b{left:60px;top:30px}
+  .tcard .tp .pad.nudge .f.a{left:20px;top:22px}
+  .tcard .tp .pad.nudge .f.b{left:36px;top:22px}
+  .tcard .tp .pad.swipe .f{animation:tpSwipe calc(3.55s*var(--ts)) linear 2 both}
+  .tcard .tp .pad.swipe .f::after{animation:tpTrailH calc(3.55s*var(--ts)) linear 2 both}
+/* ---------- Section C ---------- */
+.ctools{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin:18px 0 10px}
+.ctools label{display:inline-flex;gap:6px;align-items:center;cursor:pointer;color:var(--fg2);font-size:13px}
+.ctools input[type=checkbox]{accent-color:var(--accent);margin:0}
+.cstatus{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin-bottom:10px}
+.csteps{display:flex;gap:4px}
+.csteps span{font-size:11.5px;font-weight:600;padding:1px 8px;border-radius:999px;border:1px solid var(--hair2);color:var(--fg2);transition:background .12s,color .12s,border-color .12s}
+.csteps span.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.cwrap{position:relative;width:100%;max-width:600px}
+.cstage{width:600px;height:440px;position:absolute;left:0;top:0;transform-origin:0 0;border-radius:16px;overflow:hidden;isolation:isolate;
+  background:radial-gradient(60% 100% at 12% 0%,var(--w1),transparent 70%),radial-gradient(70% 100% at 96% 100%,var(--w2),transparent 72%),linear-gradient(160deg,var(--w3),var(--w4))}
+.cstage canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:8}
+.cstage .mbz{position:absolute;left:0;right:0;top:0;height:20px;z-index:1}
+.cstage .menubar{height:20px;padding:0 14px 0 16px}
+.cstage .menubar>*{zoom:1.6}
+.cstage #c-tcard{position:absolute;left:0;top:0;z-index:6;visibility:hidden}
+.mp{position:absolute;left:0;top:0;width:250px;height:284px;z-index:2;--hov:0;--tr:0}
+.mp .pn{--pw:250;left:0;top:0}
+.mp .rim{position:absolute;inset:0;border-radius:inherit;pointer-events:none}
+.mp .ly{position:absolute;left:0;top:0;width:100%;height:100%;opacity:0;padding:108px 26px 0;color:#fff;pointer-events:none;font-size:15px;line-height:1.3}
+.mp .ly p{margin:0 0 12px}.mp .ly .dim{opacity:.42}.mp .ly .act{font-weight:650;font-size:16px}
+.mp .ly .trl{display:block;font-size:13px;font-weight:500;opacity:var(--tr);margin-top:3px;transform:translateY(calc((1 - var(--tr))*-4px));filter:blur(calc((1 - var(--tr))*1.5px))}
+.hp{position:absolute;appearance:none;border:0;padding:0;background:rgba(255,255,255,.22);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border-radius:50%;display:grid;place-items:center;opacity:var(--hov);cursor:pointer;z-index:3}
+.hp:focus-visible{outline:2px solid #fff;outline-offset:2px}
+.hp-out{left:207px;top:13px;width:30px;height:30px}
+.hp-music{left:6px;top:6px;width:74px;height:34px;border-radius:17px;color:#fff;font-size:12px;font-weight:600}
+.hp-nav{left:10px;top:238px;width:30px;height:30px}
+.hp-play{left:103px;top:231px;width:44px;height:44px;background:rgba(255,255,255,.28)}
+.hp-prev{left:73px;top:241px;width:24px;height:24px;background:none;backdrop-filter:none;cursor:default}
+.hp-next{left:153px;top:241px;width:24px;height:24px;background:none;backdrop-filter:none;cursor:default}
+.hp-tr{left:205px;top:175px;width:34px;height:34px;display:none}
+.mp.lyr .hp-tr{display:grid}
+.hp-play .ic-pause{display:none}.mp.playing .hp-play .ic-play{display:none}.mp.playing .hp-play .ic-pause{display:block}
+.rippl{position:absolute;inset:0;border-radius:inherit;background:radial-gradient(circle,rgba(255,255,255,.6),transparent 68%);animation:rp calc(.5s*var(--ts)) ease-out forwards;pointer-events:none}
+@keyframes rp{from{transform:scale(.6);opacity:.9}to{transform:scale(1.9);opacity:0}}
+.cpop{position:absolute;left:103px;top:50px;width:136px;padding:5px;border-radius:10px;background:var(--glass);color:var(--glass-ink);font-size:12px;box-shadow:0 8px 22px rgba(20,20,50,.25),0 0 0 .5px var(--glass-line);
+  opacity:0;transform:scale(.94);transform-origin:90% 0;transition:opacity calc(.16s*var(--ts)),transform calc(.16s*var(--ts)) cubic-bezier(.2,.8,.2,1);pointer-events:none;z-index:4}
+.cpop.on{opacity:1;transform:none}
+.cpop .r{display:flex;justify-content:space-between;padding:5px 8px;border-radius:6px}.cpop .r.on{background:var(--accent-soft-c)}
+.cstrip{position:absolute;top:0;width:6px;height:56px;background:var(--strip);z-index:2;opacity:0;box-shadow:0 0 0 .5px var(--glass-line)}
+.cstrip::before{content:"";position:absolute;inset:-14px -18px}
+.cstrip.l{left:0;border-radius:0 3px 3px 0}.cstrip.r{right:0;border-radius:3px 0 0 3px}
+.cstrip .fill{position:absolute;left:0;bottom:0;width:100%;height:62%;background:var(--accent);border-radius:inherit}
+.vcard.cap{right:auto;left:0;top:0;transform-origin:0 0;z-index:3;opacity:0}
+.halo{position:absolute;left:0;top:0;width:40px;height:40px;border:1.5px solid var(--accent);border-radius:50%;pointer-events:none;opacity:0;z-index:4}
+.halo.hint{border-style:dashed}
+.gcur{position:absolute;left:0;top:0;opacity:0;z-index:7;pointer-events:none;filter:drop-shadow(0 2px 4px rgba(0,0,0,.3))}
+.gcur .rip{position:absolute;left:-7px;top:-7px;width:26px;height:26px;border-radius:50%;border:2px solid var(--accent);opacity:0}
+.toast{position:absolute;left:50%;bottom:16px;transform:translate(-50%,8px);padding:8px 16px;border-radius:999px;background:var(--glass);color:var(--glass-ink);font-size:13px;box-shadow:0 8px 22px rgba(20,20,50,.22),0 0 0 .5px var(--glass-line);
+  opacity:0;transition:opacity calc(.2s*var(--ts)),transform calc(.2s*var(--ts));z-index:9;pointer-events:none;white-space:nowrap}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+/* 卡内按钮、链接：悬停 / 按下 / 松开 */
+.cbtns{display:flex;gap:8px;margin-top:14px}
+.cbtn{appearance:none;border:0;font:inherit;font-size:12px;font-weight:600;padding:6px 15px;border-radius:999px;cursor:pointer;color:var(--tcard-ink);
+  transition:transform calc(.14s*var(--ts)) cubic-bezier(.2,.8,.2,1),background-color calc(.14s*var(--ts)) ease,filter calc(.14s*var(--ts)) ease}
+.cbtn.sm{padding:4px 11px;font-weight:500}
+.cbtn.pri{background:var(--accent);color:#fff}
+.cbtn.pri:hover{filter:brightness(1.07);transform:scale(1.03)}
+.cbtn.pri:active{filter:brightness(.93)}
+.cbtn.sec{background:rgba(127,127,135,.16)}
+.cbtn.sec:hover{background:rgba(127,127,135,.26);transform:scale(1.03)}
+.cbtn.sec:active{background:rgba(127,127,135,.36)}
+.cbtn:active{transform:scale(.96);transition-duration:calc(.07s*var(--ts))}
+.cbtn.released{animation:rel calc(.26s*var(--ts)) cubic-bezier(.3,1.5,.5,1)}
+@keyframes rel{0%{transform:scale(.96)}55%{transform:scale(1.045)}100%{transform:scale(1)}}
+.cbtn:focus-visible,.clink:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.cfoot{display:flex;justify-content:space-between;align-items:center;margin-top:12px}
+.clink{font-size:12px;color:var(--tcard-muted);cursor:pointer;text-decoration:none;background-image:linear-gradient(currentColor,currentColor);background-size:0 1px;background-repeat:no-repeat;background-position:0 100%;padding-bottom:1px;
+  transition:color calc(.14s*var(--ts)),background-size calc(.18s*var(--ts)) ease-out,opacity calc(.1s*var(--ts))}
+.clink:hover{color:var(--tcard-ink);background-size:100% 1px}
+.clink:active{opacity:.55}
+.clink.stall{color:var(--accent-ink)}
+.cnote{margin-top:12px;font-size:11.5px;line-height:1.4;color:var(--tcard-muted)}
+.tp{margin-top:12px;height:88px;display:grid;place-items:center;cursor:pointer}
+.tp .pad{position:relative;width:96px;height:72px;border-radius:8px;box-shadow:inset 0 0 0 1.5px var(--tcard-line);zoom:1.15}
+.tpcap{text-align:center;font-size:11px;color:var(--tcard-muted);margin-top:-2px}
+.rm .cbtn,.rm .cbtn:hover,.rm .cbtn:active{transform:none!important;animation:none!important;transition:background-color .1s,filter .1s,opacity .1s}
+.rm .cbtn:active{opacity:.75}
+.rm .clink{background-image:none;transition:color .1s,opacity .1s}.rm .clink:hover{text-decoration:underline}
+.rm .tcard .beats li{transition:none}.rm .tcard .beats li.pending .dot{animation:none}
+.rm .cpop,.rm .toast,.rm .rippl{transition:opacity .16s!important;animation:none!important}
+.c-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:24px;margin-top:22px;align-items:start;max-width:960px}
+@media (max-width:820px){.c-grid{grid-template-columns:minmax(0,1fr)}}
+#playCard{position:relative;width:260px}
+.playbox{border-radius:16px;padding:24px;display:grid;place-items:center;background:linear-gradient(160deg,var(--w3),var(--w4))}
+.ctable{width:100%;font-size:12.5px}
+.ctable td:first-child{white-space:nowrap;color:var(--fg2);padding-right:12px}
 </style>
 </head>
 <body>
 <div class="wrap" id="wrap">
   <h1>nanoPod 动效原型</h1>
-  <p class="sub">A：设置页「触控板式」演示台 · B：引导里「完成一步」的打勾动画。两节都可交互；实现规格见同目录 <code>spec.md</code>。</p>
+  <p class="sub">A：设置页「触控板式」演示台 · B：引导里「完成一步」的打勾动画 · C：引导的转场与微交互。三节都可交互；实现规格见同目录 <code>spec.md</code>。</p>
 
   <div class="tools" role="toolbar" aria-label="全局控制">
     <span class="tag">主题</span>
@@ -318,35 +443,13 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 
   <!-- ===================== B ===================== -->
   <h2>B　引导里「完成一步」的打勾动画</h2>
-  <p class="sub">环外径 28、线宽 5.5，连续粗环，7 步各占 1/7。点「完成一步」看整套；连点会打断并合并（环的速度不断，不回头）；最后一步合圈有礼花。</p>
+  <p class="sub">环外径 28、线宽 5.5，连续粗环，7 步各占 1/7。卡片按 macOS 标准可读档：宽 260、标题 15、正文 13、beat 13。点「完成一步」看整套；连点会打断并合并（环的速度不断，不回头）；最后一步合圈有礼花。</p>
   <div class="b-grid">
     <div>
-      <div class="bstage" id="bstage">
-        <div class="haptic" id="haptic"><span id="hpA"></span><span id="hpB"></span></div>
-        <div class="cardbox" id="cardbox">
-          <div class="tcard" id="tcard">
-            <div class="head">
-              <div class="ringbox" id="ringbox">
-                <svg viewBox="0 0 28 28" aria-hidden="true" id="ringsvg">
-                  <g id="ringg">
-                    <circle id="rTrack" cx="14" cy="14" r="11.25" fill="none" stroke="var(--ring-track)" stroke-width="5.5"/>
-                    <circle id="rDisc" cx="14" cy="14" r="0" fill="var(--accent)"/>
-                    <circle id="rFill" cx="14" cy="14" r="11.25" fill="none" stroke="var(--accent)" stroke-width="5.5" stroke-linecap="round" transform="rotate(-90 14 14)" stroke-dasharray="0 70.69" opacity="0"/>
-                    <circle id="rComet" cx="14" cy="14" r="11.25" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" transform="rotate(-90 14 14)" stroke-dasharray="0 70.69" opacity="0"/>
-                    <circle id="rSeal" cx="14" cy="14" r="11.25" fill="none" stroke="#fff" stroke-width="5.5" opacity="0"/>
-                  </g>
-                  <path id="rCheck" d="M8.6 14.3 L12.2 17.7 L19.2 10" pathLength="1" fill="none" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 1" stroke-dashoffset="1" opacity="0"/>
-                </svg>
-                <div class="num" id="rNum">1</div>
-              </div>
-              <div class="title" id="cTitle"></div>
-            </div>
-            <div class="body" id="cBody"></div>
-            <ul class="beats" id="cBeats"></ul>
-            <div class="foot2" id="cFoot"></div>
-          </div>
-        </div>
-        <canvas id="fx"></canvas>
+      <div class="bstage" id="b-stage">
+        <div class="haptic" id="haptic"><span id="b-hpA"></span><span id="b-hpB"></span></div>
+        <div class="cardbox" id="cardbox"></div>
+        <canvas id="b-fx"></canvas>
       </div>
       <div class="rings" id="ringGallery" aria-label="环在不同进度时的样子"></div>
       <p class="small" style="margin-top:8px">环在已完成 0 / 1 / 3 / 5 / 6 / 7 步时的静止样子（随页面深浅色切换）；圆头、线宽 5.5、轨道 22% 粉；合圈后变实心粉 + 白勾。</p>
@@ -359,11 +462,11 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
         <button class="btn" id="btnReset">重置</button>
       </div>
       <label class="small" style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="slowChk2" data-bind="slow" style="accent-color:var(--accent)"> 0.25× 慢放（与顶栏同步）</label>
-      <label class="small" style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="bigChk" checked style="accent-color:var(--accent)"> 放大到 1.55×（关掉是真实尺寸）</label>
+      <label class="small" style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="bigChk" checked style="accent-color:var(--accent)"> 放大到 1.35×（关掉是真实尺寸）</label>
       <div class="panel">
         <h3>状态机（当前状态高亮）</h3>
-        <div class="pills" id="pills"></div>
-        <pre class="log" id="log" aria-live="off"></pre>
+        <div class="pills" id="b-pills"></div>
+        <pre class="log" id="b-log" aria-live="off"></pre>
       </div>
       <div class="panel small">
         <h3>触觉 / 声音建议</h3>
@@ -373,6 +476,38 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
       </div>
     </div>
   </div>
+  <!-- ===================== C ===================== -->
+  <h2>C　引导的转场与微交互</h2>
+  <p class="sub">一块缩小的屏幕，右上角是 nanoPod 面板。S0 → S1 → S2 → S3 →（S4）→ S5 → S6 → S7 串在一起：可以自动播放，可以一拍一拍点，也可以直接用鼠标在面板上做。每一步完成先接 B 节的打勾与火花，再接转场，最后是新卡片。卡片按 macOS 标准可读档：宽 260、标题 15、正文 13、beat 13、链接和按钮 12。</p>
+  <div class="ctools">
+    <button class="btn primary" id="cAuto">▶ 自动播放</button>
+    <button class="btn" id="cNext">下一拍（模拟用户做这一拍）</button>
+    <button class="btn" id="cReset">重来</button>
+    <label><input type="checkbox" id="cDefer" checked> 翻译那一步延后（跳过 S4，环停在 6/7）</label>
+    <label><input type="checkbox" id="slowChk3" data-bind="slow"> 0.25× 慢放</label>
+  </div>
+  <div class="cstatus"><span class="csteps" id="cSteps"></span><span class="small">现在该：<b id="cNextLbl"></b></span></div>
+  <div class="cwrap" id="cwrap"><div class="cstage" id="c-stage" aria-label="引导转场演示"></div></div>
+  <div class="c-grid">
+    <div>
+      <h3>怎么玩</h3>
+      <div class="notes"><ul>
+        <li><b>S1</b>：控件藏着，卡上的环虚线呼吸，一个幽灵光标从卡的箭头飘向面板。你把鼠标移到面板上，控件浮出，环变实线，beat 2 亮起「待按」。移开，回到提示态。</li>
+        <li><b>S2</b>：点右上角输出（弹出输出设备小菜单），环跳到左上角 Music；点 Music 完成。可以先点 Music。</li>
+        <li><b>S3</b>：点左下气泡，面板翻到歌词页。<b>S5</b>：点手势示意（代替双指），面板落到左下角，卡片从面板<em>右侧</em>长出；再点一次，面板收进左边缘。</li>
+        <li><b>S6</b>：鼠标停到左边缘的小条上，竖卡探出，环从小条跳到竖卡；点竖卡，面板回来。<b>S7</b>：礼花 + 结尾卡。</li>
+        <li>任何一张卡上：「这一步先不做」（灰掉、不长环、往下走）和「先到这里」（卡收走）。停 6 秒后前者变强调色。把鼠标停在 beat 行上，环会指过去。</li>
+      </ul></div>
+      <h3 style="margin-top:14px">事件日志</h3>
+      <pre class="log" id="c-log" style="height:170px"></pre>
+    </div>
+    <div>
+      <h3>微交互试玩</h3>
+      <div class="playbox"><div class="tcard" id="playCard"></div></div>
+      <p class="small" style="margin-top:8px">悬停 / 按下 / 松开按钮与链接、悬停 beat 行、待按状态的圆点。开「减少动态效果」再试一次。</p>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -762,6 +897,364 @@ function updateStatus() {
   $('#stRaf').textContent = raf ? '运行中' : '已停';
 }
 
+/* ============================================================ 引导卡（B、C 共用同一套打勾编排） */
+const RC = 2 * Math.PI * 11.25;   // 环周长
+const NS = 7;
+
+class Val {
+  constructor(v, clk) { this.v = v; this.vel = 0; this.m = null; this.clk = clk; }
+  get active() { return !!this.m; }
+  set(v) { this.v = v; this.vel = 0; this.m = null; }
+  /* opts: dur, ease | spring:[duration,bounce], delay */
+  to(target, o = {}) {
+    const t0 = this.clk.now + (o.delay || 0);
+    if (o.spring) this.m = { k: 'sp', to: target, t0, dur: o.spring[0], z: 1 - clamp(o.spring[1], 0, .95) };
+    else this.m = { k: 'tw', from: this.v, to: target, t0, d: o.dur || .3, e: E[o.ease || 'out'], started: false };
+    return this;
+  }
+  step(dt) {
+    const m = this.m; if (!m) return;
+    if (this.clk.now < m.t0) return;
+    if (m.k === 'tw') {
+      if (!m.started) { m.from = this.v; m.started = true; }
+      const p = clamp((this.clk.now - m.t0) / m.d); this.v = m.from + (m.to - m.from) * m.e(p); if (p >= 1) { this.v = m.to; this.m = null; }
+    } else {
+      const w = 2 * Math.PI / m.dur, k = w * w, c = 2 * m.z * w; let left = dt; const h = 1 / 240;
+      while (left > 1e-9) { const s = Math.min(h, left); const a = -k * (this.v - m.to) - c * this.vel; this.vel += a * s; this.v += this.vel * s; left -= s; }
+      if (Math.abs(this.v - m.to) < 1e-4 && Math.abs(this.vel) < 1e-3) { this.v = m.to; this.vel = 0; this.m = null; }
+    }
+  }
+}
+
+const CK = '<path class="ck" d="M4 7.3 L6.3 9.5 L10.2 4.8" pathLength="1" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 1" stroke-dashoffset="1"/>';
+function beatDom(text) {
+  const li = document.createElement('li');
+  li.innerHTML = `<span class="dot"><svg viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6.25" fill="none" stroke="var(--dot-track)" stroke-width="1.5"/><circle class="bf" cx="7" cy="7" r="0" fill="var(--accent)"/>${CK}</svg></span><span class="bt">${text}</span>`;
+  return li;
+}
+function cardHTML(P, withBeak) {
+  return `${withBeak ? `<div class="beak R" id="${P}beak"></div>` : ''}<div class="tin"><div class="head">
+    <div class="ringbox"><svg viewBox="0 0 28 28" aria-hidden="true" id="${P}ringsvg"><g id="${P}ringg">
+      <circle id="${P}rTrack" cx="14" cy="14" r="11.25" fill="none" stroke="var(--ring-track)" stroke-width="5.5"/>
+      <circle id="${P}rDisc" cx="14" cy="14" r="0" fill="var(--accent)"/>
+      <circle id="${P}rFill" cx="14" cy="14" r="11.25" fill="none" stroke="var(--accent)" stroke-width="5.5" stroke-linecap="round" transform="rotate(-90 14 14)" stroke-dasharray="0 70.69" opacity="0"/>
+      <circle id="${P}rComet" cx="14" cy="14" r="11.25" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" transform="rotate(-90 14 14)" stroke-dasharray="0 70.69" opacity="0"/>
+      <circle id="${P}rSeal" cx="14" cy="14" r="11.25" fill="none" stroke="#fff" stroke-width="5.5" opacity="0"/></g>
+      <path id="${P}rCheck" d="M8.6 14.3 L12.2 17.7 L19.2 10" pathLength="1" fill="none" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 1" stroke-dashoffset="1" opacity="0"/></svg>
+      <div class="num" id="${P}rNum"></div></div>
+    <div class="title"></div></div>
+    <div class="body"></div><ul class="beats"></ul><div class="acts"></div><div class="foot2"></div></div>`;
+}
+const pickContent = root => ({ title: root.querySelector('.title'), body: root.querySelector('.body'), beats: root.querySelector('.beats'), acts: root.querySelector('.acts'), foot: root.querySelector('.foot2') });
+
+/* cfg: steps[], prefill, flowOf(cardStep)->{next,kind:'step'|'last'}|null, ownTransform, hooks: onHandoffStart / onSwap / onFrame / onContent */
+function makeTour(P, cfg) {
+  const q = id => document.getElementById(P + id);
+  const steps = cfg.steps;
+  const B = { now: 0, cues: [], count: cfg.prefill || 0, cardStep: 0, beats: [], busy: false, finished: false, combo: 0, lastAt: -99, seqStart: 0, particles: [], halos: [], state: 'idle', shownNum: null };
+  const mk = v => new Val(v, B);
+  const V = {
+    ring: mk(cfg.prefill || 0), ringScale: mk(1), ringW: mk(5.5), numOp: mk(1), numScale: mk(1), numY: mk(0),
+    chkDraw: mk(0), chkScale: mk(.6), disc: mk(0), seal: mk(0), cardY: mk(0), cardS: mk(1),
+    ci: [0, 1, 2, 3, 4].map(() => ({ op: mk(1), y: mk(0) }))
+  };
+  const extra = [];
+  const track = v => { extra.push(v); return v; };
+  const ALLV = () => [V.ring, V.ringScale, V.ringW, V.numOp, V.numScale, V.numY, V.chkDraw, V.chkScale, V.disc, V.seal, V.cardY, V.cardS, ...V.ci.flatMap(c => [c.op, c.y]), ...extra, ...B.beats.flatMap(b => [b.fill, b.scale, b.draw])];
+
+  const card = q('tcard'), content = pickContent(card);
+  const elRing = { fill: q('rFill'), comet: q('rComet'), seal: q('rSeal'), disc: q('rDisc'), check: q('rCheck'), num: q('rNum'), svg: q('ringsvg') };
+  const items = [content.title, content.body, content.beats, content.acts, content.foot];
+
+  /* ---- 日志 / 状态药丸 / 触觉标签 */
+  const logLines = [];
+  const PILLS = ['anticipate', 'draw', 'grow', 'sparks', 'settle', 'handoff'];
+  const PILL_LABEL = { anticipate: '预备', draw: '画勾', grow: '环长', sparks: '火花', settle: '安定', handoff: '交接', seal: '合圈', confetti: '礼花' };
+  function buildPills(final) {
+    const el = q('pills'); if (!el) return;
+    const list = final ? ['anticipate', 'draw', 'grow', 'seal', 'confetti', 'settle'] : PILLS;
+    el.innerHTML = list.map(s => `<span data-s="${s}">${PILL_LABEL[s]}</span>`).join('');
+  }
+  function enter(s) { B.state = s; const el = q('pills'); if (el) [...el.children].forEach(p => p.classList.toggle('on', p.dataset.s === s)); logEv(s); }
+  function logEv(s) {
+    const ms = Math.round((B.now - B.seqStart) * 1000);
+    logLines.push(`+${String(ms).padStart(4)} ms  ${s}`); if (logLines.length > (cfg.logLines || 9)) logLines.shift();
+    const el = q('log'); if (el) el.textContent = logLines.join('\n');
+  }
+  function haptic(name) {
+    logEv('⌁ haptic ' + name);
+    const a = q('hpA'), b = q('hpB'); if (!a) return;
+    const el = B.hapticFlip ? a : b; B.hapticFlip = !B.hapticFlip;
+    el.textContent = '⌁ haptic ' + name; el.classList.add('on'); setTimeout(() => el.classList.remove('on'), 700 / (S.slow ? .25 : 1));
+  }
+  function cue(at, fn, essential = true) { B.cues.push({ at: B.now + at, fn, essential }); }
+
+  /* ---- 内容 ---- */
+  function fillContent(els, i) {
+    const d = steps[i];
+    els.title.textContent = d.title;
+    els.body.textContent = d.body || ''; els.body.style.display = d.body ? '' : 'none';
+    els.beats.innerHTML = ''; const out = [];
+    (d.beats || []).forEach(t => { const li = beatDom(t); els.beats.appendChild(li); out.push(li); });
+    els.beats.style.display = out.length ? '' : 'none';
+    els.acts.innerHTML = d.acts || ''; els.acts.style.display = d.acts ? '' : 'none';
+    els.foot.innerHTML = typeof d.foot === 'function' ? d.foot() : (d.foot || ''); els.foot.style.display = d.foot ? '' : 'none';
+    return out;
+  }
+  function setContent(i) {
+    B.cardStep = i; const d = steps[i];
+    const lis = fillContent(content, i);
+    B.beats = lis.map(li => ({ li, dot: li.querySelector('.dot'), bf: li.querySelector('.bf'), ck: li.querySelector('.ck'), fill: mk(0), scale: mk(1), draw: mk(0), done: false }));
+    B.shownNum = d.num;
+    elRing.num.textContent = (d.ringMode === 'closed' || d.ringMode === 'check') ? '' : String(d.num ?? '');
+    cfg.onContent && cfg.onContent(i, content);
+  }
+  let mEl = null;
+  function measure(i) {                   // 目标内容的自然高度（C 用来提前算位置）
+    if (!mEl) {
+      mEl = card.cloneNode(true); mEl.querySelectorAll('[id]').forEach(e => e.removeAttribute('id'));
+      mEl.classList.add('measure'); mEl.style.cssText = 'position:absolute;left:-9999px;top:0;visibility:hidden;height:auto;transform:none;opacity:1';
+      card.parentNode.appendChild(mEl);
+    }
+    fillContent(pickContent(mEl), i); return mEl.offsetHeight;
+  }
+  function beatCheck(i, ff) {
+    const b = B.beats[i]; if (!b || b.done) return;
+    b.done = true; b.li.classList.add('done'); b.li.classList.remove('pending');
+    if (S.rm || ff) { b.fill.set(1); b.draw.set(1); b.scale.set(1); return; }
+    b.scale.to(.88, { dur: .06, ease: 'out' });                       // 预备：下压蓄力
+    cue(.06, () => { b.scale.to(1.22, { dur: .09, ease: 'out' }); b.fill.to(1, { dur: .14, ease: 'out' }); b.draw.to(1, { dur: .26, ease: 'out' }); });
+    cue(.15, () => b.scale.to(1, { spring: [.30, .42] }));              // 弹回
+  }
+
+  /* ---- 完成一步 ---- */
+  function completeStep() {
+    if (B.finished) return;
+    if (B.busy) interrupt();
+    const flow = cfg.flowOf(B.cardStep); if (!flow) return;
+    const last = flow.kind === 'last';
+    B.busy = true; B.count++;
+    const chain = B.now - B.lastAt < 4.0; B.combo = chain ? Math.min(B.combo + 1, 3) : 0; B.lastAt = B.now;
+    B.seqStart = B.now; buildPills(last);
+    const rem = B.beats.map((b, i) => b.done ? -1 : i).filter(i => i >= 0);
+    if (!S.rm) V.cardS.set(1);
+    const stag = .07;
+    rem.forEach((i, n) => cue(n * stag, () => beatCheck(i, false)));
+    const T0 = Math.max(0, (rem.length - 1) * stag);
+    runRing(B.count, flow, T0, last);
+    wake();
+  }
+  function runRing(target, flow, T0, last) {
+    if (S.rm) return runRingRM(target, flow, T0, last);
+    cue(T0, () => { enter('anticipate'); V.ringScale.to(.95, { dur: .06, ease: 'out' }); V.numOp.to(.6, { dur: .06 }); });
+    cue(T0 + .06, () => { enter('draw'); haptic('.levelChange'); });
+    cue(T0 + .06, () => { enter('grow'); V.ring.to(target, { spring: [.6, 0] }); V.ringW.to(6.5, { dur: .15, ease: 'out' }); V.ringScale.to(1.07, { dur: .18, ease: 'out' }); });
+    cue(T0 + .24, () => V.ringScale.to(1, { spring: [.45, .35] }));
+    const tChk = last ? .5 : .34;
+    cue(T0 + tChk, () => {
+      V.numOp.to(0, { dur: .14, ease: 'in' }); V.numScale.to(.5, { dur: .14, ease: 'in' });
+      V.chkDraw.to(1, { dur: .28, ease: 'out', delay: .08 }); V.chkScale.set(.6); V.chkScale.to(1.15, { dur: .16, ease: 'out', delay: .08 });
+      cue(.26, () => V.chkScale.to(1, { spring: [.32, .45] }), true);
+      elRing.check.setAttribute('opacity', 1);
+    });
+    if (!last) {
+      cue(T0 + .38, () => { enter('sparks'); spawnSparks(16 + B.combo * 4, target); spawnHalo(); }, false);
+      cue(T0 + .66, () => { enter('settle'); V.ringW.to(5.5, { dur: .2, ease: 'out' }); });
+      cue(T0 + .76, () => handoff(flow.next, false));
+      cue(T0 + 1.1, () => { B.busy = false; enter('idle'); idlePills(); });
+    } else {
+      cue(T0 + .60, () => { enter('seal'); haptic('.alignment');
+        V.ringScale.set(1.08); V.ringScale.to(1, { spring: [.5, .38] });
+        V.ringW.to(7, { dur: .12, ease: 'out' }); cue(.12, () => V.ringW.to(5.5, { dur: .22, ease: 'out' }));
+        V.seal.set(1); V.seal.to(0, { dur: .35, ease: 'out' }); });
+      cue(T0 + .64, () => { V.disc.to(1, { spring: [.4, .25] }); });
+      cue(T0 + .68, () => { enter('confetti'); spawnConfetti(72); spawnHalo(); spawnHalo(.12); V.cardY.set(-4); V.cardY.to(0, { spring: [.4, .3] }); }, false);
+      cue(T0 + 1.05, () => { enter('settle'); handoff(flow.next, false); });
+      cue(T0 + 1.5, () => { B.busy = false; B.finished = true; });
+    }
+  }
+  function runRingRM(target, flow, T0, last) {
+    cue(T0, () => { enter('draw'); haptic(last ? '.alignment' : '.levelChange'); V.ring.to(target, { dur: .3, ease: 'lin' }); });
+    cue(T0, () => { V.numOp.to(0, { dur: .16, ease: 'lin' }); elRing.check.setAttribute('opacity', 1); V.chkScale.set(1); V.chkDraw.to(1, { dur: .16, ease: 'lin' }); });
+    if (last) cue(T0 + .3, () => { enter('seal'); V.seal.set(1); V.seal.to(0, { dur: .35, ease: 'lin' }); V.disc.to(1, { dur: .2, ease: 'lin' }); });
+    cue(T0 + (last ? .7 : .5), () => handoff(flow.next, false));
+    cue(T0 + (last ? .95 : .8), () => { B.busy = false; B.finished = last; enter('idle'); idlePills(); });
+  }
+  function idlePills() { const el = q('pills'); if (el) [...el.children].forEach(p => p.classList.remove('on')); }
+  /* 只长环、不带勾和交接（S5 收边时卡片已隐去，环的填充与火花在下一张卡出现时补放） */
+  function ringOnly(target) {
+    B.busy = true; B.seqStart = B.now; buildPills(false);
+    if (S.rm) { cue(0, () => V.ring.to(target, { dur: .3, ease: 'lin' })); cue(.35, () => { B.busy = false; }); wake(); return; }
+    B.combo = 0;
+    cue(0, () => { enter('anticipate'); V.ringScale.to(.95, { dur: .06, ease: 'out' }); });
+    cue(.06, () => { enter('grow'); haptic('.levelChange'); V.ring.to(target, { spring: [.6, 0] }); V.ringW.to(6.5, { dur: .15, ease: 'out' }); V.ringScale.to(1.07, { dur: .18, ease: 'out' }); });
+    cue(.24, () => V.ringScale.to(1, { spring: [.45, .35] }));
+    cue(.38, () => { enter('sparks'); spawnSparks(16, target); spawnHalo(); }, false);
+    cue(.66, () => { enter('settle'); V.ringW.to(5.5, { dur: .2, ease: 'out' }); });
+    cue(.9, () => { B.busy = false; enter('idle'); idlePills(); });
+    wake();
+  }
+  function silentAdvance(next) { B.count++; setContent(next); }
+  function advanceQuiet(next) {
+    if (B.busy) interrupt();
+    B.busy = true; B.seqStart = B.now; enter('handoff-quiet');
+    cue(0, () => handoff(next, false)); cue(.5, () => { B.busy = false; enter('idle'); idlePills(); }); wake();
+  }
+  /* 交接：卡内容淡出 → （C：卡位移）→ 换内容 → 错峰淡入；环内勾 → 下一步数字 */
+  function handoff(next, ff) {
+    enter('handoff');
+    cfg.onHandoffStart && cfg.onHandoffStart(next, ff);
+    const nx = steps[next], fin = !!nx.final;
+    const swap = () => {
+      setContent(next);
+      if (!fin) {
+        V.chkDraw.set(0); elRing.check.setAttribute('opacity', 0);
+        if (S.rm || ff) { V.numOp.set(1); V.numScale.set(1); V.numY.set(0); }
+        else { V.numOp.set(0); V.numScale.set(.8); V.numY.set(6); V.numOp.to(1, { dur: .22, ease: 'out' }); V.numScale.to(1, { dur: .22, ease: 'out' }); V.numY.to(0, { dur: .22, ease: 'out' }); }
+      } else { elRing.num.textContent = ''; V.numOp.set(0); }
+      V.ci.forEach((c, i) => {
+        if (S.rm || ff) { c.op.set(1); c.y.set(0); }
+        else { c.op.set(0); c.y.set(6); c.op.to(1, { dur: .18, ease: 'out', delay: i * .04 }); c.y.to(0, { dur: .18, ease: 'out', delay: i * .04 }); }
+      });
+      cfg.onSwap && cfg.onSwap(next, ff);
+    };
+    if (ff) { swap(); return; }
+    const outD = S.rm ? .12 : .14;
+    V.ci.forEach(c => c.op.to(0, { dur: outD, ease: 'in' }));
+    if (!fin && !S.rm) V.chkScale.to(.7, { dur: .14, ease: 'in' });
+    cue(outD, swap);
+  }
+  /* 打断：状态类 cue 无动画快进，装饰类丢弃；环不重置、速度不断 */
+  function interrupt() {
+    logEv('⚡ interrupt → fast-forward');
+    const list = B.cues.splice(0).sort((a, b) => a.at - b.at);
+    for (const c of list) { if (c.essential) runCueFF(c); }
+    B.busy = false;
+    V.ringW.to(5.5, { dur: .1, ease: 'out' }); V.numOp.set(1); V.numScale.set(1); V.numY.set(0);
+    V.ringScale.to(1, { spring: [.3, 0] });
+  }
+  function runCueFF(c) {
+    const before = B.cues.length;
+    c.fn(true);
+    const kids = B.cues.splice(before);
+    kids.sort((a, b) => a.at - b.at).forEach(k => { if (k.essential) runCueFF(k); });
+  }
+
+  /* ---- 粒子（Canvas） ---- */
+  const fxc = q('fx'), fxx = fxc.getContext('2d'), stageEl = q('stage');
+  function fitFx() {
+    const d = devicePixelRatio || 1, w = stageEl.offsetWidth, h = stageEl.offsetHeight;
+    fxc.width = Math.round(w * d); fxc.height = Math.round(h * d); fxx.setTransform(d, 0, 0, d, 0, 0);
+  }
+  function ringGeom() {
+    const st = stageEl.getBoundingClientRect(), r = elRing.svg.getBoundingClientRect(), sc = st.width / stageEl.offsetWidth || 1;
+    const cr = card.getBoundingClientRect();
+    return { cx: (r.left - st.left + r.width / 2) / sc, cy: (r.top - st.top + r.height / 2) / sc, z: r.width / 28 / sc, cardTop: (cr.top - st.top) / sc, cardCx: (cr.left - st.left + cr.width / 2) / sc };
+  }
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  function spawnSparks(n, progress) {
+    if (S.rm) return;
+    const g = ringGeom(), ang = -Math.PI / 2 + 2 * Math.PI * (progress / NS), rr = 11.25 * g.z;
+    const hx = g.cx + Math.cos(ang) * rr, hy = g.cy + Math.sin(ang) * rr;
+    const cols = [css('--accent'), css('--accent'), css('--accent-soft'), css('--gold')];
+    for (let i = 0; i < n; i++) {
+      const a = ang + (Math.random() - .5) * Math.PI * 1.7, sp = (90 + Math.random() * 60) * g.z;
+      B.particles.push({ k: 's', x: hx, y: hy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: .55, age: 0, r: (2 + Math.random() * 1.5) * g.z * .8, c: cols[i % cols.length], damp: .88 });
+    }
+    wake();
+  }
+  function spawnHalo(delay = 0) { if (S.rm) return; const g = ringGeom(); B.halos.push({ x: g.cx, y: g.cy, z: g.z, age: -delay, life: .5 }); wake(); }
+  function spawnConfetti(n) {
+    if (S.rm) return;
+    const g = ringGeom(), cols = [css('--accent'), css('--gold'), css('--violet'), '#7fd6c2', css('--accent-soft'), '#ffffff'];
+    for (let i = 0; i < n; i++) {
+      const a = -Math.PI / 2 + (Math.random() - .5) * (Math.PI / 3), sp = (220 + Math.random() * 100) * g.z * .8;
+      B.particles.push({ k: 'c', x: g.cardCx + (Math.random() - .5) * 120 * g.z, y: g.cardTop + 8, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1.8, age: 0,
+        w: (5 + Math.random() * 2) * g.z * .8, h: (7 + Math.random() * 4) * g.z * .8, shape: i % 3, rot: Math.random() * 6.28, vr: (Math.random() - .5) * 5, c: cols[i % cols.length], g: 360 * g.z * .8 });
+    }
+    wake();
+  }
+  function stepFx(dt) {
+    const W = fxc.clientWidth, H = fxc.clientHeight; fxx.clearRect(0, 0, W, H);
+    B.particles = B.particles.filter(p => (p.age += dt) < p.life);
+    for (const p of B.particles) {
+      if (p.k === 's') {
+        const f = Math.pow(p.damp, dt * 60); p.vx *= f; p.vy *= f; p.x += p.vx * dt; p.y += p.vy * dt;
+        const u = p.age / p.life, a = 1 - E.in(u); fxx.globalAlpha = a; fxx.fillStyle = p.c; fxx.beginPath(); fxx.arc(p.x, p.y, p.r * (1 - u * .5), 0, 6.283); fxx.fill();
+      } else {
+        p.vy += p.g * dt; const f = Math.pow(.985, dt * 60); p.vx *= f; p.vy *= f; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
+        const a = p.life - p.age < .5 ? (p.life - p.age) / .5 : 1;
+        fxx.save(); fxx.globalAlpha = a; fxx.translate(p.x, p.y); fxx.rotate(p.rot); fxx.fillStyle = p.c;
+        if (p.shape === 0) fxx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+        else if (p.shape === 1) { fxx.beginPath(); fxx.arc(0, 0, p.w * .45, 0, 6.283); fxx.fill(); }
+        else fxx.fillRect(-p.w * .18, -p.h * .7, p.w * .36, p.h * 1.4);
+        fxx.restore();
+      }
+    }
+    B.halos = B.halos.filter(h => (h.age += dt) < h.life);
+    for (const h of B.halos) { if (h.age < 0) continue; const u = h.age / h.life, e = E.out(u); fxx.globalAlpha = .5 * (1 - u); fxx.strokeStyle = css('--accent'); fxx.lineWidth = 1.5 * h.z; fxx.beginPath(); fxx.arc(h.x, h.y, (14 + e * 16) * h.z, 0, 6.283); fxx.stroke(); }
+    fxx.globalAlpha = 1;
+    return B.particles.length > 0 || B.halos.length > 0;
+  }
+
+  /* ---- 每帧绘制 ---- */
+  function paint() {
+    const p = V.ring.v, frac = clamp(p / NS, 0, 1), C = RC, full = frac >= .9995;
+    elRing.fill.setAttribute('opacity', frac > .003 ? 1 : 0);
+    elRing.fill.setAttribute('stroke-dasharray', full ? `${C.toFixed(2)} ${C.toFixed(2)}` : `${(C * frac).toFixed(2)} ${C.toFixed(2)}`);
+    elRing.fill.setAttribute('stroke-width', V.ringW.v.toFixed(2));
+    const speed = Math.abs(V.ring.vel);
+    const ca = clamp(speed * .32, 0, .55), cl = C / NS * .55 * clamp(speed / 2.4, 0, 1);
+    elRing.comet.setAttribute('opacity', full ? 0 : ca.toFixed(3));
+    elRing.comet.setAttribute('stroke-dasharray', `${Math.max(.01, cl).toFixed(2)} ${C.toFixed(2)}`);
+    elRing.comet.setAttribute('stroke-dashoffset', (-(C * frac - cl)).toFixed(2));
+    elRing.seal.setAttribute('opacity', V.seal.v.toFixed(3)); elRing.seal.setAttribute('stroke-width', V.ringW.v.toFixed(2));
+    elRing.disc.setAttribute('r', (11.25 * clamp(V.disc.v, 0, 1.05)).toFixed(2));
+    elRing.svg.style.transform = `scale(${V.ringScale.v.toFixed(4)})`;
+    elRing.num.style.opacity = clamp(V.numOp.v).toFixed(3);
+    elRing.num.style.transform = `translateY(${V.numY.v.toFixed(2)}px) scale(${V.numScale.v.toFixed(3)})`;
+    elRing.check.setAttribute('stroke-dashoffset', (1 - clamp(V.chkDraw.v)).toFixed(3));
+    elRing.check.style.transformOrigin = '14px 14px'; elRing.check.style.transform = `scale(${V.chkScale.v.toFixed(3)})`;
+    elRing.check.setAttribute('stroke', V.disc.v > .35 ? '#fff' : 'var(--accent)');
+    elRing.check.setAttribute('opacity', V.chkDraw.v > .001 ? 1 : 0);
+    if (!cfg.ownTransform) card.style.transform = `translateY(${V.cardY.v.toFixed(2)}px) scale(${V.cardS.v})`;
+    V.ci.forEach((c, i) => { const it = items[i]; it.style.opacity = clamp(c.op.v).toFixed(3); it.style.transform = `translateY(${c.y.v.toFixed(2)}px)`; });
+    B.beats.forEach(b => {
+      b.bf.setAttribute('r', (6.9 * clamp(b.fill.v)).toFixed(2));
+      b.ck.setAttribute('stroke-dashoffset', (1 - clamp(b.draw.v)).toFixed(3));
+      b.dot.style.transform = `scale(${b.scale.v.toFixed(3)})`;
+    });
+  }
+  function tick(dt) {
+    B.now += dt;
+    let guard = 0;
+    while (guard++ < 200) {
+      const due = B.cues.filter(c => c.at <= B.now + 1e-9).sort((a, b) => a.at - b.at)[0];
+      if (!due) break; B.cues.splice(B.cues.indexOf(due), 1); due.fn(false);
+    }
+    const vals = ALLV(); vals.forEach(v => v.step(dt));
+    const more = cfg.onFrame ? cfg.onFrame(dt) : false;
+    paint();
+    const fx = stepFx(dt);
+    return B.cues.length > 0 || vals.some(v => v.active) || fx || more;
+  }
+  users.push(tick);
+
+  function reset() {
+    B.cues = []; B.particles = []; B.halos = []; B.count = cfg.prefill || 0; B.busy = false; B.finished = false; B.combo = 0;
+    [V.ring, V.ringScale, V.ringW, V.numOp, V.numScale, V.numY, V.chkDraw, V.chkScale, V.disc, V.seal, V.cardY, V.cardS].forEach(v => v.set(0));
+    V.ring.set(cfg.prefill || 0); V.ringScale.set(1); V.ringW.set(5.5); V.numOp.set(1); V.numScale.set(1); V.chkScale.set(.6); V.cardS.set(1);
+    V.ci.forEach(c => { c.op.set(1); c.y.set(0); });
+    setContent(cfg.startStep || 0);
+    const d = steps[B.cardStep];
+    if (d.ringMode === 'check') { V.chkDraw.set(1); V.chkScale.set(1); V.numOp.set(0); }
+    buildPills(false); enter('idle'); idlePills();
+    logLines.length = 0; const lg = q('log'); if (lg) lg.textContent = '';
+    paint(); stepFx(0);
+  }
+  return { B, V, mk, track, q, steps, card, content, elRing, completeStep, ringOnly, silentAdvance, advanceQuiet, handoff, beatCheck, interrupt, reset, cue, haptic, logEv, setContent, measure, fillContent, spawnConfetti, spawnSparks, spawnHalo, fitFx, paint, buildPills };
+}
+
 /* ============================================================ B：引导「完成一步」 */
 const STEPS = [
   ['连上 Music', '让 nanoPod 读到正在播放的歌。', ['允许控制 Music', '读到正在播放']],
@@ -773,323 +1266,582 @@ const STEPS = [
   ['它就在这条边上', '鼠标停上去，它会探出来。', ['停上去，它探出来', '点一下，回来']]
 ];
 const FINALE = ['都认识了', '有事按 设置 › 认识 nanoPod，随时回来。'];
-const RC = 2 * Math.PI * 11.25;   // 环周长
-const NS = 7;
+const BSTEPS = STEPS.map((d, i) => ({ title: d[0], body: d[1], beats: d[2], num: i + 1, foot: `第 ${i + 1} 步 / 共 7 步` }))
+  .concat([{ title: FINALE[0], body: FINALE[1], beats: [], num: null, final: true, ringMode: 'closed', foot: '7 / 7' }]);
+$('#cardbox').innerHTML = `<div class="tcard" id="b-tcard">${cardHTML('b-', false)}</div>`;
+const TB = makeTour('b-', { steps: BSTEPS, flowOf: k => k >= NS ? null : { next: k + 1, kind: k === NS - 1 ? 'last' : 'step' } });
 
-class Val {
-  constructor(v) { this.v = v; this.vel = 0; this.m = null; }
-  get active() { return !!this.m; }
-  set(v) { this.v = v; this.vel = 0; this.m = null; }
-  /* opts: dur, ease | spring:[duration,bounce], delay */
-  to(target, o = {}) {
-    const t0 = B.now + (o.delay || 0);
-    if (o.spring) this.m = { k: 'sp', to: target, t0, dur: o.spring[0], z: 1 - clamp(o.spring[1], 0, .95) };
-    else this.m = { k: 'tw', from: this.v, to: target, t0, d: o.dur || .3, e: E[o.ease || 'out'], started: false };
-    return this;
-  }
-  step(dt) {
-    const m = this.m; if (!m) return;
-    if (B.now < m.t0) return;
-    if (m.k === 'tw') {
-      if (!m.started) { m.from = this.v; m.started = true; }
-      const p = clamp((B.now - m.t0) / m.d); this.v = m.from + (m.to - m.from) * m.e(p); if (p >= 1) { this.v = m.to; this.m = null; }
-    } else {
-      const w = 2 * Math.PI / m.dur, k = w * w, c = 2 * m.z * w; let left = dt; const h = 1 / 240;
-      while (left > 1e-9) { const s = Math.min(h, left); const a = -k * (this.v - m.to) - c * this.vel; this.vel += a * s; this.v += this.vel * s; left -= s; }
-      if (Math.abs(this.v - m.to) < 1e-4 && Math.abs(this.vel) < 1e-3) { this.v = m.to; this.vel = 0; this.m = null; }
-    }
-  }
-}
-const B = {
-  now: 0, cues: [], count: 0, cardStep: 0, beats: [], busy: false, finished: false, combo: 0, lastAt: -99, seqStart: 0, particles: [], halos: [],
-  state: 'idle'
-};
-const V = {
-  ring: new Val(0), ringScale: new Val(1), ringW: new Val(5.5), numOp: new Val(1), numScale: new Val(1), numY: new Val(0),
-  chkDraw: new Val(0), chkScale: new Val(.6), disc: new Val(0), seal: new Val(0), cardY: new Val(0), cardS: new Val(1),
-  ci: [0, 1, 2].map(() => ({ op: new Val(1), y: new Val(0) }))
-};
-const ALLV = () => [V.ring, V.ringScale, V.ringW, V.numOp, V.numScale, V.numY, V.chkDraw, V.chkScale, V.disc, V.seal, V.cardY, V.cardS, ...V.ci.flatMap(c => [c.op, c.y]), ...B.beats.flatMap(b => [b.fill, b.scale, b.draw])];
-
-const elRing = { fill: $('#rFill'), comet: $('#rComet'), seal: $('#rSeal'), disc: $('#rDisc'), check: $('#rCheck'), num: $('#rNum'), g: $('#ringg'), track: $('#rTrack') };
-const elCard = { title: $('#cTitle'), body: $('#cBody'), beats: $('#cBeats'), foot: $('#cFoot'), card: $('#tcard'), box: $('#cardbox') };
-const PILLS = ['anticipate', 'draw', 'grow', 'sparks', 'settle', 'handoff'];
-const PILL_LABEL = { anticipate: '预备', draw: '画勾', grow: '环长', sparks: '火花', settle: '安定', handoff: '交接', seal: '合圈', confetti: '礼花' };
-function buildPills(final) {
-  const list = final ? ['anticipate', 'draw', 'grow', 'seal', 'confetti', 'settle'] : PILLS;
-  $('#pills').innerHTML = list.map(s => `<span data-s="${s}">${PILL_LABEL[s]}</span>`).join('');
-}
-function enter(s) {
-  B.state = s;
-  $$('#pills span').forEach(p => p.classList.toggle('on', p.dataset.s === s));
-  logEv(s);
-}
-const logLines = [];
-function logEv(s) {
-  const ms = Math.round((B.now - B.seqStart) * 1000);
-  logLines.push(`+${String(ms).padStart(4)} ms  ${s}`); if (logLines.length > 9) logLines.shift();
-  $('#log').textContent = logLines.join('\n');
-}
-function haptic(name) {
-  logEv('⌁ haptic ' + name);
-  const el = $(B.hapticFlip ? '#hpA' : '#hpB'); B.hapticFlip = !B.hapticFlip;
-  el.textContent = '⌁ haptic ' + name; el.classList.add('on'); setTimeout(() => el.classList.remove('on'), 700 / (S.slow ? .25 : 1));
-}
-function cue(at, fn, essential = true) { B.cues.push({ at: B.now + at, fn, essential }); }
-
-/* ---- 卡片内容 ---- */
-const CK = '<path class="ck" d="M4 7.3 L6.3 9.5 L10.2 4.8" pathLength="1" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 1" stroke-dashoffset="1"/>';
-function beatDom(text) {
-  const li = document.createElement('li');
-  li.innerHTML = `<span class="dot"><svg viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6.25" fill="none" stroke="var(--dot-track)" stroke-width="1.5"/><circle class="bf" cx="7" cy="7" r="0" fill="var(--accent)"/>${CK}</svg></span>${text}`;
-  return li;
-}
-function setContent(step) {
-  B.cardStep = step;
-  const fin = step >= NS;
-  const d = fin ? FINALE : STEPS[step];
-  elCard.title.textContent = d[0]; elCard.body.textContent = d[1];
-  elCard.beats.innerHTML = ''; B.beats = [];
-  if (!fin) d[2].forEach(t => {
-    const li = beatDom(t); elCard.beats.appendChild(li);
-    B.beats.push({ li, dot: li.querySelector('.dot'), bf: li.querySelector('.bf'), ck: li.querySelector('.ck'), fill: new Val(0), scale: new Val(1), draw: new Val(0), done: false });
-  });
-  elCard.foot.textContent = fin ? '7 / 7' : `第 ${step + 1} 步 / 共 7 步`;
-  B.shownNum = fin ? null : step + 1;
-  elRing.num.textContent = B.shownNum == null ? '' : String(B.shownNum);
-}
-function beatCheck(i, ff) {
-  const b = B.beats[i]; if (!b || b.done) return;
-  b.done = true; b.li.classList.add('done');
-  if (S.rm || ff) { b.fill.set(1); b.draw.set(1); b.scale.set(1); return; }
-  b.scale.to(.88, { dur: .06, ease: 'out' });                       // 预备：下压蓄力
-  cue(.06, () => { b.scale.to(1.22, { dur: .09, ease: 'out' }); b.fill.to(1, { dur: .14, ease: 'out' }); b.draw.to(1, { dur: .26, ease: 'out' }); });
-  cue(.15, () => b.scale.to(1, { spring: [.30, .42] }));              // 弹回
-}
-
-/* ---- 完成一步 ---- */
-function completeStep() {
-  if (B.finished) return;
-  if (B.busy) interrupt();
-  const k = B.count; if (k >= NS) return;
-  const last = k === NS - 1;
-  B.busy = true; B.count++;
-  const chain = B.now - B.lastAt < 4.0; B.combo = chain ? Math.min(B.combo + 1, 3) : 0; B.lastAt = B.now;
-  B.seqStart = B.now; buildPills(last);
-  const rem = B.beats.map((b, i) => b.done ? -1 : i).filter(i => i >= 0);
-  if (!S.rm) V.cardS.set(1);
-  const stag = .07;
-  rem.forEach((i, n) => cue(n * stag, () => beatCheck(i, false)));
-  const T0 = Math.max(0, (rem.length - 1) * stag);
-  runRing(k, last, T0);
-  wake();
-}
-function runRing(k, last, T0) {
-  const target = k + 1;
-  if (S.rm) return runRingRM(k, last, T0);
-  cue(T0, () => { enter('anticipate'); V.ringScale.to(.95, { dur: .06, ease: 'out' }); V.numOp.to(.6, { dur: .06 }); });
-  cue(T0 + .06, () => { enter('draw'); haptic('.levelChange'); });
-  cue(T0 + .06, () => { enter('grow'); V.ring.to(target, { spring: [.6, 0] }); V.ringW.to(6.5, { dur: .15, ease: 'out' }); V.ringScale.to(1.07, { dur: .18, ease: 'out' }); });
-  cue(T0 + .24, () => V.ringScale.to(1, { spring: [.45, .35] }));
-  const tChk = last ? .5 : .34;
-  cue(T0 + tChk, () => {
-    V.numOp.to(0, { dur: .14, ease: 'in' }); V.numScale.to(.5, { dur: .14, ease: 'in' });
-    V.chkDraw.to(1, { dur: .28, ease: 'out', delay: .08 }); V.chkScale.set(.6); V.chkScale.to(1.15, { dur: .16, ease: 'out', delay: .08 });
-    cue(.26, () => V.chkScale.to(1, { spring: [.32, .45] }), true);
-    elRing.check.setAttribute('opacity', 1);
-  });
-  if (!last) {
-    cue(T0 + .38, () => { enter('sparks'); spawnSparks(16 + B.combo * 4, target); spawnHalo(); }, false);
-    cue(T0 + .66, () => { enter('settle'); V.ringW.to(5.5, { dur: .2, ease: 'out' }); });
-    cue(T0 + .76, () => handoff(k + 1, false));
-    cue(T0 + 1.1, () => { B.busy = false; enter('idle'); $$('#pills span').forEach(p => p.classList.remove('on')); });
-  } else {
-    cue(T0 + .60, () => { enter('seal'); haptic('.alignment');
-      V.ringScale.set(1.08); V.ringScale.to(1, { spring: [.5, .38] });
-      V.ringW.to(7, { dur: .12, ease: 'out' }); cue(.12, () => V.ringW.to(5.5, { dur: .22, ease: 'out' }));
-      V.seal.set(1); V.seal.to(0, { dur: .35, ease: 'out' }); });
-    cue(T0 + .64, () => { V.disc.to(1, { spring: [.4, .25] }); });
-    cue(T0 + .68, () => { enter('confetti'); spawnConfetti(72); spawnHalo(); spawnHalo(.12); V.cardY.set(-4); V.cardY.to(0, { spring: [.4, .3] }); }, false);
-    cue(T0 + 1.05, () => { enter('settle'); handoff(NS, false); });
-    cue(T0 + 1.5, () => { B.busy = false; B.finished = true; });
-  }
-}
-function runRingRM(k, last, T0) {
-  const target = k + 1;
-  cue(T0, () => { enter('draw'); haptic(last ? '.alignment' : '.levelChange'); V.ring.to(target, { dur: .3, ease: 'lin' }); });
-  cue(T0, () => { V.numOp.to(0, { dur: .16, ease: 'lin' }); elRing.check.setAttribute('opacity', 1); V.chkScale.set(1); V.chkDraw.to(1, { dur: .16, ease: 'lin' }); });
-  if (last) cue(T0 + .3, () => { enter('seal'); V.seal.set(1); V.seal.to(0, { dur: .35, ease: 'lin' }); V.disc.to(1, { dur: .2, ease: 'lin' }); });
-  cue(T0 + (last ? .7 : .5), () => handoff(last ? NS : k + 1, false));
-  cue(T0 + (last ? .95 : .8), () => { B.busy = false; B.finished = last; enter('idle'); $$('#pills span').forEach(p => p.classList.remove('on')); });
-}
-/* 交接：卡内容淡出 → 换 → 错峰淡入；环内 勾 → 下一步数字 */
-function handoff(next, ff) {
-  enter('handoff');
-  const fin = next >= NS;
-  const swap = () => {
-    setContent(next);
-    if (!fin) {
-      // 勾退场、新数字上滚
-      V.chkDraw.set(0); elRing.check.setAttribute('opacity', 0);
-      if (S.rm || ff) { V.numOp.set(1); V.numScale.set(1); V.numY.set(0); }
-      else { V.numOp.set(0); V.numScale.set(.8); V.numY.set(6); V.numOp.to(1, { dur: .22, ease: 'out' }); V.numScale.to(1, { dur: .22, ease: 'out' }); V.numY.to(0, { dur: .22, ease: 'out' }); }
-    } else { elRing.num.textContent = ''; V.numOp.set(0); }
-    V.ci.forEach((c, i) => {
-      if (S.rm || ff) { c.op.set(1); c.y.set(0); }
-      else { c.op.set(0); c.y.set(6); c.op.to(1, { dur: .18, ease: 'out', delay: i * .04 }); c.y.to(0, { dur: .18, ease: 'out', delay: i * .04 }); }
-    });
-  };
-  if (ff) { swap(); return; }
-  const outD = S.rm ? .12 : .14;
-  V.ci.forEach(c => c.op.to(0, { dur: outD, ease: 'in' }));
-  if (!fin && !S.rm) V.chkScale.to(.7, { dur: .14, ease: 'in' });
-  cue(outD, swap);
-}
-/* 打断：把还没发生的 cue 立刻按快进模式执行；环不重置，保持速度 */
-function interrupt() {
-  logEv('⚡ interrupt → fast-forward');
-  const list = B.cues.splice(0).sort((a, b) => a.at - b.at);
-  for (const c of list) { if (c.essential) runCueFF(c); }
-  B.busy = false;
-  V.ringW.to(5.5, { dur: .1, ease: 'out' }); V.numOp.set(1); V.numScale.set(1); V.numY.set(0);
-  V.ringScale.to(1, { spring: [.3, 0] });
-}
-/* 快进执行：cue 内部若再登记子 cue，就地递归执行；handoff 走 ff 分支 */
-function runCueFF(c) {
-  const before = B.cues.length;
-  c.fn(true);
-  const kids = B.cues.splice(before);
-  kids.sort((a, b) => a.at - b.at).forEach(k => { if (k.essential) runCueFF(k); });
-}
-
-/* ---- 粒子 ---- */
-const fxc = $('#fx'), fxx = fxc.getContext('2d');
-function fitFx() {
-  const r = $('#bstage').getBoundingClientRect(), d = devicePixelRatio || 1;
-  fxc.width = Math.round(r.width * d); fxc.height = Math.round(r.height * d); fxx.setTransform(d, 0, 0, d, 0, 0);
-}
-function ringGeom() {
-  const st = $('#bstage').getBoundingClientRect(), r = $('#ringsvg').getBoundingClientRect(), z = r.width / 28;
-  return { cx: r.left - st.left + r.width / 2, cy: r.top - st.top + r.height / 2, z, cardTop: $('#tcard').getBoundingClientRect().top - st.top, cardCx: $('#tcard').getBoundingClientRect().left - st.left + $('#tcard').getBoundingClientRect().width / 2 };
-}
-const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-function spawnSparks(n, progress) {
-  if (S.rm) return;
-  const g = ringGeom(), ang = -Math.PI / 2 + 2 * Math.PI * (progress / NS), rr = 11.25 * g.z;
-  const hx = g.cx + Math.cos(ang) * rr, hy = g.cy + Math.sin(ang) * rr;
-  const cols = [css('--accent'), css('--accent'), css('--accent-soft'), css('--gold')];
-  for (let i = 0; i < n; i++) {
-    const a = ang + (Math.random() - .5) * Math.PI * 1.7, sp = (90 + Math.random() * 60) * g.z * 1.0;
-    B.particles.push({ k: 's', x: hx, y: hy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: .55, age: 0, r: (2 + Math.random() * 1.5) * g.z * .8, c: cols[i % cols.length], damp: .88 });
-  }
-  wake();
-}
-function spawnHalo(delay = 0) {
-  if (S.rm) return; const g = ringGeom(); B.halos.push({ x: g.cx, y: g.cy, z: g.z, age: -delay, life: .5 }); wake();
-}
-function spawnConfetti(n) {
-  if (S.rm) return;
-  const g = ringGeom(), cols = [css('--accent'), css('--gold'), css('--violet'), '#7fd6c2', css('--accent-soft'), '#ffffff'];
-  for (let i = 0; i < n; i++) {
-    const a = -Math.PI / 2 + (Math.random() - .5) * (Math.PI / 3), sp = (220 + Math.random() * 100) * g.z * .8;
-    B.particles.push({ k: 'c', x: g.cardCx + (Math.random() - .5) * 120 * g.z, y: g.cardTop + 8, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1.8, age: 0,
-      w: (5 + Math.random() * 2) * g.z * .8, h: (7 + Math.random() * 4) * g.z * .8, shape: i % 3, rot: Math.random() * 6.28, vr: (Math.random() - .5) * 5, c: cols[i % cols.length], g: 360 * g.z * .8 });
-  }
-  wake();
-}
-function stepFx(dt) {
-  const W = fxc.clientWidth, H = fxc.clientHeight; fxx.clearRect(0, 0, W, H);
-  B.particles = B.particles.filter(p => (p.age += dt) < p.life);
-  for (const p of B.particles) {
-    if (p.k === 's') {
-      const f = Math.pow(p.damp, dt * 60); p.vx *= f; p.vy *= f; p.x += p.vx * dt; p.y += p.vy * dt;
-      const u = p.age / p.life, a = 1 - E.in(u); fxx.globalAlpha = a; fxx.fillStyle = p.c; fxx.beginPath(); fxx.arc(p.x, p.y, p.r * (1 - u * .5), 0, 6.283); fxx.fill();
-    } else {
-      p.vy += p.g * dt; const f = Math.pow(.985, dt * 60); p.vx *= f; p.vy *= f; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
-      const a = p.life - p.age < .5 ? (p.life - p.age) / .5 : 1;
-      fxx.save(); fxx.globalAlpha = a; fxx.translate(p.x, p.y); fxx.rotate(p.rot); fxx.fillStyle = p.c;
-      if (p.shape === 0) fxx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
-      else if (p.shape === 1) { fxx.beginPath(); fxx.arc(0, 0, p.w * .45, 0, 6.283); fxx.fill(); }
-      else fxx.fillRect(-p.w * .18, -p.h * .7, p.w * .36, p.h * 1.4);
-      fxx.restore();
-    }
-  }
-  B.halos = B.halos.filter(h => (h.age += dt) < h.life);
-  for (const h of B.halos) { if (h.age < 0) continue; const u = h.age / h.life, e = E.out(u); fxx.globalAlpha = .5 * (1 - u); fxx.strokeStyle = css('--accent'); fxx.lineWidth = 1.5 * h.z; fxx.beginPath(); fxx.arc(h.x, h.y, (14 + e * 16) * h.z, 0, 6.283); fxx.stroke(); }
-  fxx.globalAlpha = 1;
-  return B.particles.length > 0 || B.halos.length > 0;
-}
-
-/* ---- 每帧绘制 ---- */
-function paint() {
-  const p = V.ring.v, frac = clamp(p / NS, 0, 1);
-  const C = RC, full = frac >= .9995;
-  elRing.fill.setAttribute('opacity', frac > .003 ? 1 : 0);
-  elRing.fill.setAttribute('stroke-dasharray', full ? `${C.toFixed(2)} ${C.toFixed(2)}` : `${(C * frac).toFixed(2)} ${C.toFixed(2)}`);
-  elRing.fill.setAttribute('stroke-width', V.ringW.v.toFixed(2));
-  const speed = Math.abs(V.ring.vel);
-  const ca = clamp(speed * .32, 0, .55), cl = C / NS * .55 * clamp(speed / 2.4, 0, 1);
-  elRing.comet.setAttribute('opacity', full ? 0 : ca.toFixed(3));
-  elRing.comet.setAttribute('stroke-dasharray', `${Math.max(.01, cl).toFixed(2)} ${C.toFixed(2)}`);
-  elRing.comet.setAttribute('stroke-dashoffset', (-(C * frac - cl)).toFixed(2));
-  elRing.seal.setAttribute('opacity', V.seal.v.toFixed(3)); elRing.seal.setAttribute('stroke-width', V.ringW.v.toFixed(2));
-  elRing.disc.setAttribute('r', (11.25 * clamp(V.disc.v, 0, 1.05)).toFixed(2));
-  elRing.g.style.transformOrigin = '14px 14px'; elRing.g.style.transformBox = 'view-box';
-  $('#ringsvg').style.transform = `scale(${V.ringScale.v.toFixed(4)})`;
-  $('#rNum').style.opacity = clamp(V.numOp.v).toFixed(3);
-  $('#rNum').style.transform = `translateY(${V.numY.v.toFixed(2)}px) scale(${V.numScale.v.toFixed(3)})`;
-  elRing.check.setAttribute('stroke-dashoffset', (1 - clamp(V.chkDraw.v)).toFixed(3));
-  elRing.check.style.transformOrigin = '14px 14px'; elRing.check.style.transform = `scale(${V.chkScale.v.toFixed(3)})`;
-  elRing.check.setAttribute('stroke', V.disc.v > .35 ? '#fff' : 'var(--accent)');
-  elRing.check.setAttribute('opacity', V.chkDraw.v > .001 ? 1 : 0);
-  elCard.card.style.transform = `translateY(${V.cardY.v.toFixed(2)}px) scale(${V.cardS.v})`;
-  const items = [elCard.title, elCard.body, elCard.beats];
-  V.ci.forEach((c, i) => { const it = items[i]; it.style.opacity = clamp(c.op.v).toFixed(3); it.style.transform = `translateY(${c.y.v.toFixed(2)}px)`; });
-  B.beats.forEach(b => {
-    b.bf.setAttribute('r', (6.9 * clamp(b.fill.v)).toFixed(2));
-    b.ck.setAttribute('stroke-dashoffset', (1 - clamp(b.draw.v)).toFixed(3));
-    b.dot.style.transform = `scale(${b.scale.v.toFixed(3)})`;
-  });
-}
-users.push(dt => {
-  B.now += dt;
-  // 先跑 cue（可能登记新 cue）
-  let guard = 0;
-  while (guard++ < 200) {
-    const due = B.cues.filter(c => c.at <= B.now + 1e-9).sort((a, b) => a.at - b.at)[0];
-    if (!due) break; B.cues.splice(B.cues.indexOf(due), 1); due.fn(false);
-  }
-  const vals = ALLV(); vals.forEach(v => v.step(dt));
-  paint();
-  const fx = stepFx(dt);
-  return B.cues.length > 0 || vals.some(v => v.active) || fx;
-});
-
-/* ---- 重置 / 按钮 ---- */
-function resetB(soft) {
-  B.cues = []; B.particles = []; B.halos = []; B.count = 0; B.busy = false; B.finished = false; B.combo = 0;
-  [V.ring, V.ringScale, V.ringW, V.numOp, V.numScale, V.numY, V.chkDraw, V.chkScale, V.disc, V.seal, V.cardY, V.cardS].forEach(v => v.set(0));
-  V.ringScale.set(1); V.ringW.set(5.5); V.numOp.set(1); V.numScale.set(1); V.chkScale.set(.6); V.cardS.set(1);
-  V.ci.forEach(c => { c.op.set(1); c.y.set(0); });
-  setContent(0); buildPills(false); enter('idle'); $$('#pills span').forEach(p => p.classList.remove('on'));
-  logLines.length = 0; $('#log').textContent = '';
-  paint(); stepFx(0);
-}
-$('#btnStep').addEventListener('click', () => { completeStep(); });
+$('#btnStep').addEventListener('click', () => { TB.completeStep(); });
 $('#btnBeat').addEventListener('click', () => {
-  if (B.finished) return; if (B.busy) interrupt();
+  const B = TB.B; if (B.finished) return; if (B.busy) TB.interrupt();
   const rem = B.beats.map((b, i) => b.done ? -1 : i).filter(i => i >= 0);
   if (rem.length === 0) return;
-  if (rem.length === 1) { completeStep(); return; }
-  B.seqStart = B.now; haptic('.levelChange'); beatCheck(rem[0], false); wake();
+  if (rem.length === 1) { TB.completeStep(); return; }
+  B.seqStart = B.now; TB.haptic('.levelChange'); TB.beatCheck(rem[0], false); wake();
 });
 $('#btnRapid').addEventListener('click', () => {
-  if (B.finished) return; let n = 0;
-  const go = () => { completeStep(); if (++n < 3) setTimeout(go, 160 / (S.slow ? .25 : 1)); };
+  if (TB.B.finished) return; let n = 0;
+  const go = () => { TB.completeStep(); if (++n < 3) setTimeout(go, 160 / (S.slow ? .25 : 1)); };
   go();
 });
-$('#btnReset').addEventListener('click', () => resetB());
-$('#bigChk').addEventListener('change', e => { $('#cardbox').style.setProperty('--z', e.target.checked ? 1.55 : 1); fitFx(); });
+$('#btnReset').addEventListener('click', () => TB.reset());
+$('#bigChk').addEventListener('change', e => { $('#cardbox').style.setProperty('--z', e.target.checked ? 1.35 : 1); TB.fitFx(); });
+
+
+/* ============================================================ C：引导的转场与微交互 */
+const CW = 600, CH = 440, MB = 20, PW = 250, PH = 284, CARD_W = 260, GAP = 16, CAP_W = 120, CAP_H = 204;
+const CORNER = { TR: { x: CW - 16 - PW, y: MB + 16 }, BL: { x: 16, y: CH - 16 - PH } };
+const Cd = { defer: true };                       // 翻译那一步是否延后（S4 跳过）
+const glyphHTML = v => `<div class="tp" data-act="glyph" title="点一下，代替双指手势"><div class="pad ${v}"><i class="f a"></i><i class="f b"></i></div></div><div class="tpcap">点这里，代替双指手势</div>`;
+const LINKS = `<div class="cfoot"><a class="clink" data-act="skip" tabindex="0" role="button">这一步先不做</a><a class="clink" data-act="stop" tabindex="0" role="button">先到这里</a></div>`;
+const S5_BODY = '双指按住面板，轻轻往一个角推过去，它会自己落好。', S5_TUCK = '落好了。往左边再推一下，它会藏进屏幕边。';
+const S5_ACTS = () => glyphHTML('nudge') + `<div class="cbtns" style="margin-top:8px"><button class="cbtn sec sm" data-act="tuckForMe">替我收起来</button></div>`;
+const CSTEPS = [
+  { id: 'S0', title: '你好，很高兴见到你', body: '接下来几分钟，我陪你把 nanoPod 走一遍。都是些顺手的小事，不着急。', num: 1, ringMode: 'check', anchor: 'edge',
+    acts: `<div class="cbtns"><button class="cbtn pri" data-act="start">开始</button><button class="cbtn sec" data-act="later">以后再说</button></div>`,
+    foot: `<div class="cnote">✓ Music 已经连上了　·　随时可以停下，设置里能接着来</div>` },
+  { id: 'S1', title: '把鼠标挪过来', body: '面板平时只留封面，控件在你需要的时候才出来。', bodyArmed: '控件出来了，按一下播放。', bodyAway: '鼠标再回到面板上。', beats: ['移到面板上', '按一下播放'], num: 2, anchor: 'play', foot: LINKS },
+  { id: 'S2', title: '专辑页的两个角', body: '右上角选声音从哪里出，左上角一步到 Music。', bodyAway: '鼠标再回到面板上。', beats: ['右上角：声音从哪出', '左上角：去 Music'], num: 3, anchor: 'out', foot: LINKS },
+  { id: 'S3', title: '歌词在这儿', body: '左下角的小气泡，或者点一下封面。', bodyAway: '鼠标再回到面板上。', beats: [], num: 4, anchor: 'nav', foot: LINKS },
+  { id: 'S4', title: '翻译', body: '右下角的按钮。译文会跟在每一句下面。', bodyAway: '鼠标再回到面板上。', beats: [], num: 5, anchor: 'tr', foot: LINKS },
+  { id: 'S5', title: '放到你喜欢的角落', body: S5_BODY, beats: ['推到一个角落', '再往屏幕边上推一下'], num: 6, anchor: 'edge', acts: S5_ACTS(), foot: LINKS },
+  { id: 'S6', title: '它就在这条边上', body: '', beats: ['鼠标停上去，它会探出来', '点一下，回来'], num: 7, anchor: 'strip', foot: LINKS },
+  { id: 'S7', title: '就这些了', final: true, anchor: 'edge',
+    get body() { return '往后它就安静地待在一边，想听的时候就在。' + (Cd.defer ? '翻译那一步，等有外文歌的时候我再来。' : '') + '愿有音乐陪着的时候，都是好时光。'; },
+    get ringMode() { return Cd.defer ? 'check' : 'closed'; },
+    acts: `<div class="cbtns"><button class="cbtn pri" data-act="shortcut">录个快捷键</button><button class="cbtn sec" data-act="ok">好</button></div>`,
+    foot: `<div class="cnote">想再走一遍：设置 › 认识 nanoPod</div>` }
+];
+const CIDX = Object.fromEntries(CSTEPS.map((d, i) => [d.id, i]));
+const cflow = i => {
+  switch (CSTEPS[i].id) {
+    case 'S1': return { next: CIDX.S2, kind: 'step' };
+    case 'S2': return { next: CIDX.S3, kind: 'step' };
+    case 'S3': return { next: Cd.defer ? CIDX.S5 : CIDX.S4, kind: 'step' };
+    case 'S4': return { next: CIDX.S5, kind: 'step' };
+    case 'S6': return { next: CIDX.S7, kind: Cd.defer ? 'step' : 'last' };
+    default: return null;
+  }
+};
+const skipNextOf = id => ({ S1: 'S2', S2: 'S3', S3: Cd.defer ? 'S5' : 'S4', S4: 'S5', S5: 'S6', S6: 'S7' }[id]);
+
+const OUT_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round"><path d="M3 6.4v3.2h2.3L8.4 12V4L5.3 6.4z" fill="#fff" stroke="none"/><path d="M10.4 5.6a3.4 3.4 0 010 4.8M12.2 3.9a5.8 5.8 0 010 8.2"/></svg>';
+const NAV_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" fill="#fff"><path d="M3 3.5h10a1.5 1.5 0 011.5 1.5v4.6a1.5 1.5 0 01-1.5 1.5H8.2L5 13.5v-2.4H3A1.5 1.5 0 011.5 9.6V5A1.5 1.5 0 013 3.5z"/></svg>';
+const PLAY_ICONS = '<svg class="ic-play" width="18" height="18" viewBox="0 0 18 18" fill="#fff"><path d="M5 3l10 6-10 6z"/></svg><svg class="ic-pause" width="18" height="18" viewBox="0 0 18 18" fill="#fff"><rect x="4" y="3" width="3.6" height="12" rx="1"/><rect x="10.4" y="3" width="3.6" height="12" rx="1"/></svg>';
+const TR_ICON = '<span style="font-size:14px;font-weight:600;color:#fff">文</span>';
+const CSTAGE_HTML = () => `
+  <div class="mbz">${MENUBAR}</div>
+  <div class="cstrip" id="c-strip"><i class="fill"></i></div>
+  <div class="mp" id="c-mp">
+    <div class="pn" style="--pw:250">
+      <div class="art" id="c-art"><i class="sun"></i><i class="wv1"></i><i class="wv2"></i></div>
+      <b class="t1" id="c-t1"></b><b class="t2" id="c-t2"></b>
+      <div class="ly" id="c-ly"><p class="dim">Down by the water</p><p class="act">Let’s go see the sea<span class="trl">我们去看海吧</span></p><p class="dim">Just you, just me</p></div>
+      <div class="rim" id="c-rim"></div>
+    </div>
+    <button class="hp hp-out" data-ev="out" aria-label="输出设备">${OUT_ICON}</button>
+    <button class="hp hp-music" data-ev="music" aria-label="去 Music"><span>↖ Music</span></button>
+    <button class="hp hp-nav" data-ev="nav" aria-label="歌词">${NAV_ICON}</button>
+    <button class="hp hp-prev" tabindex="-1"><svg width="14" height="12" viewBox="0 0 14 12" fill="#fff"><path d="M13 1V11L7 6Z M7 1V11L1 6Z"/></svg></button>
+    <button class="hp hp-play" data-ev="play" id="c-play" aria-label="播放">${PLAY_ICONS}</button>
+    <button class="hp hp-next" tabindex="-1"><svg width="14" height="12" viewBox="0 0 14 12" fill="#fff"><path d="M1 1V11L7 6Z M7 1V11L13 6Z"/></svg></button>
+    <button class="hp hp-tr" data-ev="translate" aria-label="翻译">${TR_ICON}</button>
+    <div class="cpop" id="c-pop"><div class="r on"><span>MacBook 扬声器</span><b>✓</b></div><div class="r"><span>AirPods</span></div></div>
+  </div>
+  <div class="vcard cap" id="c-cap"><div class="th"></div><b class="ti"></b><b class="ar"></b>
+    <svg class="pl" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8.6" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="1.8"/><circle cx="10" cy="10" r="8.6" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="36 54" transform="rotate(-90 10 10)"/><path d="M8 6.3v7.4l6-3.7z" fill="#fff"/></svg>
+    <svg class="nx" viewBox="0 0 14 12"><path d="M1 1V11L7 6Z M7 1V11L13 6Z"/></svg></div>
+  <div class="halo" id="c-halo"></div>
+  <div class="gcur" id="c-gcur"><svg width="20" height="24" viewBox="0 0 20 24"><path d="M2 1.5v17l4.4-4 3 7 3.2-1.4-3-6.8H16z" fill="#fff" stroke="#111" stroke-width="1.3" stroke-linejoin="round"/></svg><i class="rip"></i></div>
+  <div class="tcard" id="c-tcard">${cardHTML('c-', true)}</div>
+  <canvas id="c-fx"></canvas>
+  <div class="toast" id="c-toast"></div>`;
+
+$('#c-stage').innerHTML = CSTAGE_HTML();
+const cqs = id => document.getElementById('c-' + id);
+const cel = { stage: $('#c-stage'), mp: cqs('mp'), art: cqs('art'), t1: cqs('t1'), t2: cqs('t2'), ly: cqs('ly'), rim: cqs('rim'), play: cqs('play'), pop: cqs('pop'), strip: cqs('strip'), cap: cqs('cap'), halo: cqs('halo'), gcur: cqs('gcur'), toast: cqs('toast'), beak: cqs('beak') };
+
+/* ---- 状态与动画值 ---- */
+const Q = { corner: 'TR', tucked: false, playing: false, page: 0, trOn: false, realHover: false, simHover: false, auto: false, autoAt: null, stopped: false, done: false, lock: false,
+  stepId: 'S0', beakSide: 'R', haloKind: null, haloMode: 'hint', peekKind: null, breathT0: null, gc: { t0: null }, dwell: null, stallT0: 0, bodyMode: 'base', cardShown: false, capOut: false, popT: null };
+const TC = makeTour('c-', {
+  steps: CSTEPS, prefill: 1, ownTransform: true, logLines: 10, flowOf: cflow,
+  onHandoffStart: (n, ff) => cHandoffStart(n, ff), onSwap: (n, ff) => cSwap(n, ff), onFrame: dt => cFrame(dt), onContent: () => { Q.bodyMode = 'base'; }
+});
+const tv = v => TC.track(TC.mk(v));
+const CV = {
+  px: tv(CORNER.TR.x), py: tv(CORNER.TR.y), pOp: tv(1), hov: tv(0), page: tv(0), tr: tv(0), stripOp: tv(0), cap: tv(0),
+  cx: tv(0), cy: tv(0), ch: tv(0), cop: tv(0), csc: tv(1), capp: tv(0), bOff: tv(30), bOp: tv(1),
+  hx: tv(0), hy: tv(0), hw: tv(40), hh: tv(40), hop: tv(0), hsc: tv(1), playPop: tv(1), pulse: tv(1)
+};
+const cur = () => CSTEPS[TC.B.cardStep];
+const Bt = () => TC.B;
+const hovering = () => Q.realHover || Q.simHover;
+const spr = (v, t, dur, bounce, delay = 0) => { if (S.rm) { v.set(t); } else v.to(t, { spring: [dur, bounce], delay }); };
+const fade = (v, t, dur, ease = 'out', delay = 0) => v.to(t, { dur: S.rm ? .16 : dur, ease: S.rm ? 'lin' : ease, delay });
+
+/* ---- 锚点与放置（纯函数，可测） ---- */
+function anchorPt(kind) {
+  const R = CORNER[Q.corner], centerR = R.x + PW / 2 > CW / 2;
+  switch (kind) {
+    case 'edge': return { x: centerR ? R.x : R.x + PW, y: R.y + PH / 2 };
+    case 'play': return { x: R.x + 125, y: R.y + 253 };
+    case 'out': return { x: R.x + 222, y: R.y + 28 };
+    case 'music': return { x: R.x + 43, y: R.y + 23 };
+    case 'nav': return { x: R.x + 25, y: R.y + 253 };
+    case 'tr': return { x: R.x + 222, y: R.y + 192 };
+    case 'strip': return { x: centerR ? CW : 0, y: R.y + PH / 2 };
+  }
+}
+function placeCard(kind, h) {
+  const R = CORNER[Q.corner], panelRight = R.x + PW / 2 > CW / 2, a = anchorPt(kind);
+  let x, side;
+  if (kind === 'strip') { x = panelRight ? CW - 14 - CAP_W - 20 - CARD_W : 14 + CAP_W + 20; side = panelRight ? 'R' : 'L'; }
+  else if (panelRight) { x = R.x - GAP - CARD_W; side = 'R'; } else { x = R.x + PW + GAP; side = 'L'; }
+  const y = clamp(a.y - h / 2, MB + 10, CH - 10 - h);
+  return { x, y, h, side, bOff: clamp(a.y - y, 24, h - 24), ay: a.y };
+}
+function haloGeo(kind) {
+  const a = anchorPt(kind === 'cap' ? 'strip' : kind);
+  switch (kind) {
+    case 'play': case 'out': case 'tr': return { cx: a.x, cy: a.y, w: 40, h: 40 };
+    case 'nav': return { cx: a.x, cy: a.y, w: 36, h: 36 };
+    case 'music': return { cx: a.x, cy: a.y, w: 82, h: 42 };
+    case 'strip': return { cx: a.x === 0 ? 5 : CW - 5, cy: a.y, w: 18, h: 72 };
+    case 'cap': { const left = a.x === 0; return { cx: left ? 14 + CAP_W / 2 : CW - 14 - CAP_W / 2, cy: a.y, w: CAP_W + 12, h: CAP_H + 12 }; }
+  }
+}
+
+/* ---- 卡片：出现 / 消失 / 位移 ---- */
+function setCardNow(pl) {
+  CV.cx.set(pl.x); CV.cy.set(pl.y); CV.ch.set(pl.h); CV.bOff.set(pl.bOff); setBeakSide(pl.side); CV.bOp.set(1);
+}
+function setBeakSide(s) { Q.beakSide = s; cel.beak.className = 'beak ' + s; }
+function cardAppear(kind) {
+  const h = TC.measure(TC.B.cardStep), pl = placeCard(kind, h);
+  setCardNow(pl); Q.cardShown = true; Q.anchorKind = kind;
+  TC.V.ci.forEach(c => { c.op.set(S.rm ? 1 : 0); c.y.set(0); });
+  CV.cop.set(0);
+  if (S.rm) { CV.csc.set(1); CV.capp.set(0); fade(CV.cop, 1, .16); return; }
+  CV.csc.set(.94); CV.capp.set(10);
+  CV.cop.to(1, { dur: .14, ease: 'out' });
+  CV.csc.to(1, { spring: [.36, .14] }); CV.capp.to(0, { spring: [.36, .14] });
+  TC.V.ci.forEach((c, i) => { c.op.to(1, { dur: .18, ease: 'out', delay: .06 + i * .04 }); c.y.set(6); c.y.to(0, { dur: .18, ease: 'out', delay: .06 + i * .04 }); });
+  TC.logEv('card.appear');
+}
+function cardHide(toward = 6) {
+  Q.cardShown = false;
+  if (S.rm) { fade(CV.cop, 0, .12); return; }
+  CV.cop.to(0, { dur: .16, ease: 'in' }); CV.csc.to(.97, { dur: .16, ease: 'in' }); CV.capp.to(toward, { dur: .16, ease: 'in' });
+  TC.logEv('card.hide');
+}
+function moveCard(pl, delay) {
+  CV.cx.to(pl.x, { spring: [.5, .14], delay }); CV.cy.to(pl.y, { spring: [.5, .14], delay });
+  CV.ch.to(pl.h, { spring: [.4, .15], delay: delay + .1 });
+  CV.bOff.to(pl.bOff, { spring: [.42, .15], delay });
+  if (pl.side !== Q.beakSide) {                                  // 箭头换向：0.1 s 淡出，中点换边，0.16 s 淡入
+    CV.bOp.to(0, { dur: .1, ease: 'in', delay });
+    TC.cue(delay + .12, () => { setBeakSide(pl.side); CV.bOp.to(1, { dur: .16, ease: 'out' }); });
+  }
+  TC.logEv(`card.move → (${Math.round(pl.x)}, ${Math.round(pl.y)}) beak ${pl.side}`);
+}
+function cHandoffStart(next, ff) {
+  const d = CSTEPS[next];
+  haloHide(); hintStop(); popHide(); Q.stallT0 = 0;
+  if (d.id === 'S6' && !Q.tucked) panelTuck();
+  if (d.id === 'S7' && Q.tucked) panelReturn();
+  const h = TC.measure(next), pl = placeCard(d.anchor, h); Q.anchorKind = d.anchor;
+  if (ff) { setCardNow(pl); return; }
+  if (S.rm) { fade(CV.cop, 0, .12); TC.cue(.14, () => { setCardNow(pl); fade(CV.cop, 1, .16); }); return; }
+  moveCard(pl, .04);
+}
+function cSwap(next, ff) {
+  const d = CSTEPS[next]; Q.stepId = d.id; markStep();
+  if (d.id === 'S7') {
+    if (Cd.defer) TC.cue(ff ? 0 : .3, () => TC.spawnConfetti(72), false);
+    if (!ff) TC.cue(8, () => { if (Q.stepId === 'S7' && Q.cardShown) finishTour('自动收起'); });
+    return;
+  }
+  if (ff) enterStep(d.id); else TC.cue(.42, () => enterStep(d.id));
+}
+
+/* ---- 高亮环 ---- */
+function haloShow(kind, mode = 'wait') {
+  const g = haloGeo(kind); if (!g) return;
+  const first = CV.hop.v < .02 && !CV.hop.m;
+  Q.haloKind = kind; Q.haloMode = mode; cel.halo.dataset.kind = kind;
+  const setGeo = (f) => { f(CV.hx, g.cx - g.w / 2); f(CV.hy, g.cy - g.h / 2); f(CV.hw, g.w); f(CV.hh, g.h); };
+  if (first || S.rm) {
+    setGeo((v, t) => v.set(t));
+    if (S.rm) { CV.hsc.set(1); CV.hop.set(0); fade(CV.hop, mode === 'hint' ? .7 : 1, .16); }
+    else { CV.hsc.set(1.25); CV.hop.set(0); CV.hop.to(mode === 'hint' ? .7 : 1, { dur: .2, ease: 'out' }); CV.hsc.to(1, { spring: [.9, .35] }); }
+  } else {                                                       // 跳到下一个控件：spring(.42, .85) 位移
+    setGeo((v, t) => v.to(t, { spring: [.42, .15] }));
+    CV.hop.to(mode === 'hint' ? .7 : 1, { dur: .15, ease: 'out' });
+  }
+  cel.halo.classList.toggle('hint', mode === 'hint');
+  cel.halo.style.borderRadius = (Math.min(g.w, g.h) / 2 + (kind === 'cap' ? 20 : 0)) + 'px';
+  if (!S.rm) Q.breathT0 = TC.B.now;
+}
+function haloHide() {
+  if (CV.hop.v < .02 && !CV.hop.m) { Q.haloKind = null; return; }
+  fade(CV.hop, 0, .14, 'in'); Q.haloKind = null; Q.breathT0 = null;
+}
+function haloMode(mode) {
+  Q.haloMode = mode; cel.halo.classList.toggle('hint', mode === 'hint');
+  fade(CV.hop, mode === 'hint' ? .7 : 1, .18);
+  if (mode === 'armed' && !S.rm) { CV.pulse.set(1); CV.pulse.to(1.14, { dur: .12, ease: 'out' }); TC.cue(.12, () => CV.pulse.to(1, { spring: [.5, .3] })); }
+}
+function haloPeek(kind) {                                      // beat 行悬停：环临时指到这一拍对应的控件
+  if (!Q.haloKind || !kind) return;
+  const g = haloGeo(kind); if (!g) return;
+  if (S.rm) { CV.hx.set(g.cx - g.w / 2); CV.hy.set(g.cy - g.h / 2); CV.hw.set(g.w); CV.hh.set(g.h); return; }
+  CV.hx.to(g.cx - g.w / 2, { spring: [.42, .15] }); CV.hy.to(g.cy - g.h / 2, { spring: [.42, .15] }); CV.hw.to(g.w, { spring: [.42, .15] }); CV.hh.to(g.h, { spring: [.42, .15] });
+  cel.halo.style.borderRadius = (Math.min(g.w, g.h) / 2 + (kind === 'cap' ? 20 : 0)) + 'px';
+}
+const BEAT_TARGET = { S2: ['out', 'music'], S6: ['strip', 'cap'] };
+
+/* ---- 「把鼠标挪过来」提示：幽灵光标 + 呼吸 + 面板边缘微光 ---- */
+function hintStart() { if (S.rm) return; Q.gc.t0 = TC.B.now + .6; }
+function hintStop() {
+  Q.gc.t0 = null; Q.breathT0 = null; cel.gcur.style.opacity = 0; cel.rim.style.boxShadow = 'none';
+}
+function gcFrame(now) {
+  const t0 = Q.gc.t0, el = cel.gcur; if (t0 == null) return false;
+  const CYC = 3.4, u = now - t0; if (u < 0) return true;
+  const c = Math.floor(u / CYC);
+  if (c >= 2) { hintStop(); return false; }
+  const t = u - c * CYC;
+  // 起点：卡片朝面板一侧的箭头尖；终点：面板封面中心偏下
+  const s = { x: Q.beakSide === 'R' ? CV.cx.v + CARD_W : CV.cx.v, y: CV.cy.v + CV.bOff.v }, R = CORNER[Q.corner], e = { x: R.x + 150, y: R.y + 190 };
+  const p = E.io(clamp((t - .25) / .9));
+  const mx = (s.x + e.x) / 2, my = (s.y + e.y) / 2 - 34;
+  const x = (1 - p) * (1 - p) * s.x + 2 * (1 - p) * p * mx + p * p * e.x, y = (1 - p) * (1 - p) * s.y + 2 * (1 - p) * p * my + p * p * e.y;
+  const op = clamp(t / .2) * (1 - clamp((t - 2.05) / .3)) * .92;
+  el.style.opacity = op.toFixed(3); el.style.transform = `translate(${x.toFixed(1)}px,${y.toFixed(1)}px)`;
+  const rp = clamp((t - 1.2) / .55);                             // 到位后一圈涟漪：这就是“悬停”
+  el.querySelector('.rip').style.cssText = `opacity:${(rp > 0 && rp < 1 ? .55 * (1 - rp) : 0).toFixed(3)};transform:scale(${(0.6 + rp * 1.8).toFixed(3)})`;
+  return true;
+}
+
+/* ---- 面板：悬停、页面、位置 ---- */
+function updateHover() {
+  const h = hovering();
+  spr(CV.hov, h ? 1 : 0, .4, .15);
+  if (h) { if (Q.gc.t0 != null) { Q.gc.t0 = null; cel.gcur.style.opacity = 0; } if (Q.stepId === 'S1' && !Bt().beats[0]?.done && !Q.dwell) Q.dwell = TC.B.now + .08; }
+  else Q.dwell = null;
+  refreshArmed(); wake();
+}
+function refreshArmed() {
+  const d = cur(), b = Bt().beats, h = hovering();
+  const needs = (d.id === 'S1' && b[0]?.done && !b[1]?.done) || d.id === 'S2' || d.id === 'S3' || d.id === 'S4';
+  if (!needs || !Q.cardShown || Bt().busy) return;
+  if (d.id === 'S1') {
+    b[1].li.classList.toggle('pending', h);
+    if (h) { if (Q.bodyMode !== 'armed') { setBody(d.bodyArmed); Q.bodyMode = 'armed'; haloMode('armed'); } }
+    else if (Q.bodyMode !== 'away') { setBody(d.bodyAway); Q.bodyMode = 'away'; haloMode('hint'); }
+    return;
+  }
+  const done = b.length && b.every(x => x.done); if (done) return;
+  if (h) { if (Q.bodyMode === 'away') { setBody(d.body); Q.bodyMode = 'base'; haloMode('wait'); } }
+  else if (Q.bodyMode !== 'away') { setBody(d.bodyAway); Q.bodyMode = 'away'; haloMode('hint'); }
+}
+function setBody(text) {
+  const el = TC.content.body, o = TC.V.ci[1].op;
+  if (S.rm) { el.textContent = text; relayout(); return; }
+  o.to(0, { dur: .1, ease: 'in' }); TC.cue(.1, () => { el.textContent = text; relayout(); o.to(1, { dur: .16, ease: 'out' }); });
+}
+function relayout() {                                            // 正文行数变了：卡高与位置重新算，箭头仍指着锚点
+  const c = TC.card, saved = c.style.height; c.style.height = 'auto'; const h = c.offsetHeight; c.style.height = saved;
+  const pl = placeCard(Q.anchorKind || cur().anchor, h);
+  if (S.rm) { CV.ch.set(h); CV.cy.set(pl.y); CV.bOff.set(pl.bOff); return; }
+  CV.ch.to(h, { spring: [.4, .15] }); CV.cy.to(pl.y, { spring: [.4, .15] }); CV.bOff.to(pl.bOff, { spring: [.4, .15] });
+}
+function panelMoveTo(pos) { spr(CV.px, pos.x, .5, .14); spr(CV.py, pos.y, .5, .14); }
+function panelTuck() {
+  Q.tucked = true; Q.simHover = false; const right = CORNER[Q.corner].x + PW / 2 > CW / 2;
+  spr(CV.px, right ? CW + 24 : -PW - 24, .5, .14); fade(CV.pOp, 0, .3, 'in', S.rm ? 0 : .3);
+  cel.strip.className = 'cstrip ' + (right ? 'r' : 'l'); cel.strip.style.top = (CORNER[Q.corner].y + PH / 2 - 28) + 'px';
+  fade(CV.stripOp, 1, .3, 'out', S.rm ? 0 : .35);
+  updateHover();
+}
+function panelReturn() {
+  Q.tucked = false; const R = CORNER[Q.corner];
+  spr(CV.px, R.x, .5, .14); fade(CV.pOp, 1, .2, 'out'); fade(CV.stripOp, 0, .25, 'in');
+  spr(CV.cap, 0, .4, .15); Q.capOut = false;
+}
+function ripple(el) { const r = document.createElement('span'); r.className = 'rippl'; el.appendChild(r); setTimeout(() => r.remove(), 600 / (S.slow ? .25 : 1)); }
+function popShow() {
+  cel.pop.classList.add('on'); Q.popT = TC.B.now + 1.5;
+}
+function popHide() { cel.pop.classList.remove('on'); Q.popT = null; }
+function toast(text, dur = 2.6) {
+  cel.toast.textContent = text; cel.toast.classList.add('on');
+  const my = ++toast.n; TC.cue(dur, () => { if (toast.n === my) cel.toast.classList.remove('on'); }, false);
+}
+toast.n = 0;
+
+/* ---- 步骤进入：环、提示 ---- */
+function enterStep(id) {
+  Q.stallT0 = TC.B.now; Q.bodyMode = 'base';
+  const sk = TC.content.foot.querySelector('[data-act=skip]'); sk && sk.classList.remove('stall');
+  switch (id) {
+    case 'S1': haloShow('play', 'hint'); hintStart(); break;
+    case 'S2': haloShow('out', hovering() ? 'wait' : 'hint'); break;
+    case 'S3': haloShow('nav', hovering() ? 'wait' : 'hint'); break;
+    case 'S4': haloShow('tr', hovering() ? 'wait' : 'hint'); break;
+    case 'S6': haloShow('strip', 'wait'); break;
+  }
+  if (id === 'S2' || id === 'S3' || id === 'S4') { if (!hovering()) { setBody(cur().bodyAway); Q.bodyMode = 'away'; } }
+}
+
+/* ---- 用户动作 → 引导事件 ---- */
+function beatDone(i) {
+  const b = Bt().beats[i]; if (!b || b.done) return false;
+  TC.beatCheck(i, false); TC.haptic('.levelChange'); hintStop(); Q.breathT0 = null; wake();
+  if (Bt().beats.every(x => x.done)) { haloHide(); TC.completeStep(); return true; }
+  return false;
+}
+function userDid(ev) {
+  if (Q.stopped || Q.done || Q.lock) return;
+  const id = Q.stepId, b = Bt().beats;
+  if (Bt().busy) return;
+  switch (id + ':' + ev) {
+    case 'S0:start': TC.advanceQuiet(CIDX.S1); break;
+    case 'S1:hover': if (!b[0].done) { beatDone(0); refreshArmed(); } break;
+    case 'S1:play': if (b[0].done && !b[1].done) beatDone(1); break;
+    case 'S2:out': if (!b[0].done) { popShow(); beatDone(0) || (b[1].done || haloShow('music', 'wait')); } break;
+    case 'S2:music': if (!b[1].done) { beatDone(1) || (b[0].done || haloShow('out', 'wait')); } break;
+    case 'S3:nav': haloHide(); TC.completeStep(); break;
+    case 'S4:translate': haloHide(); TC.completeStep(); break;
+    case 'S5:corner': if (!b[0].done) doCorner(); break;
+    case 'S5:tuck': if (b[0].done && !b[1].done) doTuck(); else if (!b[0].done) { doCorner(); TC.cue(1.6, () => doTuck()); } break;
+    case 'S6:peek': if (!b[0].done) doPeek(); break;
+    case 'S6:return': if (!b[0].done) { doPeek(); TC.cue(.7, () => doReturn()); } else if (!b[1].done) doReturn(); break;
+  }
+}
+function doCorner() {
+  Q.lock = true; Q.simHover = false; updateHover();
+  TC.beatCheck(0, false); TC.haptic('.levelChange'); cardHide(); haloHide();
+  Q.corner = 'BL'; panelMoveTo(CORNER.BL);
+  TC.cue(S.rm ? .3 : .75, () => {
+    CSTEPS[CIDX.S5].body = S5_TUCK; CSTEPS[CIDX.S5].acts = glyphHTML('swipeL') + `<div class="cbtns" style="margin-top:8px"><button class="cbtn sec sm" data-act="tuckForMe">替我收起来</button></div>`;
+    TC.content.body.textContent = S5_TUCK; TC.content.acts.innerHTML = CSTEPS[CIDX.S5].acts;
+    cardAppear('edge'); Q.lock = false;
+  });
+  wake();
+}
+function doTuck() {
+  Q.lock = true; cardHide(); haloHide(); TC.beatCheck(1, false); TC.haptic('.levelChange');
+  panelTuck();
+  TC.cue(S.rm ? .4 : .95, () => {
+    TC.silentAdvance(CIDX.S6); Q.stepId = 'S6'; markStep(); cardAppear('strip');
+    TC.cue(S.rm ? .2 : .3, () => TC.ringOnly(TC.B.count));
+    TC.cue(S.rm ? .3 : .75, () => { enterStep('S6'); Q.lock = false; });
+  });
+  wake();
+}
+function doPeek() {
+  Q.capOut = true; spr(CV.cap, 1, .45, .2); beatDone(0); haloShow('cap', 'wait'); wake();
+}
+function doReturn() {
+  Q.lock = true; haloHide(); beatDone(1);
+  panelReturn(); wake();
+  TC.cue(.8, () => { Q.lock = false; });
+}
+
+/* ---- 结束与中断 ---- */
+function stopTour() {
+  if (Q.stopped) return; Q.stopped = true; Q.auto = false; syncAutoBtn();
+  cardHide(); haloHide(); hintStop(); popHide();
+  toast('已停在这里 · 设置 › 认识 nanoPod 里可以接着来'); wake();
+}
+function finishTour(msg) {
+  if (Q.done) return; Q.done = true; Q.auto = false; syncAutoBtn(); cardHide(10); haloHide();
+  toast(msg === '自动收起' ? '8 秒无操作，自动收起' : (msg || '引导结束')); wake();
+}
+function skipStep() {
+  const d = cur(); if (d.final || d.id === 'S0' || Bt().busy || Q.lock || Q.stopped) return;
+  Bt().beats.forEach(b => { if (!b.done) b.li.classList.add('skip'); b.li.classList.remove('pending'); });
+  haloHide(); hintStop(); popHide();
+  setBody('好，先放一放。'); Q.bodyMode = 'skip';
+  const nxt = CIDX[skipNextOf(d.id)];
+  Q.lock = true;
+  TC.cue(S.rm ? .3 : .55, () => { Q.lock = false; TC.advanceQuiet(nxt); });
+  TC.logEv('skip ' + d.id); wake();
+}
+
+/* ---- 每帧 ---- */
+function cFrame(dt) {
+  const B = TC.B; let active = false;
+  if (Q.dwell != null && B.now >= Q.dwell) { Q.dwell = null; if (hovering()) userDid('hover'); }
+  if (Q.popT != null && B.now >= Q.popT) popHide();
+  // 呼吸：出现 1.2 s 后开始，一周期 2.4 s，最多 3 个周期（之后静止，零成本）
+  let g = 0;
+  if (Q.breathT0 != null && !S.rm) {
+    const p = (B.now - Q.breathT0 - 1.2) / 2.4;
+    if (p >= 3) Q.breathT0 = null; else { if (p > 0) g = .5 - .5 * Math.cos(2 * Math.PI * p); active = true; }
+  }
+  if (gcFrame(B.now)) active = true;
+  // 停滞 6 s：「这一步先不做」变明显
+  if (Q.cardShown && B.now - Q.stallT0 > 6 && Q.stallT0 > 0) { const sk = TC.content.foot.querySelector('[data-act=skip]'); if (sk && !sk.classList.contains('stall')) sk.classList.add('stall'); }
+  // 自动播放
+  if (Q.auto && !Q.stopped && !Q.done) {
+    active = true;
+    const ready = !Bt().busy && !Q.lock && Q.cardShown && CV.cop.v > .95 && !CV.cx.m;
+    if (ready && Q.autoAt == null) Q.autoAt = B.now + autoDelay();
+    if (Q.autoAt != null && (!ready)) Q.autoAt = null;
+    if (Q.autoAt != null && B.now >= Q.autoAt) { Q.autoAt = null; nextAction(); }
+  }
+  paintC(g);
+  return active;
+}
+function autoDelay() {
+  const id = Q.stepId, b = Bt().beats, d0 = b[0]?.done;
+  const t = { S0: 2.6, S1: d0 ? 1.7 : 3.6, S2: d0 ? 1.6 : 2.4, S3: 2.4, S4: 2.4, S5: d0 ? 3.0 : 3.2, S6: d0 ? 1.8 : 2.4, S7: 3.5 }[id];
+  return S.rm ? Math.min(t, 1.5) : t;
+}
+function nextAction() {
+  if (Q.stopped || Q.done || Q.lock || Bt().busy) return;
+  const id = Q.stepId, b = Bt().beats, d0 = b[0]?.done;
+  const sim = () => { if (!hovering()) { Q.simHover = true; updateHover(); } };
+  switch (id) {
+    case 'S0': userDid('start'); break;
+    case 'S1': if (!d0) { Q.simHover = true; updateHover(); } else { sim(); press('play', cel.play); } break;
+    case 'S2': sim(); press(d0 ? 'music' : 'out', $(d0 ? '.hp-music' : '.hp-out', cel.mp)); break;
+    case 'S3': sim(); press('nav', $('.hp-nav', cel.mp)); break;
+    case 'S4': sim(); press('translate', $('.hp-tr', cel.mp)); break;
+    case 'S5': userDid(d0 ? 'tuck' : 'corner'); break;
+    case 'S6': userDid(d0 ? 'return' : 'peek'); break;
+    case 'S7': finishTour('引导结束'); break;
+  }
+  refreshNextLabel();
+}
+function nextLabel() {
+  if (Q.stopped) return '已停下（点「重来」）'; if (Q.done) return '已结束（点「重来」）';
+  const id = Q.stepId, d0 = Bt().beats[0]?.done;
+  return { S0: '点「开始」', S1: d0 ? '按一下播放' : '鼠标移到面板上', S2: d0 ? '点左上角 Music' : '点右上角输出', S3: '点左下角歌词气泡', S4: '点右下角翻译', S5: d0 ? '往边上再推一下' : '双指推到一个角', S6: d0 ? '点一下小卡，回来' : '鼠标停到小条上', S7: '点「好」' }[id];
+}
+function refreshNextLabel() { $('#cNextLbl').textContent = nextLabel(); }
+
+/* ---- 绘制 ---- */
+function paintC(g) {
+  const T = TC, V = T.V, B = T.B;
+  cel.mp.style.transform = `translate(${CV.px.v.toFixed(1)}px,${CV.py.v.toFixed(1)}px)`; cel.mp.style.opacity = clamp(CV.pOp.v).toFixed(3);
+  const h = clamp(CV.hov.v, 0, 1.05), pg = CV.page.v;
+  const artS = PW * lerp(.68, .48, h), top = (PH - 80 * h - artS) / 2;
+  cel.art.style.cssText = `width:${artS}px;height:${artS}px;left:${(PW - artS) / 2}px;top:${top}px;border-radius:${lerp(10, 8, h)}px;opacity:${1 - pg}`;
+  cel.t1.style.top = (top + artS + 14) + 'px'; cel.t2.style.top = (top + artS + 26) + 'px'; cel.t1.style.opacity = cel.t2.style.opacity = 1 - pg;
+  cel.ly.style.opacity = pg; cel.ly.style.setProperty('--tr', clamp(CV.tr.v).toFixed(3));
+  cel.mp.style.setProperty('--hov', clamp(h).toFixed(3));
+  cel.mp.classList.toggle('playing', Q.playing); cel.mp.classList.toggle('lyr', pg > .5);
+  cel.play.style.transform = `scale(${CV.playPop.v.toFixed(3)})`;
+  cel.rim.style.boxShadow = g > .01 ? `inset 0 0 0 1.5px rgba(250,64,88,${(.55 * g).toFixed(3)}), 0 0 ${(6 + 22 * g).toFixed(1)}px rgba(250,64,88,${(.35 * g).toFixed(3)})` : 'none';
+  // 贴边条与小卡
+  const left = cel.strip.classList.contains('l'), so = clamp(CV.stripOp.v);
+  cel.strip.style.opacity = so.toFixed(3);
+  cel.strip.style.transform = `translateX(${((1 - so) * (left ? -6 : 6)).toFixed(1)}px)`;
+  const capT = clamp(CV.cap.v, 0, 1.05), sy = CORNER[Q.corner].y + PH / 2;
+  const cx0 = lerp(-140, 14, capT), capX = left ? cx0 : CW - cx0 - CAP_W;
+  cel.cap.style.transform = `translate(${capX.toFixed(1)}px,${(sy - CAP_H / 2).toFixed(1)}px) scale(2)`; cel.cap.style.opacity = clamp(capT * 3).toFixed(3);
+  cel.cap.style.pointerEvents = capT > .6 ? 'auto' : 'none';
+  cel.strip.style.pointerEvents = so > .5 ? 'auto' : 'none';
+  // 高亮环
+  const hs = CV.hsc.v * CV.pulse.v * (1 + .035 * g);
+  const hst = cel.halo.style;
+  hst.left = CV.hx.v.toFixed(1) + 'px'; hst.top = CV.hy.v.toFixed(1) + 'px'; hst.width = CV.hw.v.toFixed(1) + 'px'; hst.height = CV.hh.v.toFixed(1) + 'px';
+  hst.opacity = clamp(CV.hop.v * (1 - .18 * g)).toFixed(3); hst.transform = `scale(${hs.toFixed(4)})`;
+  hst.boxShadow = `0 0 0 ${(3 + 4 * g).toFixed(1)}px var(--ring-track),0 0 ${(12 + 12 * g).toFixed(1)}px rgba(250,64,88,${(.32 + .22 * g).toFixed(3)})`;
+  // 卡片
+  const R = Q.beakSide === 'R', dir = R ? 1 : -1, card = T.card;
+  card.style.transformOrigin = `${R ? '100%' : '0'} ${CV.bOff.v.toFixed(1)}px`;
+  card.style.transform = `translate(${(CV.cx.v + dir * CV.capp.v).toFixed(1)}px,${(CV.cy.v + V.cardY.v).toFixed(1)}px) scale(${(CV.csc.v * V.cardS.v).toFixed(4)})`;
+  card.style.opacity = clamp(CV.cop.v).toFixed(3); card.style.visibility = CV.cop.v < .01 ? 'hidden' : 'visible';
+  card.style.height = CV.ch.v > 1 ? CV.ch.v.toFixed(1) + 'px' : 'auto';
+  cel.beak.style.top = (CV.bOff.v - 11).toFixed(1) + 'px'; cel.beak.style.opacity = clamp(CV.bOp.v).toFixed(3);
+}
+
+/* ---- 事件接线 ---- */
+cel.mp.addEventListener('pointerenter', () => { if (Q.tucked) return; Q.realHover = true; updateHover(); });
+cel.mp.addEventListener('pointerleave', () => { Q.realHover = false; updateHover(); });
+cel.mp.addEventListener('click', e => {
+  const b = e.target.closest('.hp[data-ev]'); if (!b || CV.hov.v < .6) return;
+  press(b.dataset.ev, b);
+});
+function uiClick(ev, b) {                                        // 面板自己的反应，与引导无关
+  if (b) ripple(b);
+  if (ev === 'play') { Q.playing = !Q.playing; if (!S.rm) { CV.playPop.set(.86); CV.playPop.to(1, { spring: [.32, .4] }); } }
+  if (ev === 'nav') spr(CV.page, CV.page.v > .5 ? 0 : 1, .3, 0);
+  if (ev === 'translate') { Q.trOn = !Q.trOn; fade(CV.tr, Q.trOn ? 1 : 0, .35); }
+}
+function press(ev, b) { uiClick(ev, b); userDid(ev); }
+cel.strip.addEventListener('pointerenter', () => { if (Q.tucked && !Q.capOut && Q.stepId === 'S6') userDid('peek'); else if (Q.tucked && !Q.capOut) { Q.capOut = true; spr(CV.cap, 1, .45, .2); } });
+cel.cap.addEventListener('click', () => { if (Q.stepId === 'S6') userDid('return'); else { panelReturn(); } });
+cel.cap.addEventListener('pointerleave', () => { if (Q.tucked && Q.stepId !== 'S6') { Q.capOut = false; spr(CV.cap, 0, .4, .15); } });
+
+TC.card.addEventListener('click', e => {
+  const a = e.target.closest('[data-act]'); if (!a) return;
+  switch (a.dataset.act) {
+    case 'start': userDid('start'); break;
+    case 'later': case 'stop': stopTour(); break;
+    case 'skip': skipStep(); break;
+    case 'glyph': userDid(Bt().beats[0]?.done ? 'tuck' : 'corner'); break;
+    case 'tuckForMe': userDid('tuck'); break;
+    case 'shortcut': finishTour('→ 打开 设置 › 快捷键'); break;
+    case 'ok': finishTour('引导结束'); break;
+  }
+});
+TC.card.addEventListener('pointerup', e => {                    // 松开：回弹一下
+  const b = e.target.closest('.cbtn'); if (!b || S.rm) return;
+  b.classList.remove('released'); void b.offsetWidth; b.classList.add('released');
+});
+TC.card.addEventListener('mouseover', e => {                    // beat 行悬停：环指到这一拍的控件
+  const li = e.target.closest('.beats li'); if (!li) return;
+  const i = [...li.parentNode.children].indexOf(li), tg = BEAT_TARGET[Q.stepId];
+  if (tg && Q.haloKind) haloPeek(tg[i]); else if (Q.haloKind && !S.rm) { CV.pulse.set(1); CV.pulse.to(1.14, { dur: .1, ease: 'out' }); TC.cue(.1, () => CV.pulse.to(1, { spring: [.5, .3] })); }
+  wake();
+});
+TC.card.addEventListener('mouseout', e => {
+  const li = e.target.closest('.beats li'); if (!li || li.contains(e.relatedTarget)) return;
+  if (Q.haloKind) haloPeek(Q.haloKind); wake();
+});
+TC.card.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.clink')) { e.preventDefault(); e.target.click(); } });
+
+/* ---- 控制条、步骤芯片、复位 ---- */
+function markStep() { $$('#cSteps span').forEach(s => s.classList.toggle('on', s.dataset.s === Q.stepId)); refreshNextLabel(); }
+function syncAutoBtn() { const b = $('#cAuto'); b.textContent = Q.auto ? '⏸ 暂停自动播放' : '▶ 自动播放'; }
+function resetC() {
+  Object.assign(Q, { corner: 'TR', tucked: false, playing: false, trOn: false, realHover: false, simHover: false, auto: Q.auto, autoAt: null, stopped: false, done: false, lock: false, stepId: 'S0', haloKind: null, breathT0: null, dwell: null, bodyMode: 'base', capOut: false, popT: null });
+  CSTEPS[CIDX.S5].body = S5_BODY; CSTEPS[CIDX.S5].acts = S5_ACTS();
+  TC.reset();
+  [CV.pOp, CV.stripOp, CV.hov, CV.page, CV.tr, CV.cap, CV.hop, CV.cop, CV.capp].forEach(v => v.set(0)); CV.pOp.set(1);
+  CV.px.set(CORNER.TR.x); CV.py.set(CORNER.TR.y); CV.csc.set(1); CV.hsc.set(1); CV.pulse.set(1); CV.playPop.set(1); CV.bOp.set(1);
+  cel.strip.className = 'cstrip r'; hintStop(); popHide(); cel.toast.classList.remove('on');
+  setBeakSide('R'); markStep(); CV.cop.set(0);
+  TC.cue(.25, () => { cardAppear('edge'); });
+  Q.stallT0 = 0;
+  paintC(0); wake(); refreshNextLabel();
+}
+$('#cAuto').addEventListener('click', () => { Q.auto = !Q.auto; if (Q.auto && (Q.stopped || Q.done)) resetC(); syncAutoBtn(); Q.autoAt = null; wake(); });
+$('#cNext').addEventListener('click', () => { nextAction(); wake(); });
+$('#cReset').addEventListener('click', () => resetC());
+$('#cDefer').addEventListener('change', e => { Cd.defer = e.target.checked; resetC(); });
+function fitC() {
+  const wrap = $('#cwrap'), sc = Math.min(1, wrap.clientWidth / CW);
+  cel.stage.style.transform = sc < 1 ? `scale(${sc})` : 'none'; wrap.style.height = (CH * sc) + 'px'; Q.scale = sc;
+}
+addEventListener('resize', () => { fitC(); TC.fitFx(); });
+$('#cSteps').innerHTML = CSTEPS.map(d => `<span data-s="${d.id}">${d.id}</span>`).join('');
+
+/* ---- 微交互试玩区 ---- */
+function buildPlayground() {
+  const el = $('#playCard'); el.innerHTML = `<div class="tin" style="height:auto"><div class="head"><div class="ringbox"><svg viewBox="0 0 28 28"><circle cx="14" cy="14" r="11.25" fill="none" stroke="var(--ring-track)" stroke-width="5.5"/><circle cx="14" cy="14" r="11.25" fill="none" stroke="var(--accent)" stroke-width="5.5" stroke-linecap="round" transform="rotate(-90 14 14)" stroke-dasharray="20 70.69"/></svg><div class="num">3</div></div><div class="title">试试这些微交互</div></div>
+    <div class="body">悬停、按下、松开；把鼠标停在下面的 beat 行上。</div><ul class="beats" id="playBeats"></ul>
+    <div class="acts"><div class="cbtns"><button class="cbtn pri">主按钮</button><button class="cbtn sec">次按钮</button></div></div>
+    <div class="foot2"><div class="cfoot"><a class="clink" tabindex="0" role="button">这一步先不做</a><a class="clink" tabindex="0" role="button">先到这里</a></div></div></div>`;
+  const ul = $('#playBeats'); ['移到面板上', '按一下播放'].forEach((t, i) => { const li = beatDom(t); if (i === 0) { li.classList.add('done'); li.querySelector('.bf').setAttribute('r', 6.9); li.querySelector('.ck').setAttribute('stroke-dashoffset', 0); } if (i === 1) li.classList.add('pending'); ul.appendChild(li); });
+  el.addEventListener('pointerup', e => { const b = e.target.closest('.cbtn'); if (!b || S.rm) return; b.classList.remove('released'); void b.offsetWidth; b.classList.add('released'); });
+}
 
 /* ---- 环的静态样子 ---- */
 function ringSVGStatic(count) {
@@ -1105,12 +1857,13 @@ function buildGallery() {
 }
 
 /* ============================================================ 全局控制 */
-function setSlow(v) { S.slow = v; $$('[data-bind=slow]').forEach(e => e.checked = v); }
+function setSlow(v) { S.slow = v; $$('[data-bind=slow]').forEach(e => e.checked = v); document.documentElement.style.setProperty('--ts', v ? 4 : 1); }
 $$('[data-bind=slow]').forEach(e => e.addEventListener('change', () => setSlow(e.checked)));
 function setRM(v) {
   S.rm = v; $('#rmChk').checked = v; document.body.classList.toggle('rm', v);
   if (A.run) { const r = A.run.r; A.run = null; show(r, 'still'); }
-  if (B.busy) { interrupt(); wake(); }
+  if (TB.B.busy) { TB.interrupt(); wake(); }
+  if (TC.B.busy) { TC.interrupt(); wake(); }
 }
 $('#rmChk').addEventListener('change', e => setRM(e.target.checked));
 function setTheme(t) {
@@ -1124,12 +1877,13 @@ matchMedia('(prefers-reduced-motion: reduce)').addEventListener?.('change', e =>
 /* 初始化 */
 fitWin(); setRM(S.rm);
 show(ROWS.player[0], 'still');
-buildGallery(); resetB(); fitFx(); addEventListener('resize', fitFx);
+buildGallery(); TB.reset(); TB.fitFx(); addEventListener('resize', () => TB.fitFx());
+buildPlayground(); fitC(); TC.fitFx(); resetC();
 new MutationObserver(buildGallery).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
 /* 调试 / 确定性回放：手动推进假时钟，不依赖 rAF */
 window.__proto = {
-  S, A, B, V, SCENES, ROWS,
+  S, A, B: TB.B, V: TB.V, SCENES, ROWS, TB, TC, Q, CV, resetC, nextAction, userDid,
   advance(sec) { S.manual = true; const h = 1 / 60; let t = 0; while (t < sec - 1e-9) { const d = Math.min(h, sec - t); advanceAll(d); t += d; } updateStatus(); },
   resume() { S.manual = false; wake(); },
   seek(rowId, t, sw = true) {                     // 把演示台定在 loop 时间 t 的一帧
@@ -1137,7 +1891,7 @@ window.__proto = {
     A.layers.forEach(l => l.classList.add('notrans')); show(r, 'still'); A.still.render(t); A.layers.forEach(l => void l.offsetWidth);
   },
   shot(id, t, sw = true) { $('.tools').style.display = 'none'; this.advance(0); this.seek(id, t, sw); scrollTo(0, $('#stage').getBoundingClientRect().top + scrollY - 10); return innerWidth + 'x' + innerHeight; },
-  completeStep, resetB
+  completeStep: TB.completeStep, resetB: TB.reset
 };
 })();
 </script>
