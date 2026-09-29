@@ -89,7 +89,7 @@ final class SettingsWindowStructureTests: XCTestCase {
         XCTAssertFalse(window.styleMask.contains(.miniaturizable))
         XCTAssertTrue(window.styleMask.contains(.titled))
         XCTAssertTrue(window.styleMask.contains(.closable))
-        XCTAssertEqual(window.contentView?.frame.size, NSSize(width: 480, height: 520))
+        XCTAssertEqual(window.contentView?.frame.size.width, 480)
         XCTAssertFalse(window.title.isEmpty)
         window.close()
     }

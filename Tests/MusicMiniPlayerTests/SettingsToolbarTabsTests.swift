@@ -96,6 +96,25 @@ final class SettingsToolbarTabsTests: XCTestCase {
         }
     }
 
+    /// Native Settings behaviour: switching tabs resizes the window to the new
+    /// page, keeping the top edge where it was.
+    func test_switchingTabs_resizesTheWindow_topEdgePinned() throws {
+        let (app, window) = try makeWindow(selected: .general)
+        defer { window.close() }
+        let top = window.frame.maxY
+        let generalHeight = try XCTUnwrap(window.contentView).bounds.height
+        app.settingsWindowState.selectedTab = .player
+        spin(1.0)
+        let playerHeight = try XCTUnwrap(window.contentView).bounds.height
+        XCTAssertNotEqual(playerHeight, generalHeight, accuracy: 20)
+        XCTAssertEqual(window.frame.maxY, top, accuracy: 0.5, "top edge must stay pinned")
+        XCTAssertEqual(try XCTUnwrap(window.contentView).bounds.width, SettingsMetrics.windowWidth)
+        app.settingsWindowState.selectedTab = .general
+        spin(1.0)
+        XCTAssertEqual(try XCTUnwrap(window.contentView).bounds.height, generalHeight, accuracy: 1)
+        XCTAssertEqual(window.frame.maxY, top, accuracy: 0.5)
+    }
+
     func test_segmentedControl_isGone() throws {
         let repo = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

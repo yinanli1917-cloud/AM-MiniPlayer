@@ -17,8 +17,9 @@ import AppKit
 // ──────────────────────────────────────────────
 
 enum SettingsMetrics {
-    /// Window content size (proposal §4.2).
-    static let windowSize = CGSize(width: 480, height: 520)
+    /// Window content width (proposal §4.2). The height is not a constant: each tab's
+    /// window is its own content plus `pageBottomInset`.
+    static let windowWidth: CGFloat = 480
     /// Side and bottom padding; the top is 24 (motion prototype spec §A.1).
     static let outerPadding: CGFloat = 20
     static let topPadding: CGFloat = 24
@@ -34,13 +35,10 @@ enum SettingsMetrics {
     static let rowHeight: CGFloat = 44
     static let rowHeightWithDetail: CGFloat = 53
     static let rowHorizontalPadding: CGFloat = 14
-    /// Scrolling page area: from under the demo stage to the window's bottom
-    /// edge (the tab strip lives in the title bar, outside the content rect).
-    /// The last 20pt are inside the scroll content (bottom
-    /// inset), so a page that fits at rest never shows a clipped card.
-    static let pageViewportHeight: CGFloat =
-        windowSize.height - topPadding - stageHeight - stageToPage
+    /// Gap under the last element of every page (native Settings look).
     static let pageBottomInset: CGFloat = 20
+    /// The DEBUG-only Diagnostics page is a scrolling panel, so it gets a fixed height.
+    static let diagnosticsPageHeight: CGFloat = 309
 }
 
 // ──────────────────────────────────────────────

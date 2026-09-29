@@ -769,11 +769,11 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         // v3.2 + native toolbar tabs: one hosted page per tab; the strip, the
         // selection tint and the window title (= page name) are AppKit's.
         // Fixed size, no minimize (HIG Settings windows); each page's content
-        // is a hard 480×520 (SettingsMetrics.windowSize).
+        // is 480 wide, its height follows the selected tab.
         let window = MainActor.assumeIsolated {
             SettingsTabViewController.makeWindow(state: state, autosaveName: "Settings") { tab in
-                NSHostingController(
-                    rootView: SettingsWindowView(state: state, tab: tab)
+                SettingsTabViewController.hostPage(
+                    SettingsWindowView(state: state, tab: tab)
                         .environmentObject(musicController))
             }
         }

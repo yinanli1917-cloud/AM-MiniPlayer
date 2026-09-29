@@ -206,11 +206,13 @@ struct SettingsWindowView: View {
                 .padding(.bottom, SettingsMetrics.stageToPage)
 
             pageArea
-                .frame(width: SettingsMetrics.contentWidth, height: SettingsMetrics.pageViewportHeight, alignment: .top)
         }
         .padding(.top, SettingsMetrics.topPadding)
         .padding(.horizontal, SettingsMetrics.outerPadding)
-        .frame(width: SettingsMetrics.windowSize.width, height: SettingsMetrics.windowSize.height, alignment: .top)
+        // The window is exactly this page: content + the same bottom padding on every tab
+        // (native Settings windows follow the tab; only the width is fixed).
+        .padding(.bottom, SettingsMetrics.pageBottomInset)
+        .frame(width: SettingsMetrics.windowWidth)
         .background(SettingsPalette.windowBackground)
         .background(DemoWindowVisibilityObserver { stage.settle() })
         .environmentObject(hover)
@@ -273,24 +275,21 @@ struct SettingsWindowView: View {
         #if DEBUG || LOCAL_DEVELOPER_BUILD
         case .diagnostics:
             DiagnosticsDebugPanel(musicController: musicController)
+                .frame(width: SettingsMetrics.contentWidth, height: SettingsMetrics.diagnosticsPageHeight)
         #endif
         default:
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 0) {
-                    switch tab {
-                    case .player: playerPage
-                    case .general: generalPage
-                    case .shortcuts: shortcutsPage
-                    case .about: AboutLinksView()
-                    #if DEBUG || LOCAL_DEVELOPER_BUILD
-                    case .diagnostics: EmptyView()
-                    #endif
-                    }
+            VStack(alignment: .leading, spacing: 0) {
+                switch tab {
+                case .player: playerPage
+                case .general: generalPage
+                case .shortcuts: shortcutsPage
+                case .about: AboutLinksView()
+                #if DEBUG || LOCAL_DEVELOPER_BUILD
+                case .diagnostics: EmptyView()
+                #endif
                 }
-                .frame(width: SettingsMetrics.contentWidth, alignment: .leading)
-                .padding(.bottom, SettingsMetrics.pageBottomInset)
             }
-            .scrollBounceBehavior(.basedOnSize)
+            .frame(width: SettingsMetrics.contentWidth, alignment: .leading)
         }
     }
 

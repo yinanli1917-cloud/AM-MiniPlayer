@@ -2,7 +2,7 @@
 // SettingsWindowRenderTests — offscreen PNG render of the REAL settings window
 // (docs/design/2026-09-25-menu-settings/mockup.html is the visual reference).
 //
-// Hosts the real SettingsWindowView in a fixed 480x520 toolbar-tab window (same
+// Hosts the real SettingsWindowView in a 480-wide toolbar-tab window (height follows the tab) (same
 // construction as AppMain.createSettingsWindow) far off screen, and captures
 // its content view at exactly 2x: every tab x {light, dark} x {en, zh}, plus
 // every demo scene at rest x {light, dark}. Output dir:
@@ -76,7 +76,7 @@ final class SettingsWindowRenderTests: XCTestCase {
             var view = SettingsWindowView(state: state, tab: tab, hover: tab == state.selectedTab ? hover : nil)
             view.automationStatusProvider = { .authorized }
             view.appleMusicStatusProvider = { .notDetermined }
-            return NSHostingController(rootView: view.environmentObject(MusicController(preview: true)))
+            return SettingsTabViewController.hostPage(view.environmentObject(MusicController(preview: true)))
         }
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         window.setFrameOrigin(NSPoint(x: -20000, y: -20000))
@@ -101,10 +101,10 @@ final class SettingsWindowRenderTests: XCTestCase {
                     let (window, _) = makeSettingsWindow(tab: tab, dark: dark)
                     spin(0.5)
                     let content = try XCTUnwrap(window.contentView)
-                    XCTAssertEqual(content.bounds.size, NSSize(width: 480, height: 520))
+                    XCTAssertEqual(content.bounds.width, 480)
                     let rep = Self.capture(content)
                     XCTAssertEqual(rep.pixelsWide, 960)
-                    XCTAssertEqual(rep.pixelsHigh, 1040)
+                    XCTAssertEqual(CGFloat(rep.pixelsHigh), content.bounds.height * 2, accuracy: 2)
                     let prefix = ProcessInfo.processInfo.environment["NANOPOD_RENDER_PREFIX"] ?? ""
                     try Self.writePNG(rep, name: "\(prefix)window-\(tab.rawValue)-\(dark ? "dark" : "light")-\(langTag).png")
                     window.close()

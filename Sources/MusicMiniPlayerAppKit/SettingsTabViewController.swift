@@ -97,6 +97,14 @@ final class SettingsTabViewController: NSTabViewController {
 
     // MARK: window recipe
 
+    /// Hosts one page so its fitted SwiftUI size becomes `preferredContentSize`,
+    /// which is what a toolbar-style tab controller sizes the window to.
+    static func hostPage<Page: View>(_ page: Page) -> NSViewController {
+        let host = NSHostingController(rootView: page)
+        host.sizingOptions = [.preferredContentSize]
+        return host
+    }
+
     /// The settings window: fixed size, titled + closable only (HIG Settings
     /// windows do not resize or minimise); its title is the current page's name.
     static func makeWindow(
@@ -108,9 +116,18 @@ final class SettingsTabViewController: NSTabViewController {
         let window = NSWindow(contentViewController: controller)
         window.styleMask = [.titled, .closable]
         if let autosaveName { window.setFrameAutosaveName(autosaveName) }
-        // After the autosave restore: a frame saved by an older layout must not win.
-        window.setContentSize(SettingsMetrics.windowSize)
         window.isReleasedWhenClosed = false
+        // Open at the selected page's size, not the tab view's default 500x500
+        // (after the autosave restore, so a frame saved by an older layout can't win).
+        controller.view.layoutSubtreeIfNeeded()
+        if let page = controller.tabViewItems[safe: controller.selectedTabViewItemIndex]?.viewController,
+           page.preferredContentSize.height > 0 {
+            window.setContentSize(page.preferredContentSize)
+        }
         return window
     }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
 }
