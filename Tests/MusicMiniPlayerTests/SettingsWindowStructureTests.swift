@@ -5,7 +5,7 @@
 // Covers the acceptance list: tab sequence, window styleMask/size, the
 // "Getting to know nanoPod" title/action policy, tab persistence + URL
 // aliasing, Toggle/SettingsSwitchStyle parity, SettingsDemo/row 1:1
-// correspondence, the demo stage being static stills (no animator anywhere,
+// correspondence, the demo stage's bounded motion (no free-running animator,
 // cross-fade off under Reduce Motion), Launch at Login going through a
 // fakeable protocol, the AccentColor asset, and the "Music Mini Player" ->
 // "nanoPod" text sweep.
@@ -198,31 +198,34 @@ final class SettingsWindowStructureTests: XCTestCase {
         XCTAssertEqual(declared, allCases, "every SettingsDemo case must map to exactly one row, and vice versa")
     }
 
-    func test_everySettingsDemoCase_hasAStill() {
-        let context = SettingsDemoContext(translationSampleText: "Let's go see the sea", shortcutDescriptions: [:])
+    func test_everySettingsDemoCase_hasARestFrame() {
         for demo in SettingsDemo.allCases {
-            // Building the art must not crash/trap for any case, and every
+            // Every scene yields a frame at its rest time (no trap for any case), and every
             // demo belongs to exactly one page.
-            _ = demo.art(context: context)
+            _ = demo.frame(at: demo.timing.restTime(on: true), options: DemoOptions())
+            _ = demo.frame(at: demo.timing.restTime(on: false), options: DemoOptions())
             XCTAssertTrue([SettingsTab.player, .general, .shortcuts].contains(demo.tab), demo.rawValue)
         }
-        // Each page's default still is a row of that same page.
+        // Each page's default scene is a row of that same page.
         for tab in [SettingsTab.player, .general, .shortcuts] {
             XCTAssertEqual(tab.defaultDemo?.tab, tab)
         }
         XCTAssertNil(SettingsTab.about.defaultDemo)
     }
 
-    // MARK: - 6. The stage is static stills: no animator, cross-fade only
+    // MARK: - 6. The stage's motion is bounded: no free-running animation anywhere
 
-    /// This round ships clean stills; the animated prototypes come later.
-    /// Nothing on the stage may animate on its own — the only motion is the
-    /// 0.22s cross-fade between two stills, and it is off under Reduce Motion.
-    func test_demoStage_hasNoAnimatorOrLoop_inAnySource() throws {
-        for file in ["SettingsDemoStage.swift", "SettingsDemoArt.swift"] {
+    /// The only clock is a TimelineView whose schedule ends (DemoTimelineSchedule), mounted only
+    /// while a run is live and only in the stage file. No repeating animation, timer or sleep.
+    func test_demoStage_hasNoFreeRunningAnimation_inAnySource() throws {
+        let files = ["SettingsDemoStage.swift", "SettingsDemoMotion.swift", "SettingsDemoDrawing.swift", "SettingsDemoSVGPath.swift"]
+        for file in files {
             let source = try sourceText("Sources/MusicMiniPlayerAppKit/\(file)")
-            for banned in ["PhaseAnimator", "KeyframeAnimator", "TimelineView", "repeatForever", "symbolEffect", "Timer.", "Task.sleep"] {
+            for banned in ["PhaseAnimator", "KeyframeAnimator", "repeatForever", "symbolEffect", "Timer.", "Task.sleep", "asyncAfter", ".animation)"] {
                 XCTAssertFalse(source.contains(banned), "\(file) must not contain \(banned)")
+            }
+            if file != "SettingsDemoStage.swift" {
+                XCTAssertFalse(source.contains("TimelineView"), "\(file): only the stage file may mount a TimelineView")
             }
         }
     }

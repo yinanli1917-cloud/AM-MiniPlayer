@@ -9,7 +9,7 @@
  *        NSSwitch / NSSegmentedControl) on purpose: system controls grey out
  *        in an inactive window and their divider drawing is not ours to fix,
  *        and the draft specifies an accent-filled selected segment and a
- *        36×16 switch. They stay real SwiftUI Toggle / Button semantics.
+ *        36×20 switch. They stay real SwiftUI Toggle / Button semantics.
  */
 
 import SwiftUI
@@ -18,7 +18,7 @@ import SwiftUI
 // MARK: - Card, dividers, section chrome
 // ──────────────────────────────────────────────
 
-/// Grouped card: radius 10, `--m-card` fill, rows clipped to the corner.
+/// Grouped card: radius 12 (= the demo stage's), card fill, rows clipped to the corner.
 struct SettingsCard<Content: View>: View {
     @ViewBuilder var content: Content
 
@@ -30,10 +30,17 @@ struct SettingsCard<Content: View>: View {
     }
 }
 
-/// `.crow + .crow { border-top: 1px --m-cardsep }`, full card width.
+/// The prototype's `.row + .row { border-top: 1px }`: the line sits INSIDE the lower row's
+/// height, on top of its hover fill — so it takes no height of its own (rows stay exactly
+/// 44 / 53pt and a whole card is the plain sum of its rows) and draws above the row below.
 struct SettingsDivider: View {
     var body: some View {
-        Rectangle().fill(SettingsPalette.cardSeparator).frame(height: 1)
+        Color.clear
+            .frame(height: 0)
+            .overlay(alignment: .top) {
+                Rectangle().fill(SettingsPalette.cardSeparator).frame(height: 1)
+            }
+            .zIndex(1)
     }
 }
 
@@ -71,43 +78,52 @@ struct SettingsSectionFooter: View {
 // MARK: - Row
 // ──────────────────────────────────────────────
 
-/// `.crow`: min height 40, padding 8/10, title 13pt, detail 11pt secondary.
-/// Lights up (`.hov`) while the pointer is on it; reports position to the
-/// hover-intent model through a tracking-area background.
+/// `.row`: 44pt (title only) or 53pt (title + description) tall, 14pt side padding, title 13pt,
+/// description 11pt secondary. The row under the pointer takes the hover grey at once; the row the
+/// stage is showing keeps a half-strength grey. Reports position to the hover-intent model through
+/// a tracking-area background.
 struct SettingsRow<Trailing: View>: View {
     let demo: SettingsDemo
     let title: String
     var detail: String?
     @ViewBuilder var trailing: Trailing
     @EnvironmentObject private var hover: SettingsHoverIntentModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var background: Color {
+        if hover.highlightedRow == demo { return SettingsPalette.rowHover }
+        if (hover.stageDemo ?? demo.tab.defaultDemo) == demo { return SettingsPalette.rowActive }
+        return .clear
+    }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 13))
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
                 if let detail {
                     Text(detail)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             trailing
         }
         .padding(.horizontal, SettingsMetrics.rowHorizontalPadding)
-        .padding(.vertical, SettingsMetrics.rowVerticalPadding)
-        .frame(minHeight: SettingsMetrics.rowMinHeight)
-        .background(hover.highlightedRow == demo ? SettingsPalette.rowHover : Color.clear)
+        .frame(height: detail == nil ? SettingsMetrics.rowHeight : SettingsMetrics.rowHeightWithDetail)
+        .background(background)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: background)
         .background(SettingsRowHoverTracker(demo: demo, model: hover))
         .accessibilityElement(children: .contain)
     }
 }
 
 // ──────────────────────────────────────────────
-// MARK: - Switch (.tg: 36×16, knob 14, 1pt inset)
+// MARK: - Switch (.sw: 36×20, knob 16, 2pt inset)
 // ──────────────────────────────────────────────
 
 struct SettingsSwitchStyle: ToggleStyle {
@@ -121,12 +137,12 @@ struct SettingsSwitchStyle: ToggleStyle {
                 Capsule().fill(configuration.isOn ? SettingsPalette.accent : SettingsPalette.switchOff)
                 Circle()
                     .fill(Color.white)
-                    .frame(width: 14, height: 14)
-                    .shadow(color: .black.opacity(0.3), radius: 0.75, y: 0.5)
-                    .padding(1)
+                    .frame(width: 16, height: 16)
+                    .shadow(color: .black.opacity(0.3), radius: 1, y: 1)
+                    .padding(2)
             }
-            .frame(width: 36, height: 16)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: configuration.isOn)
+            .frame(width: 36, height: 20)
+            .animation(reduceMotion ? nil : .timingCurve(0.3, 1.2, 0.5, 1, duration: 0.2), value: configuration.isOn)
         }
         .buttonStyle(.plain)
         .accessibilityValue(configuration.isOn ? Text("1") : Text("0"))

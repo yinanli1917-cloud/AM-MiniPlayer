@@ -19,26 +19,30 @@ import AppKit
 enum SettingsMetrics {
     /// Window content size (proposal §4.2).
     static let windowSize = CGSize(width: 480, height: 562)
+    /// Side and bottom padding; the top is 24 (motion prototype spec §A.1).
     static let outerPadding: CGFloat = 20
+    static let topPadding: CGFloat = 24
     static let contentWidth: CGFloat = 440
-    static let stageHeight: CGFloat = 120
-    static let stageTileGap: CGFloat = 10
-    static let tileWidth: CGFloat = (contentWidth - stageTileGap) / 2
-    static let tileCorner: CGFloat = 10
+    /// The demo stage: a centred 16:9 rounded rectangle (creator's decision 2026-09-29).
+    static let stageWidth: CGFloat = 300
+    static let stageHeight: CGFloat = 169
+    static let stageCorner: CGFloat = 12
     static let segmentedHeight: CGFloat = 24
-    static let stageToSegmented: CGFloat = 14
-    static let segmentedToContent: CGFloat = 14
-    static let cardCorner: CGFloat = 10
-    static let rowMinHeight: CGFloat = 40
-    static let rowVerticalPadding: CGFloat = 8
-    static let rowHorizontalPadding: CGFloat = 10
+    static let stageToSegmented: CGFloat = 18
+    static let segmentedToContent: CGFloat = 18
+    /// Same radius as the stage: two cards, one corner.
+    static let cardCorner: CGFloat = 12
+    /// A row with only a title is 44pt tall; one with a description line is 53pt.
+    static let rowHeight: CGFloat = 44
+    static let rowHeightWithDetail: CGFloat = 53
+    static let rowHorizontalPadding: CGFloat = 14
     /// Scrolling page area: from under the segmented control to the window's
-    /// bottom edge. The last 12pt are inside the scroll content (bottom
+    /// bottom edge. The last 20pt are inside the scroll content (bottom
     /// inset), so a page that fits at rest never shows a clipped card.
     static let pageViewportHeight: CGFloat =
-        windowSize.height - outerPadding - stageHeight - stageToSegmented
+        windowSize.height - topPadding - stageHeight - stageToSegmented
         - segmentedHeight - segmentedToContent
-    static let pageBottomInset: CGFloat = 12
+    static let pageBottomInset: CGFloat = 20
 }
 
 // ──────────────────────────────────────────────
@@ -68,35 +72,24 @@ enum SettingsPalette {
     static var accent: Color { Color(nsColor: accentNS) }
 
     // Window body / grouped cards (--m-win, --m-card, --m-cardsep)
-    static let windowBackground = Color(nsColor: dynamic(light: 0xFEFEFE, dark: 0x1F1F21))
-    static let card = Color(nsColor: dynamic(light: 0xF4F4F5, dark: 0x2A2A2D))
-    static let cardSeparator = Color(nsColor: dynamic(light: 0xE6E6E8, darkWhite: 1, darkAlpha: 0.09))
-    /// `.crow.hov` — rgba(127,127,127,.08) in both appearances.
-    static let rowHover = Color(nsColor: NSColor(white: 0.498, alpha: 0.08))
+    // (motion prototype tokens: --win / --card / --row-line / --card-hover / --seg-bg)
+    static let windowBackground = Color(nsColor: dynamic(light: 0xFBFBFC, dark: 0x262628))
+    static let card = Color(nsColor: dynamic(light: 0xF3F3F5, dark: 0x303033))
+    static let cardSeparator = Color(nsColor: dynamicWhite(lightWhite: 0, lightAlpha: 0.08, darkWhite: 1, darkAlpha: 0.08))
+    /// Row under the pointer: the trackpad page's hover grey.
+    static let rowHover = Color(nsColor: dynamic(light: 0xE8E8EC, dark: 0x3B3B3F))
+    /// The row whose scene the stage is showing, while the pointer is elsewhere (hover grey at 55%).
+    static let rowActive = rowHover.opacity(0.55)
 
-    // Segmented control (--m-segbg)
-    static let segmentTrack = Color(nsColor: dynamic(light: 0xE9E9EB, dark: 0x3A3A3E))
+    // Segmented control (--seg-bg)
+    static let segmentTrack = Color(nsColor: dynamic(light: 0xE7E7EA, dark: 0x3A3A3D))
 
-    // Switch (--m-off) and push button (--m-btn / --m-hair / --m-btnshadow)
-    static let switchOff = Color(nsColor: dynamicWhite(lightWhite: 0, lightAlpha: 0.22, darkWhite: 1, darkAlpha: 0.26))
+    // Switch (--sw-off) and push button (--m-btn / --m-hair / --m-btnshadow)
+    static let switchOff = Color(nsColor: NSColor(name: nil) { isDark($0) ? NSColor(srgbRed: 120 / 255, green: 120 / 255, blue: 128 / 255, alpha: 0.4) : NSColor(srgbRed: 120 / 255, green: 120 / 255, blue: 128 / 255, alpha: 0.25) })
     static let buttonFill = Color(nsColor: dynamic(light: 0xFFFFFF, dark: 0x5A5A5E))
     static let hairline = Color(nsColor: dynamicWhite(lightWhite: 0, lightAlpha: 0.09, darkWhite: 1, darkAlpha: 0.10))
     static let hairlineStrong = Color(nsColor: dynamicWhite(lightWhite: 0, lightAlpha: 0.20, darkWhite: 1, darkAlpha: 0.22))
     static let buttonShadow = Color(nsColor: dynamicWhite(lightWhite: 0, lightAlpha: 0.18, darkWhite: 0, darkAlpha: 0.50))
-
-    // Demo stage tiles (draft: .stage / .mscreen / .mpanel / .keycap)
-    static let screenTile = Color(nsColor: dynamic(light: 0xDFE3EA, dark: 0x34363C))
-    static let screenBar = Color(nsColor: dynamicWhite(lightWhite: 1, lightAlpha: 0.75, darkWhite: 1, darkAlpha: 0.14))
-    static let screenDock = Color(nsColor: dynamicWhite(lightWhite: 1, lightAlpha: 0.70, darkWhite: 1, darkAlpha: 0.14))
-    static let fg3 = Color(nsColor: dynamicWhite(lightWhite: 0, lightAlpha: 0.28, darkWhite: 1, darkAlpha: 0.30))
-    static let panel = Color(nsColor: dynamic(light: 0x2B2B30, dark: 0x151518))
-    static let panelInk = Color.white.opacity(0.9)
-    static let panelInk2 = Color(nsColor: dynamicWhite(lightWhite: 1, lightAlpha: 0.45, darkWhite: 1, darkAlpha: 0.40))
-    static let cover = Color(nsColor: dynamic(light: 0x7AA2E8, dark: 0x5F86D4))
-    static let coverEnd = Color(nsColor: NSColor(srgbRed: 0x3F / 255, green: 0x5F / 255, blue: 0xA8 / 255, alpha: 1))
-    static let coverAlt = Color(nsColor: dynamic(light: 0xE8A06A, dark: 0xD18A58))
-    static let coverAltEnd = Color(nsColor: NSColor(srgbRed: 0xA3 / 255, green: 0x55 / 255, blue: 0x2A / 255, alpha: 1))
-    static let keycapFill = Color(nsColor: dynamic(light: 0xFFFFFF, dark: 0x1A1A1C))
 
     // MARK: helpers
 

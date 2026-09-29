@@ -72,13 +72,24 @@ final class SettingsWindowLayoutTests: XCTestCase {
     func test_metrics_addUpToTheWindow() {
         let m = SettingsMetrics.self
         XCTAssertEqual(
-            m.outerPadding + m.stageHeight + m.stageToSegmented + m.segmentedHeight + m.segmentedToContent + m.pageViewportHeight,
+            m.topPadding + m.stageHeight + m.stageToSegmented + m.segmentedHeight + m.segmentedToContent + m.pageViewportHeight,
             m.windowSize.height, accuracy: 0.001)
         XCTAssertEqual(m.windowSize, CGSize(width: 480, height: 562))
         XCTAssertEqual(m.contentWidth + 2 * m.outerPadding, m.windowSize.width)
         XCTAssertEqual(m.segmentedHeight, 24)
-        XCTAssertEqual(m.stageHeight, 120)
-        XCTAssertEqual(m.tileWidth * 2 + m.stageTileGap, m.contentWidth)
+        // The stage: a centred 16:9 rounded rectangle, one corner radius with the cards below.
+        XCTAssertEqual(CGSize(width: m.stageWidth, height: m.stageHeight), CGSize(width: 300, height: 169))
+        XCTAssertEqual(m.stageWidth / m.stageHeight, 16.0 / 9.0, accuracy: 0.01)
+        XCTAssertEqual(m.stageCorner, m.cardCorner)
+    }
+
+    /// Spec §A.1: 6 General rows (4 title-only at 44, 2 with a description at 53 = 282) must fit the
+    /// 289pt row area under the 300×169 stage without scrolling.
+    func test_generalPageRows_fitUnderTheStage() {
+        let m = SettingsMetrics.self
+        let rows = 4 * m.rowHeight + 2 * m.rowHeightWithDetail
+        XCTAssertEqual(rows, 282)
+        XCTAssertLessThanOrEqual(rows, m.pageViewportHeight - m.pageBottomInset)
     }
 
     // MARK: language
@@ -131,10 +142,10 @@ final class SettingsWindowLayoutTests: XCTestCase {
          "launchAtLogin", "launchAtLoginApprovalNeeded", "launchAtLoginOpenItems", "showInDock",
          "tour.settings.title", "tour.settings.keepGoing", "tour.settings.again",
          "sectionEdge", "sectionLyrics", "sectionPermissions", "sectionData",
-         "automation", "appleMusic", "automationFooter", "automationGrant", "automationOpenSettings",
+         "automation", "appleMusic", "automationDesc", "automationGrant", "automationOpenSettings",
          "onboarding.auth.authorized", "authDenied", "authNotDetermined",
          "playbackHistory", "clearPlaybackHistoryDesc", "clearButton", "clearPlaybackHistory",
          "clearHistoryConfirmTitle", "clearHistoryConfirmMessage", "cancel",
-         "shortcutsFooter", "version", "aboutTagline", "acknowledgements", "reportIssue"]
+         "shortcutsFooter", "stateOn", "stateOff", "playerFooter", "version", "aboutTagline", "acknowledgements", "reportIssue"]
     }
 }
