@@ -37,20 +37,48 @@ public struct TourAnchorKey: PreferenceKey {
     }
 }
 
+/// How far a container has pushed its content away from the position the
+/// content rests at (a "hidden" offset that animates back to 0 on hover). The
+/// tour must point at where a control WILL be, not where it hides, so
+/// `tourAnchor` subtracts this from the rect it publishes. Default 0.
+private struct TourAnchorRestOffsetKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+public extension EnvironmentValues {
+    var tourAnchorRestOffset: CGFloat {
+        get { self[TourAnchorRestOffsetKey.self] }
+        set { self[TourAnchorRestOffsetKey.self] = newValue }
+    }
+}
+
+private struct TourAnchorModifier: ViewModifier {
+    let id: TourAnchorID
+    let active: Bool
+    let coordinateSpace: CoordinateSpace
+    @Environment(\.tourAnchorRestOffset) private var restOffset
+
+    func body(content: Content) -> some View {
+        content.background(
+            GeometryReader { geo in
+                Color.clear.preference(
+                    key: TourAnchorKey.self,
+                    value: active ? [id: geo.frame(in: coordinateSpace).offsetBy(dx: 0, dy: -restOffset)] : [:]
+                )
+            }
+        )
+    }
+}
+
 public extension View {
     /// Publishes this view's frame (screen/global space by default) as the
     /// tour anchor `id`, but ONLY while `active` — §4.2: "未激活时修饰符不发
     /// preference", so a control that's currently hidden (not hovered) never
-    /// overwrites the registry's last-known rect with a zero one.
+    /// overwrites the registry's last-known rect with a zero one. The rect is
+    /// the control's RESTING position: a container's hide offset
+    /// (`tourAnchorRestOffset`) is taken back out.
     func tourAnchor(_ id: TourAnchorID, active: Bool = true, coordinateSpace: CoordinateSpace = .global) -> some View {
-        background(
-            GeometryReader { geo in
-                Color.clear.preference(
-                    key: TourAnchorKey.self,
-                    value: active ? [id: geo.frame(in: coordinateSpace)] : [:]
-                )
-            }
-        )
+        modifier(TourAnchorModifier(id: id, active: active, coordinateSpace: coordinateSpace))
     }
 }
 
@@ -92,11 +120,18 @@ public final class TourAnchorRegistry: ObservableObject {
     /// the real hosting view, so the panel's 32pt-taller hosting view
     /// (PanelWindowMetrics) and any future geometry change are handled by
     /// AppKit instead of a hardcoded offset.
+    ///
+    /// SwiftUI's `.global` space starts at the hosting view's SAFE-AREA rect,
+    /// not at its frame: the panel's host reaches 32pt above the window with a
+    /// 32pt top safe area, so every anchor read 32pt too high until the safe
+    /// area was added back (measured 2026-09-29: the play button, 31pt above
+    /// the panel's bottom, converted to 63pt).
     public static func screenRect(forGlobal rect: CGRect, in window: NSWindow) -> CGRect {
         let host = PanelWindowMetrics.hostingView(in: window)
+        let safe = host.safeAreaRect
         let inHost = host.isFlipped
-            ? rect
-            : CGRect(x: rect.minX, y: host.bounds.height - rect.maxY, width: rect.width, height: rect.height)
+            ? rect.offsetBy(dx: safe.minX, dy: safe.minY)
+            : CGRect(x: rect.minX + safe.minX, y: safe.maxY - rect.maxY, width: rect.width, height: rect.height)
         return window.convertToScreen(host.convert(inHost, to: nil))
     }
 

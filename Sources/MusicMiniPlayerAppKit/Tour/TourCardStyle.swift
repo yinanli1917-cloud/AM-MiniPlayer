@@ -21,26 +21,24 @@ import AppKit
 
 enum TourCardMetrics {
     /// The card body. The window is this plus the beak on the beak side.
-    static let bodyWidth: CGFloat = 236
+    static let bodyWidth: CGFloat = 260
     static let beakSize: CGFloat = 12
     static let cornerRadius: CGFloat = 14
     static let paddingTop: CGFloat = 14
     static let paddingSide: CGFloat = 14
     static let paddingBottom: CGFloat = 12
 
-    // Sizes vs storyboard.html (`.title` 13 / `.body` 12 / `.beats li` 12 /
-    // `.link` 11 / `.mbtn` 11): raised half a point to a point after the
-    // offscreen 2x render review (founder 2026-09-29: judge readability at real
-    // point size). 12pt muted body on glass read small next to a 13pt title;
-    // the title goes to 14 so the title/body step stays a clear +1.5pt on top
-    // of weight and ink, and links/buttons go to 11.5 so they stay tappable.
-    static let titleSize: CGFloat = 14
-    static let bodySize: CGFloat = 12.5
-    static let beatSize: CGFloat = 12.5
-    static let linkSize: CGFloat = 11.5
-    static let buttonSize: CGFloat = 11.5
+    // Sizes: the macOS standard readable tier (founder 2026-09-29: the
+    // storyboard's 13/12/12/11/11 read small on a real Mac). Title 15
+    // semibold, body and beats 13, footer links and buttons 12 — same
+    // ratios as the system's own popovers (headline / body / callout).
+    static let titleSize: CGFloat = 15
+    static let bodySize: CGFloat = 13
+    static let beatSize: CGFloat = 13
+    static let linkSize: CGFloat = 12
+    static let buttonSize: CGFloat = 12
     static let noteSize: CGFloat = 10.5
-    static let confirmSize: CGFloat = 12.5
+    static let confirmSize: CGFloat = 13
 
     /// CSS `line-height` minus the font's natural line height, as SwiftUI
     /// `lineSpacing` (extra space added between lines).
@@ -147,7 +145,7 @@ enum TourContrast {
 // MARK: - Button styles (window-state independent)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// `.card .link`: 11pt, secondary ink, no chrome. Pressed = ink.
+/// `.card .link`: 12pt, secondary ink, no chrome. Pressed = ink.
 struct TourLinkStyle: ButtonStyle {
     var palette: TourCardPalette
     func makeBody(configuration: Configuration) -> some View {
@@ -158,7 +156,7 @@ struct TourLinkStyle: ButtonStyle {
     }
 }
 
-/// `.card .mbtn`: solid capsule, 11pt semibold, inverse ink.
+/// `.card .mbtn`: solid capsule, 12pt semibold, inverse ink.
 struct TourPrimaryButtonStyle: ButtonStyle {
     var palette: TourCardPalette
     func makeBody(configuration: Configuration) -> some View {

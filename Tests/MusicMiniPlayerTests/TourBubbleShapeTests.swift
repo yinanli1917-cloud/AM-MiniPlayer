@@ -76,4 +76,24 @@ final class TourBubbleShapeTests: XCTestCase {
             XCTAssertEqual(box.maxX, rect.maxX, accuracy: 0.5)
         }
     }
+
+    /// Founder 2026-09-29: the beak drew as a separate blob beside the body.
+    /// Body + beak are added as two sub-paths that only touch at an edge, and
+    /// glass samples the path's distance field, so the seam showed. The shape
+    /// must be ONE closed contour on every side.
+    func test_path_isOneClosedContour_onEverySide() {
+        for side: TourCardSide in [.left, .right, .top, .bottom] {
+            let shape = TourBubbleShape(beakSide: side, beakOffset: 75)
+            var moves = 0, closes = 0
+            shape.path(in: rect).forEach { element in
+                switch element {
+                case .move: moves += 1
+                case .closeSubpath: closes += 1
+                default: break
+                }
+            }
+            XCTAssertEqual(moves, 1, "\(side): body and beak must merge into a single sub-path")
+            XCTAssertEqual(closes, 1, "\(side): and it must be closed")
+        }
+    }
 }

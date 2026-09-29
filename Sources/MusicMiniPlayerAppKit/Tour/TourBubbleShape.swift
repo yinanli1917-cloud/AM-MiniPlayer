@@ -41,9 +41,13 @@ struct TourBubbleShape: Shape, Equatable {
 
     func path(in rect: CGRect) -> Path {
         let body = bodyRect(in: rect)
-        var path = Path(roundedRect: body, cornerRadius: cornerRadius, style: .continuous)
-        path.addPath(beakTriangle(in: rect, body: body))
-        return path
+        // ONE closed outline. Adding the triangle as a second sub-path leaves a
+        // hairline seam on the shared edge, and Liquid Glass (which samples the
+        // path's distance field) then draws the beak as a separate pale blob
+        // floating beside the body (founder 2026-09-29). The beak's base runs
+        // `overlap` into the body so the boolean union is one merged contour.
+        return Path(roundedRect: body, cornerRadius: cornerRadius, style: .continuous)
+            .union(beakTriangle(in: rect, body: body))
     }
 
     /// The beak's own tip point, in the same coordinate space as `path(in:)`
@@ -59,32 +63,44 @@ struct TourBubbleShape: Shape, Equatable {
         }
     }
 
+    /// The beak: tip, the two base corners on the body's edge, and two more
+    /// points `overlap` inside the body so it merges with it.
     private func beakTriangle(in rect: CGRect, body: CGRect) -> Path {
         let offset = clampedOffset(in: body)
-        var triangle = Path()
+        let overlap: CGFloat = 2
+        let half = beakSize / 2
+        var beak = Path()
         switch beakSide {
         case .left:
             let tip = CGPoint(x: rect.minX, y: body.minY + offset)
-            triangle.move(to: tip)
-            triangle.addLine(to: CGPoint(x: body.minX, y: tip.y - beakSize / 2))
-            triangle.addLine(to: CGPoint(x: body.minX, y: tip.y + beakSize / 2))
+            beak.move(to: tip)
+            beak.addLine(to: CGPoint(x: body.minX, y: tip.y - half))
+            beak.addLine(to: CGPoint(x: body.minX + overlap, y: tip.y - half))
+            beak.addLine(to: CGPoint(x: body.minX + overlap, y: tip.y + half))
+            beak.addLine(to: CGPoint(x: body.minX, y: tip.y + half))
         case .right:
             let tip = CGPoint(x: rect.maxX, y: body.minY + offset)
-            triangle.move(to: tip)
-            triangle.addLine(to: CGPoint(x: body.maxX, y: tip.y - beakSize / 2))
-            triangle.addLine(to: CGPoint(x: body.maxX, y: tip.y + beakSize / 2))
+            beak.move(to: tip)
+            beak.addLine(to: CGPoint(x: body.maxX, y: tip.y - half))
+            beak.addLine(to: CGPoint(x: body.maxX - overlap, y: tip.y - half))
+            beak.addLine(to: CGPoint(x: body.maxX - overlap, y: tip.y + half))
+            beak.addLine(to: CGPoint(x: body.maxX, y: tip.y + half))
         case .top:
             let tip = CGPoint(x: body.minX + offset, y: rect.minY)
-            triangle.move(to: tip)
-            triangle.addLine(to: CGPoint(x: tip.x - beakSize / 2, y: body.minY))
-            triangle.addLine(to: CGPoint(x: tip.x + beakSize / 2, y: body.minY))
+            beak.move(to: tip)
+            beak.addLine(to: CGPoint(x: tip.x - half, y: body.minY))
+            beak.addLine(to: CGPoint(x: tip.x - half, y: body.minY + overlap))
+            beak.addLine(to: CGPoint(x: tip.x + half, y: body.minY + overlap))
+            beak.addLine(to: CGPoint(x: tip.x + half, y: body.minY))
         case .bottom:
             let tip = CGPoint(x: body.minX + offset, y: rect.maxY)
-            triangle.move(to: tip)
-            triangle.addLine(to: CGPoint(x: tip.x - beakSize / 2, y: body.maxY))
-            triangle.addLine(to: CGPoint(x: tip.x + beakSize / 2, y: body.maxY))
+            beak.move(to: tip)
+            beak.addLine(to: CGPoint(x: tip.x - half, y: body.maxY))
+            beak.addLine(to: CGPoint(x: tip.x - half, y: body.maxY - overlap))
+            beak.addLine(to: CGPoint(x: tip.x + half, y: body.maxY - overlap))
+            beak.addLine(to: CGPoint(x: tip.x + half, y: body.maxY))
         }
-        triangle.closeSubpath()
-        return triangle
+        beak.closeSubpath()
+        return beak
     }
 }

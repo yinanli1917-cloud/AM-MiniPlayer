@@ -570,6 +570,9 @@ extension MiniPlayerView {
                     )
                     .blur(radius: controlsBlurAmount)
                     .offset(y: controlsOffsetY)
+                    // The tour points at where these controls REST, not at the
+                    // spot they slide in from while the panel is not hovered.
+                    .environment(\.tourAnchorRestOffset, controlsOffsetY)
                 }
                 .opacity(showOverlayContent ? 1 : 0)
                 .allowsHitTesting(showOverlayContent)
