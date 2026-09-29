@@ -2,13 +2,15 @@
 // SettingsWindowStructureTests — v3.2 settings window redesign
 // (docs/design/2026-09-25-menu-settings/proposal.md §4, §5)
 //
-// Covers the acceptance list verbatim: tab sequence, window styleMask/size,
-// the "Getting to know nanoPod" title/action policy, tab persistence + URL
-// aliasing, Toggle/.switch parity, SettingsDemo/row 1:1 correspondence,
-// Reduce Motion suppressing PhaseAnimator/KeyframeAnimator/TimelineView, the
-// row hover-intent dwell gate (fake clock, no real sleeping), Launch at
-// Login going through a fakeable protocol, the AccentColor asset, and the
-// "Music Mini Player" -> "nanoPod" text sweep.
+// Covers the acceptance list: tab sequence, window styleMask/size, the
+// "Getting to know nanoPod" title/action policy, tab persistence + URL
+// aliasing, Toggle/SettingsSwitchStyle parity, SettingsDemo/row 1:1
+// correspondence, the demo stage being static stills (no animator anywhere,
+// cross-fade off under Reduce Motion), Launch at Login going through a
+// fakeable protocol, the AccentColor asset, and the "Music Mini Player" ->
+// "nanoPod" text sweep.
+// Hover-intent lives in SettingsHoverIntentTests; layout / localization in
+// SettingsWindowLayoutTests.
 // ──────────────────────────────────────────────
 
 import XCTest
@@ -131,20 +133,15 @@ final class SettingsWindowStructureTests: XCTestCase {
 
     // MARK: - 3. Tab persistence + URL aliasing
 
-    func test_settingsWindowState_persistsSelectedTabAcrossInstances() {
-        let key = SettingsWindowState.selectedTabDefaultsKey
-        let original = UserDefaults.standard.string(forKey: key)
-        defer {
-            if let original {
-                UserDefaults.standard.set(original, forKey: key)
-            } else {
-                UserDefaults.standard.removeObject(forKey: key)
-            }
-        }
+    func test_settingsWindowState_persistsSelectedTabAcrossInstances() throws {
+        // Private suite: never touches the standard (real) defaults.
+        let suite = "nanopod.test.settings-state.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
 
-        let state = SettingsWindowState()
+        let state = SettingsWindowState(defaults: defaults)
         state.selectedTab = .shortcuts
-        let restored = SettingsWindowState()
+        let restored = SettingsWindowState(defaults: defaults)
         XCTAssertEqual(restored.selectedTab, .shortcuts)
     }
 
@@ -162,9 +159,9 @@ final class SettingsWindowStructureTests: XCTestCase {
         app.settingsWindow?.close()
     }
 
-    // MARK: - 4. Every Toggle explicitly `.toggleStyle(.switch)`
+    // MARK: - 4. Every Toggle uses the settings switch style
 
-    func test_everyToggleInSettingsView_hasExplicitSwitchStyle() throws {
+    func test_everyToggleInSettingsView_usesSettingsSwitchStyle() throws {
         let fullSource = try sourceText("Sources/MusicMiniPlayerAppKit/SettingsView.swift")
         // Scope to the proposal's own rows — the DEBUG-only Owner Diagnostics
         // panel (unrelated to this design, pre-existing) has its own toggle
@@ -172,9 +169,10 @@ final class SettingsWindowStructureTests: XCTestCase {
         let cutoff = fullSource.range(of: "MARK: - Owner Diagnostics Debug Panel")?.lowerBound ?? fullSource.endIndex
         let source = String(fullSource[..<cutoff])
         let toggleCount = occurrenceCount(of: "Toggle(isOn:", in: source)
-        let switchStyleCount = occurrenceCount(of: ".toggleStyle(.switch)", in: source)
+        let styleCount = occurrenceCount(of: ".toggleStyle(SettingsSwitchStyle())", in: source)
         XCTAssertGreaterThan(toggleCount, 0)
-        XCTAssertEqual(toggleCount, switchStyleCount, "every Toggle(isOn:) must be followed by .toggleStyle(.switch)")
+        XCTAssertEqual(toggleCount, styleCount, "every Toggle(isOn:) must be followed by .toggleStyle(SettingsSwitchStyle())")
+        XCTAssertFalse(source.contains(".toggleStyle(.switch)"), "the system switch greys out in an inactive window; rows use SettingsSwitchStyle")
     }
 
     // MARK: - 5. SettingsDemo.allCases <-> row 1:1 correspondence
@@ -182,7 +180,10 @@ final class SettingsWindowStructureTests: XCTestCase {
     func test_settingsDemoCases_matchRowDeclarationsExactly() throws {
         let source = try sourceText("Sources/MusicMiniPlayerAppKit/SettingsView.swift")
 
-        var declared = identifiersAfter("SettingsRow(demo: .", in: source)
+        // Rows declare their demo either directly (`SettingsRow(demo: .x`, also
+        // when wrapped over several lines) or through the `toggleRow(.x, …)` helper.
+        var declared = identifiersAfter("demo: .", in: source)
+        declared.formUnion(identifiersAfter("toggleRow(.", in: source))
 
         // The 5 Shortcuts-tab rows go through `demo(for action:)` rather than a
         // literal `SettingsRow(demo: .case` — extract its switch's `return .case`.
@@ -197,118 +198,38 @@ final class SettingsWindowStructureTests: XCTestCase {
         XCTAssertEqual(declared, allCases, "every SettingsDemo case must map to exactly one row, and vice versa")
     }
 
-    func test_everySettingsDemoCase_hasARestingFrame() {
-        let context = SettingsDemoContext(
-            fullscreenCoverOn: true,
-            edgeShowSongOn: true,
-            showTranslationOn: true,
-            translationSampleText: "Let's go see the sea",
-            launchAtLoginOn: false,
-            showInDockOn: true,
-            automationStatus: .authorized,
-            appleMusicStatus: .authorized,
-            shortcutDescriptions: [:]
-        )
+    func test_everySettingsDemoCase_hasAStill() {
+        let context = SettingsDemoContext(translationSampleText: "Let's go see the sea", shortcutDescriptions: [:])
         for demo in SettingsDemo.allCases {
-            // Constructing the view must not crash/trap for any case.
-            _ = demo.restingFrame(state: context)
+            // Building the art must not crash/trap for any case, and every
+            // demo belongs to exactly one page.
+            _ = demo.art(context: context)
+            XCTAssertTrue([SettingsTab.player, .general, .shortcuts].contains(demo.tab), demo.rawValue)
+        }
+        // Each page's default still is a row of that same page.
+        for tab in [SettingsTab.player, .general, .shortcuts] {
+            XCTAssertEqual(tab.defaultDemo?.tab, tab)
+        }
+        XCTAssertNil(SettingsTab.about.defaultDemo)
+    }
+
+    // MARK: - 6. The stage is static stills: no animator, cross-fade only
+
+    /// This round ships clean stills; the animated prototypes come later.
+    /// Nothing on the stage may animate on its own — the only motion is the
+    /// 0.22s cross-fade between two stills, and it is off under Reduce Motion.
+    func test_demoStage_hasNoAnimatorOrLoop_inAnySource() throws {
+        for file in ["SettingsDemoStage.swift", "SettingsDemoArt.swift"] {
+            let source = try sourceText("Sources/MusicMiniPlayerAppKit/\(file)")
+            for banned in ["PhaseAnimator", "KeyframeAnimator", "TimelineView", "repeatForever", "symbolEffect", "Timer.", "Task.sleep"] {
+                XCTAssertFalse(source.contains(banned), "\(file) must not contain \(banned)")
+            }
         }
     }
 
-    // MARK: - 6. Reduce Motion suppresses PhaseAnimator/KeyframeAnimator/TimelineView
-
-    private var dummyContext: SettingsDemoContext {
-        SettingsDemoContext(
-            fullscreenCoverOn: false,
-            edgeShowSongOn: false,
-            showTranslationOn: false,
-            translationSampleText: "",
-            launchAtLoginOn: false,
-            showInDockOn: false,
-            automationStatus: .notDetermined,
-            appleMusicStatus: .notDetermined,
-            shortcutDescriptions: [:]
-        )
-    }
-
-    /// `_ConditionalContent<True, False>`'s STATIC type always spells out both
-    /// branches — `String(reflecting: type(of: body))` says "PhaseAnimator"
-    /// regardless of `reduceMotion`, since Swift's ViewBuilder bakes both
-    /// possible branch types into one compile-time type (verified: this is
-    /// what a first attempt at this test found). A `Mirror` walk of the live
-    /// `body` VALUE was tried next, but SwiftUI's internal view-tree types
-    /// (accessibility-modifier storage in particular) aren't reliably
-    /// Mirror-reflectable — a real risk of false failures/passes for reasons
-    /// having nothing to do with `reduceMotion`. The reliable, maintainable
-    /// check for "this branch never constructs a PhaseAnimator" is structural:
-    /// the `if reduceMotion { … } else { … }` branch in `DemoStage.body`'s
-    /// source must not mention the banned animator types in its own lexical
-    /// scope — same source-scan convention as `ButtonFillTintTests`.
-    func test_demoStage_reduceMotionBranch_sourceNeverMentionsAnimatorTypes() throws {
-        let source = try sourceText("Sources/MusicMiniPlayerAppKit/SettingsDemoStage.swift")
-        guard let branchStart = source.range(of: "if reduceMotion {"),
-              let branchEnd = source.range(of: "} else {", range: branchStart.upperBound..<source.endIndex) else {
-            return XCTFail("DemoStage.body's `if reduceMotion { … } else {` shape not found")
-        }
-        let reduceMotionBranch = String(source[branchStart.upperBound..<branchEnd.lowerBound])
-        XCTAssertFalse(reduceMotionBranch.contains("PhaseAnimator"), reduceMotionBranch)
-        XCTAssertFalse(reduceMotionBranch.contains("KeyframeAnimator"), reduceMotionBranch)
-        XCTAssertFalse(reduceMotionBranch.contains("TimelineView"), reduceMotionBranch)
-    }
-
-    /// Positive control: the `else` (motion-allowed) branch DOES use
-    /// PhaseAnimator — proves the source-scan above targets the right text
-    /// (not just failing to find PhaseAnimator for unrelated reasons).
-    func test_demoStage_motionAllowedBranch_sourceDoesUsePhaseAnimator() throws {
-        let source = try sourceText("Sources/MusicMiniPlayerAppKit/SettingsDemoStage.swift")
-        guard let branchStart = source.range(of: "} else {"),
-              let branchEnd = source.range(of: "} else if let demo = SettingsDemo.allCases.first {", range: branchStart.upperBound..<source.endIndex) else {
-            return XCTFail("DemoStage.body's else branch not found in the expected shape")
-        }
-        let motionBranch = String(source[branchStart.upperBound..<branchEnd.lowerBound])
-        XCTAssertTrue(motionBranch.contains("PhaseAnimator"), motionBranch)
-    }
-
-    // MARK: - 7. Row hover-intent dwell gate (fake clock — no real sleeping)
-
-    func test_hoverIntent_fastPassThrough_neverCommits() {
-        let host = SettingsRowHoverIntentHost()
-        var committed: [Bool] = []
-        host.onCommitChanged = { committed.append($0) }
-
-        var now: TimeInterval = 0
-        host.nowProvider = { now }
-        host.scheduleProvider = { _, _ in
-            // Never fires — simulates leaving before the dwell timer's real-world deadline.
-        }
-
-        host.hoverChanged(true)
-        now += 0.05 // 50ms — well under the 150ms dwell
-        host.hoverChanged(false)
-
-        XCTAssertTrue(committed.isEmpty, "a fast pass must never switch the demo")
-    }
-
-    func test_hoverIntent_fullDwell_commits() {
-        let host = SettingsRowHoverIntentHost()
-        var committed: [Bool] = []
-        host.onCommitChanged = { committed.append($0) }
-
-        var now: TimeInterval = 0
-        host.nowProvider = { now }
-        host.scheduleProvider = { delay, fire in
-            now += delay // fake clock: jump straight to the armed deadline
-            fire()
-        }
-
-        host.hoverChanged(true)
-        XCTAssertEqual(committed, [true])
-    }
-
-    func test_hoverIntentConfig_matchesProgressBarNumbers() {
-        // proposal §4.4 explicitly reuses the progress bar's numbers.
-        XCTAssertEqual(ProgressHoverIntentEngine.Config.default.dwellDuration, 0.15, accuracy: 0.0001)
-        XCTAssertEqual(ProgressHoverIntentEngine.Config.default.movementTolerance, 4.0, accuracy: 0.0001)
+    func test_demoStage_crossFade_isNilUnderReduceMotion() {
+        XCTAssertNil(DemoStage.crossFade(reduceMotion: true))
+        XCTAssertNotNil(DemoStage.crossFade(reduceMotion: false))
     }
 
     // MARK: - 8. Launch at Login via a fakeable protocol

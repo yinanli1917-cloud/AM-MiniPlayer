@@ -1,13 +1,14 @@
 /**
  * [INPUT]: 依赖 MusicMiniPlayerCore 的 MusicController/LyricsService/TourPersistence/
  *          GlobalShortcutAction；依赖 LocalizedStrings 的 L10n/UserDefaultsBinding；
- *          依赖 SettingsDemoStage 的 DemoStage/SettingsDemo/SettingsRowHoverIntentHost；
- *          依赖 AboutPageView。
+ *          依赖 SettingsControls（卡片/行/开关/分段）、SettingsHoverIntent（悬停意图）、
+ *          SettingsDemoStage（演示台）、SettingsPalette、AboutPageView。
  * [OUTPUT]: 导出 SettingsWindowView、SettingsWindowState、SettingsTab、
  *           GettingToKnowNanoPodAction、TourButtonPolicy、LaunchAtLoginBridge、
  *           LaunchAtLoginProviding。
- * [POS]: MusicMiniPlayerApp 的设置界面集合（v3.2 重做：演示台 + 分段控件 + 分组行，
- *        无 sidebar 无工具栏 — docs/design/2026-09-25-menu-settings/proposal.md）
+ * [POS]: MusicMiniPlayerApp 的设置界面（v3.2：演示台 + 分段控件 + 分组卡片，
+ *        无 sidebar 无工具栏；视觉以 mockup.html 为准 —
+ *        docs/design/2026-09-25-menu-settings/proposal.md §4）
  */
 
 import SwiftUI
@@ -48,6 +49,19 @@ enum SettingsTab: String, Hashable, CaseIterable {
     }
 }
 
+extension SettingsDemo {
+    /// The page this row lives on.
+    var tab: SettingsTab {
+        switch self {
+        case .fullscreenCover, .edgeShowSongOnTrackChange, .showTranslation, .translateTo: return .player
+        case .launchAtLogin, .showInDock, .gettingToKnowNanoPod, .musicAutomation,
+             .appleMusicAccess, .playbackHistory: return .general
+        case .playPauseShortcut, .nextTrackShortcut, .previousTrackShortcut,
+             .showHidePlayerShortcut, .hideToEdgeShortcut: return .shortcuts
+        }
+    }
+}
+
 // ──────────────────────────────────────────────
 // MARK: - SettingsWindowState (persists the last-selected tab)
 // ──────────────────────────────────────────────
@@ -55,12 +69,15 @@ enum SettingsTab: String, Hashable, CaseIterable {
 final class SettingsWindowState: ObservableObject {
     static let selectedTabDefaultsKey = "nanoPodSettingsSelectedTab"
 
+    private let defaults: UserDefaults
+
     @Published var selectedTab: SettingsTab {
-        didSet { UserDefaults.standard.set(selectedTab.rawValue, forKey: Self.selectedTabDefaultsKey) }
+        didSet { defaults.set(selectedTab.rawValue, forKey: Self.selectedTabDefaultsKey) }
     }
 
-    init() {
-        if let raw = UserDefaults.standard.string(forKey: Self.selectedTabDefaultsKey),
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        if let raw = defaults.string(forKey: Self.selectedTabDefaultsKey),
            let restored = SettingsTab(rawValue: raw) {
             selectedTab = restored
         } else {
@@ -144,16 +161,18 @@ struct SettingsWindowView: View {
     @EnvironmentObject var musicController: MusicController
     @ObservedObject var state: SettingsWindowState
     @StateObject private var lyricsService = LyricsService.shared
-    /// Kept for its Automation/MusicKit authorization queries (still used by
-    /// `automationStatusControl` below AND by the tour's "connect" step) —
-    /// its old `hasCompletedOnboarding`/`markCompleted`/schema-1 bookkeeping
-    /// is superseded by `TourPersistence` and no longer read here.
+    /// Kept for its Automation/MusicKit authorization queries and the Automation
+    /// grant request; its old onboarding bookkeeping is superseded by
+    /// `TourPersistence` and no longer read here.
     @StateObject private var onboardingState = OnboardingState.shared
+    @StateObject private var hover = SettingsHoverIntentModel()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var confirmingClearHistory = false
+    /// Bumped after a permission request so the status rows re-query.
+    @State private var permissionRefresh = 0
 
     /// Read fresh on every body evaluation — the tour isn't expected to be
-    /// running while its own "keep going / again" button is on screen, so a
-    /// plain re-read (not a live subscription) is enough.
+    /// running while its own "keep going / again" button is on screen.
     private var tourStatus: TourRunStatus { TourPersistence.load().status }
 
     /// Overridable for tests — the production default reaches through the
@@ -161,92 +180,102 @@ struct SettingsWindowView: View {
     /// `fromStart`: true restarts the tour from step 1 (persistence reset
     /// first); false resumes from wherever it left off.
     var onRequestTour: (_ fromStart: Bool) -> Void = { AppMain.shared?.showTour(fromStart: $0) }
+    /// Test seams: deterministic permission state for renders.
+    var automationStatusProvider: () -> OnboardingAuthorizationStatus = { OnboardingState.shared.automationStatus }
+    var appleMusicStatusProvider: () -> OnboardingAuthorizationStatus = { OnboardingState.shared.musicKitStatus }
 
-    @State private var activeDemo: SettingsDemo?
-    @State private var playToken = 0
-    @State private var loopTask: Task<Void, Never>?
+    init(state: SettingsWindowState) {
+        self.state = state
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            Group {
-                if state.selectedTab == .about {
-                    AboutPageView()
-                } else if isDiagnosticsTab {
-                    EmptyView()
-                } else {
-                    DemoStage(demo: activeDemo, context: demoContext, playToken: playToken, reduceMotion: reduceMotion, caption: activeDemo.map(captionText) ?? "")
-                }
-            }
-            .frame(height: 120)
-            .padding(.bottom, 14)
+            stageArea
+                .frame(height: SettingsMetrics.stageHeight)
+                .padding(.bottom, SettingsMetrics.stageToSegmented)
 
-            Picker("", selection: $state.selectedTab) {
-                ForEach(SettingsTab.visibleCases, id: \.self) { tab in
-                    Text(tab.title).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 440)
-            .padding(.bottom, 14)
+            SettingsSegmentedControl(tabs: SettingsTab.visibleCases, selection: $state.selectedTab)
+                .padding(.bottom, SettingsMetrics.segmentedToContent)
 
-            Group {
-                switch state.selectedTab {
-                case .player: playerTab
-                case .general: generalTab
-                case .shortcuts: shortcutsTab
-                case .about: EmptyView()
-                #if DEBUG || LOCAL_DEVELOPER_BUILD
-                case .diagnostics: DiagnosticsDebugPanel(musicController: musicController)
-                #endif
-                }
+            pageArea
+                .frame(width: SettingsMetrics.contentWidth, height: SettingsMetrics.pageViewportHeight, alignment: .top)
+        }
+        .padding(.top, SettingsMetrics.outerPadding)
+        .padding(.horizontal, SettingsMetrics.outerPadding)
+        .frame(width: SettingsMetrics.windowSize.width, height: SettingsMetrics.windowSize.height, alignment: .top)
+        .background(SettingsPalette.windowBackground)
+        .environmentObject(hover)
+        .onChange(of: state.selectedTab) { _, _ in hover.resetStage() }
+        .confirmationDialog(
+            L10n.localized("clearHistoryConfirmTitle"),
+            isPresented: $confirmingClearHistory,
+            titleVisibility: .visible
+        ) {
+            Button(L10n.localized("clearPlaybackHistory"), role: .destructive) {
+                musicController.clearPlaybackHistory()
             }
-            .frame(height: 350)
-        }
-        .padding(20)
-        .frame(width: 480, height: 562)
-        .onChange(of: activeDemo) { _, newValue in
-            restartLoop(for: newValue)
-        }
-        .onDisappear {
-            loopTask?.cancel()
+            Button(L10n.localized("cancel"), role: .cancel) {}
+        } message: {
+            Text(L10n.localized("clearHistoryConfirmMessage"))
         }
     }
 
-    private var isDiagnosticsTab: Bool {
+    // MARK: Stage + page
+
+    @ViewBuilder
+    private var stageArea: some View {
+        switch state.selectedTab {
+        case .about:
+            AboutHeaderView()
         #if DEBUG || LOCAL_DEVELOPER_BUILD
-        return state.selectedTab == .diagnostics
-        #else
-        return false
+        case .diagnostics:
+            Color.clear
         #endif
-    }
-
-    // MARK: Demo loop (hover-driven; never runs under Reduce Motion — proposal §4.4)
-
-    private func restartLoop(for demo: SettingsDemo?) {
-        loopTask?.cancel()
-        loopTask = nil
-        guard let demo, !reduceMotion else { return }
-        playToken += 1
-        loopTask = Task { @MainActor in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_400_000_000)
-                guard !Task.isCancelled, activeDemo == demo else { return }
-                playToken += 1
+        default:
+            if let demo = shownDemo {
+                DemoStage(demo: demo, context: demoContext, reduceMotion: reduceMotion, caption: captionText(for: demo))
             }
         }
     }
+
+    /// The rested-on row's still if it belongs to this page, else the page's first row.
+    private var shownDemo: SettingsDemo? {
+        if let rested = hover.stageDemo, rested.tab == state.selectedTab { return rested }
+        return state.selectedTab.defaultDemo
+    }
+
+    @ViewBuilder
+    private var pageArea: some View {
+        switch state.selectedTab {
+        #if DEBUG || LOCAL_DEVELOPER_BUILD
+        case .diagnostics:
+            DiagnosticsDebugPanel(musicController: musicController)
+        #endif
+        default:
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 0) {
+                    switch state.selectedTab {
+                    case .player: playerPage
+                    case .general: generalPage
+                    case .shortcuts: shortcutsPage
+                    case .about: AboutLinksView()
+                    #if DEBUG || LOCAL_DEVELOPER_BUILD
+                    case .diagnostics: EmptyView()
+                    #endif
+                    }
+                }
+                .frame(width: SettingsMetrics.contentWidth, alignment: .leading)
+                .padding(.bottom, SettingsMetrics.pageBottomInset)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+
+    // MARK: Stage context
 
     private var demoContext: SettingsDemoContext {
         SettingsDemoContext(
-            fullscreenCoverOn: UserDefaults.standard.bool(forKey: "fullscreenAlbumCover"),
-            edgeShowSongOn: UserDefaults.standard.object(forKey: LiquidEdgeController.autoPeekDefaultsKey) as? Bool ?? true,
-            showTranslationOn: lyricsService.showTranslation,
             translationSampleText: translationSampleText,
-            launchAtLoginOn: LaunchAtLoginBridge.status == .enabled,
-            showInDockOn: AppMain.shared?.showInDock ?? true,
-            automationStatus: onboardingState.automationStatus,
-            appleMusicStatus: onboardingState.musicKitStatus,
             shortcutDescriptions: Dictionary(uniqueKeysWithValues: GlobalShortcutAction.allCases.map {
                 ($0, KeyboardShortcuts.getShortcut(for: $0.name)?.description ?? "")
             })
@@ -254,8 +283,7 @@ struct SettingsWindowView: View {
     }
 
     private var translationSampleText: String {
-        let currentLang = lyricsService.translationLanguage
-        switch currentLang {
+        switch lyricsService.translationLanguage {
         case "zh": return "我们去看海吧"
         case "ja": return "海を見に行こう"
         case "ko": return "바다 보러 가자"
@@ -276,8 +304,8 @@ struct SettingsWindowView: View {
         case .showInDock: return L10n.localized("showInDock")
         case .gettingToKnowNanoPod: return L10n.localized("tour.settings.title")
         case .musicAutomation: return L10n.localized("automation")
-        case .appleMusicAccess: return L10n.localized("musicKit")
-        case .playbackHistory: return L10n.localized("clearPlaybackHistory")
+        case .appleMusicAccess: return L10n.localized("appleMusic")
+        case .playbackHistory: return L10n.localized("playbackHistory")
         case .playPauseShortcut: return GlobalShortcutAction.togglePlayPause.localizedTitle
         case .nextTrackShortcut: return GlobalShortcutAction.nextTrack.localizedTitle
         case .previousTrackShortcut: return GlobalShortcutAction.previousTrack.localizedTitle
@@ -286,78 +314,65 @@ struct SettingsWindowView: View {
         }
     }
 
-    // MARK: - Player Tab
+    // MARK: - Row helpers
 
-    private var playerTab: some View {
-        Form {
-            Section {
-                SettingsRow(demo: .fullscreenCover, activeDemo: $activeDemo) {
-                    Toggle(isOn: UserDefaultsBinding.bool(forKey: "fullscreenAlbumCover")) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(L10n.localized("fullscreenCover"))
-                            Text(L10n.localized("fullscreenCoverDesc"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .toggleStyle(.switch)
-                }
-            }
+    private func toggleRow(_ demo: SettingsDemo, title: String, detail: String? = nil, isOn: Binding<Bool>) -> some View {
+        SettingsRow(demo: demo, title: title, detail: detail) {
+            Toggle(isOn: isOn) { Text(title) }
+                .toggleStyle(SettingsSwitchStyle())
+                .accessibilityLabel(title)
+        }
+    }
 
-            Section {
-                SettingsRow(demo: .edgeShowSongOnTrackChange, activeDemo: $activeDemo) {
-                    Toggle(isOn: edgeShowSongBinding) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(L10n.localized("edgeShowSongOnTrackChange"))
-                            Text(L10n.localized("edgeShowSongOnTrackChangeDesc"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .toggleStyle(.switch)
-                }
-            }
+    // MARK: - Player page
 
-            if #available(macOS 15.0, *) {
-                Section {
-                    SettingsRow(demo: .showTranslation, activeDemo: $activeDemo) {
-                        Toggle(isOn: Binding(
+    @ViewBuilder
+    private var playerPage: some View {
+        SettingsCard {
+            toggleRow(.fullscreenCover,
+                      title: L10n.localized("fullscreenCover"),
+                      detail: L10n.localized("fullscreenCoverDesc"),
+                      isOn: UserDefaultsBinding.bool(forKey: "fullscreenAlbumCover"))
+        }
+
+        SettingsSectionHeader(title: L10n.localized("sectionEdge"))
+        SettingsCard {
+            toggleRow(.edgeShowSongOnTrackChange,
+                      title: L10n.localized("edgeShowSongOnTrackChange"),
+                      detail: L10n.localized("edgeShowSongOnTrackChangeDesc"),
+                      isOn: edgeShowSongBinding)
+        }
+
+        if #available(macOS 15.0, *) {
+            SettingsSectionHeader(title: L10n.localized("sectionLyrics"))
+            SettingsCard {
+                toggleRow(.showTranslation,
+                          title: L10n.localized("showTranslation"),
+                          detail: L10n.localized("showTranslationDesc"),
+                          isOn: Binding(
                             get: { lyricsService.showTranslation },
-                            set: { lyricsService.showTranslation = $0 }
-                        )) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(L10n.localized("showTranslation"))
-                                Text(L10n.localized("showTranslationDesc"))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                            set: { lyricsService.showTranslation = $0 }))
+                SettingsDivider()
+                SettingsRow(demo: .translateTo, title: L10n.localized("translateTo")) {
+                    Picker(L10n.localized("translateTo"), selection: Binding(
+                        get: {
+                            let currentLang = lyricsService.translationLanguage
+                            return currentLang == L10n.systemLanguageCode ? "system" : currentLang
+                        },
+                        set: { code in
+                            lyricsService.translationLanguage = code == "system" ? L10n.systemLanguageCode : code
                         }
-                        .toggleStyle(.switch)
-                    }
-                }
-
-                Section {
-                    SettingsRow(demo: .translateTo, activeDemo: $activeDemo) {
-                        Picker(selection: Binding(
-                            get: {
-                                let currentLang = lyricsService.translationLanguage
-                                return currentLang == L10n.systemLanguageCode ? "system" : currentLang
-                            },
-                            set: { code in
-                                lyricsService.translationLanguage = code == "system" ? L10n.systemLanguageCode : code
-                            }
-                        )) {
-                            ForEach(L10n.translationLanguageOptions, id: \.code) { option in
-                                Text(option.name).tag(option.code)
-                            }
-                        } label: {
-                            Text(L10n.localized("translationLang"))
+                    )) {
+                        ForEach(L10n.translationLanguageOptions, id: \.code) { option in
+                            Text(option.name).tag(option.code)
                         }
                     }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .fixedSize()
                 }
             }
         }
-        .formStyle(.grouped)
     }
 
     /// Default on (no public API tells whether the player already notifies).
@@ -369,190 +384,146 @@ struct SettingsWindowView: View {
         )
     }
 
-    // MARK: - General Tab
+    // MARK: - General page
 
-    private var generalTab: some View {
-        Form {
-            Section {
-                SettingsRow(demo: .launchAtLogin, activeDemo: $activeDemo) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Toggle(isOn: Binding(
-                            get: { LaunchAtLoginBridge.status == .enabled },
-                            set: { LaunchAtLoginBridge.setEnabled($0) }
-                        )) {
-                            Text(L10n.localized("launchAtLogin"))
-                        }
-                        .toggleStyle(.switch)
-
-                        if LaunchAtLoginBridge.status == .requiresApproval {
-                            HStack {
-                                Text(L10n.localized("launchAtLoginApprovalNeeded"))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Button(L10n.localized("launchAtLoginOpenItems")) {
-                                    if let url = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension") {
-                                        NSWorkspace.shared.open(url)
-                                    }
-                                }
-                                .buttonStyle(.link)
-                                .controlSize(.small)
+    @ViewBuilder
+    private var generalPage: some View {
+        let loginStatus = LaunchAtLoginBridge.status
+        SettingsCard {
+            SettingsRow(
+                demo: .launchAtLogin,
+                title: L10n.localized("launchAtLogin"),
+                detail: loginStatus == .requiresApproval ? L10n.localized("launchAtLoginApprovalNeeded") : nil
+            ) {
+                HStack(spacing: 10) {
+                    if loginStatus == .requiresApproval {
+                        Button(L10n.localized("launchAtLoginOpenItems")) {
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension") {
+                                NSWorkspace.shared.open(url)
                             }
                         }
+                        .buttonStyle(SettingsPushButtonStyle())
                     }
-                }
-            }
-
-            Section {
-                SettingsRow(demo: .showInDock, activeDemo: $activeDemo) {
                     Toggle(isOn: Binding(
+                        get: { LaunchAtLoginBridge.status == .enabled },
+                        set: { LaunchAtLoginBridge.setEnabled($0); permissionRefresh += 1 }
+                    )) { Text(L10n.localized("launchAtLogin")) }
+                        .toggleStyle(SettingsSwitchStyle())
+                        .accessibilityLabel(L10n.localized("launchAtLogin"))
+                }
+            }
+            SettingsDivider()
+            toggleRow(.showInDock,
+                      title: L10n.localized("showInDock"),
+                      isOn: Binding(
                         get: { AppMain.shared?.showInDock ?? true },
-                        set: { AppMain.shared?.showInDock = $0 }
-                    )) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(L10n.localized("showInDock"))
-                            Text(L10n.localized("showInDockDesc"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .toggleStyle(.switch)
-                }
-            }
-
-            Section {
-                SettingsRow(demo: .gettingToKnowNanoPod, activeDemo: $activeDemo) {
-                    HStack {
-                        Text(L10n.localized("tour.settings.title"))
-                        Spacer()
-                        Button(L10n.localized(TourButtonPolicy.titleKey(status: tourStatus))) {
-                            GettingToKnowNanoPodAction.perform(status: tourStatus, requestTour: onRequestTour)
-                        }
-                        .frame(minWidth: 210)
-                        .fixedSize()
-                    }
-                }
-            }
-
-            Section {
-                SettingsRow(demo: .musicAutomation, activeDemo: $activeDemo) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(L10n.localized("automation"))
-                        }
-                        Spacer()
-                        automationStatusControl
-                    }
-                }
-            } footer: {
-                Text(L10n.localized("automationFooter"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                SettingsRow(demo: .appleMusicAccess, activeDemo: $activeDemo) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(L10n.localized("musicKit"))
-                            Text(L10n.localized("musicKitDesc"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        musicKitStatusControl
-                    }
-                }
-            }
-
-            Section {
-                SettingsRow(demo: .playbackHistory, activeDemo: $activeDemo) {
-                    Button(role: .destructive) {
-                        musicController.clearPlaybackHistory()
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(L10n.localized("clearPlaybackHistory"))
-                            Text(L10n.localized("clearPlaybackHistoryDesc"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
+                        set: { AppMain.shared?.showInDock = $0 }))
+            SettingsDivider()
+            SettingsRow(demo: .gettingToKnowNanoPod, title: L10n.localized("tour.settings.title")) {
+                tourButton
             }
         }
-        .formStyle(.grouped)
+
+        SettingsSectionHeader(title: L10n.localized("sectionPermissions"))
+        SettingsCard {
+            SettingsRow(demo: .musicAutomation, title: L10n.localized("automation")) {
+                permissionControl(
+                    status: automationStatusProvider(),
+                    grant: {
+                        onboardingState.requestAutomationAccess()
+                        permissionRefresh += 1
+                    },
+                    openSettings: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")
+            }
+            SettingsDivider()
+            SettingsRow(demo: .appleMusicAccess, title: L10n.localized("appleMusic")) {
+                permissionControl(
+                    status: appleMusicStatusProvider(),
+                    grant: {
+                        Task {
+                            await musicController.requestMusicKitAccess()
+                            permissionRefresh += 1
+                        }
+                    },
+                    openSettings: "x-apple.systempreferences:com.apple.preference.security?Privacy_Media")
+            }
+        }
+        SettingsSectionFooter(text: L10n.localized("automationFooter"))
+
+        SettingsSectionHeader(title: L10n.localized("sectionData"))
+        SettingsCard {
+            SettingsRow(
+                demo: .playbackHistory,
+                title: L10n.localized("playbackHistory"),
+                detail: L10n.localized("clearPlaybackHistoryDesc")
+            ) {
+                Button(L10n.localized("clearButton")) { confirmingClearHistory = true }
+                    .buttonStyle(SettingsPushButtonStyle())
+            }
+        }
     }
 
-    private var automationStatusControl: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(onboardingState.automationStatus == .authorized ? Color.green : Color.orange)
-                .frame(width: 8, height: 8)
-            switch onboardingState.automationStatus {
+    /// Both titles are laid out (one hidden) so the button keeps the width of
+    /// the longer one and never changes the row when the text swaps.
+    private var tourButton: some View {
+        let status = tourStatus
+        return Button {
+            GettingToKnowNanoPodAction.perform(status: status, requestTour: onRequestTour)
+        } label: {
+            ZStack {
+                Text(L10n.localized("tour.settings.keepGoing")).hidden()
+                Text(L10n.localized("tour.settings.again")).hidden()
+                Text(L10n.localized(TourButtonPolicy.titleKey(status: status)))
+            }
+        }
+        .buttonStyle(SettingsPushButtonStyle())
+    }
+
+    @ViewBuilder
+    private func permissionControl(status: OnboardingAuthorizationStatus, grant: @escaping () -> Void, openSettings: String) -> some View {
+        HStack(spacing: 10) {
+            Text(permissionLabel(status))
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize()
+            switch status {
             case .authorized:
-                Text(L10n.localized("onboarding.auth.authorized")).font(.caption).foregroundStyle(.secondary)
+                EmptyView()
+            case .notDetermined:
+                Button(L10n.localized("automationGrant"), action: grant)
+                    .buttonStyle(SettingsPushButtonStyle())
             case .denied:
                 Button(L10n.localized("automationOpenSettings")) {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
-                        NSWorkspace.shared.open(url)
-                    }
+                    if let url = URL(string: openSettings) { NSWorkspace.shared.open(url) }
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            case .notDetermined:
-                Button(L10n.localized("automationGrant")) {
-                    onboardingState.requestAutomationAccess()
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .buttonStyle(SettingsPushButtonStyle())
             }
+        }
+        .id(permissionRefresh)
+    }
+
+    private func permissionLabel(_ status: OnboardingAuthorizationStatus) -> String {
+        switch status {
+        case .authorized: return L10n.localized("onboarding.auth.authorized")
+        case .denied: return L10n.localized("authDenied")
+        case .notDetermined: return L10n.localized("authNotDetermined")
         }
     }
 
-    private var musicKitStatusControl: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(musicController.musicKitAuthorized ? Color.green : Color.orange)
-                .frame(width: 8, height: 8)
+    // MARK: - Shortcuts page
 
-            Text(musicController.musicKitAuthStatus)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            if !musicController.musicKitAuthorized {
-                Button(L10n.localized("musicKitRequest")) {
-                    Task { await musicController.requestMusicKitAccess() }
+    @ViewBuilder
+    private var shortcutsPage: some View {
+        SettingsCard {
+            ForEach(Array(GlobalShortcutAction.allCases.enumerated()), id: \.element) { index, action in
+                if index > 0 { SettingsDivider() }
+                SettingsRow(demo: demo(for: action), title: action.localizedTitle) {
+                    KeyboardShortcuts.Recorder(for: action.name)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-            } else {
-                Button(L10n.localized("musicKitOpen")) {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Media") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
             }
         }
-    }
-
-    // MARK: - Shortcuts Tab
-
-    private var shortcutsTab: some View {
-        Form {
-            Section {
-                ForEach(GlobalShortcutAction.allCases) { action in
-                    SettingsRow(demo: demo(for: action), activeDemo: $activeDemo) {
-                        KeyboardShortcuts.Recorder(action.localizedTitle, name: action.name)
-                    }
-                }
-            } footer: {
-                Text(L10n.localized("shortcutsFooter"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
+        SettingsSectionFooter(text: L10n.localized("shortcutsFooter"))
     }
 
     private func demo(for action: GlobalShortcutAction) -> SettingsDemo {
@@ -563,41 +534,6 @@ struct SettingsWindowView: View {
         case .togglePanel: return .showHidePlayerShortcut
         case .hideToEdge: return .hideToEdgeShortcut
         }
-    }
-}
-
-// ──────────────────────────────────────────────
-// MARK: - SettingsRow (hover-intent wrapper — proposal §4.4)
-// ──────────────────────────────────────────────
-
-/// Wraps a Form row: on a genuine dwell (150ms, ≤4pt drift — the same numbers
-/// as the progress bar's hover-intent gate), tells the parent to show this
-/// row's demo. A fast pass-through never switches the stage.
-struct SettingsRow<Content: View>: View {
-    let demo: SettingsDemo
-    @Binding var activeDemo: SettingsDemo?
-    let content: Content
-    @State private var host = SettingsRowHoverIntentHost()
-
-    init(demo: SettingsDemo, activeDemo: Binding<SettingsDemo?>, @ViewBuilder content: () -> Content) {
-        self.demo = demo
-        self._activeDemo = activeDemo
-        self.content = content()
-    }
-
-    var body: some View {
-        content
-            .contentShape(Rectangle())
-            .onHover { hovering in
-                host.onCommitChanged = { committed in
-                    if committed {
-                        activeDemo = demo
-                    } else if activeDemo == demo {
-                        activeDemo = nil
-                    }
-                }
-                host.hoverChanged(hovering)
-            }
     }
 }
 
