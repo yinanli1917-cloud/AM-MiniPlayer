@@ -1,0 +1,1103 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nanoPod 动效原型</title>
+<style>
+:root{
+  --bg:#f5f5f7; --fg:#1d1d1f; --fg2:#6e6e73; --fg3:#8e8e93; --hair:rgba(0,0,0,.1); --hair2:rgba(0,0,0,.18);
+  --surface:#ffffff; --code:rgba(0,0,0,.05);
+  --accent:#FA4058; --accent-ink:#D42640; --accent-soft:#FF8FA0; --gold:#FFB93F; --violet:#7A6BFF;
+  --ring-track:rgba(250,64,88,.22); --dot-track:rgba(60,60,67,.30);
+  /* 设置窗口 */
+  --win:#FBFBFC; --card:#F3F3F5; --card-hover:#E8E8EC; --row-line:rgba(0,0,0,.08);
+  --seg-bg:#E7E7EA; --seg-fg:#1d1d1f; --win-shadow:0 18px 50px rgba(30,30,60,.22), 0 0 0 .5px rgba(0,0,0,.18);
+  --sw-off:rgba(120,120,128,.25);
+  /* 演示台 */
+  --w1:#cfdcff; --w2:#ffd6e2; --w3:#e2e8f7; --w4:#f3e4ee;
+  --glass:rgba(255,255,255,.86); --glass-ink:#1d1d1f; --glass-line:rgba(0,0,0,.07);
+  --menubar:rgba(255,255,255,.55); --bgwin:rgba(255,255,255,.55); --bgwin-line:rgba(0,0,0,.08);
+  --strip:rgba(255,255,255,.75); --keyface:#ffffff; --keyedge:#c9c9cf; --keyink:#3a3a3f;
+  --cap-ink:rgba(30,30,50,.6);
+  /* 引导卡 */
+  --tcard-bg:rgba(255,255,255,.78); --tcard-ink:#1d1d1f; --tcard-muted:#6e6e73; --tcard-line:rgba(0,0,0,.08);
+  --tcard-shadow:0 14px 34px rgba(30,30,70,.22);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#161618; --fg:#f5f5f7; --fg2:#a1a1a6; --fg3:#8e8e93; --hair:rgba(255,255,255,.1); --hair2:rgba(255,255,255,.2);
+    --surface:#232326; --code:rgba(255,255,255,.08);
+    --accent:#FB546C; --accent-ink:#FF8497; --accent-soft:#FF8FA0; --gold:#FFC65A; --violet:#8F82FF;
+    --ring-track:rgba(251,84,108,.30); --dot-track:rgba(235,235,245,.30);
+    --win:#262628; --card:#303033; --card-hover:#3B3B3F; --row-line:rgba(255,255,255,.08);
+    --seg-bg:#3A3A3D; --seg-fg:#f5f5f7; --win-shadow:0 18px 50px rgba(0,0,0,.55), 0 0 0 .5px rgba(255,255,255,.14);
+    --sw-off:rgba(120,120,128,.4);
+    --w1:#34427f; --w2:#5b2c4b; --w3:#1f2340; --w4:#2e2040;
+    --glass:rgba(48,48,54,.86); --glass-ink:#f5f5f7; --glass-line:rgba(255,255,255,.09);
+    --menubar:rgba(20,20,30,.45); --bgwin:rgba(40,40,52,.6); --bgwin-line:rgba(255,255,255,.08);
+    --strip:rgba(255,255,255,.55); --keyface:#48484e; --keyedge:#1b1b1e; --keyink:#f2f2f6;
+    --cap-ink:rgba(235,235,255,.62);
+    --tcard-bg:rgba(44,44,50,.78); --tcard-ink:#f2f2f6; --tcard-muted:#a9a9b6; --tcard-line:rgba(255,255,255,.1);
+    --tcard-shadow:0 14px 34px rgba(0,0,0,.5);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#161618; --fg:#f5f5f7; --fg2:#a1a1a6; --fg3:#8e8e93; --hair:rgba(255,255,255,.1); --hair2:rgba(255,255,255,.2);
+  --surface:#232326; --code:rgba(255,255,255,.08);
+  --accent:#FB546C; --accent-ink:#FF8497; --accent-soft:#FF8FA0; --gold:#FFC65A; --violet:#8F82FF;
+  --ring-track:rgba(251,84,108,.30); --dot-track:rgba(235,235,245,.30);
+  --win:#262628; --card:#303033; --card-hover:#3B3B3F; --row-line:rgba(255,255,255,.08);
+  --seg-bg:#3A3A3D; --seg-fg:#f5f5f7; --win-shadow:0 18px 50px rgba(0,0,0,.55), 0 0 0 .5px rgba(255,255,255,.14);
+  --sw-off:rgba(120,120,128,.4);
+  --w1:#34427f; --w2:#5b2c4b; --w3:#1f2340; --w4:#2e2040;
+  --glass:rgba(48,48,54,.86); --glass-ink:#f5f5f7; --glass-line:rgba(255,255,255,.09);
+  --menubar:rgba(20,20,30,.45); --bgwin:rgba(40,40,52,.6); --bgwin-line:rgba(255,255,255,.08);
+  --strip:rgba(255,255,255,.55); --keyface:#48484e; --keyedge:#1b1b1e; --keyink:#f2f2f6;
+  --cap-ink:rgba(235,235,255,.62);
+  --tcard-bg:rgba(44,44,50,.78); --tcard-ink:#f2f2f6; --tcard-muted:#a9a9b6; --tcard-line:rgba(255,255,255,.1);
+  --tcard-shadow:0 14px 34px rgba(0,0,0,.5);
+  color-scheme:dark;
+}
+:root[data-theme="light"]{ color-scheme:light; }
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro","Helvetica Neue","PingFang SC","Hiragino Sans GB",sans-serif;
+  font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1120px;margin:0 auto;padding:28px 16px 80px}
+h1{font-size:26px;line-height:1.2;margin:0 0 6px;font-weight:700;letter-spacing:-.01em}
+h2{font-size:20px;margin:56px 0 4px;font-weight:700}
+h3{font-size:14px;margin:0 0 8px;font-weight:600}
+p{margin:0 0 10px;max-width:74ch}
+.sub{color:var(--fg2);max-width:74ch}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums;font-size:.92em}
+code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;background:var(--code);padding:1px 5px;border-radius:4px}
+.tools{position:sticky;top:0;z-index:20;margin:14px -16px 0;padding:10px 16px;display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;
+  background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--hair);font-size:13px}
+.tools label{display:inline-flex;gap:6px;align-items:center;cursor:pointer;color:var(--fg2);user-select:none}
+.tools input[type=checkbox]{accent-color:var(--accent);margin:0}
+.seg2{display:inline-flex;border:1px solid var(--hair2);border-radius:8px;overflow:hidden}
+.seg2 button{appearance:none;border:0;background:transparent;color:var(--fg2);padding:4px 11px;font:inherit;font-size:12.5px;cursor:pointer}
+.seg2 button[aria-pressed="true"]{background:var(--fg);color:var(--bg)}
+.btn{appearance:none;border:1px solid var(--hair2);background:var(--surface);color:var(--fg);border-radius:9px;padding:7px 14px;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.btn:hover{border-color:var(--fg3)} .btn:active{transform:scale(.97)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn:focus-visible,.seg2 button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.pillr{display:inline-block;font-size:11px;font-weight:600;padding:1px 8px;border-radius:999px;border:1px solid var(--hair2);color:var(--fg2)}
+
+/* ---------- Section A ---------- */
+.a-grid{display:grid;grid-template-columns:minmax(0,500px) minmax(0,1fr);gap:32px;margin-top:22px;align-items:start}
+@media (max-width:980px){.a-grid{grid-template-columns:minmax(0,1fr)}}
+.winwrap{width:100%;position:relative}
+.win{width:480px;border-radius:14px;background:var(--win);box-shadow:var(--win-shadow);overflow:hidden;transform-origin:0 0;position:absolute;left:0;top:0}
+.tb{height:28px;position:relative;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600}
+.tl{position:absolute;left:12px;top:8px;display:flex;gap:8px}
+.tl span{width:12px;height:12px;border-radius:50%;display:block;border:.5px solid rgba(0,0,0,.14)}
+.tl .r{background:#ff5f57}.tl .y{background:#febc2e}.tl .g{background:#28c840}
+.content{height:562px;padding:20px;display:flex;flex-direction:column;gap:14px}
+.stage{height:140px;flex:none;border-radius:12px;position:relative;overflow:hidden;isolation:isolate;
+  background:radial-gradient(60% 100% at 12% 0%,var(--w1),transparent 70%),radial-gradient(70% 100% at 96% 100%,var(--w2),transparent 72%),linear-gradient(160deg,var(--w3),var(--w4))}
+.layer{position:absolute;inset:0;opacity:0;transition:opacity .28s ease;pointer-events:none}
+.layer.on{opacity:1}
+.rm .layer,.layer.notrans{transition:none}
+.stagecap{position:absolute;left:12px;bottom:8px;font-size:11px;color:var(--cap-ink);display:flex;gap:6px;align-items:center;z-index:5;transition:opacity .2s}
+.stagecap i{font-style:normal;font-weight:600;padding:0 6px;border-radius:999px;background:var(--menubar);line-height:16px}
+.seg{height:24px;flex:none;display:flex;background:var(--seg-bg);border-radius:8px;padding:0}
+.seg button{flex:1;appearance:none;border:0;background:transparent;color:var(--seg-fg);font:inherit;font-size:12.5px;border-radius:7px;cursor:pointer;position:relative}
+.seg button[aria-selected="true"]{background:var(--accent);color:#fff;font-weight:500}
+.seg button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.pane{flex:1;min-height:0;display:none;flex-direction:column;gap:8px}
+.pane.on{display:flex}
+.grp{background:var(--card);border-radius:12px;overflow:hidden;flex:none}
+.row{height:53px;padding:0 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid var(--row-line);transition:background .12s ease;position:relative}
+.row:first-child{border-top:0}
+.row.active{background:color-mix(in srgb,var(--card-hover) 55%,transparent)}
+.row.hot{background:var(--card-hover)}
+.row .lb{min-width:0}
+.row .t{font-size:13px;line-height:1.25;color:var(--fg)}
+.row .d{font-size:11px;line-height:1.25;color:var(--fg2);margin-top:2px}
+.foot{font-size:11px;color:var(--fg2);padding:0 6px;line-height:1.4}
+.sw{appearance:none;flex:none;width:36px;height:20px;border-radius:10px;background:var(--sw-off);position:relative;border:0;padding:0;cursor:pointer;transition:background .2s ease}
+.sw::after{content:"";position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .2s cubic-bezier(.3,1.2,.5,1)}
+.sw[aria-checked="true"]{background:var(--accent)}
+.sw[aria-checked="true"]::after{transform:translateX(16px)}
+.sw:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.rm .sw,.rm .sw::after{transition:none}
+.pop{appearance:none;font:inherit;font-size:12.5px;color:var(--fg);background:var(--surface);border:0;border-radius:6px;padding:3px 22px 3px 9px;box-shadow:0 0 0 .5px var(--hair2),0 1px 1px rgba(0,0,0,.08);
+  background-image:linear-gradient(45deg,transparent 50%,var(--fg2) 50%),linear-gradient(135deg,var(--fg2) 50%,transparent 50%);background-position:calc(100% - 11px) 50%,calc(100% - 7px) 50%;background-size:4px 4px;background-repeat:no-repeat;cursor:pointer}
+.recorder{flex:none;font-size:12.5px;padding:3px 10px;border-radius:6px;background:var(--surface);box-shadow:0 0 0 .5px var(--hair2);color:var(--fg);font-variant-numeric:tabular-nums;letter-spacing:.06em}
+.ph{flex:1;display:grid;place-items:center;text-align:center;color:var(--fg2);font-size:12px;padding:0 30px}
+.notes{font-size:13px;color:var(--fg2)}
+.notes h3{color:var(--fg)}
+.notes ul{margin:0 0 16px;padding-left:18px}
+.notes li{margin:0 0 5px}
+.status{border:1px solid var(--hair);background:var(--surface);border-radius:12px;padding:12px 14px;font-size:12.5px;margin-bottom:16px}
+.status dl{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:0}
+.status dt{color:var(--fg2)} .status dd{margin:0;font-variant-numeric:tabular-nums}
+
+/* 面板（em = 面板宽） */
+.pn{position:absolute;font-size:calc(var(--pw)*1px);width:1em;height:1.136em;border-radius:.07em;overflow:hidden;
+  background:radial-gradient(110% 80% at 14% 6%,#ff9aa8 0,transparent 62%),radial-gradient(100% 80% at 92% 96%,#7d6cff 0,transparent 58%),#b9508f;
+  box-shadow:0 .09em .22em rgba(30,20,70,.3), inset 0 0 0 .004em rgba(255,255,255,.28)}
+.pn .art{position:absolute;left:.16em;top:.075em;width:.68em;height:.68em;border-radius:.04em;overflow:hidden;
+  background:linear-gradient(170deg,#ffd58f 0%,#ff7f8f 46%,#6b5bd6 100%);box-shadow:0 .02em .06em rgba(0,0,0,.28)}
+.art .sun{position:absolute;left:27%;top:30%;width:46%;height:46%;border-radius:50%;background:#fff1d0;opacity:.95}
+.art .wv1{position:absolute;left:0;top:60%;width:100%;height:42%;background:linear-gradient(to bottom,#5a4bc4,#2f2a85)}
+.art .wv2{position:absolute;left:36%;top:70%;width:28%;height:4%;border-radius:2px;background:#fff1d0;opacity:.4;box-shadow:0 .012em 0 0 rgba(255,241,208,.0), -.03em .05em 0 -0 rgba(255,241,208,.28)}
+.pn .scrim{position:absolute;left:0;bottom:0;width:100%;height:.62em;background:linear-gradient(to bottom,transparent,rgba(24,10,56,.62));opacity:0}
+.pn .t1,.pn .t2{position:absolute;left:.16em;border-radius:.02em;display:block}
+.pn .t1{top:.885em;width:.42em;height:.027em;background:rgba(255,255,255,.94)}
+.pn .t2{top:.94em;width:.27em;height:.02em;background:rgba(255,255,255,.55)}
+.pn .ctl{position:absolute;left:0;top:1.0em;width:100%;display:flex;justify-content:center;align-items:center;gap:.15em}
+.pn .ctl svg{fill:#fff;display:block;height:.052em}
+.menubar{position:absolute;left:0;right:0;top:0;height:10px;background:var(--menubar);display:flex;align-items:center;justify-content:flex-end;gap:7px;padding-right:9px}
+.menubar i{display:block;width:8px;height:4px;border-radius:2px;background:var(--cap-ink);opacity:.55}
+.menubar i.np{width:5px;height:5px;border-radius:50%;background:var(--accent);opacity:1}
+.abs{position:absolute}
+.strip{position:absolute;right:0;top:50px;width:5px;height:40px;border-radius:3px 0 0 3px;background:var(--strip);overflow:hidden;box-shadow:0 0 0 .5px var(--glass-line)}
+.strip .fill{position:absolute;left:0;bottom:0;width:100%;background:var(--accent);border-radius:3px}
+.capsule{position:absolute;right:12px;top:47px;height:46px;width:156px;border-radius:23px;background:var(--glass);color:var(--glass-ink);
+  box-shadow:0 8px 20px rgba(20,20,50,.22),0 0 0 .5px var(--glass-line);display:flex;align-items:center;gap:9px;padding:0 12px 0 8px}
+.capsule .th{flex:none;width:32px;height:32px;border-radius:9px;background:linear-gradient(170deg,#ffd58f 0%,#ff7f8f 46%,#6b5bd6 100%);position:relative;overflow:hidden}
+.capsule .th::before{content:"";position:absolute;left:28%;top:26%;width:44%;height:44%;border-radius:50%;background:#fff1d0;opacity:.95}
+.capsule .th::after{content:"";position:absolute;left:0;top:58%;width:100%;height:50%;background:linear-gradient(to bottom,#5a4bc4,#2f2a85)}
+.capsule .tx{flex:1;min-width:0}
+.capsule .tx b{display:block;height:5px;border-radius:3px;background:currentColor;opacity:.85;width:78%}
+.capsule .tx b+b{height:4px;width:52%;opacity:.4;margin-top:6px}
+.keys{position:absolute;display:flex;gap:6px}
+.key{width:34px;height:34px;border-radius:9px;background:var(--keyface);color:var(--keyink);display:grid;place-items:center;font-size:15px;font-weight:500;
+  box-shadow:0 3px 0 var(--keyedge),0 5px 8px rgba(20,20,50,.16),inset 0 1px 0 rgba(255,255,255,.4);position:relative;will-change:transform}
+.bgwin{position:absolute;border-radius:9px;background:var(--bgwin);box-shadow:0 0 0 .5px var(--bgwin-line);overflow:hidden}
+.bgwin::before{content:"";position:absolute;left:8px;top:8px;width:20px;height:5px;border-radius:3px;background:radial-gradient(circle at 2.5px 2.5px,#ff5f57 2.4px,transparent 2.6px),radial-gradient(circle at 10px 2.5px,#febc2e 2.4px,transparent 2.6px),radial-gradient(circle at 17.5px 2.5px,#28c840 2.4px,transparent 2.6px);opacity:.8}
+.bgwin b{position:absolute;left:10px;height:5px;border-radius:3px;background:var(--cap-ink);opacity:.22}
+.lyric{position:absolute;left:0;width:100%;padding:0 18px;color:#fff;font-size:calc(var(--pw)*.07px);line-height:1.3;will-change:transform,opacity}
+.lyric .tr{display:block;font-size:.88em;opacity:.78;font-weight:500;margin-top:.15em;position:relative}
+.lyric .tr span{position:absolute;left:0;top:0;white-space:nowrap}
+
+/* ---------- Section B ---------- */
+.b-grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:24px;margin-top:22px;align-items:start}
+@media (max-width:900px){.b-grid{grid-template-columns:minmax(0,1fr)}}
+.bstage{position:relative;height:470px;border-radius:16px;overflow:hidden;isolation:isolate;
+  background:radial-gradient(60% 100% at 12% 0%,var(--w1),transparent 70%),radial-gradient(70% 100% at 96% 100%,var(--w2),transparent 72%),linear-gradient(160deg,var(--w3),var(--w4))}
+.bstage canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:6}
+.cardbox{position:absolute;left:50%;top:calc(100px / var(--z,1.55));transform:translateX(-50%);zoom:var(--z,1.55)}
+.tcard{position:relative;width:236px;padding:14px 14px 12px;border-radius:14px;color:var(--tcard-ink);
+  background:var(--tcard-bg);backdrop-filter:blur(18px) saturate(1.5);-webkit-backdrop-filter:blur(18px) saturate(1.5);
+  box-shadow:var(--tcard-shadow),0 0 0 .5px var(--tcard-line);will-change:transform}
+.tcard .head{display:flex;flex-direction:row-reverse;justify-content:space-between;align-items:flex-start;gap:12px}
+.tcard .title{flex:1;min-width:0;padding-top:4px;font-size:13px;font-weight:600;letter-spacing:-.005em;line-height:1.3}
+.tcard .body{font-size:12px;color:var(--tcard-muted);margin-top:8px;line-height:1.45;min-height:34px}
+.tcard .beats{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.tcard .beats li{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--tcard-ink);transition:color .2s ease}
+.tcard .beats li.done{color:var(--tcard-muted)}
+.tcard .dot{flex:none;width:14px;height:14px;display:block}
+.tcard .dot svg{width:14px;height:14px;display:block;overflow:visible}
+.tcard .ringbox{flex:none;width:28px;height:28px;position:relative}
+.tcard .ringbox svg{width:28px;height:28px;display:block;overflow:visible}
+.tcard .num{position:absolute;inset:0;display:grid;place-items:center;font-size:9.5px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.tcard .foot2{margin-top:10px;font-size:10.5px;color:var(--tcard-muted);font-variant-numeric:tabular-nums}
+.haptic{position:absolute;left:14px;top:14px;z-index:7;display:flex;flex-direction:column;gap:6px;pointer-events:none}
+.haptic span{font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:999px;background:var(--glass);color:var(--glass-ink);box-shadow:0 0 0 .5px var(--glass-line);opacity:0;transform:translateY(4px);transition:opacity .15s,transform .15s}
+.haptic span.on{opacity:1;transform:none}
+.ctrl{display:flex;flex-direction:column;gap:14px}
+.btns{display:flex;flex-wrap:wrap;gap:8px}
+.panel{border:1px solid var(--hair);background:var(--surface);border-radius:12px;padding:12px 14px}
+.pills{display:flex;flex-wrap:wrap;gap:6px}
+.pills span{font-size:11.5px;padding:2px 9px;border-radius:999px;border:1px solid var(--hair2);color:var(--fg2);transition:background .12s,color .12s,border-color .12s}
+.pills span.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.log{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:11px;line-height:1.5;color:var(--fg2);margin:8px 0 0;height:150px;overflow:hidden;white-space:pre}
+.rings{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:10px;margin-top:14px}
+.rcell{border-radius:12px;padding:12px 6px 10px;display:grid;justify-items:center;gap:6px;text-align:center;font-size:11.5px;color:var(--tcard-muted);
+  background:linear-gradient(160deg,var(--w3),var(--w4));position:relative}
+.rcell .rb{width:56px;height:56px;border-radius:14px;display:grid;place-items:center;background:var(--tcard-bg);box-shadow:0 0 0 .5px var(--tcard-line)}
+.rcell svg{width:40px;height:40px;display:block;overflow:visible}
+.rcell b{color:var(--fg);font-weight:600;display:block}
+.rcell.lb-cell{color:var(--cap-ink)}
+.tag{font-size:11px;color:var(--fg2)}
+.small{font-size:12.5px;color:var(--fg2)}
+@media (prefers-reduced-motion: reduce){ .sw::after{transition:none} }
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap">
+  <h1>nanoPod 动效原型</h1>
+  <p class="sub">A：设置页「触控板式」演示台 · B：引导里「完成一步」的打勾动画。两节都可交互；实现规格见同目录 <code>spec.md</code>。</p>
+
+  <div class="tools" role="toolbar" aria-label="全局控制">
+    <span class="tag">主题</span>
+    <span class="seg2" id="themeSeg">
+      <button data-th="auto" aria-pressed="true">跟随系统</button><button data-th="light" aria-pressed="false">浅色</button><button data-th="dark" aria-pressed="false">深色</button>
+    </span>
+    <label><input type="checkbox" id="rmChk"> 减少动态效果</label>
+    <label><input type="checkbox" id="slowChk" data-bind="slow"> 0.25× 慢放</label>
+    <label><input type="checkbox" id="tourChk"> 自动轮播 A 的演示</label>
+  </div>
+
+  <!-- ===================== A ===================== -->
+  <h2>A　设置页：演示台 + 悬停即演示</h2>
+  <p class="sub">把鼠标停在窗口里的某一行上：这一行先亮起，停满 150 ms（且移动不超过 4 px）才切换演示；两段之间淡入淡出，同一时间只动一段；离开行后当前这轮演到落在静息帧就停。开关点一下，回放一次到新状态。</p>
+  <div class="a-grid">
+    <div class="winwrap" id="winwrap">
+      <div class="win" id="win" aria-label="设置窗口示意">
+        <div class="tb"><div class="tl"><span class="r"></span><span class="y"></span><span class="g"></span></div>设置</div>
+        <div class="content">
+          <div class="stage" id="stage" aria-hidden="true">
+            <div class="layer" id="layerA"></div><div class="layer" id="layerB"></div>
+            <div class="stagecap" id="stagecap"></div>
+          </div>
+          <div class="seg" role="tablist" id="seg">
+            <button role="tab" data-tab="player" aria-selected="true">面板</button>
+            <button role="tab" data-tab="general" aria-selected="false">通用</button>
+            <button role="tab" data-tab="shortcuts" aria-selected="false">快捷键</button>
+            <button role="tab" data-tab="about" aria-selected="false">关于</button>
+          </div>
+          <div class="pane on" data-pane="player">
+            <div class="grp" id="grpPlayer"></div>
+            <div class="foot">译文来自系统翻译，只在本机处理。</div>
+          </div>
+          <div class="pane" data-pane="general"><div class="ph">本原型不含这一段。通用段沿用同一个演示台：登录时启动 / 在 Dock 显示两行各配一段小动画，规格见 spec.md §A.9。</div></div>
+          <div class="pane" data-pane="shortcuts">
+            <div class="grp" id="grpShortcuts"></div>
+            <div class="foot">快捷键全局生效；默认未设置。</div>
+          </div>
+          <div class="pane" data-pane="about"><div class="ph">关于页整块留给动画会话，本原型不含。</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="notes">
+      <div class="status" aria-live="polite">
+        <h3>运行状态（验证用）</h3>
+        <dl>
+          <dt>悬停意图</dt><dd id="stIntent">空闲</dd>
+          <dt>正在动的演示</dt><dd id="stRun">无（静帧）</dd>
+          <dt>同时运行数</dt><dd id="stCount">0</dd>
+          <dt>rAF 循环</dt><dd id="stRaf">已停</dd>
+        </dl>
+      </div>
+      <h3>排版决定</h3>
+      <ul>
+        <li><b>演示区在窗口最上方，一块 440 × 140</b>（触控板页是两块 150 高；nanoPod 的效果需要一条屏幕边或一整块面板，所以合成一块宽的）。高度比稿子里的 120 多 20，行区相应从 350 收到 330，窗口仍是 480 × 562。</li>
+        <li><b>背景是一张安静的桌面壁纸</b>：冷色底（浅色偏淡蓝紫、深色偏靛蓝）加两团柔和的光，圆角 12。面板、胶囊、键帽在上面才不会和 Apple Music 粉抢色；粉色只留给「正在发生的那件事」。</li>
+        <li><b>对应关系</b>：悬停行 = 行底色变深（同触控板页的悬停灰）；离开后最后演示过的行保留浅一档底色，告诉你台上是哪一行；台左下角小字写行名和开关状态。</li>
+        <li><b>动画节奏照录屏</b>：主运动约 0.9 s，缓入缓出 cubic-bezier(.42, 0, .58, 1)，无过冲；透明度 0.3 s；动作之间停 0.7–1.4 s。</li>
+      </ul>
+      <h3>怎么看</h3>
+      <ul>
+        <li>「面板」段四行、「快捷键」段两行都有演示。</li>
+        <li>把「减少动态效果」打开：演示台只显示静帧，切行不淡入淡出。</li>
+        <li>「0.25× 慢放」对这里也生效，方便看细节。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ===================== B ===================== -->
+  <h2>B　引导里「完成一步」的打勾动画</h2>
+  <p class="sub">环外径 28、线宽 5.5，连续粗环，7 步各占 1/7。点「完成一步」看整套；连点会打断并合并（环的速度不断，不回头）；最后一步合圈有礼花。</p>
+  <div class="b-grid">
+    <div>
+      <div class="bstage" id="bstage">
+        <div class="haptic" id="haptic"><span id="hpA"></span><span id="hpB"></span></div>
+        <div class="cardbox" id="cardbox">
+          <div class="tcard" id="tcard">
+            <div class="head">
+              <div class="ringbox" id="ringbox">
+                <svg viewBox="0 0 28 28" aria-hidden="true" id="ringsvg">
+                  <g id="ringg">
+                    <circle id="rTrack" cx="14" cy="14" r="11.25" fill="none" stroke="var(--ring-track)" stroke-width="5.5"/>
+                    <circle id="rDisc" cx="14" cy="14" r="0" fill="var(--accent)"/>
+                    <circle id="rFill" cx="14" cy="14" r="11.25" fill="none" stroke="var(--accent)" stroke-width="5.5" stroke-linecap="round" transform="rotate(-90 14 14)" stroke-dasharray="0 70.69" opacity="0"/>
+                    <circle id="rComet" cx="14" cy="14" r="11.25" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" transform="rotate(-90 14 14)" stroke-dasharray="0 70.69" opacity="0"/>
+                    <circle id="rSeal" cx="14" cy="14" r="11.25" fill="none" stroke="#fff" stroke-width="5.5" opacity="0"/>
+                  </g>
+                  <path id="rCheck" d="M8.6 14.3 L12.2 17.7 L19.2 10" pathLength="1" fill="none" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 1" stroke-dashoffset="1" opacity="0"/>
+                </svg>
+                <div class="num" id="rNum">1</div>
+              </div>
+              <div class="title" id="cTitle"></div>
+            </div>
+            <div class="body" id="cBody"></div>
+            <ul class="beats" id="cBeats"></ul>
+            <div class="foot2" id="cFoot"></div>
+          </div>
+        </div>
+        <canvas id="fx"></canvas>
+      </div>
+      <div class="rings" id="ringGallery" aria-label="环在不同进度时的样子"></div>
+      <p class="small" style="margin-top:8px">环在已完成 0 / 1 / 3 / 5 / 6 / 7 步时的静止样子（随页面深浅色切换）；圆头、线宽 5.5、轨道 22% 粉；合圈后变实心粉 + 白勾。</p>
+    </div>
+    <div class="ctrl">
+      <div class="btns">
+        <button class="btn primary" id="btnStep">完成一步</button>
+        <button class="btn" id="btnBeat">只勾一个 beat</button>
+        <button class="btn" id="btnRapid">快速三连（测打断）</button>
+        <button class="btn" id="btnReset">重置</button>
+      </div>
+      <label class="small" style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="slowChk2" data-bind="slow" style="accent-color:var(--accent)"> 0.25× 慢放（与顶栏同步）</label>
+      <label class="small" style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="bigChk" checked style="accent-color:var(--accent)"> 放大到 1.55×（关掉是真实尺寸）</label>
+      <div class="panel">
+        <h3>状态机（当前状态高亮）</h3>
+        <div class="pills" id="pills"></div>
+        <pre class="log" id="log" aria-live="off"></pre>
+      </div>
+      <div class="panel small">
+        <h3>触觉 / 声音建议</h3>
+        <b>触觉</b>：<code>.levelChange</code> 落在「勾落下」那一刻（+60 ms，画面上第一次有东西撞停）；最后一步合圈用 <code>.alignment</code>，落在圆头碰到起点（+600 ms）。beat 打勾同样一次 <code>.levelChange</code>。每次都取新的 <code>defaultPerformer</code>；用鼠标时系统自动无感。<br>
+        <b>声音</b>：不加。这是音乐 app，轻响会踩在用户正在听的歌上。若以后要加，只在合圈那一次，且默认关闭。<br>
+        舞台左上角的小标签在这些时刻闪一下，只是标记位置，原型不发声不振动。
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const $  = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+
+/* ------------------------------------------------------------ 全局状态与时钟 */
+const S = { slow: false, rm: matchMedia('(prefers-reduced-motion: reduce)').matches, manual: false };
+const users = [];               // 每个 user(dt, now)=>bool 仍在运行
+let raf = 0, lastTs = 0;
+function wake() { if (S.manual) return; if (!raf) { lastTs = performance.now(); raf = requestAnimationFrame(frame); } updateStatus(); }
+function frame(ts) {
+  raf = 0;
+  const dt = Math.min(0.05, (ts - lastTs) / 1000); lastTs = ts;
+  if (advanceAll(dt * (S.slow ? 0.25 : 1))) raf = requestAnimationFrame(frame);
+  updateStatus();
+}
+function advanceAll(sdt) { let busy = false; for (const u of users) if (u(sdt)) busy = true; return busy; }
+
+/* ------------------------------------------------------------ 缓动 / 弹簧 */
+function bezier(x1, y1, x2, y2) {
+  return t => {
+    if (t <= 0) return 0; if (t >= 1) return 1;
+    let lo = 0, hi = 1, u = t;
+    for (let i = 0; i < 22; i++) { u = (lo + hi) / 2; const x = 3 * (1 - u) ** 2 * u * x1 + 3 * (1 - u) * u * u * x2 + u ** 3; if (x < t) lo = u; else hi = u; }
+    return 3 * (1 - u) ** 2 * u * y1 + 3 * (1 - u) * u * u * y2 + u ** 3;
+  };
+}
+const E = { io: bezier(.42, 0, .58, 1), out: bezier(.2, .8, .2, 1), in: bezier(.4, 0, 1, 1), lin: t => clamp(t) };
+/* SwiftUI Spring(duration:bounce:) 的解析近似：ω = 2π/duration，ζ = 1 - bounce */
+function springPos(t, dur, bounce) {
+  if (t <= 0) return 0;
+  const w = 2 * Math.PI / dur, z = 1 - clamp(bounce, 0, .95);
+  if (z >= 1) return 1 - (1 + w * t) * Math.exp(-w * t);
+  const wd = w * Math.sqrt(1 - z * z);
+  return 1 - Math.exp(-z * w * t) * (Math.cos(wd * t) + (z * w / wd) * Math.sin(wd * t));
+}
+/* 场景里的“状态变量”：init 起，events=[[time,target,kind,a,b]]，时间由调用者传入（纯函数，可重放） */
+function sv(t, init, ev) {
+  let cur = init;
+  for (let i = 0; i < ev.length; i++) {
+    const [t0, to, kind, a, b] = ev[i];
+    if (t < t0) return cur;
+    const u = t - t0;
+    const p = kind === 'sp' ? springPos(u, a, b || 0) : (E[kind] || E.io)(u / a);
+    const nt = i + 1 < ev.length ? ev[i + 1][0] : Infinity;
+    if (t >= nt) { cur = to; continue; }
+    return cur + (to - cur) * p;
+  }
+  return cur;
+}
+const bump = (t, t0, d) => { const u = (t - t0) / d; return u <= 0 || u >= 1 ? 0 : Math.sin(Math.PI * u); };
+
+/* ============================================================ A：设置页演示台 */
+const ICON = {
+  prev: '<svg viewBox="0 0 14 12" style="width:.062em"><path d="M13 1V11L7 6Z M7 1V11L1 6Z"/></svg>',
+  play: '<svg viewBox="0 0 10 12" style="width:.044em"><path d="M1 1L9 6L1 11Z"/></svg>',
+  next: '<svg viewBox="0 0 14 12" style="width:.062em"><path d="M1 1V11L7 6Z M7 1V11L13 6Z"/></svg>'
+};
+const panelHTML = pw => `<div class="pn" style="--pw:${pw}"><div class="art"><i class="sun"></i><i class="wv1"></i><i class="wv2"></i></div><div class="scrim"></div><b class="t1"></b><b class="t2"></b><div class="ctl">${ICON.prev}${ICON.play}${ICON.next}</div></div>`;
+const KEYS = ['⌥', '⌘', 'P'];
+const keysHTML = (labels) => labels.map(k => `<div class="key">${k}</div>`).join('');
+
+/* 每个场景：loop 周期、once 区间（切换开关时播放的那一段）、build(el)->render(t, opts) */
+const SCENES = {
+  cover: {
+    name: '全屏封面', loop: 6.2, once: { on: [0.7, 2.7], off: [3.7, 5.4] }, rest: sw => sw ? 2.7 : 0.3,
+    build(el) {
+      el.innerHTML = `<div class="menubar"><i></i><i></i><i class="np"></i></div><div class="abs" id="p" style="left:168px;top:16px">${panelHTML(104)}</div>`;
+      const pn = el.querySelector('.pn'), art = pn.querySelector('.art'), scrim = pn.querySelector('.scrim'),
+        t1 = pn.querySelector('.t1'), t2 = pn.querySelector('.t2'), ctl = pn.querySelector('.ctl');
+      return t => {
+        const s = sv(t, 0, [[0.9, 1, 'io', .9], [3.9, 0, 'io', .9]]);
+        const sz = lerp(.68, 1, s);
+        art.style.width = art.style.height = sz + 'em';
+        art.style.left = (1 - sz) / 2 + 'em'; art.style.top = lerp(.075, 0, s) + 'em';
+        art.style.borderRadius = lerp(.04, 0, s) + 'em';
+        art.style.boxShadow = s > .98 ? 'none' : '';
+        scrim.style.opacity = s;
+        t1.style.top = lerp(.885, .79, s) + 'em'; t2.style.top = lerp(.94, .845, s) + 'em'; ctl.style.top = lerp(1.0, .915, s) + 'em';
+      };
+    }
+  },
+  peek: {
+    name: '贴边收起 · 换歌探出', loop: 8.4, once: { on: [1.9, 5.9], off: [1.9, 3.6] }, rest: sw => sw ? 5.0 : 3.4,
+    build(el, o) {
+      el.innerHTML = `<div class="menubar"><i></i><i></i><i class="np"></i></div>
+        <div class="abs" id="p" style="left:290px;top:14px">${panelHTML(104)}</div>
+        <div class="strip" id="strip"><div class="fill" id="fill"></div></div>
+        <div class="capsule" id="cap"><div class="th"></div><div class="tx"><b></b><b></b></div></div>`;
+      const p = el.querySelector('#p'), strip = el.querySelector('#strip'), fill = el.querySelector('#fill'), cap = el.querySelector('#cap');
+      return t => {
+        const tuck = sv(t, 0, [[0.7, 1, 'io', .92], [6.7, 0, 'io', .92]]);
+        const cp = o.capsule === false ? 0 : sv(t, 0, [[2.4, 1, 'io', .8], [5.7, 0, 'io', .8]]);
+        p.style.transform = `translateX(${tuck * 170}px)`;
+        p.style.opacity = 1 - E.io(clamp((tuck - .55) / .45));
+        const sa = E.io(clamp((tuck - .5) / .5));
+        strip.style.opacity = sa; strip.style.transform = `translateX(${(1 - sa) * 5}px)`;
+        const pulse = bump(t, 2.3, 1.0);
+        strip.style.boxShadow = `0 0 0 .5px var(--glass-line), 0 0 ${pulse * 12}px ${pulse * 3}px rgba(250,64,88,${pulse * .55})`;
+        fill.style.height = (t < 2.4 ? 62 : 8 + (t - 2.4) * 1.5) + '%';
+        cap.style.transform = `translateX(${(1 - cp) * 190}px)`; cap.style.opacity = clamp(cp * 3);
+      };
+    }
+  },
+  trans: {
+    name: '显示翻译', loop: 6.0, once: { on: [0.7, 2.6], off: [3.9, 5.4] }, rest: sw => sw ? 2.6 : 0.3,
+    build(el, o) { return buildLyrics(el, o, false); }
+  },
+  transTo: {
+    name: '翻译为', loop: 6.8, once: { on: [0, 1.7], off: [0, 1.7] }, rest: () => 1.2,
+    build(el, o) { return buildLyrics(el, o, true); }
+  },
+  showhide: {
+    name: '显示 / 隐藏面板', loop: 6.6, once: { on: [0.6, 2.5], off: [0.6, 2.5] }, rest: () => 0.3,
+    build(el) {
+      el.innerHTML = `<div class="menubar"><i></i><i></i><i class="np"></i></div>
+        <div class="bgwin" style="left:236px;top:26px;width:176px;height:92px"><b style="top:24px;width:96px"></b><b style="top:38px;width:130px"></b><b style="top:52px;width:70px"></b><b style="top:66px;width:110px"></b></div>
+        <div class="abs" id="p" style="left:266px;top:14px">${panelHTML(96)}</div>
+        <div class="keys" id="keys" style="left:44px;top:52px">${keysHTML(KEYS)}</div>`;
+      const p = el.querySelector('#p'), keys = $$('.key', el);
+      return t => {
+        const press = Math.max(bump(t, 0.9, .34), bump(t, 3.4, .34));
+        keys.forEach((k, i) => {
+          const d = press; k.style.transform = `translateY(${d * 3}px) scale(${1 - d * .05})`;
+          k.style.boxShadow = `0 ${3 - d * 2.5}px 0 var(--keyedge), 0 ${5 - d * 3}px 8px rgba(20,20,50,${.16 - d * .08}), inset 0 1px 0 rgba(255,255,255,.4)` + (d > .05 ? `, 0 0 0 ${2 * d}px rgba(250,64,88,${d * .8})` : '');
+        });
+        const op = sv(t, 1, [[1.0, 0, 'out', .32], [3.5, 1, 'out', .42]]);
+        p.style.opacity = op; p.style.transform = `scale(${lerp(.955, 1, op)})`;
+      };
+    }
+  },
+  hideEdge: {
+    name: '贴边隐藏', loop: 7.0, once: { on: [0.6, 2.6], off: [0.6, 2.6] }, rest: () => 0.3,
+    build(el) {
+      el.innerHTML = `<div class="menubar"><i></i><i></i><i class="np"></i></div>
+        <div class="abs" id="p" style="left:290px;top:14px">${panelHTML(104)}</div>
+        <div class="strip" id="strip"><div class="fill" style="height:62%"></div></div>
+        <div class="keys" id="keys" style="left:44px;top:52px">${keysHTML(['⌥', '⌘', 'E'])}</div>`;
+      const p = el.querySelector('#p'), strip = el.querySelector('#strip'), keys = $$('.key', el);
+      return t => {
+        const press = Math.max(bump(t, 0.9, .34), bump(t, 3.9, .34));
+        keys.forEach(k => { const d = press; k.style.transform = `translateY(${d * 3}px) scale(${1 - d * .05})`;
+          k.style.boxShadow = `0 ${3 - d * 2.5}px 0 var(--keyedge), 0 ${5 - d * 3}px 8px rgba(20,20,50,${.16 - d * .08}), inset 0 1px 0 rgba(255,255,255,.4)` + (d > .05 ? `, 0 0 0 ${2 * d}px rgba(250,64,88,${d * .8})` : ''); });
+        const tuck = sv(t, 0, [[1.05, 1, 'io', .92], [4.05, 0, 'io', .92]]);
+        p.style.transform = `translateX(${tuck * 170}px)`; p.style.opacity = 1 - E.io(clamp((tuck - .55) / .45));
+        const sa = E.io(clamp((tuck - .5) / .5)); strip.style.opacity = sa; strip.style.transform = `translateX(${(1 - sa) * 5}px)`;
+      };
+    }
+  }
+};
+const LANGS = [
+  ['跟随系统', '我们去看海吧'], ['中文', '我们去看海吧'], ['English', "Let's go see the sea"], ['日本語', '海を見に行こう'], ['한국어', '바다 보러 가자'], ['Français', 'Allons voir la mer']
+];
+const CYCLE = ['我们去看海吧', '海を見に行こう', '바다 보러 가자', 'Allons voir la mer'];
+function buildLyrics(el, o, cycle) {
+  const pw = 214;
+  el.innerHTML = `<div class="abs" style="left:${(440 - pw) / 2}px;top:12px"><div class="pn" style="--pw:${pw};height:2.2em;background:radial-gradient(110% 40% at 14% 0%,#ff9aa8 0,transparent 62%),radial-gradient(100% 40% at 92% 60%,#7d6cff 0,transparent 58%),#b9508f">
+    <div class="lyric" id="l0" style="top:12px;opacity:.42">Down by the water</div>
+    <div class="lyric" id="l1" style="top:42px"><b style="font-weight:650">Let’s go see the sea</b><span class="tr"><span id="trA"></span><span id="trB"></span>&nbsp;</span></div>
+    <div class="lyric" id="l2" style="top:80px;opacity:.42">Just you, just me</div>
+    <div class="lyric" id="l3" style="top:112px;opacity:.42">Let the tide decide</div></div></div>`;
+  const l1 = el.querySelector('#l1'), l2 = el.querySelector('#l2'), l3 = el.querySelector('#l3'), trA = el.querySelector('#trA'), trB = el.querySelector('#trB');
+  const L = 20;  // 一行译文占的高度（px）
+  const fixed = o && o.lang != null ? LANGS[o.lang][1] : null;
+  return t => {
+    let s, a = 1, b = 0, txtA, txtB = '';
+    if (!cycle) { s = sv(t, 0, [[1.1, 1, 'out', .55], [4.2, 0, 'out', .5]]); txtA = fixed || CYCLE[0]; }
+    else {
+      s = 1;
+      if (fixed) txtA = fixed;
+      else {
+        const seg = 1.7, i = Math.floor(t / seg) % 4, u = (t % seg) / seg;
+        const f = E.io(clamp(u / .18));       // 0.3 s 交叉淡入
+        txtA = CYCLE[i]; txtB = CYCLE[(i + 3) % 4]; a = f; b = 1 - f;
+      }
+    }
+    trA.textContent = txtA; trB.textContent = txtB;
+    trA.style.opacity = a * s; trB.style.opacity = b * s;
+    const off = (1 - s) * -3;
+    trA.style.transform = trB.style.transform = `translateY(${off}px)`;
+    trA.style.filter = trB.style.filter = `blur(${(1 - s) * 1.6}px)`;
+    l2.style.transform = l3.style.transform = `translateY(${(s * L).toFixed(2)}px)`;
+  };
+}
+
+/* ------ 演示台运行器 */
+const A = { run: null, layers: [$('#layerA'), $('#layerB')], front: 0, still: null, tab: 'player', sw: {}, lang: 0, tour: false, gen: 0 };
+const ROWS = {
+  player: [
+    { id: 'cover', scene: 'cover', title: '全屏封面', desc: '专辑封面铺满面板。', ctl: 'sw' },
+    { id: 'peek', scene: 'peek', title: '换歌时显示歌曲', desc: '贴边收起时，短暂探出新歌。', ctl: 'sw' },
+    { id: 'trans', scene: 'trans', title: '显示翻译', desc: '译文显示在原文下方。', ctl: 'sw' },
+    { id: 'transTo', scene: 'transTo', title: '翻译为', desc: '', ctl: 'pop' }
+  ],
+  shortcuts: [
+    { id: 'showhide', scene: 'showhide', title: '显示 / 隐藏面板', desc: '', ctl: 'rec', rec: '⌥⌘P' },
+    { id: 'hideEdge', scene: 'hideEdge', title: '贴边隐藏', desc: '', ctl: 'rec', rec: '⌥⌘E' }
+  ]
+};
+const rowEls = {};
+for (const tab of Object.keys(ROWS)) {
+  const grp = $(tab === 'player' ? '#grpPlayer' : '#grpShortcuts');
+  for (const r of ROWS[tab]) {
+    A.sw[r.id] = true;
+    const el = document.createElement('div'); el.className = 'row'; el.dataset.row = r.id;
+    let ctl = '';
+    if (r.ctl === 'sw') ctl = `<button class="sw" role="switch" aria-checked="true" aria-label="${r.title}"></button>`;
+    else if (r.ctl === 'pop') ctl = `<select class="pop" aria-label="${r.title}">${LANGS.map((l, i) => `<option value="${i}">${l[0]}</option>`).join('')}</select>`;
+    else ctl = `<span class="recorder">${r.rec}</span>`;
+    el.innerHTML = `<div class="lb"><div class="t">${r.title}</div>${r.desc ? `<div class="d">${r.desc}</div>` : ''}</div>${ctl}`;
+    grp.appendChild(el); rowEls[r.id] = el; r.el = el; r.tab = tab;
+  }
+}
+const ROWLIST = [...ROWS.player, ...ROWS.shortcuts];
+const rowById = id => ROWLIST.find(r => r.id === id);
+
+const capEl = $('#stagecap');
+function setCap(r) {
+  const on = A.sw[r.id];
+  const chip = r.ctl === 'sw' ? `<i>${on ? '开' : '关'}</i>` : r.ctl === 'pop' ? `<i>${LANGS[A.lang][0]}</i>` : `<i>${r.rec}</i>`;
+  capEl.innerHTML = `${SCENES[r.scene].name}${chip}`;
+}
+function sceneOpts(r) {
+  if (r.id === 'peek') return { capsule: A.sw.peek };
+  if (r.id === 'transTo') return { lang: A.langFixed ? A.lang : null };
+  if (r.id === 'trans') return { };
+  return {};
+}
+function mountScene(r, opts) {
+  const back = A.layers[1 - A.front], front = A.layers[A.front];
+  const sc = SCENES[r.scene];
+  const layer = back; layer.innerHTML = '';
+  const render = sc.build(layer, opts);
+  return { layer, render, sc };
+}
+/* 把 r 的场景显示到台上；mode: 'still' | 'loop' | 'once'  */
+function show(r, mode, opts = {}) {
+  const old = A.run || A.still;
+  const same = old && old.r === r;
+  const o = sceneOpts(r);
+  const sc = SCENES[r.scene];
+  const sw = A.sw[r.id] !== false;
+  let m;
+  if (same && old.layer) {                   // 同一场景：原地续用图层，不交叉淡化
+    m = { layer: old.layer, render: (sc.build.length ? (old.layer.innerHTML = '', sc.build(old.layer, o)) : old.render), sc };
+  } else {
+    m = mountScene(r, o);
+    const prev = A.layers[A.front];
+    A.layers[1 - A.front].classList.add('on');
+    if (prev !== m.layer) { prev.classList.remove('on'); const stale = prev; setTimeout(() => { if (!stale.classList.contains('on')) stale.innerHTML = ''; }, S.rm ? 0 : 340); }
+    A.front = 1 - A.front;
+  }
+  A.run = null; A.still = null;
+  setCap(r);
+  const base = { r, layer: m.layer, render: m.render, sc, t: 0 };
+  if (mode === 'still') {
+    m.render(sc.rest(sw)); A.still = base; markActive(r);
+  } else if (mode === 'loop') {
+    base.mode = 'loop'; base.t = 0; base.leaving = false; base.stopAt = null; A.run = base; m.render(0); markActive(r);
+  } else {
+    const [a, b] = sc.once[sw ? 'on' : 'off'];
+    base.mode = 'once'; base.t = a; base.endT = b; A.run = base; m.render(a); markActive(r);
+  }
+  updateStatus(); wake();
+}
+function markActive(r) { $$('.row').forEach(e => e.classList.toggle('active', e === r.el)); }
+function nextRestT(run) {
+  const rt = run.sc.rest(A.sw[run.r.id] !== false), L = run.sc.loop;
+  let k = Math.floor((run.t - rt) / L) + 1; return rt + k * L;
+}
+users.push(dt => {
+  const run = A.run; if (!run) return false;
+  run.t += dt;
+  if (run.mode === 'once') {
+    if (run.t >= run.endT) { run.render(run.endT); A.still = run; A.run = null; updateStatus(); return false; }
+    run.render(run.t); return true;
+  }
+  if (run.leaving && run.stopAt != null && run.t >= run.stopAt) {
+    run.render(run.sc.rest(A.sw[run.r.id] !== false)); A.still = run; A.run = null;
+    if (A.tour) setTimeout(tourNext, 350);
+    updateStatus(); return false;
+  }
+  if (run.tourOne && run.t >= run.sc.loop) {                // 轮播：演完一轮
+    run.render(run.sc.rest(A.sw[run.r.id] !== false)); A.still = run; A.run = null;
+    setTimeout(tourNext, 350); updateStatus(); return false;
+  }
+  run.render(run.t % run.sc.loop); return true;
+});
+
+/* ------ 悬停意图：停满 150 ms 且期间移动 ≤ 4 px */
+const intent = { row: null, ax: 0, ay: 0, timer: 0, fired: false };
+function intentStart(r, x, y) { clearTimeout(intent.timer); intent.row = r; intent.ax = x; intent.ay = y; intent.fired = false;
+  setIntent('等待停住…');
+  intent.timer = setTimeout(() => { intent.fired = true; setIntent('已触发（' + r.title + '）'); fire(r); }, 150); }
+function fire(r) {
+  if (A.tour) tourStop();
+  if (A.run && A.run.r === r && A.run.mode === 'loop') { A.run.leaving = false; A.run.stopAt = null; return; }
+  if (S.rm) { show(r, 'still'); return; }
+  show(r, 'loop');
+}
+function setIntent(s) { $('#stIntent').textContent = s; }
+for (const r of ROWLIST) {
+  const el = r.el;
+  el.addEventListener('pointerenter', e => { el.classList.add('hot'); intentStart(r, e.clientX, e.clientY); });
+  el.addEventListener('pointermove', e => {
+    if (intent.row === r && !intent.fired && Math.hypot(e.clientX - intent.ax, e.clientY - intent.ay) > 4 * winScale) intentStart(r, e.clientX, e.clientY);
+  });
+  el.addEventListener('pointerleave', () => {
+    el.classList.remove('hot'); clearTimeout(intent.timer); setIntent('空闲');
+    if (A.run && A.run.r === r && A.run.mode === 'loop') { A.run.leaving = true; A.run.stopAt = nextRestT(A.run); }
+  });
+  el.addEventListener('focusin', () => { if (!el.matches(':hover')) fire(r); });
+  const sw = $('.sw', el);
+  if (sw) sw.addEventListener('click', () => {
+    if (A.tour) tourStop();
+    const v = sw.getAttribute('aria-checked') !== 'true'; sw.setAttribute('aria-checked', v); A.sw[r.id] = v;
+    if (S.rm) show(r, 'still'); else show(r, 'once');
+  });
+  const pop = $('.pop', el);
+  if (pop) pop.addEventListener('change', () => { A.lang = +pop.value; A.langFixed = true; if (S.rm) show(r, 'still'); else show(r, 'once'); });
+  if (pop) pop.addEventListener('pointerenter', () => { A.langFixed = false; });
+}
+
+/* ------ 分段 */
+$('#seg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  $$('#seg button').forEach(x => x.setAttribute('aria-selected', x === b));
+  $$('.pane').forEach(p => p.classList.toggle('on', p.dataset.pane === b.dataset.tab));
+  A.tab = b.dataset.tab;
+  if (ROWS[A.tab]) show(ROWS[A.tab][0], 'still');
+});
+
+/* ------ 自动轮播 */
+let tourIdx = -1;
+function tourNext() {
+  if (!A.tour) return;
+  tourIdx = (tourIdx + 1) % ROWLIST.length;
+  const r = ROWLIST[tourIdx];
+  if (r.tab !== A.tab) { const btn = $(`#seg button[data-tab="${r.tab}"]`); btn.click(); }
+  $$('.row').forEach(e => e.classList.remove('hot')); r.el.classList.add('hot');
+  A.sw[r.id] = true; const sw = $('.sw', r.el); if (sw) sw.setAttribute('aria-checked', 'true');
+  A.langFixed = false;
+  show(r, S.rm ? 'still' : 'loop'); if (A.run) A.run.tourOne = true;
+  if (S.rm) setTimeout(tourNext, 1800);
+}
+function tourStop() { A.tour = false; $('#tourChk').checked = false; $$('.row.hot').forEach(e => { if (!e.matches(':hover')) e.classList.remove('hot'); }); }
+$('#tourChk').addEventListener('change', e => { A.tour = e.target.checked; if (A.tour) { tourIdx = -1; tourNext(); } });
+
+/* ------ 窗口缩放（手机宽度） */
+let winScale = 1;
+function fitWin() {
+  const wrap = $('#winwrap'), win = $('#win');
+  const avail = wrap.clientWidth; winScale = Math.min(1, avail / 480);
+  win.style.transform = winScale < 1 ? `scale(${winScale})` : 'none';
+  wrap.style.height = (590 * winScale) + 'px';
+}
+addEventListener('resize', fitWin);
+
+function updateStatus() {
+  const run = A.run;
+  $('#stRun').textContent = run ? `${SCENES[run.r.scene].name}（${run.mode === 'loop' ? (run.leaving ? '收尾中' : '循环') : '回放一次'}）` : '无（静帧）';
+  $('#stCount').textContent = run ? 1 : 0;
+  $('#stRaf').textContent = raf ? '运行中' : '已停';
+}
+
+/* ============================================================ B：引导「完成一步」 */
+const STEPS = [
+  ['连上 Music', '让 nanoPod 读到正在播放的歌。', ['允许控制 Music', '读到正在播放']],
+  ['把鼠标挪过来', '面板平时只留封面，控件在你需要的时候才出来。', ['移到面板上', '按一下播放']],
+  ['专辑页的两个角', '右上角选声音从哪出，左上角一步到 Music。', ['右上角：声音从哪出', '左上角：去 Music']],
+  ['点开歌词', '翻到歌词页，看当前这一行。', ['翻到歌词页', '等一行走完']],
+  ['翻译一句', '有外文歌的时候，点右下角的翻译按钮。', ['点翻译按钮', '看到译文']],
+  ['放到你喜欢的角落', '双指按住面板，轻轻往一个角推过去。', ['推到一个角落', '再往边上推一下']],
+  ['它就在这条边上', '鼠标停上去，它会探出来。', ['停上去，它探出来', '点一下，回来']]
+];
+const FINALE = ['都认识了', '有事按 设置 › 认识 nanoPod，随时回来。'];
+const RC = 2 * Math.PI * 11.25;   // 环周长
+const NS = 7;
+
+class Val {
+  constructor(v) { this.v = v; this.vel = 0; this.m = null; }
+  get active() { return !!this.m; }
+  set(v) { this.v = v; this.vel = 0; this.m = null; }
+  /* opts: dur, ease | spring:[duration,bounce], delay */
+  to(target, o = {}) {
+    const t0 = B.now + (o.delay || 0);
+    if (o.spring) this.m = { k: 'sp', to: target, t0, dur: o.spring[0], z: 1 - clamp(o.spring[1], 0, .95) };
+    else this.m = { k: 'tw', from: this.v, to: target, t0, d: o.dur || .3, e: E[o.ease || 'out'], started: false };
+    return this;
+  }
+  step(dt) {
+    const m = this.m; if (!m) return;
+    if (B.now < m.t0) return;
+    if (m.k === 'tw') {
+      if (!m.started) { m.from = this.v; m.started = true; }
+      const p = clamp((B.now - m.t0) / m.d); this.v = m.from + (m.to - m.from) * m.e(p); if (p >= 1) { this.v = m.to; this.m = null; }
+    } else {
+      const w = 2 * Math.PI / m.dur, k = w * w, c = 2 * m.z * w; let left = dt; const h = 1 / 240;
+      while (left > 1e-9) { const s = Math.min(h, left); const a = -k * (this.v - m.to) - c * this.vel; this.vel += a * s; this.v += this.vel * s; left -= s; }
+      if (Math.abs(this.v - m.to) < 1e-4 && Math.abs(this.vel) < 1e-3) { this.v = m.to; this.vel = 0; this.m = null; }
+    }
+  }
+}
+const B = {
+  now: 0, cues: [], count: 0, cardStep: 0, beats: [], busy: false, finished: false, combo: 0, lastAt: -99, seqStart: 0, particles: [], halos: [],
+  state: 'idle'
+};
+const V = {
+  ring: new Val(0), ringScale: new Val(1), ringW: new Val(5.5), numOp: new Val(1), numScale: new Val(1), numY: new Val(0),
+  chkDraw: new Val(0), chkScale: new Val(.6), disc: new Val(0), seal: new Val(0), cardY: new Val(0), cardS: new Val(1),
+  ci: [0, 1, 2].map(() => ({ op: new Val(1), y: new Val(0) }))
+};
+const ALLV = () => [V.ring, V.ringScale, V.ringW, V.numOp, V.numScale, V.numY, V.chkDraw, V.chkScale, V.disc, V.seal, V.cardY, V.cardS, ...V.ci.flatMap(c => [c.op, c.y]), ...B.beats.flatMap(b => [b.fill, b.scale, b.draw])];
+
+const elRing = { fill: $('#rFill'), comet: $('#rComet'), seal: $('#rSeal'), disc: $('#rDisc'), check: $('#rCheck'), num: $('#rNum'), g: $('#ringg'), track: $('#rTrack') };
+const elCard = { title: $('#cTitle'), body: $('#cBody'), beats: $('#cBeats'), foot: $('#cFoot'), card: $('#tcard'), box: $('#cardbox') };
+const PILLS = ['anticipate', 'draw', 'grow', 'sparks', 'settle', 'handoff'];
+const PILL_LABEL = { anticipate: '预备', draw: '画勾', grow: '环长', sparks: '火花', settle: '安定', handoff: '交接', seal: '合圈', confetti: '礼花' };
+function buildPills(final) {
+  const list = final ? ['anticipate', 'draw', 'grow', 'seal', 'confetti', 'settle'] : PILLS;
+  $('#pills').innerHTML = list.map(s => `<span data-s="${s}">${PILL_LABEL[s]}</span>`).join('');
+}
+function enter(s) {
+  B.state = s;
+  $$('#pills span').forEach(p => p.classList.toggle('on', p.dataset.s === s));
+  logEv(s);
+}
+const logLines = [];
+function logEv(s) {
+  const ms = Math.round((B.now - B.seqStart) * 1000);
+  logLines.push(`+${String(ms).padStart(4)} ms  ${s}`); if (logLines.length > 9) logLines.shift();
+  $('#log').textContent = logLines.join('\n');
+}
+function haptic(name) {
+  logEv('⌁ haptic ' + name);
+  const el = $(B.hapticFlip ? '#hpA' : '#hpB'); B.hapticFlip = !B.hapticFlip;
+  el.textContent = '⌁ haptic ' + name; el.classList.add('on'); setTimeout(() => el.classList.remove('on'), 700 / (S.slow ? .25 : 1));
+}
+function cue(at, fn, essential = true) { B.cues.push({ at: B.now + at, fn, essential }); }
+
+/* ---- 卡片内容 ---- */
+const CK = '<path class="ck" d="M4 7.3 L6.3 9.5 L10.2 4.8" pathLength="1" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 1" stroke-dashoffset="1"/>';
+function beatDom(text) {
+  const li = document.createElement('li');
+  li.innerHTML = `<span class="dot"><svg viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6.25" fill="none" stroke="var(--dot-track)" stroke-width="1.5"/><circle class="bf" cx="7" cy="7" r="0" fill="var(--accent)"/>${CK}</svg></span>${text}`;
+  return li;
+}
+function setContent(step) {
+  B.cardStep = step;
+  const fin = step >= NS;
+  const d = fin ? FINALE : STEPS[step];
+  elCard.title.textContent = d[0]; elCard.body.textContent = d[1];
+  elCard.beats.innerHTML = ''; B.beats = [];
+  if (!fin) d[2].forEach(t => {
+    const li = beatDom(t); elCard.beats.appendChild(li);
+    B.beats.push({ li, dot: li.querySelector('.dot'), bf: li.querySelector('.bf'), ck: li.querySelector('.ck'), fill: new Val(0), scale: new Val(1), draw: new Val(0), done: false });
+  });
+  elCard.foot.textContent = fin ? '7 / 7' : `第 ${step + 1} 步 / 共 7 步`;
+  B.shownNum = fin ? null : step + 1;
+  elRing.num.textContent = B.shownNum == null ? '' : String(B.shownNum);
+}
+function beatCheck(i, ff) {
+  const b = B.beats[i]; if (!b || b.done) return;
+  b.done = true; b.li.classList.add('done');
+  if (S.rm || ff) { b.fill.set(1); b.draw.set(1); b.scale.set(1); return; }
+  b.scale.to(.88, { dur: .06, ease: 'out' });                       // 预备：下压蓄力
+  cue(.06, () => { b.scale.to(1.22, { dur: .09, ease: 'out' }); b.fill.to(1, { dur: .14, ease: 'out' }); b.draw.to(1, { dur: .26, ease: 'out' }); });
+  cue(.15, () => b.scale.to(1, { spring: [.30, .42] }));              // 弹回
+}
+
+/* ---- 完成一步 ---- */
+function completeStep() {
+  if (B.finished) return;
+  if (B.busy) interrupt();
+  const k = B.count; if (k >= NS) return;
+  const last = k === NS - 1;
+  B.busy = true; B.count++;
+  const chain = B.now - B.lastAt < 4.0; B.combo = chain ? Math.min(B.combo + 1, 3) : 0; B.lastAt = B.now;
+  B.seqStart = B.now; buildPills(last);
+  const rem = B.beats.map((b, i) => b.done ? -1 : i).filter(i => i >= 0);
+  if (!S.rm) V.cardS.set(1);
+  const stag = .07;
+  rem.forEach((i, n) => cue(n * stag, () => beatCheck(i, false)));
+  const T0 = Math.max(0, (rem.length - 1) * stag);
+  runRing(k, last, T0);
+  wake();
+}
+function runRing(k, last, T0) {
+  const target = k + 1;
+  if (S.rm) return runRingRM(k, last, T0);
+  cue(T0, () => { enter('anticipate'); V.ringScale.to(.95, { dur: .06, ease: 'out' }); V.numOp.to(.6, { dur: .06 }); });
+  cue(T0 + .06, () => { enter('draw'); haptic('.levelChange'); });
+  cue(T0 + .06, () => { enter('grow'); V.ring.to(target, { spring: [.6, 0] }); V.ringW.to(6.5, { dur: .15, ease: 'out' }); V.ringScale.to(1.07, { dur: .18, ease: 'out' }); });
+  cue(T0 + .24, () => V.ringScale.to(1, { spring: [.45, .35] }));
+  const tChk = last ? .5 : .34;
+  cue(T0 + tChk, () => {
+    V.numOp.to(0, { dur: .14, ease: 'in' }); V.numScale.to(.5, { dur: .14, ease: 'in' });
+    V.chkDraw.to(1, { dur: .28, ease: 'out', delay: .08 }); V.chkScale.set(.6); V.chkScale.to(1.15, { dur: .16, ease: 'out', delay: .08 });
+    cue(.26, () => V.chkScale.to(1, { spring: [.32, .45] }), true);
+    elRing.check.setAttribute('opacity', 1);
+  });
+  if (!last) {
+    cue(T0 + .38, () => { enter('sparks'); spawnSparks(16 + B.combo * 4, target); spawnHalo(); }, false);
+    cue(T0 + .66, () => { enter('settle'); V.ringW.to(5.5, { dur: .2, ease: 'out' }); });
+    cue(T0 + .76, () => handoff(k + 1, false));
+    cue(T0 + 1.1, () => { B.busy = false; enter('idle'); $$('#pills span').forEach(p => p.classList.remove('on')); });
+  } else {
+    cue(T0 + .60, () => { enter('seal'); haptic('.alignment');
+      V.ringScale.set(1.08); V.ringScale.to(1, { spring: [.5, .38] });
+      V.ringW.to(7, { dur: .12, ease: 'out' }); cue(.12, () => V.ringW.to(5.5, { dur: .22, ease: 'out' }));
+      V.seal.set(1); V.seal.to(0, { dur: .35, ease: 'out' }); });
+    cue(T0 + .64, () => { V.disc.to(1, { spring: [.4, .25] }); });
+    cue(T0 + .68, () => { enter('confetti'); spawnConfetti(72); spawnHalo(); spawnHalo(.12); V.cardY.set(-4); V.cardY.to(0, { spring: [.4, .3] }); }, false);
+    cue(T0 + 1.05, () => { enter('settle'); handoff(NS, false); });
+    cue(T0 + 1.5, () => { B.busy = false; B.finished = true; });
+  }
+}
+function runRingRM(k, last, T0) {
+  const target = k + 1;
+  cue(T0, () => { enter('draw'); haptic(last ? '.alignment' : '.levelChange'); V.ring.to(target, { dur: .3, ease: 'lin' }); });
+  cue(T0, () => { V.numOp.to(0, { dur: .16, ease: 'lin' }); elRing.check.setAttribute('opacity', 1); V.chkScale.set(1); V.chkDraw.to(1, { dur: .16, ease: 'lin' }); });
+  if (last) cue(T0 + .3, () => { enter('seal'); V.seal.set(1); V.seal.to(0, { dur: .35, ease: 'lin' }); V.disc.to(1, { dur: .2, ease: 'lin' }); });
+  cue(T0 + (last ? .7 : .5), () => handoff(last ? NS : k + 1, false));
+  cue(T0 + (last ? .95 : .8), () => { B.busy = false; B.finished = last; enter('idle'); $$('#pills span').forEach(p => p.classList.remove('on')); });
+}
+/* 交接：卡内容淡出 → 换 → 错峰淡入；环内 勾 → 下一步数字 */
+function handoff(next, ff) {
+  enter('handoff');
+  const fin = next >= NS;
+  const swap = () => {
+    setContent(next);
+    if (!fin) {
+      // 勾退场、新数字上滚
+      V.chkDraw.set(0); elRing.check.setAttribute('opacity', 0);
+      if (S.rm || ff) { V.numOp.set(1); V.numScale.set(1); V.numY.set(0); }
+      else { V.numOp.set(0); V.numScale.set(.8); V.numY.set(6); V.numOp.to(1, { dur: .22, ease: 'out' }); V.numScale.to(1, { dur: .22, ease: 'out' }); V.numY.to(0, { dur: .22, ease: 'out' }); }
+    } else { elRing.num.textContent = ''; V.numOp.set(0); }
+    V.ci.forEach((c, i) => {
+      if (S.rm || ff) { c.op.set(1); c.y.set(0); }
+      else { c.op.set(0); c.y.set(6); c.op.to(1, { dur: .18, ease: 'out', delay: i * .04 }); c.y.to(0, { dur: .18, ease: 'out', delay: i * .04 }); }
+    });
+  };
+  if (ff) { swap(); return; }
+  const outD = S.rm ? .12 : .14;
+  V.ci.forEach(c => c.op.to(0, { dur: outD, ease: 'in' }));
+  if (!fin && !S.rm) V.chkScale.to(.7, { dur: .14, ease: 'in' });
+  cue(outD, swap);
+}
+/* 打断：把还没发生的 cue 立刻按快进模式执行；环不重置，保持速度 */
+function interrupt() {
+  logEv('⚡ interrupt → fast-forward');
+  const list = B.cues.splice(0).sort((a, b) => a.at - b.at);
+  for (const c of list) { if (c.essential) runCueFF(c); }
+  B.busy = false;
+  V.ringW.to(5.5, { dur: .1, ease: 'out' }); V.numOp.set(1); V.numScale.set(1); V.numY.set(0);
+  V.ringScale.to(1, { spring: [.3, 0] });
+}
+/* 快进执行：cue 内部若再登记子 cue，就地递归执行；handoff 走 ff 分支 */
+function runCueFF(c) {
+  const before = B.cues.length;
+  c.fn(true);
+  const kids = B.cues.splice(before);
+  kids.sort((a, b) => a.at - b.at).forEach(k => { if (k.essential) runCueFF(k); });
+}
+
+/* ---- 粒子 ---- */
+const fxc = $('#fx'), fxx = fxc.getContext('2d');
+function fitFx() {
+  const r = $('#bstage').getBoundingClientRect(), d = devicePixelRatio || 1;
+  fxc.width = Math.round(r.width * d); fxc.height = Math.round(r.height * d); fxx.setTransform(d, 0, 0, d, 0, 0);
+}
+function ringGeom() {
+  const st = $('#bstage').getBoundingClientRect(), r = $('#ringsvg').getBoundingClientRect(), z = r.width / 28;
+  return { cx: r.left - st.left + r.width / 2, cy: r.top - st.top + r.height / 2, z, cardTop: $('#tcard').getBoundingClientRect().top - st.top, cardCx: $('#tcard').getBoundingClientRect().left - st.left + $('#tcard').getBoundingClientRect().width / 2 };
+}
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function spawnSparks(n, progress) {
+  if (S.rm) return;
+  const g = ringGeom(), ang = -Math.PI / 2 + 2 * Math.PI * (progress / NS), rr = 11.25 * g.z;
+  const hx = g.cx + Math.cos(ang) * rr, hy = g.cy + Math.sin(ang) * rr;
+  const cols = [css('--accent'), css('--accent'), css('--accent-soft'), css('--gold')];
+  for (let i = 0; i < n; i++) {
+    const a = ang + (Math.random() - .5) * Math.PI * 1.7, sp = (90 + Math.random() * 60) * g.z * 1.0;
+    B.particles.push({ k: 's', x: hx, y: hy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: .55, age: 0, r: (2 + Math.random() * 1.5) * g.z * .8, c: cols[i % cols.length], damp: .88 });
+  }
+  wake();
+}
+function spawnHalo(delay = 0) {
+  if (S.rm) return; const g = ringGeom(); B.halos.push({ x: g.cx, y: g.cy, z: g.z, age: -delay, life: .5 }); wake();
+}
+function spawnConfetti(n) {
+  if (S.rm) return;
+  const g = ringGeom(), cols = [css('--accent'), css('--gold'), css('--violet'), '#7fd6c2', css('--accent-soft'), '#ffffff'];
+  for (let i = 0; i < n; i++) {
+    const a = -Math.PI / 2 + (Math.random() - .5) * (Math.PI / 3), sp = (220 + Math.random() * 100) * g.z * .8;
+    B.particles.push({ k: 'c', x: g.cardCx + (Math.random() - .5) * 120 * g.z, y: g.cardTop + 8, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1.8, age: 0,
+      w: (5 + Math.random() * 2) * g.z * .8, h: (7 + Math.random() * 4) * g.z * .8, shape: i % 3, rot: Math.random() * 6.28, vr: (Math.random() - .5) * 5, c: cols[i % cols.length], g: 360 * g.z * .8 });
+  }
+  wake();
+}
+function stepFx(dt) {
+  const W = fxc.clientWidth, H = fxc.clientHeight; fxx.clearRect(0, 0, W, H);
+  B.particles = B.particles.filter(p => (p.age += dt) < p.life);
+  for (const p of B.particles) {
+    if (p.k === 's') {
+      const f = Math.pow(p.damp, dt * 60); p.vx *= f; p.vy *= f; p.x += p.vx * dt; p.y += p.vy * dt;
+      const u = p.age / p.life, a = 1 - E.in(u); fxx.globalAlpha = a; fxx.fillStyle = p.c; fxx.beginPath(); fxx.arc(p.x, p.y, p.r * (1 - u * .5), 0, 6.283); fxx.fill();
+    } else {
+      p.vy += p.g * dt; const f = Math.pow(.985, dt * 60); p.vx *= f; p.vy *= f; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
+      const a = p.life - p.age < .5 ? (p.life - p.age) / .5 : 1;
+      fxx.save(); fxx.globalAlpha = a; fxx.translate(p.x, p.y); fxx.rotate(p.rot); fxx.fillStyle = p.c;
+      if (p.shape === 0) fxx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      else if (p.shape === 1) { fxx.beginPath(); fxx.arc(0, 0, p.w * .45, 0, 6.283); fxx.fill(); }
+      else fxx.fillRect(-p.w * .18, -p.h * .7, p.w * .36, p.h * 1.4);
+      fxx.restore();
+    }
+  }
+  B.halos = B.halos.filter(h => (h.age += dt) < h.life);
+  for (const h of B.halos) { if (h.age < 0) continue; const u = h.age / h.life, e = E.out(u); fxx.globalAlpha = .5 * (1 - u); fxx.strokeStyle = css('--accent'); fxx.lineWidth = 1.5 * h.z; fxx.beginPath(); fxx.arc(h.x, h.y, (14 + e * 16) * h.z, 0, 6.283); fxx.stroke(); }
+  fxx.globalAlpha = 1;
+  return B.particles.length > 0 || B.halos.length > 0;
+}
+
+/* ---- 每帧绘制 ---- */
+function paint() {
+  const p = V.ring.v, frac = clamp(p / NS, 0, 1);
+  const C = RC, full = frac >= .9995;
+  elRing.fill.setAttribute('opacity', frac > .003 ? 1 : 0);
+  elRing.fill.setAttribute('stroke-dasharray', full ? `${C.toFixed(2)} ${C.toFixed(2)}` : `${(C * frac).toFixed(2)} ${C.toFixed(2)}`);
+  elRing.fill.setAttribute('stroke-width', V.ringW.v.toFixed(2));
+  const speed = Math.abs(V.ring.vel);
+  const ca = clamp(speed * .32, 0, .55), cl = C / NS * .55 * clamp(speed / 2.4, 0, 1);
+  elRing.comet.setAttribute('opacity', full ? 0 : ca.toFixed(3));
+  elRing.comet.setAttribute('stroke-dasharray', `${Math.max(.01, cl).toFixed(2)} ${C.toFixed(2)}`);
+  elRing.comet.setAttribute('stroke-dashoffset', (-(C * frac - cl)).toFixed(2));
+  elRing.seal.setAttribute('opacity', V.seal.v.toFixed(3)); elRing.seal.setAttribute('stroke-width', V.ringW.v.toFixed(2));
+  elRing.disc.setAttribute('r', (11.25 * clamp(V.disc.v, 0, 1.05)).toFixed(2));
+  elRing.g.style.transformOrigin = '14px 14px'; elRing.g.style.transformBox = 'view-box';
+  $('#ringsvg').style.transform = `scale(${V.ringScale.v.toFixed(4)})`;
+  $('#rNum').style.opacity = clamp(V.numOp.v).toFixed(3);
+  $('#rNum').style.transform = `translateY(${V.numY.v.toFixed(2)}px) scale(${V.numScale.v.toFixed(3)})`;
+  elRing.check.setAttribute('stroke-dashoffset', (1 - clamp(V.chkDraw.v)).toFixed(3));
+  elRing.check.style.transformOrigin = '14px 14px'; elRing.check.style.transform = `scale(${V.chkScale.v.toFixed(3)})`;
+  elRing.check.setAttribute('stroke', V.disc.v > .35 ? '#fff' : 'var(--accent)');
+  elRing.check.setAttribute('opacity', V.chkDraw.v > .001 ? 1 : 0);
+  elCard.card.style.transform = `translateY(${V.cardY.v.toFixed(2)}px) scale(${V.cardS.v})`;
+  const items = [elCard.title, elCard.body, elCard.beats];
+  V.ci.forEach((c, i) => { const it = items[i]; it.style.opacity = clamp(c.op.v).toFixed(3); it.style.transform = `translateY(${c.y.v.toFixed(2)}px)`; });
+  B.beats.forEach(b => {
+    b.bf.setAttribute('r', (6.9 * clamp(b.fill.v)).toFixed(2));
+    b.ck.setAttribute('stroke-dashoffset', (1 - clamp(b.draw.v)).toFixed(3));
+    b.dot.style.transform = `scale(${b.scale.v.toFixed(3)})`;
+  });
+}
+users.push(dt => {
+  B.now += dt;
+  // 先跑 cue（可能登记新 cue）
+  let guard = 0;
+  while (guard++ < 200) {
+    const due = B.cues.filter(c => c.at <= B.now + 1e-9).sort((a, b) => a.at - b.at)[0];
+    if (!due) break; B.cues.splice(B.cues.indexOf(due), 1); due.fn(false);
+  }
+  const vals = ALLV(); vals.forEach(v => v.step(dt));
+  paint();
+  const fx = stepFx(dt);
+  return B.cues.length > 0 || vals.some(v => v.active) || fx;
+});
+
+/* ---- 重置 / 按钮 ---- */
+function resetB(soft) {
+  B.cues = []; B.particles = []; B.halos = []; B.count = 0; B.busy = false; B.finished = false; B.combo = 0;
+  [V.ring, V.ringScale, V.ringW, V.numOp, V.numScale, V.numY, V.chkDraw, V.chkScale, V.disc, V.seal, V.cardY, V.cardS].forEach(v => v.set(0));
+  V.ringScale.set(1); V.ringW.set(5.5); V.numOp.set(1); V.numScale.set(1); V.chkScale.set(.6); V.cardS.set(1);
+  V.ci.forEach(c => { c.op.set(1); c.y.set(0); });
+  setContent(0); buildPills(false); enter('idle'); $$('#pills span').forEach(p => p.classList.remove('on'));
+  logLines.length = 0; $('#log').textContent = '';
+  paint(); stepFx(0);
+}
+$('#btnStep').addEventListener('click', () => { completeStep(); });
+$('#btnBeat').addEventListener('click', () => {
+  if (B.finished) return; if (B.busy) interrupt();
+  const rem = B.beats.map((b, i) => b.done ? -1 : i).filter(i => i >= 0);
+  if (rem.length === 0) return;
+  if (rem.length === 1) { completeStep(); return; }
+  B.seqStart = B.now; haptic('.levelChange'); beatCheck(rem[0], false); wake();
+});
+$('#btnRapid').addEventListener('click', () => {
+  if (B.finished) return; let n = 0;
+  const go = () => { completeStep(); if (++n < 3) setTimeout(go, 160 / (S.slow ? .25 : 1)); };
+  go();
+});
+$('#btnReset').addEventListener('click', () => resetB());
+$('#bigChk').addEventListener('change', e => { $('#cardbox').style.setProperty('--z', e.target.checked ? 1.55 : 1); fitFx(); });
+
+/* ---- 环的静态样子 ---- */
+function ringSVGStatic(count) {
+  const closed = count >= NS, C2 = RC, frac = count / NS;
+  return `<svg viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="11.25" fill="none" stroke="var(--ring-track)" stroke-width="5.5"/>
+    ${closed ? `<circle cx="14" cy="14" r="11.25" fill="var(--accent)"/>` : ''}
+    ${count > 0 ? `<circle cx="14" cy="14" r="11.25" fill="none" stroke="var(--accent)" stroke-width="5.5" stroke-linecap="round" transform="rotate(-90 14 14)" stroke-dasharray="${closed ? C2 : (C2 * frac).toFixed(2)} ${C2.toFixed(2)}"/>` : ''}
+    ${closed ? `<path d="M8.6 14.3 L12.2 17.7 L19.2 10" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>` : `<text x="14" y="17.3" text-anchor="middle" font-size="9.5" font-weight="700" fill="var(--tcard-ink)" font-family="-apple-system,SF Pro Text,sans-serif">${count + 1}</text>`}</svg>`;
+}
+function buildGallery() {
+  const g = $('#ringGallery');
+  g.innerHTML = [0, 1, 3, 5, 6, 7].map(n => `<div class="rcell"><div class="rb">${ringSVGStatic(n)}</div><span style="color:var(--cap-ink)"><b style="color:inherit">${n === 7 ? '合圈' : '已完成 ' + n + ' / 7'}</b>${n === 0 ? '未开始' : n === 6 ? '最后一截' : n === 7 ? '实心 + 白勾' : ''}</span></div>`).join('');
+}
+
+/* ============================================================ 全局控制 */
+function setSlow(v) { S.slow = v; $$('[data-bind=slow]').forEach(e => e.checked = v); }
+$$('[data-bind=slow]').forEach(e => e.addEventListener('change', () => setSlow(e.checked)));
+function setRM(v) {
+  S.rm = v; $('#rmChk').checked = v; document.body.classList.toggle('rm', v);
+  if (A.run) { const r = A.run.r; A.run = null; show(r, 'still'); }
+  if (B.busy) { interrupt(); wake(); }
+}
+$('#rmChk').addEventListener('change', e => setRM(e.target.checked));
+function setTheme(t) {
+  const root = document.documentElement;
+  if (t === 'auto') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', t);
+  $$('#themeSeg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.th === t));
+}
+$('#themeSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setTheme(b.dataset.th); });
+matchMedia('(prefers-reduced-motion: reduce)').addEventListener?.('change', e => setRM(e.matches));
+
+/* 初始化 */
+fitWin(); setRM(S.rm);
+show(ROWS.player[0], 'still');
+buildGallery(); resetB(); fitFx(); addEventListener('resize', fitFx);
+new MutationObserver(buildGallery).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+/* 调试 / 确定性回放：手动推进假时钟，不依赖 rAF */
+window.__proto = {
+  S, A, B, V, SCENES, ROWS,
+  advance(sec) { S.manual = true; const h = 1 / 60; let t = 0; while (t < sec - 1e-9) { const d = Math.min(h, sec - t); advanceAll(d); t += d; } updateStatus(); },
+  resume() { S.manual = false; wake(); },
+  seek(rowId, t, sw = true) {                     // 把演示台定在 loop 时间 t 的一帧
+    const r = rowById(rowId); A.sw[rowId] = sw; const w = $('.sw', r.el); if (w) w.setAttribute('aria-checked', sw);
+    A.layers.forEach(l => l.classList.add('notrans')); show(r, 'still'); A.still.render(t); A.layers.forEach(l => void l.offsetWidth);
+  },
+  shot(id, t, sw = true) { $('.tools').style.display = 'none'; this.advance(0); this.seek(id, t, sw); scrollTo(0, $('#stage').getBoundingClientRect().top + scrollY - 10); return innerWidth + 'x' + innerHeight; },
+  completeStep, resetB
+};
+})();
+</script>
+</body>
+</html>
