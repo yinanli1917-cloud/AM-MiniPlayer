@@ -122,6 +122,7 @@ struct TourCelebrationView: View {
     let field: TourParticleField
     let startTime: TimeInterval
     @State private var isPlaying = true
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         TimelineView(.animation(paused: !isPlaying)) { timeline in
@@ -135,7 +136,7 @@ struct TourCelebrationView: View {
                     gc.opacity = alpha
                     gc.translateBy(x: p.x, y: p.y)
                     gc.rotate(by: .radians(p.rotation))
-                    let color: Color = p.colorIsAccent ? Color.accentColor : .white
+                    let color: Color = p.colorIsAccent ? TourCardPalette.resolve(dark: colorScheme == .dark).accent : .white
                     let rect = CGRect(x: -p.size / 2, y: -p.size / 2, width: p.size, height: p.isCircle ? p.size : p.size * 0.6)
                     if p.isCircle {
                         gc.fill(Path(ellipseIn: rect), with: .color(color))

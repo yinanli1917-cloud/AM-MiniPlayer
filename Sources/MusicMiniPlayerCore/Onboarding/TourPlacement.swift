@@ -19,14 +19,25 @@ public enum TourCardSide: Equatable, Sendable {
 public struct TourCardPlacement: Equatable, Sendable {
     public let origin: CGPoint
     public let beakSide: TourCardSide
-    /// Distance from the card's top edge to the beak's tip, along the beak
-    /// edge — always clamped away from the corners (§4.3: `clamp(…, 18, h−18)`).
+    /// Distance from the card's BOTTOM edge (screen space, y up) to the
+    /// beak's tip along a left/right beak edge (from the LEFT edge for a
+    /// top/bottom beak) — always clamped away from the corners (§4.3:
+    /// `clamp(…, 18, h−18)`). SwiftUI's TourBubbleShape measures from the
+    /// TOP, so the view layer flips it (`TourCardPlacement.beakOffsetFromTop`).
     public let beakOffset: CGFloat
 
     public init(origin: CGPoint, beakSide: TourCardSide, beakOffset: CGFloat) {
         self.origin = origin
         self.beakSide = beakSide
         self.beakOffset = beakOffset
+    }
+
+    /// The offset in the top-left, y-down convention the bubble shape uses.
+    public func beakOffsetFromTop(cardHeight: CGFloat) -> CGFloat {
+        switch beakSide {
+        case .left, .right: return cardHeight - beakOffset
+        case .top, .bottom: return beakOffset
+        }
     }
 }
 

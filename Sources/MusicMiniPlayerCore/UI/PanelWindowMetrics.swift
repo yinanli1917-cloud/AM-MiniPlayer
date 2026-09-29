@@ -56,6 +56,16 @@ public enum PanelWindowMetrics {
     public static let tunedTopSafeArea: CGFloat = 32
     public static let cornerRadius: CGFloat = 16
 
+    /// The SwiftUI hosting view of a panel window built by `makeContentView`
+    /// (the container's only subview), or the content view itself for any
+    /// other window shape. SwiftUI `.global` rects live in this view's space.
+    @MainActor
+    public static func hostingView(in window: NSWindow) -> NSView {
+        guard let content = window.contentView else { return NSView() }
+        if content.subviews.count == 1, let host = content.subviews.first { return host }
+        return content
+    }
+
     /// The window's content view: a plain container the size of the window,
     /// holding the hosting view 32pt taller than it (the extra reaches above
     /// the window's top edge and is never on screen).
