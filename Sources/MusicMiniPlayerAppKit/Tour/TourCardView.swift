@@ -96,6 +96,19 @@ struct TourCardView: View {
         }
     }
 
+    /// The card body's rectangle in screen space (window minus the beak) — the
+    /// finale confetti launches from its top edge.
+    static func bodyFrame(inWindowFrame f: CGRect, beakSide: TourCardSide) -> CGRect {
+        var r = f
+        switch beakSide {
+        case .left: r.origin.x += M.beakSize; r.size.width -= M.beakSize
+        case .right: r.size.width -= M.beakSize
+        case .top: r.size.height -= M.beakSize
+        case .bottom: r.origin.y += M.beakSize; r.size.height -= M.beakSize
+        }
+        return r
+    }
+
     /// Screen point (AppKit, y up) of the progress ring's center for a card
     /// window at `f` — where the completion sparks fly out from.
     static func ringCenter(inWindowFrame f: CGRect, beakSide: TourCardSide) -> CGPoint {
@@ -127,6 +140,9 @@ struct TourCardView: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
             head
+            // The completion handoff (spec §B.2) fades three blocks: title,
+            // body (+ chip), and everything from the beats down. The ring is
+            // not part of any block.
             if !model.body.isEmpty {
                 Text(model.body)
                     .font(.system(size: M.bodySize))
@@ -134,23 +150,26 @@ struct TourCardView: View {
                     .lineSpacing(M.bodyLineSpacing)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, M.bodyTop)
+                    .tourFeedbackBlock(1, feedback)
             }
-            if let chip = model.chip { chipView(chip) }
-            if !model.beats.isEmpty { beatsView }
+            if let chip = model.chip { chipView(chip).tourFeedbackBlock(1, feedback) }
+            if !model.beats.isEmpty { beatsView.tourFeedbackBlock(2, feedback) }
             if let gestureKind {
                 TourGestureGlyph(kind: gestureKind, reduceMotion: reduceMotion)
                     .frame(maxWidth: .infinity)
                     .padding(.top, M.gestureTop)
+                    .tourFeedbackBlock(2, feedback)
             }
-            if isMoveStep, let note = model.footNote { noteView(note) }
+            if isMoveStep, let note = model.footNote { noteView(note).tourFeedbackBlock(2, feedback) }
             if let confirm = model.confirm {
                 Text(confirm)
                     .font(.system(size: M.confirmSize, weight: .semibold))
                     .foregroundStyle(palette.ink)
                     .padding(.top, M.confirmTop)
+                    .tourFeedbackBlock(2, feedback)
             }
-            footer
-            if !isMoveStep, let note = model.footNote, hasFooter { noteView(note) }
+            footer.tourFeedbackBlock(2, feedback)
+            if !isMoveStep, let note = model.footNote, hasFooter { noteView(note).tourFeedbackBlock(2, feedback) }
         }
         .padding(.top, M.paddingTop)
         .padding(.horizontal, M.paddingSide)
@@ -170,6 +189,7 @@ struct TourCardView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, M.titleTopInset)
+                .tourFeedbackBlock(0, feedback)
             TourFeedbackRing(
                 completed: model.ringCompleted, closed: model.ringClosed,
                 stepLabel: model.stepLabel, palette: palette, feedback: feedback
@@ -191,13 +211,7 @@ struct TourCardView: View {
     private var beatsView: some View {
         VStack(alignment: .leading, spacing: M.beatGap) {
             ForEach(model.beats) { beat in
-                HStack(spacing: 8) {
-                    TourFeedbackBeatDot(index: beat.id, checked: beat.checked, palette: palette, feedback: feedback)
-                    Text(beat.text)
-                        .font(.system(size: M.beatSize))
-                        .foregroundStyle(beat.checked ? palette.muted : palette.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                TourFeedbackBeatRow(beat: beat, palette: palette, size: M.beatSize, feedback: feedback)
             }
         }
         .padding(.top, M.beatsTop)

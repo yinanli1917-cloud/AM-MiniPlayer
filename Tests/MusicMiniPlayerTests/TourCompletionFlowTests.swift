@@ -125,4 +125,51 @@ final class TourCompletionFlowTests: XCTestCase {
         let last = try XCTUnwrap(series.last)
         XCTAssertGreaterThan(last, before, "and end longer than it started (\(before) -> \(last))")
     }
+
+    /// Spec §B.2 handoff: the old card's content fades OUT before the next
+    /// step's card takes over (it used to stay fully visible until a flat 1.0s
+    /// timer swapped it), and the new content fades in.
+    func test_stepCompletion_fadesTheOldContentOut_thenHandsTheCardOver() {
+        controller.send(.resume(completed: [.connect]))
+        spin(0.4)
+        controller.debugCardStore?.arm = .simulated
+        controller.send(.signal(.controlsRevealed))
+        controller.send(.signal(.isPlaying))
+        let start = Date()
+        spin(0.30)
+        XCTAssertEqual(controller.debugCardStore?.model.kind, .step(.reveal))
+        XCTAssertEqual(controller.debugFeedback.frame.contentOpacity, [1, 1, 1], "content untouched while the ring works")
+        spin(max(0, 0.86 - Date().timeIntervalSince(start)))
+        XCTAssertLessThan(controller.debugFeedback.frame.contentOpacity[0], 0.8, "the old content is fading out at ~0.86s")
+        XCTAssertEqual(controller.debugCardStore?.model.kind, .step(.reveal), "but the card has not been swapped yet")
+        spin(max(0, 1.2 - Date().timeIntervalSince(start)))
+        XCTAssertEqual(controller.debugCardStore?.model.kind, .step(.corners), "the next step's card has taken over")
+        spin(0.6)
+        XCTAssertFalse(controller.debugFeedback.isActive, "and the sequence has ended")
+    }
+
+    /// Spec §B.3: on the last step the card stays while the ring closes and
+    /// the confetti flies (window included); the finale card takes over at the
+    /// handoff, not at the first frame.
+    func test_finale_lastCardStaysWhileTheRingCloses_thenTheFinaleCardTakesOver() throws {
+        controller.send(.resume(completed: Set(TourStep.orderedSteps).subtracting([.back])))
+        spin(0.4)
+        controller.debugCardStore?.arm = .simulated
+        let store = try XCTUnwrap(controller.debugCardStore)
+        XCTAssertEqual(store.model.kind, .step(.back))
+        controller.send(.panelExpanded)
+        XCTAssertEqual(controller.state.phase, .finale, "the reducer is already at the finale")
+        spin(0.35)
+        XCTAssertEqual(store.model.kind, .step(.back), "the last step's card stays while the ring closes")
+        XCTAssertTrue(store.model.beats.allSatisfy(\.checked), "with both dots solid")
+        XCTAssertEqual(store.model.ringCompleted, 7)
+        XCTAssertTrue(controller.debugFeedback.isActive)
+        spin(0.55)                                                     // ~0.9s: confetti is up
+        XCTAssertNotNil(controller.debugFeedback.debugSparkOverlay.window, "the confetti window is open")
+        XCTAssertFalse(controller.debugFeedback.fx.particles.isEmpty)
+        spin(0.7)                                                      // ~1.6s: past the 1.19s handoff
+        guard case .finale = store.model.kind else { return XCTFail("finale card expected, got \(store.model.kind)") }
+        spin(1.4)
+        XCTAssertNil(controller.debugFeedback.debugSparkOverlay.window, "the FX window closes when the confetti has fallen")
+    }
 }

@@ -4,7 +4,7 @@
  *          TourPlacement/TourAnchorRegistry/TourMotionPolicy/OnboardingState/
  *          MusicController/LyricsService/SnappablePanel/LiquidEdgeController;
  *          this Tour/ folder's TourCardWindow/TourCardView (+TourCardStore)/
- *          TourCompletionFeedback/TourHaloView/TourCelebrationView.
+ *          TourCompletionFeedback/TourHaloView.
  * [OUTPUT]: Exports TourController — the @MainActor effect executor that
  *           turns TourMachine's pure output into real windows.
  * [POS]: MusicMiniPlayerAppKit/Tour. Owned by AppMain; constructed once the
@@ -36,13 +36,17 @@ final class TourController: ObservableObject {
     private var cardStore: TourCardStore?
     private var haloWindow: TourHaloWindow?
     private var haloStore: TourHaloStore?
-    /// Confetti only; the step-completion sparks live in `feedback`.
-    private var celebrationWindow: TourCelebrationWindow?
-    /// The "you finished it" animation — the controller's only call into it
-    /// is `feedback.begin(_:)`.
+    /// The "you finished it" animation (sparks and confetti included, in its
+    /// own FX window): the controller calls `begin(_:onSwapDue:)`,
+    /// `cardDidSwap()` and `cancel()`.
     private let feedback: TourCompletionFeedback
     private var transitionWork: DispatchWorkItem?
     private var finaleWork: DispatchWorkItem?
+    /// Fallback for the finale card swap (the feedback normally triggers it).
+    private var finaleCardWork: DispatchWorkItem?
+    /// Where the card window sits when nothing bounces it (finale bounce base).
+    private var cardPlacedOrigin: NSPoint?
+    private var cardBounceBase: NSPoint?
     private var closingFlashWork: DispatchWorkItem?
     private var connectDenied = false
     /// The last model actually shown — needed for the S4L-completion "closing
@@ -62,12 +66,12 @@ final class TourController: ObservableObject {
     /// windows are currently allocated, and whether any of the three timers
     /// (transition / finale auto-dismiss / closing-flash) are still armed.
     var debugAllocatedWindowCount: Int {
-        [cardWindow != nil, haloWindow != nil, celebrationWindow != nil, feedback.debugSparkOverlay.window != nil].filter { $0 }.count
+        [cardWindow != nil, haloWindow != nil, feedback.debugSparkOverlay.window != nil].filter { $0 }.count
     }
     var debugFeedback: TourCompletionFeedback { feedback }
     var debugCardStore: TourCardStore? { cardStore }
     var debugHasPendingTimers: Bool {
-        transitionWork != nil || finaleWork != nil || closingFlashWork != nil
+        transitionWork != nil || finaleWork != nil || closingFlashWork != nil || finaleCardWork != nil
     }
     var debugIsDeferredWatcherArmed: Bool { deferredWatcher.isArmed }
     /// Geometry seams for TourCardPlacementIntegrationTests (screen coordinates).
@@ -88,6 +92,7 @@ final class TourController: ObservableObject {
         self.state = TourPersistence.load(from: defaults)
 
         panel.onSnappedToCorner = { [weak self] _, corner in self?.snappedCornerSubject.send(corner) }
+        self.feedback.applyCardOffset = { [weak self] dy in self?.bounceCard(by: dy) }
         wireDetectors()
     }
 
@@ -213,27 +218,38 @@ final class TourController: ObservableObject {
         var ringTo: Int?
         var spark = false
         var closes = false
+        var confetti = false
+        var haptics: [TourHaptic] = []
+        // The finale (spec §B.3): the last step's card STAYS while the ring
+        // closes and the confetti flies; the finale card takes over at the
+        // handoff (the feedback calls `presentFinaleCard()`).
+        let holdForFinale = userCompletion && cardStore != nil && lastPresentedModel != nil
+            && effects.contains { if case .showFinaleCard = $0 { return true }; return false }
+            && effects.contains { if case .growRing = $0 { return true }; return false }
         for effect in effects {
             switch effect {
             case .showWelcomeCard: connectDenied = false; presentCurrentCard()
             case .showStepCard: connectDenied = false; presentCurrentCard()
             case .showDeferralNote: presentCurrentCard()
-            case .showFinaleCard: presentCurrentCard()
+            case .showFinaleCard: if !holdForFinale { presentCurrentCard() }
             case .showDeferredTipCard: presentCurrentCard()
             case .hideCard: hideCard()
             case .checkBeat(let step, let index):
-                if patchDisplayedCard({ model in
+                // Only a dot that is not yet solid on screen animates.
+                let onScreen = cardStore?.model.beats ?? []
+                let wasChecked = onScreen.indices.contains(index) ? onScreen[index].checked : false
+                if patchDisplayedCard(fromLast: holdForFinale, { model in
                     guard model.beats.indices.contains(index), case .step(let shown) = model.kind, shown == step else { return false }
                     model.beats[index].checked = true
                     return true
-                }) { pops.append(index) }
+                }), !wasChecked { pops.append(index) }
             case .growRing(let to):
                 ringTo = to
-                patchDisplayedCard { model in model.ringCompleted = to; return true }
+                patchDisplayedCard(fromLast: holdForFinale) { model in model.ringCompleted = to; return true }
             case .spark: spark = true
             case .pulseRing: closes = true
-            case .confetti: playConfetti()
-            case .haptic(let kind): performHaptic(kind)
+            case .confetti: confetti = true
+            case .haptic(let kind): haptics.append(kind)
             case .relocateCardToPanel: presentCurrentCard()
             case .persist: TourPersistence.save(state, to: defaults)
             case .armDeferredWatcher: armDeferredWatcher()
@@ -242,12 +258,18 @@ final class TourController: ObservableObject {
             }
         }
         if userCompletion, let store = cardStore, !pops.isEmpty || ringTo != nil {
-            beginFeedback(store: store, pops: pops, ringTo: ringTo, spark: spark, closes: closes)
+            // The feedback owns the haptics of a completion (they land on the
+            // frame the check lands / the ring seals, spec §B.8).
+            beginFeedback(store: store, pops: pops, ringTo: ringTo, spark: spark, closes: closes,
+                          confetti: confetti, holdForFinale: holdForFinale)
+        } else {
+            haptics.forEach { performHaptic($0) }
         }
         if closingFlashPending { closingFlashPending = false; scheduleClosingFlashHide() }
     }
 
-    private func beginFeedback(store: TourCardStore, pops: [Int], ringTo: Int?, spark: Bool, closes: Bool) {
+    private func beginFeedback(store: TourCardStore, pops: [Int], ringTo: Int?, spark: Bool, closes: Bool,
+                               confetti: Bool, holdForFinale: Bool) {
         let total = TourStep.orderedSteps.count
         var event = TourFeedbackEvent(ringFrom: ringTo ?? 0, ringTo: ringTo ?? 0, total: total, beatIndices: pops)
         if let to = ringTo {
@@ -255,10 +277,51 @@ final class TourController: ObservableObject {
             event.ringFrom = max(0, to - 1)
             event.closesRing = closes && to >= total
         }
-        if spark, let window = cardWindow {
-            event.sparkOriginOnScreen = TourCardView.ringCenter(inWindowFrame: window.frame, beakSide: store.beakSide)
+        event.sparks = spark
+        event.confetti = confetti
+        if let window = cardWindow {
+            event.ringCenterOnScreen = TourCardView.ringCenter(inWindowFrame: window.frame, beakSide: store.beakSide)
+            event.cardFrameOnScreen = TourCardView.bodyFrame(inWindowFrame: window.frame, beakSide: store.beakSide)
         }
-        feedback.begin(event)
+        var onSwapDue: (() -> Void)?
+        if holdForFinale {
+            // The finale card replaces the last step's card at the handoff.
+            event.handsOff = true
+            onSwapDue = { [weak self] in self?.presentFinaleCard() }
+            scheduleFinaleCardFallback()
+        } else if ringTo != nil, case .transitioning = state.phase {
+            // The next step's card replaces this one at the handoff.
+            event.handsOff = true
+            onSwapDue = { [weak self] in self?.advanceTransitionNow() }
+        }
+        cardBounceBase = cardWindow?.frame.origin
+        feedback.begin(event, onSwapDue: onSwapDue)
+    }
+
+    /// The feedback asked for the next step's card (its fade-out is done).
+    private func advanceTransitionNow() {
+        transitionWork?.cancel(); transitionWork = nil
+        send(.advanceTransition)
+    }
+
+    private func presentFinaleCard() {
+        finaleCardWork?.cancel(); finaleCardWork = nil
+        guard case .finale = state.phase else { return }
+        presentCurrentCard()
+    }
+
+    private func scheduleFinaleCardFallback() {
+        finaleCardWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.presentFinaleCard() }
+        finaleCardWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.7, execute: work)
+    }
+
+    /// Finale bounce: move the real card window (nothing clips at its edge).
+    private func bounceCard(by dy: CGFloat) {
+        let base = dy == 0 ? (cardPlacedOrigin ?? cardBounceBase) : cardBounceBase
+        guard let window = cardWindow, let base else { return }
+        window.setFrameOrigin(NSPoint(x: base.x, y: base.y - dy))
     }
 
     private func armDeferredWatcher() {
@@ -271,8 +334,7 @@ final class TourController: ObservableObject {
     }
 
     private func performHaptic(_ kind: TourHaptic) {
-        let pattern: NSHapticFeedbackManager.FeedbackPattern = (kind == .alignment) ? .alignment : .levelChange
-        NSHapticFeedbackManager.defaultPerformer.perform(pattern, performanceTime: .drawCompleted)
+        TourCompletionFeedback.performSystemHaptic(kind)
     }
 
     // MARK: - Teardown (§11.2: zero standing cost afterward)
@@ -280,17 +342,19 @@ final class TourController: ObservableObject {
     private func teardown() {
         transitionWork?.cancel(); transitionWork = nil
         finaleWork?.cancel(); finaleWork = nil
+        finaleCardWork?.cancel(); finaleCardWork = nil
         closingFlashWork?.cancel(); closingFlashWork = nil
         hideCard()
         TourAnchorRegistry.shared.reset()
     }
 
-    /// Fully releases the three overlay windows (not just orders them out) —
+    /// Fully releases the overlay windows (not just orders them out) —
     /// §11.2's "结束后无窗口...effectViews 清单必须回到引导前" means the
     /// window OBJECTS must go, not just become invisible. Nothing else holds
     /// a strong reference to them, so dropping these is deinit or nothing.
     private func hideCard() {
         closingFlashWork?.cancel(); closingFlashWork = nil
+        finaleCardWork?.cancel(); finaleCardWork = nil
         closingFlashPending = false
         lastPresentedModel = nil
         feedback.cancel()
@@ -302,9 +366,6 @@ final class TourController: ObservableObject {
         haloWindow?.orderOut(nil)
         haloWindow = nil
         haloStore = nil
-        celebrationWindow?.contentView = nil
-        celebrationWindow?.orderOut(nil)
-        celebrationWindow = nil
     }
 
     // MARK: - Card content assembly (proposal §3.3/§9)
@@ -322,12 +383,19 @@ final class TourController: ObservableObject {
     /// transition/idle phase, e.g. the last step's completion or S4L's
     /// closing flash) the last card shown. Returns whether it changed.
     @discardableResult
-    private func patchDisplayedCard(_ patch: (inout TourCardModel) -> Bool) -> Bool {
-        let live = cardModel(for: state.phase)
+    private func patchDisplayedCard(fromLast: Bool = false, _ patch: (inout TourCardModel) -> Bool) -> Bool {
+        let live = fromLast ? nil : cardModel(for: state.phase)
         var model: TourCardModel
         if let live { model = live } else if let last = lastPresentedModel { model = last } else { return false }
         guard patch(&model) else { return false }
         lastPresentedModel = model
+        if fromLast, let store = cardStore {
+            // Finale hold: the card stays exactly where it is (re-placing it
+            // would use the finale phase's anchor); a checked dot / longer
+            // ring changes no layout.
+            store.model = model
+            return true
+        }
         presentCard(model: model, gestureKind: live == nil ? nil : gestureKind(for: state.phase))
         if live == nil, case .idle = state.phase { closingFlashPending = true }
         return true
@@ -337,7 +405,8 @@ final class TourController: ObservableObject {
         closingFlashWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.hideCard() }
         closingFlashWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + TourMotionPolicy.Tokens.stepCompletionFeedback, execute: work)
+        // The closing seal (disc, flash, halo) runs about 1.1s: let it finish.
+        DispatchQueue.main.asyncAfter(deadline: .now() + TourMotionPolicy.Tokens.stepCompletionFeedback + 0.25, execute: work)
     }
 
     private func cardModel(for phase: TourPhase) -> TourCardModel? {
@@ -548,6 +617,10 @@ final class TourController: ObservableObject {
         debugLastAnchorRect = anchor
 
         let newContent = store.model.kind != model.kind || store.model.title != model.title
+        // A different card is taking over while the completion feedback waits
+        // for exactly that: the feedback already faded the old content out and
+        // fades the new one in — no crossfade of our own on top of it.
+        let feedbackHandoff = newContent && feedback.expectsSwap
         let apply = {
             store.beakSide = placement.beakSide
             store.beakOffset = placement.beakOffsetFromTop(cardHeight: cardSize.height)
@@ -555,7 +628,10 @@ final class TourController: ObservableObject {
             store.model = model
             if newContent { store.contentKey += 1 }
         }
-        if newContent {
+        if feedbackHandoff {
+            apply()
+            feedback.cardDidSwap()
+        } else if newContent {
             feedback.cancel()
             if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { apply() } else {
                 withAnimation(.easeOut(duration: TourMotionPolicy.Tokens.cardDismissDuration)) { apply() }
@@ -576,6 +652,8 @@ final class TourController: ObservableObject {
             window.setFrame(target, display: true)
         }
         window.orderFront(nil)
+        feedback.raiseOverlay()
+        cardPlacedOrigin = target.origin
 
         positionHalo(anchor: anchor)
     }
@@ -641,29 +719,6 @@ final class TourController: ObservableObject {
             window.contentView = TourHostingView(rootView: TourHaloRoot(store: store))
             haloStore = store
             haloWindow = window
-        }
-    }
-
-    // MARK: - Confetti (finale)
-
-    /// §8.2's 72 confetti from the panel's top edge. The field lives in the
-    /// celebration window's LOCAL y-down space (the first version fed it
-    /// screen coordinates, so nothing was ever on screen).
-    private func playConfetti() {
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, let panel else { return }
-        let frame = panel.frame.insetBy(dx: -80, dy: -160).union(panel.frame)
-        if celebrationWindow == nil { celebrationWindow = TourCelebrationWindow() }
-        let edge = CGRect(x: panel.frame.minX - frame.minX, y: frame.maxY - panel.frame.maxY, width: panel.frame.width, height: 1)
-        let now = Date().timeIntervalSinceReferenceDate
-        let field = TourParticleField.confetti(along: edge, at: now)
-        celebrationWindow?.contentView = TourHostingView(rootView: TourCelebrationView(field: field, startTime: now))
-        celebrationWindow?.setFrame(frame, display: true)
-        celebrationWindow?.orderFront(nil)
-        let longest = field.particles.map(\.lifetime).max() ?? 0
-        DispatchQueue.main.asyncAfter(deadline: .now() + longest + 0.1) { [weak self] in
-            self?.celebrationWindow?.contentView = nil
-            self?.celebrationWindow?.orderOut(nil)
-            self?.celebrationWindow = nil
         }
     }
 
