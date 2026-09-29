@@ -642,15 +642,9 @@ final class TourController: ObservableObject {
 
         window.hasShadow = store.arm.needsWindowShadow
         let target = NSRect(origin: placement.origin, size: cardSize)
-        if window.isVisible, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, window.frame != target {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = TourMotionPolicy.Tokens.cardTravelResponse
-                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.3, 1.0, 0.5, 1.0)
-                window.animator().setFrame(target, display: true)
-            }
-        } else {
-            window.setFrame(target, display: true)
-        }
+        window.place(target, animated: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+                     duration: TourMotionPolicy.Tokens.cardTravelResponse,
+                     timing: CAMediaTimingFunction(controlPoints: 0.3, 1.0, 0.5, 1.0))
         window.orderFront(nil)
         feedback.raiseOverlay()
         cardPlacedOrigin = target.origin
@@ -659,12 +653,19 @@ final class TourController: ObservableObject {
     }
 
     private func measureCardSize(model: TourCardModel, beakSide: TourCardSide, gestureKind: TourGestureKind?, arm: TourCardMaterialArm) -> CGSize {
-        let view = TourCardView(model: model, beakSide: beakSide, beakOffset: 40, gestureKind: gestureKind, arm: arm, feedback: feedback)
+        // The footer's links and buttons only render when their handlers exist; a
+        // measuring copy WITHOUT handlers is one footer row (~14pt) shorter than
+        // the live card — the second reason the bottom links were cut off.
+        let view = TourCardView(model: model, beakSide: beakSide, beakOffset: 40, gestureKind: gestureKind, arm: arm, feedback: feedback,
+                                onPrimary: {}, onSecondary: {}, onStop: {}, onSkipStep: {}, onFallback: {})
         let hosting = TourHostingView(rootView: view)
         let width = TourCardView.windowWidth(beakSide: beakSide)
         hosting.frame = NSRect(x: 0, y: 0, width: width, height: 1)
         let fitting = hosting.fittingSize
-        return CGSize(width: width, height: max(fitting.height > 0 ? fitting.height : 150, 92))
+        // No silent fallback height: a made-up size is what clipped every card
+        // (fittingSize was (0, 0) and 150 was used instead).
+        assert(fitting.height > 0, "TourHostingView must report its content size")
+        return CGSize(width: width, height: max(fitting.height, 92))
     }
 
     private func positionHalo(anchor: CGRect) {
@@ -708,8 +709,7 @@ final class TourController: ObservableObject {
             store.onStop = { [weak self] in self?.send(.stopTour) }
             store.onSkipStep = { [weak self] in self?.handleSkipStepOrDeniedContinue() }
             store.onFallback = { [weak self] in self?.handleFallback() }
-            let window = TourCardWindow()
-            window.contentView = TourHostingView(rootView: TourCardRoot(store: store))
+            let window = TourCardWindow(store: store)
             cardStore = store
             cardWindow = window
         }

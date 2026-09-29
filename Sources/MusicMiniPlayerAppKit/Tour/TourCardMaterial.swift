@@ -119,5 +119,8 @@ final class TourVibrancyView: NSVisualEffectView {
             NSBezierPath(cgPath: path).fill()
             return true
         }
+        // The window shadow is computed from the window's opaque pixels; after
+        // a re-mask it must follow the (new) bubble, not the old silhouette.
+        DispatchQueue.main.async { [weak self] in self?.window?.invalidateShadow() }
     }
 }

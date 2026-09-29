@@ -73,8 +73,12 @@ final class TourCardPlacementIntegrationTests: XCTestCase {
         let anchor = try XCTUnwrap(controller.debugLastAnchorRect, "reveal step must resolve an anchor rect")
         XCTAssertTrue(panel.frame.insetBy(dx: -1, dy: -1).contains(CGPoint(x: anchor.midX, y: anchor.midY)),
                       "anchor \(anchor) must be inside the panel \(panel.frame) in SCREEN coordinates")
-        XCTAssertEqual(anchor.midX, expectedPlayCenter.x, accuracy: 6)
-        XCTAssertEqual(anchor.midY, expectedPlayCenter.y, accuracy: 6)
+        XCTAssertEqual(anchor.midX, expectedPlayCenter.x, accuracy: 3)
+        // Tight on purpose: the anchor used to read 32pt too high (safe area)
+        // while the panel was hovered and, unhovered, 30pt too low (the hide
+        // offset) — the two nearly cancelled at rest, so a 6pt tolerance let
+        // both bugs through.
+        XCTAssertEqual(anchor.midY, expectedPlayCenter.y, accuracy: 3)
     }
 
     func test_revealCard_sitsBesideThePanelWithinSixteenPoints_andOnScreen() throws {
