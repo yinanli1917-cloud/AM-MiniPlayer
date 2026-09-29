@@ -7,9 +7,7 @@
  * [POS]: Settings window's About tab (docs/design/2026-09-25-menu-settings/
  *        proposal.md §4.3 "About" row + mockup `.about`) — a deliberate
  *        placeholder, no animation; the animation session replaces it. The
- *        segmented control stays where it is on every tab (mockup moves it to
- *        the top for About; a control that jumps 134pt under the cursor was
- *        judged worse than the small deviation).
+ *        native toolbar-tab strip stays where it is on every tab.
  */
 
 import SwiftUI

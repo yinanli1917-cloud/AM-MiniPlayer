@@ -3,13 +3,13 @@
  *          (row tracker + model), SettingsDemo (row → demo identity).
  * [OUTPUT]: Exports SettingsCard, SettingsDivider, SettingsSectionHeader,
  *           SettingsSectionFooter, SettingsRow, SettingsSwitchStyle,
- *           SettingsPushButtonStyle, SettingsSegmentedControl.
+ *           SettingsPushButtonStyle.
  * [POS]: Settings window's building blocks, drawn to the mockup's `.card` /
- *        `.crow` / `.tg` / `.pbtn` / `.segc` rules. Custom-drawn (not
- *        NSSwitch / NSSegmentedControl) on purpose: system controls grey out
- *        in an inactive window and their divider drawing is not ours to fix,
- *        and the draft specifies an accent-filled selected segment and a
- *        36×20 switch. They stay real SwiftUI Toggle / Button semantics.
+ *        `.crow` / `.tg` / `.pbtn` rules. Custom-drawn (not NSSwitch) on
+ *        purpose: system controls grey out in an inactive window and their
+ *        divider drawing is not ours to fix, and the draft specifies a 36×20
+ *        switch. They stay real SwiftUI Toggle / Button semantics. (The page
+ *        switcher is the native toolbar-tab strip, SettingsTabViewController.)
  */
 
 import SwiftUI
@@ -173,44 +173,5 @@ struct SettingsPushButtonStyle: ButtonStyle {
             )
             .opacity(configuration.isPressed ? 0.7 : 1)
             .fixedSize()
-    }
-}
-
-// ──────────────────────────────────────────────
-// MARK: - Segmented control (.segc: 440×24, track radius 7, pad 2, seg radius 5)
-// ──────────────────────────────────────────────
-
-struct SettingsSegmentedControl: View {
-    let tabs: [SettingsTab]
-    @Binding var selection: SettingsTab
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(tabs, id: \.self) { tab in
-                let selected = tab == selection
-                Button {
-                    selection = tab
-                } label: {
-                    Text(tab.title)
-                        .font(.system(size: 12, weight: selected ? .semibold : .regular))
-                        .foregroundStyle(selected ? Color.white : Color.primary)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 20)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(selected ? SettingsPalette.accent : Color.clear)
-                        )
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-            }
-        }
-        .padding(2)
-        .frame(width: SettingsMetrics.contentWidth, height: SettingsMetrics.segmentedHeight)
-        .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous).fill(SettingsPalette.segmentTrack)
-        )
-        .accessibilityElement(children: .contain)
     }
 }

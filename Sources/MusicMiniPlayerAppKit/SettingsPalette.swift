@@ -13,12 +13,13 @@ import SwiftUI
 import AppKit
 
 // ──────────────────────────────────────────────
-// MARK: - Metrics (draft: .win.v3 / .stage / .segc / .card / .crow)
+// MARK: - Metrics (draft: .win.v3 / .stage / .card / .crow)
 // ──────────────────────────────────────────────
 
 enum SettingsMetrics {
-    /// Window content size (proposal §4.2).
-    static let windowSize = CGSize(width: 480, height: 562)
+    /// Window content width (proposal §4.2). The height is not a constant: each tab's
+    /// window is its own content plus `pageBottomInset`.
+    static let windowWidth: CGFloat = 480
     /// Side and bottom padding; the top is 24 (motion prototype spec §A.1).
     static let outerPadding: CGFloat = 20
     static let topPadding: CGFloat = 24
@@ -27,22 +28,17 @@ enum SettingsMetrics {
     static let stageWidth: CGFloat = 300
     static let stageHeight: CGFloat = 169
     static let stageCorner: CGFloat = 12
-    static let segmentedHeight: CGFloat = 24
-    static let stageToSegmented: CGFloat = 18
-    static let segmentedToContent: CGFloat = 18
+    static let stageToPage: CGFloat = 18
     /// Same radius as the stage: two cards, one corner.
     static let cardCorner: CGFloat = 12
     /// A row with only a title is 44pt tall; one with a description line is 53pt.
     static let rowHeight: CGFloat = 44
     static let rowHeightWithDetail: CGFloat = 53
     static let rowHorizontalPadding: CGFloat = 14
-    /// Scrolling page area: from under the segmented control to the window's
-    /// bottom edge. The last 20pt are inside the scroll content (bottom
-    /// inset), so a page that fits at rest never shows a clipped card.
-    static let pageViewportHeight: CGFloat =
-        windowSize.height - topPadding - stageHeight - stageToSegmented
-        - segmentedHeight - segmentedToContent
+    /// Gap under the last element of every page (native Settings look).
     static let pageBottomInset: CGFloat = 20
+    /// The DEBUG-only Diagnostics page is a scrolling panel, so it gets a fixed height.
+    static let diagnosticsPageHeight: CGFloat = 309
 }
 
 // ──────────────────────────────────────────────
@@ -80,9 +76,6 @@ enum SettingsPalette {
     static let rowHover = Color(nsColor: dynamic(light: 0xE8E8EC, dark: 0x3B3B3F))
     /// The row whose scene the stage is showing, while the pointer is elsewhere (hover grey at 55%).
     static let rowActive = rowHover.opacity(0.55)
-
-    // Segmented control (--seg-bg)
-    static let segmentTrack = Color(nsColor: dynamic(light: 0xE7E7EA, dark: 0x3A3A3D))
 
     // Switch (--sw-off) and push button (--m-btn / --m-hair / --m-btnshadow)
     static let switchOff = Color(nsColor: NSColor(name: nil) { isDark($0) ? NSColor(srgbRed: 120 / 255, green: 120 / 255, blue: 128 / 255, alpha: 0.4) : NSColor(srgbRed: 120 / 255, green: 120 / 255, blue: 128 / 255, alpha: 0.25) })
