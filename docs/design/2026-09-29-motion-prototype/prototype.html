@@ -153,27 +153,39 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
   background:linear-gradient(170deg,#ffd58f 0%,#ff7f8f 46%,#6b5bd6 100%);box-shadow:0 .02em .06em rgba(0,0,0,.28)}
 .art .sun{position:absolute;left:27%;top:30%;width:46%;height:46%;border-radius:50%;background:#fff1d0;opacity:.95}
 .art .wv1{position:absolute;left:0;top:60%;width:100%;height:42%;background:linear-gradient(to bottom,#5a4bc4,#2f2a85)}
-.art .wv2{position:absolute;left:36%;top:70%;width:28%;height:4%;border-radius:2px;background:#fff1d0;opacity:.4;box-shadow:0 .012em 0 0 rgba(255,241,208,.0), -.03em .05em 0 -0 rgba(255,241,208,.28)}
-.pn .scrim{position:absolute;left:0;bottom:0;width:100%;height:.62em;background:linear-gradient(to bottom,transparent,rgba(24,10,56,.62));opacity:0}
+.art .wv2{display:none}
+.pn .bk{position:absolute;left:-.2em;top:-.12em;width:1.4em;height:1.4em;filter:blur(.17em) saturate(1.1);opacity:0;overflow:hidden;background:linear-gradient(170deg,#ffd58f 0%,#ff7f8f 46%,#6b5bd6 100%)}
+.pn .bk .sun{position:absolute;left:27%;top:30%;width:46%;height:46%;border-radius:50%;background:#fff1d0}
+.pn .bk .sea{position:absolute;left:0;top:60%;width:100%;height:42%;background:linear-gradient(to bottom,#5a4bc4,#2f2a85)}
+.pn .t1,.pn .t2{text-shadow:0 0 .03em rgba(30,10,60,.4)}
 .pn .t1,.pn .t2{position:absolute;left:.16em;border-radius:.02em;display:block}
 .pn .t1{top:.885em;width:.42em;height:.027em;background:rgba(255,255,255,.94)}
 .pn .t2{top:.94em;width:.27em;height:.02em;background:rgba(255,255,255,.55)}
 .pn .ctl{position:absolute;left:0;top:1.0em;width:100%;display:flex;justify-content:center;align-items:center;gap:.15em}
 .pn .ctl svg{fill:#fff;display:block;height:.052em}
-.menubar{position:absolute;left:0;right:0;top:0;height:10px;z-index:0;background:var(--menubar);display:flex;align-items:center;justify-content:flex-end;gap:7px;padding-right:9px}
-.menubar i{display:block;width:8px;height:4px;border-radius:2px;background:var(--cap-ink);opacity:.55}
-.menubar i.np{width:5px;height:5px;border-radius:50%;background:var(--accent);opacity:1}
+.menubar{position:absolute;left:0;right:0;top:0;height:12px;z-index:0;background:var(--menubar);box-shadow:0 .5px 0 var(--glass-line);display:flex;align-items:center;padding:0 8px 0 9px;color:var(--cap-ink);opacity:1}
+.menubar svg{display:block;fill:currentColor;flex:none}
+.menubar .apple{width:6px;height:7px;margin-right:6px;opacity:.85}
+.menubar .mn{display:flex;gap:5px;align-items:center}
+.menubar .mn i{display:block;height:3px;border-radius:2px;background:currentColor;opacity:.42}
+.menubar .mn i:first-child{opacity:.75}
+.menubar .sp{flex:1}
+.menubar .st{display:flex;gap:6px;align-items:center}
+.menubar .st svg{opacity:.62}
+.menubar .st .np{fill:var(--accent);opacity:1;width:5px;height:6.5px}
+.menubar .st .tm{display:block;width:16px;height:3px;border-radius:2px;background:currentColor;opacity:.55;margin-left:1px}
 .abs{position:absolute}
 .strip{position:absolute;right:0;top:70px;width:5px;height:40px;border-radius:3px 0 0 3px;background:var(--strip);overflow:hidden;box-shadow:0 0 0 .5px var(--glass-line)}
 .strip .fill{position:absolute;left:0;bottom:0;width:100%;background:var(--accent);border-radius:3px}
-.capsule{position:absolute;right:12px;top:67px;height:46px;width:156px;border-radius:23px;background:var(--glass);color:var(--glass-ink);
-  box-shadow:0 8px 20px rgba(20,20,50,.22),0 0 0 .5px var(--glass-line);display:flex;align-items:center;gap:9px;padding:0 12px 0 8px}
-.capsule .th{flex:none;width:32px;height:32px;border-radius:9px;background:linear-gradient(170deg,#ffd58f 0%,#ff7f8f 46%,#6b5bd6 100%);position:relative;overflow:hidden}
-.capsule .th::before{content:"";position:absolute;left:28%;top:26%;width:44%;height:44%;border-radius:50%;background:#fff1d0;opacity:.95}
-.capsule .th::after{content:"";position:absolute;left:0;top:58%;width:100%;height:50%;background:linear-gradient(to bottom,#5a4bc4,#2f2a85)}
-.capsule .tx{flex:1;min-width:0}
-.capsule .tx b{display:block;height:5px;border-radius:3px;background:currentColor;opacity:.85;width:78%}
-.capsule .tx b+b{height:4px;width:52%;opacity:.4;margin-top:6px}
+.vcard{position:absolute;right:7px;top:39px;width:60px;height:102px;border-radius:13px;overflow:hidden;
+  background:linear-gradient(90deg,#9a63ab 0%,#6d4587 52%,#1e1228 100%);box-shadow:0 8px 20px rgba(20,10,40,.35),inset 0 0 0 .5px rgba(255,255,255,.14);will-change:transform,opacity}
+.vcard .th{position:absolute;left:6px;top:6px;width:48px;height:48px;border-radius:7px;overflow:hidden;background:linear-gradient(170deg,#ffd58f 0%,#ff7f8f 46%,#6b5bd6 100%)}
+.vcard .th::before{content:"";position:absolute;left:28%;top:24%;width:44%;height:44%;border-radius:50%;background:#fff1d0;opacity:.95}
+.vcard .th::after{content:"";position:absolute;left:0;top:58%;width:100%;height:50%;background:linear-gradient(to bottom,#5a4bc4,#2f2a85)}
+.vcard .ti{position:absolute;left:50%;top:60px;width:28px;height:4px;margin-left:-14px;border-radius:2px;background:#fff}
+.vcard .ar{position:absolute;left:50%;top:68px;width:18px;height:3px;margin-left:-9px;border-radius:2px;background:rgba(255,255,255,.55)}
+.vcard .pl{position:absolute;left:9px;top:77px;width:20px;height:20px}
+.vcard .nx{position:absolute;left:38px;top:82px;width:12px;height:10px;fill:#fff}
 .keys{position:absolute;display:flex;gap:6px}
 .key{width:34px;height:34px;border-radius:9px;background:var(--keyface);color:var(--keyink);display:grid;place-items:center;font-size:15px;font-weight:500;
   box-shadow:0 3px 0 var(--keyedge),0 5px 8px rgba(20,20,50,.16),inset 0 1px 0 rgba(255,255,255,.4);position:relative;will-change:transform}
@@ -248,8 +260,8 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
   <p class="sub">把鼠标停在窗口里的某一行上：这一行先亮起，停满 150 ms（且移动不超过 4 px）才切换演示；两段之间淡入淡出，同一时间只动一段；离开行后当前这轮演到落在静息帧就停。开关点一下，回放一次到新状态。</p>
   <div class="a-grid">
     <div>
-    <div class="sizebar"><span>演示区尺寸</span>
-      <span class="seg2" id="sizeSeg"><button data-size="s" aria-pressed="false">280×158</button><button data-size="m" aria-pressed="true">300×169 · 推荐</button><button data-size="l" aria-pressed="false">320×180</button></span></div>
+    <div class="sizebar"><span>演示区尺寸（创始人已定 300×169，另两档仅留作对照）</span>
+      <span class="seg2" id="sizeSeg"><button data-size="s" aria-pressed="false">280×158</button><button data-size="m" aria-pressed="true">300×169 · 已定</button><button data-size="l" aria-pressed="false">320×180</button></span></div>
     <div class="winwrap" id="winwrap">
       <div class="win" id="win" data-size="m" aria-label="设置窗口示意">
         <div class="tb"><div class="tl"><span class="r"></span><span class="y"></span><span class="g"></span></div>设置</div>
@@ -424,7 +436,14 @@ const ICON = {
   play: '<svg viewBox="0 0 10 12" style="width:.044em"><path d="M1 1L9 6L1 11Z"/></svg>',
   next: '<svg viewBox="0 0 14 12" style="width:.062em"><path d="M1 1V11L7 6Z M7 1V11L13 6Z"/></svg>'
 };
-const panelHTML = pw => `<div class="pn" style="--pw:${pw}"><div class="art"><i class="sun"></i><i class="wv1"></i><i class="wv2"></i></div><div class="scrim"></div><b class="t1"></b><b class="t2"></b><div class="ctl">${ICON.prev}${ICON.play}${ICON.next}</div></div>`;
+const panelHTML = pw => `<div class="pn" style="--pw:${pw}"><div class="bk"><i class="sun"></i><i class="sea"></i></div><div class="art"><i class="sun"></i><i class="wv1"></i><i class="wv2"></i></div><b class="t1"></b><b class="t2"></b><div class="ctl">${ICON.prev}${ICON.play}${ICON.next}</div></div>`;
+const MENUBAR = `<div class="menubar"><svg class="apple" viewBox="0 0 12 14"><path d="M6 3.7c.8-.5 2.2-.6 3.1.6-1.2.8-1.3 2.6.1 3.4-.5 1.5-1.4 3-2.4 3-.5 0-.6-.3-1-.3s-.6.3-1.1.3C3.5 10.7 2.2 7.1 3.3 5.1c.8-1.2 2-1.9 2.7-1.4z"/><path d="M6.4 3.1c0-1 .6-1.9 1.7-2.3 0 1-.5 2-1.7 2.3z"/></svg>
+  <span class="mn"><i style="width:15px"></i><i style="width:9px"></i><i style="width:11px"></i><i style="width:9px"></i><i style="width:12px"></i></span><span class="sp"></span>
+  <span class="st"><svg viewBox="0 0 8 10" class="np"><ellipse cx="2.5" cy="7.6" rx="2.2" ry="1.7"/><path d="M4 7.4V1l3.4 1.3v1.5L5.2 3v4.4z"/></svg>
+  <svg viewBox="0 0 12 9" width="9" height="7"><path d="M6 8.4l1.5-1.6a2.1 2.1 0 00-3 0zM2.9 5.2l.9.9a3.4 3.4 0 014.4 0l.9-.9a4.7 4.7 0 00-6.2 0zM.8 3l.9.9a6.4 6.4 0 018.6 0L11.2 3a7.7 7.7 0 00-10.4 0z"/></svg>
+  <svg viewBox="0 0 16 8" width="13" height="6.5"><rect x=".5" y=".5" width="13" height="7" rx="2" fill="none" stroke="currentColor"/><rect x="2" y="2" width="8" height="4" rx="1"/><rect x="14.4" y="2.6" width="1.4" height="2.8" rx=".7"/></svg>
+  <svg viewBox="0 0 10 8" width="8" height="6.5"><rect x="0" y="0" width="10" height="3.2" rx="1.6"/><rect x="0" y="4.8" width="10" height="3.2" rx="1.6"/></svg>
+  <i class="tm"></i></span></div>`;
 const KEYS = ['⌥', '⌘', 'P'];
 const keysHTML = (labels) => labels.map(k => `<div class="key">${k}</div>`).join('');
 
@@ -433,8 +452,8 @@ const SCENES = {
   cover: {
     name: '全屏封面', loop: 6.2, once: { on: [0.7, 2.7], off: [3.7, 5.4] }, rest: sw => sw ? 2.7 : 0.3,
     build(el) {
-      el.innerHTML = `<div class="menubar"><i></i><i></i><i class="np"></i></div><div class="abs" id="p" style="left:105px;top:30px">${panelHTML(110)}</div>`;
-      const pn = el.querySelector('.pn'), art = pn.querySelector('.art'), scrim = pn.querySelector('.scrim'),
+      el.innerHTML = `${MENUBAR}<div class="abs" id="p" style="left:105px;top:30px">${panelHTML(110)}</div>`;
+      const pn = el.querySelector('.pn'), art = pn.querySelector('.art'), bk = pn.querySelector('.bk'),
         t1 = pn.querySelector('.t1'), t2 = pn.querySelector('.t2'), ctl = pn.querySelector('.ctl');
       return t => {
         const s = sv(t, 0, [[0.9, 1, 'io', .9], [3.9, 0, 'io', .9]]);
@@ -443,7 +462,10 @@ const SCENES = {
         art.style.left = (1 - sz) / 2 + 'em'; art.style.top = lerp(.075, 0, s) + 'em';
         art.style.borderRadius = lerp(.04, 0, s) + 'em';
         art.style.boxShadow = s > .98 ? 'none' : '';
-        scrim.style.opacity = s;
+        bk.style.opacity = s;                                    // 模糊底：封面自身颜色放大铺满面板并模糊
+        const blend = 40 * s;                                    // 封面底部 40 % 渐隐进模糊底（真实值 100pt / 250pt）
+        const m = `linear-gradient(to bottom,#000 ${100 - blend}%,rgba(0,0,0,${1 - s}) 100%)`;
+        art.style.webkitMaskImage = art.style.maskImage = m;
         t1.style.top = lerp(.885, .79, s) + 'em'; t2.style.top = lerp(.94, .845, s) + 'em'; ctl.style.top = lerp(1.0, .915, s) + 'em';
       };
     }
@@ -451,10 +473,12 @@ const SCENES = {
   peek: {
     name: '贴边收起 · 换歌探出', loop: 8.4, once: { on: [1.9, 5.9], off: [1.9, 3.6] }, rest: sw => sw ? 5.0 : 3.4,
     build(el, o) {
-      el.innerHTML = `<div class="menubar"><i></i><i></i><i class="np"></i></div>
+      el.innerHTML = `${MENUBAR}
         <div class="abs" id="p" style="left:170px;top:24px">${panelHTML(104)}</div>
         <div class="strip" id="strip"><div class="fill" id="fill"></div></div>
-        <div class="capsule" id="cap"><div class="th"></div><div class="tx"><b></b><b></b></div></div>`;
+        <div class="vcard" id="cap"><div class="th"></div><b class="ti"></b><b class="ar"></b>
+          <svg class="pl" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8.6" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="1.8"/><circle cx="10" cy="10" r="8.6" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="36 54" transform="rotate(-90 10 10)"/><path d="M8 6.3v7.4l6-3.7z" fill="#fff"/></svg>
+          <svg class="nx" viewBox="0 0 14 12"><path d="M1 1V11L7 6Z M7 1V11L13 6Z"/></svg></div>`;
       const p = el.querySelector('#p'), strip = el.querySelector('#strip'), fill = el.querySelector('#fill'), cap = el.querySelector('#cap');
       return t => {
         const tuck = sv(t, 0, [[0.7, 1, 'io', .92], [6.7, 0, 'io', .92]]);
@@ -466,7 +490,7 @@ const SCENES = {
         const pulse = bump(t, 2.3, 1.0);
         strip.style.boxShadow = `0 0 0 .5px var(--glass-line), 0 0 ${pulse * 12}px ${pulse * 3}px rgba(250,64,88,${pulse * .55})`;
         fill.style.height = (t < 2.4 ? 62 : 8 + (t - 2.4) * 1.5) + '%';
-        cap.style.transform = `translateX(${(1 - cp) * 190}px)`; cap.style.opacity = clamp(cp * 3);
+        cap.style.transform = `translateX(${(1 - cp) * 80}px)`; cap.style.opacity = clamp(cp * 3);
       };
     }
   },
@@ -481,7 +505,7 @@ const SCENES = {
   showhide: {
     name: '显示 / 隐藏面板', loop: 6.6, once: { on: [0.6, 2.5], off: [0.6, 2.5] }, rest: () => 0.3,
     build(el) {
-      el.innerHTML = `<div class="menubar"><i></i><i></i><i class="np"></i></div>
+      el.innerHTML = `${MENUBAR}
         <div class="bgwin" style="left:160px;top:30px;width:140px;height:100px"><b style="top:26px;width:70px"></b><b style="top:42px;width:100px"></b><b style="top:58px;width:54px"></b><b style="top:74px;width:84px"></b></div>
         <div class="abs" id="p" style="left:184px;top:26px">${panelHTML(92)}</div>
         <div class="keys" id="keys" style="left:24px;top:76px">${keysHTML(KEYS)}</div>`;
@@ -500,7 +524,7 @@ const SCENES = {
   hideEdge: {
     name: '贴边隐藏', loop: 7.0, once: { on: [0.6, 2.6], off: [0.6, 2.6] }, rest: () => 0.3,
     build(el) {
-      el.innerHTML = `<div class="menubar"><i></i><i></i><i class="np"></i></div>
+      el.innerHTML = `${MENUBAR}
         <div class="abs" id="p" style="left:170px;top:24px">${panelHTML(104)}</div>
         <div class="strip" id="strip"><div class="fill" style="height:62%"></div></div>
         <div class="keys" id="keys" style="left:24px;top:76px">${keysHTML(['⌥', '⌘', 'E'])}</div>`;
