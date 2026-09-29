@@ -97,14 +97,18 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 .tl{position:absolute;left:12px;top:8px;display:flex;gap:8px}
 .tl span{width:12px;height:12px;border-radius:50%;display:block;border:.5px solid rgba(0,0,0,.14)}
 .tl .r{background:#ff5f57}.tl .y{background:#febc2e}.tl .g{background:#28c840}
-.content{height:562px;padding:20px;display:flex;flex-direction:column;gap:14px}
-.stage{height:140px;flex:none;border-radius:12px;position:relative;overflow:hidden;isolation:isolate;
+.content{height:562px;padding:24px 20px 20px;display:flex;flex-direction:column;gap:18px}
+.win{--sw:300px;--sh:169px;--k:.9375}
+.win[data-size="s"]{--sw:280px;--sh:158px;--k:.875}
+.win[data-size="l"]{--sw:320px;--sh:180px;--k:1}
+.stage{width:var(--sw);height:var(--sh);align-self:center;flex:none;border-radius:12px;position:relative;overflow:hidden;isolation:isolate;
   background:radial-gradient(60% 100% at 12% 0%,var(--w1),transparent 70%),radial-gradient(70% 100% at 96% 100%,var(--w2),transparent 72%),linear-gradient(160deg,var(--w3),var(--w4))}
+.canvas{position:absolute;left:0;top:0;width:320px;height:180px;transform-origin:0 0;transform:scale(var(--k))}
 .layer{position:absolute;inset:0;opacity:0;transition:opacity .28s ease;pointer-events:none}
 .layer.on{opacity:1}
 .rm .layer,.layer.notrans{transition:none}
-.stagecap{position:absolute;left:12px;bottom:8px;font-size:11px;color:var(--cap-ink);display:flex;gap:6px;align-items:center;z-index:5;transition:opacity .2s}
-.stagecap i{font-style:normal;font-weight:600;padding:0 6px;border-radius:999px;background:var(--menubar);line-height:16px}
+.stagecap{position:absolute;left:8px;bottom:8px;font-size:11px;line-height:18px;color:var(--cap-ink);display:flex;gap:6px;align-items:center;z-index:5;padding:0 8px;border-radius:999px;background:var(--menubar);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);max-width:calc(100% - 16px);white-space:nowrap}
+.stagecap i{font-style:normal;font-weight:600;color:var(--fg)}
 .seg{height:24px;flex:none;display:flex;background:var(--seg-bg);border-radius:8px;padding:0}
 .seg button{flex:1;appearance:none;border:0;background:transparent;color:var(--seg-fg);font:inherit;font-size:12.5px;border-radius:7px;cursor:pointer;position:relative}
 .seg button[aria-selected="true"]{background:var(--accent);color:#fff;font-weight:500}
@@ -114,6 +118,7 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 .grp{background:var(--card);border-radius:12px;overflow:hidden;flex:none}
 .row{height:53px;padding:0 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid var(--row-line);transition:background .12s ease;position:relative}
 .row:first-child{border-top:0}
+.row.one{height:44px}
 .row.active{background:color-mix(in srgb,var(--card-hover) 55%,transparent)}
 .row.hot{background:var(--card-hover)}
 .row .lb{min-width:0}
@@ -130,6 +135,8 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
   background-image:linear-gradient(45deg,transparent 50%,var(--fg2) 50%),linear-gradient(135deg,var(--fg2) 50%,transparent 50%);background-position:calc(100% - 11px) 50%,calc(100% - 7px) 50%;background-size:4px 4px;background-repeat:no-repeat;cursor:pointer}
 .recorder{flex:none;font-size:12.5px;padding:3px 10px;border-radius:6px;background:var(--surface);box-shadow:0 0 0 .5px var(--hair2);color:var(--fg);font-variant-numeric:tabular-nums;letter-spacing:.06em}
 .ph{flex:1;display:grid;place-items:center;text-align:center;color:var(--fg2);font-size:12px;padding:0 30px}
+.sizebar{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;margin:0 0 12px;font-size:12.5px;color:var(--fg2)}
+.sizebar b{color:var(--accent-ink);font-weight:600}
 .notes{font-size:13px;color:var(--fg2)}
 .notes h3{color:var(--fg)}
 .notes ul{margin:0 0 16px;padding-left:18px}
@@ -153,13 +160,13 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 .pn .t2{top:.94em;width:.27em;height:.02em;background:rgba(255,255,255,.55)}
 .pn .ctl{position:absolute;left:0;top:1.0em;width:100%;display:flex;justify-content:center;align-items:center;gap:.15em}
 .pn .ctl svg{fill:#fff;display:block;height:.052em}
-.menubar{position:absolute;left:0;right:0;top:0;height:10px;background:var(--menubar);display:flex;align-items:center;justify-content:flex-end;gap:7px;padding-right:9px}
+.menubar{position:absolute;left:0;right:0;top:0;height:10px;z-index:0;background:var(--menubar);display:flex;align-items:center;justify-content:flex-end;gap:7px;padding-right:9px}
 .menubar i{display:block;width:8px;height:4px;border-radius:2px;background:var(--cap-ink);opacity:.55}
 .menubar i.np{width:5px;height:5px;border-radius:50%;background:var(--accent);opacity:1}
 .abs{position:absolute}
-.strip{position:absolute;right:0;top:50px;width:5px;height:40px;border-radius:3px 0 0 3px;background:var(--strip);overflow:hidden;box-shadow:0 0 0 .5px var(--glass-line)}
+.strip{position:absolute;right:0;top:70px;width:5px;height:40px;border-radius:3px 0 0 3px;background:var(--strip);overflow:hidden;box-shadow:0 0 0 .5px var(--glass-line)}
 .strip .fill{position:absolute;left:0;bottom:0;width:100%;background:var(--accent);border-radius:3px}
-.capsule{position:absolute;right:12px;top:47px;height:46px;width:156px;border-radius:23px;background:var(--glass);color:var(--glass-ink);
+.capsule{position:absolute;right:12px;top:67px;height:46px;width:156px;border-radius:23px;background:var(--glass);color:var(--glass-ink);
   box-shadow:0 8px 20px rgba(20,20,50,.22),0 0 0 .5px var(--glass-line);display:flex;align-items:center;gap:9px;padding:0 12px 0 8px}
 .capsule .th{flex:none;width:32px;height:32px;border-radius:9px;background:linear-gradient(170deg,#ffd58f 0%,#ff7f8f 46%,#6b5bd6 100%);position:relative;overflow:hidden}
 .capsule .th::before{content:"";position:absolute;left:28%;top:26%;width:44%;height:44%;border-radius:50%;background:#fff1d0;opacity:.95}
@@ -240,12 +247,15 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
   <h2>A　设置页：演示台 + 悬停即演示</h2>
   <p class="sub">把鼠标停在窗口里的某一行上：这一行先亮起，停满 150 ms（且移动不超过 4 px）才切换演示；两段之间淡入淡出，同一时间只动一段；离开行后当前这轮演到落在静息帧就停。开关点一下，回放一次到新状态。</p>
   <div class="a-grid">
+    <div>
+    <div class="sizebar"><span>演示区尺寸</span>
+      <span class="seg2" id="sizeSeg"><button data-size="s" aria-pressed="false">280×158</button><button data-size="m" aria-pressed="true">300×169 · 推荐</button><button data-size="l" aria-pressed="false">320×180</button></span></div>
     <div class="winwrap" id="winwrap">
-      <div class="win" id="win" aria-label="设置窗口示意">
+      <div class="win" id="win" data-size="m" aria-label="设置窗口示意">
         <div class="tb"><div class="tl"><span class="r"></span><span class="y"></span><span class="g"></span></div>设置</div>
         <div class="content">
           <div class="stage" id="stage" aria-hidden="true">
-            <div class="layer" id="layerA"></div><div class="layer" id="layerB"></div>
+            <div class="canvas"><div class="layer" id="layerA"></div><div class="layer" id="layerB"></div></div>
             <div class="stagecap" id="stagecap"></div>
           </div>
           <div class="seg" role="tablist" id="seg">
@@ -267,6 +277,7 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
         </div>
       </div>
     </div>
+    </div>
     <div class="notes">
       <div class="status" aria-live="polite">
         <h3>运行状态（验证用）</h3>
@@ -279,9 +290,9 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
       </div>
       <h3>排版决定</h3>
       <ul>
-        <li><b>演示区在窗口最上方，一块 440 × 140</b>（触控板页是两块 150 高；nanoPod 的效果需要一条屏幕边或一整块面板，所以合成一块宽的）。高度比稿子里的 120 多 20，行区相应从 350 收到 330，窗口仍是 480 × 562。</li>
+        <li><b>演示区在窗口最上方，居中的一块 16:9 圆角矩形</b>（创始人定：一整块、规整、不必撑满两边）。三个候选 280×158 / 300×169 / 320×180，圆角 12，与下面分组卡片同一个半径；默认 300×169。窗口仍是 480 × 562，各段的构图都画在 320×180 的底图上再整体缩放，所以三个尺寸看到的是同一构图。</li>
         <li><b>背景是一张安静的桌面壁纸</b>：冷色底（浅色偏淡蓝紫、深色偏靛蓝）加两团柔和的光，圆角 12。面板、胶囊、键帽在上面才不会和 Apple Music 粉抢色；粉色只留给「正在发生的那件事」。</li>
-        <li><b>对应关系</b>：悬停行 = 行底色变深（同触控板页的悬停灰）；离开后最后演示过的行保留浅一档底色，告诉你台上是哪一行；台左下角小字写行名和开关状态。</li>
+        <li><b>对应关系</b>：悬停行 = 行底色变深（同触控板页的悬停灰）；离开后最后演示过的行保留浅一档底色，告诉你台上是哪一行；台左下角一枚半透明小胶囊写行名和开关状态。</li>
         <li><b>动画节奏照录屏</b>：主运动约 0.9 s，缓入缓出 cubic-bezier(.42, 0, .58, 1)，无过冲；透明度 0.3 s；动作之间停 0.7–1.4 s。</li>
       </ul>
       <h3>怎么看</h3>
@@ -422,7 +433,7 @@ const SCENES = {
   cover: {
     name: '全屏封面', loop: 6.2, once: { on: [0.7, 2.7], off: [3.7, 5.4] }, rest: sw => sw ? 2.7 : 0.3,
     build(el) {
-      el.innerHTML = `<div class="menubar"><i></i><i></i><i class="np"></i></div><div class="abs" id="p" style="left:168px;top:16px">${panelHTML(104)}</div>`;
+      el.innerHTML = `<div class="menubar"><i></i><i></i><i class="np"></i></div><div class="abs" id="p" style="left:105px;top:30px">${panelHTML(110)}</div>`;
       const pn = el.querySelector('.pn'), art = pn.querySelector('.art'), scrim = pn.querySelector('.scrim'),
         t1 = pn.querySelector('.t1'), t2 = pn.querySelector('.t2'), ctl = pn.querySelector('.ctl');
       return t => {
@@ -441,7 +452,7 @@ const SCENES = {
     name: '贴边收起 · 换歌探出', loop: 8.4, once: { on: [1.9, 5.9], off: [1.9, 3.6] }, rest: sw => sw ? 5.0 : 3.4,
     build(el, o) {
       el.innerHTML = `<div class="menubar"><i></i><i></i><i class="np"></i></div>
-        <div class="abs" id="p" style="left:290px;top:14px">${panelHTML(104)}</div>
+        <div class="abs" id="p" style="left:170px;top:24px">${panelHTML(104)}</div>
         <div class="strip" id="strip"><div class="fill" id="fill"></div></div>
         <div class="capsule" id="cap"><div class="th"></div><div class="tx"><b></b><b></b></div></div>`;
       const p = el.querySelector('#p'), strip = el.querySelector('#strip'), fill = el.querySelector('#fill'), cap = el.querySelector('#cap');
@@ -471,9 +482,9 @@ const SCENES = {
     name: '显示 / 隐藏面板', loop: 6.6, once: { on: [0.6, 2.5], off: [0.6, 2.5] }, rest: () => 0.3,
     build(el) {
       el.innerHTML = `<div class="menubar"><i></i><i></i><i class="np"></i></div>
-        <div class="bgwin" style="left:236px;top:26px;width:176px;height:92px"><b style="top:24px;width:96px"></b><b style="top:38px;width:130px"></b><b style="top:52px;width:70px"></b><b style="top:66px;width:110px"></b></div>
-        <div class="abs" id="p" style="left:266px;top:14px">${panelHTML(96)}</div>
-        <div class="keys" id="keys" style="left:44px;top:52px">${keysHTML(KEYS)}</div>`;
+        <div class="bgwin" style="left:160px;top:30px;width:140px;height:100px"><b style="top:26px;width:70px"></b><b style="top:42px;width:100px"></b><b style="top:58px;width:54px"></b><b style="top:74px;width:84px"></b></div>
+        <div class="abs" id="p" style="left:184px;top:26px">${panelHTML(92)}</div>
+        <div class="keys" id="keys" style="left:24px;top:76px">${keysHTML(KEYS)}</div>`;
       const p = el.querySelector('#p'), keys = $$('.key', el);
       return t => {
         const press = Math.max(bump(t, 0.9, .34), bump(t, 3.4, .34));
@@ -490,9 +501,9 @@ const SCENES = {
     name: '贴边隐藏', loop: 7.0, once: { on: [0.6, 2.6], off: [0.6, 2.6] }, rest: () => 0.3,
     build(el) {
       el.innerHTML = `<div class="menubar"><i></i><i></i><i class="np"></i></div>
-        <div class="abs" id="p" style="left:290px;top:14px">${panelHTML(104)}</div>
+        <div class="abs" id="p" style="left:170px;top:24px">${panelHTML(104)}</div>
         <div class="strip" id="strip"><div class="fill" style="height:62%"></div></div>
-        <div class="keys" id="keys" style="left:44px;top:52px">${keysHTML(['⌥', '⌘', 'E'])}</div>`;
+        <div class="keys" id="keys" style="left:24px;top:76px">${keysHTML(['⌥', '⌘', 'E'])}</div>`;
       const p = el.querySelector('#p'), strip = el.querySelector('#strip'), keys = $$('.key', el);
       return t => {
         const press = Math.max(bump(t, 0.9, .34), bump(t, 3.9, .34));
@@ -511,11 +522,11 @@ const LANGS = [
 const CYCLE = ['我们去看海吧', '海を見に行こう', '바다 보러 가자', 'Allons voir la mer'];
 function buildLyrics(el, o, cycle) {
   const pw = 214;
-  el.innerHTML = `<div class="abs" style="left:${(440 - pw) / 2}px;top:12px"><div class="pn" style="--pw:${pw};height:2.2em;background:radial-gradient(110% 40% at 14% 0%,#ff9aa8 0,transparent 62%),radial-gradient(100% 40% at 92% 60%,#7d6cff 0,transparent 58%),#b9508f">
-    <div class="lyric" id="l0" style="top:12px;opacity:.42">Down by the water</div>
-    <div class="lyric" id="l1" style="top:42px"><b style="font-weight:650">Let’s go see the sea</b><span class="tr"><span id="trA"></span><span id="trB"></span>&nbsp;</span></div>
-    <div class="lyric" id="l2" style="top:80px;opacity:.42">Just you, just me</div>
-    <div class="lyric" id="l3" style="top:112px;opacity:.42">Let the tide decide</div></div></div>`;
+  el.innerHTML = `<div class="abs" style="left:${(320 - pw) / 2}px;top:10px"><div class="pn" style="--pw:${pw};height:2.2em;background:radial-gradient(110% 40% at 14% 0%,#ff9aa8 0,transparent 62%),radial-gradient(100% 40% at 92% 60%,#7d6cff 0,transparent 58%),#b9508f">
+    <div class="lyric" id="l0" style="top:6px;opacity:.42">Down by the water</div>
+    <div class="lyric" id="l1" style="top:30px"><b style="font-weight:650">Let’s go see the sea</b><span class="tr"><span id="trA"></span><span id="trB"></span>&nbsp;</span></div>
+    <div class="lyric" id="l2" style="top:66px;opacity:.42">Just you, just me</div>
+    <div class="lyric" id="l3" style="top:94px;opacity:.42">Let the tide decide</div></div></div>`;
   const l1 = el.querySelector('#l1'), l2 = el.querySelector('#l2'), l3 = el.querySelector('#l3'), trA = el.querySelector('#trA'), trB = el.querySelector('#trB');
   const L = 20;  // 一行译文占的高度（px）
   const fixed = o && o.lang != null ? LANGS[o.lang][1] : null;
@@ -559,7 +570,7 @@ for (const tab of Object.keys(ROWS)) {
   const grp = $(tab === 'player' ? '#grpPlayer' : '#grpShortcuts');
   for (const r of ROWS[tab]) {
     A.sw[r.id] = true;
-    const el = document.createElement('div'); el.className = 'row'; el.dataset.row = r.id;
+    const el = document.createElement('div'); el.className = 'row' + (r.desc ? '' : ' one'); el.dataset.row = r.id;
     let ctl = '';
     if (r.ctl === 'sw') ctl = `<button class="sw" role="switch" aria-checked="true" aria-label="${r.title}"></button>`;
     else if (r.ctl === 'pop') ctl = `<select class="pop" aria-label="${r.title}">${LANGS.map((l, i) => `<option value="${i}">${l[0]}</option>`).join('')}</select>`;
@@ -685,6 +696,13 @@ $('#seg').addEventListener('click', e => {
   $$('.pane').forEach(p => p.classList.toggle('on', p.dataset.pane === b.dataset.tab));
   A.tab = b.dataset.tab;
   if (ROWS[A.tab]) show(ROWS[A.tab][0], 'still');
+});
+
+/* ------ 演示区尺寸候选 */
+$('#sizeSeg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  $('#win').dataset.size = b.dataset.size;
+  $$('#sizeSeg button').forEach(x => x.setAttribute('aria-pressed', x === b));
 });
 
 /* ------ 自动轮播 */
