@@ -28,6 +28,7 @@ Sources/
 ├── MusicMiniPlayerAppKit/         - App 层库 target（原 MusicMiniPlayerApp 源码整体 git mv 至此，零逻辑改动）
 │   ├── MusicMiniPlayerApp.swift  - AppDelegate + window management（AppMain 与委托方法 public）
 │   ├── SettingsView.swift        - Settings view (menu bar + settings window + components)
+│   ├── SettingsDemo{Stage,Motion,Drawing,SVGPath}.swift - 设置页演示台（09-29 原型落地）：300×169 居中圆角台、6 段动画（全屏封面/贴边换歌/显示翻译/翻译为/显示隐藏面板/贴边隐藏）+ 通用段 2 段 + 静帧；`frame(at:t)` 纯函数 + Canvas 绘制 + 会结束的 TimelineView 时钟（空闲零定时器）
 │   └── LocalizedStrings.swift    - L10n localization + UserDefaults binding helpers
 ├── MusicMiniPlayerCore/
 │   ├── Services/
@@ -151,6 +152,7 @@ Tests/MusicMiniPlayerTests/         - 999 个单元测试（2026-08-27 `swift te
     └── PanelWindowLayoutParityTests.swift - 面板窗口去 32pt 透明条：真实 MiniPlayerView 新旧窗口四页逐字节一致（含对照组）+ 顶角吸附 16pt
     └── LiquidEdgeTests / LiquidEdgeControllerTests / LiquidEdgeCapsuleInputTests - 液态贴边：pose 数学、真窗口假时钟全流程、液体落在面板上、胶囊按钮点击
     └── NativeLyricsHandoffClockTests.swift - 切行确定性时钟门：注入播放钟+墙钟锁步驱动真 surface（debugNowOverride/debugTick/debugPlaybackClockDateProvider），钉死上一行位移/opacity/亮层同帧退场（边界后 +150ms 错峰）；复现旧红测试=0.8s appear 窗内切行被冻结、余晖先暗的 harness 伪影
+    └── SettingsDemoMotionTests.swift / SettingsDemoFrameRenderTests.swift - 演示台：关键帧数值、循环无缝、rest 落点、同时只动一段、空闲零时钟、减少动态效果只显示静帧；`NANOPOD_DEMO_COMPARE_DIR` 输出 2x 定格帧（对照原型 `__proto.shot`）
     └── PendingPlaybackAccumulatorTests.swift - 「待定播放→达标入账」假时钟穷举：0s/10s 两档门槛、9.9s 不记/10.0s 记边界、暂停不计时、极短曲自然结束、同曲重复探测不重启、H3 快速双切歌不丢已达标行、H4 PID 晚到原地打补丁不重插行、app 退出 flush、100k 次 soak、真实 09-25 凌晨连切段回放
     └── PlaybackHistoryCapacityMeasurementTests.swift - 真 NSWindow 托管 PlaylistView 实测 History 50/100/200/300 行 body 求值+布局耗时（结果钉进 PlaybackHistoryStore.capacity 注释）；全部行封面预置内存缓存，零网络/SB 调用
 

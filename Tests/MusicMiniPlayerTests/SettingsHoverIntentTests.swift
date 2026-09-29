@@ -8,7 +8,7 @@
 //     150ms with ≤4pt drift (the progress bar's ProgressHoverIntentEngine
 //     numbers); a fast pass-through never changes it;
 //   - moving to another row makes that row earn its own dwell;
-//   - leaving all rows leaves the stage on the last committed still;
+//   - leaving all rows leaves the stage on the last committed scene (which plays out to its rest frame);
 //   - an idle window has no timer armed (zero work with no hover).
 // Fake clock throughout — nothing sleeps.
 // ──────────────────────────────────────────────
@@ -115,6 +115,17 @@ final class SettingsHoverIntentTests: XCTestCase {
     }
 
     // MARK: row to row
+
+    func test_everyCommit_bumpsTheCommitCount_evenForTheSameRowAgain() {
+        model.pointerEntered(.showInDock, at: pointA)
+        clock.advance(to: 0.15)
+        XCTAssertEqual(model.commitCount, 1)
+        model.pointerExited(.showInDock)
+        clock.advance(to: 0.16)
+        model.pointerEntered(.showInDock, at: pointA)   // back inside the exit grace
+        XCTAssertEqual(model.stageDemo, .showInDock)
+        XCTAssertEqual(model.commitCount, 2, "the stage restarts / keeps that row's scene on each commit")
+    }
 
     func test_movingToAnotherRow_keepsTheOldStillUntilTheNewRowDwells() {
         model.pointerEntered(.launchAtLogin, at: pointA)
@@ -272,7 +283,7 @@ final class SettingsHoverIntentViewTests: XCTestCase {
     func test_realView_rowLightsUpAtOnce_stageSwapsOnlyAfterDwell() throws {
         let window = try host()
         let row = try tracker(.showInDock, in: window)
-        let other = try tracker(.launchAtLogin, in: window)
+        let other = try tracker(.gettingToKnowNanoPod, in: window)   // not the page's active row (launchAtLogin is)
         let restBytes = try stageBytes(window)
         let restRowPixel = try pixel(in: window, of: row, at: NSPoint(x: 4, y: 20))
         let otherRowPixel = try pixel(in: window, of: other, at: NSPoint(x: 4, y: 20))
@@ -281,7 +292,8 @@ final class SettingsHoverIntentViewTests: XCTestCase {
         let at = NSPoint(x: 100, y: 20)
         row.mouseEntered(with: try event(.mouseEntered, in: window, at: at))
         spin(0.04)
-        XCTAssertNotEqual(try pixel(in: window, of: row, at: NSPoint(x: 4, y: 20)), restRowPixel, "the hovered row must light up within a frame or two")
+        let hoveredPixel = try pixel(in: window, of: row, at: NSPoint(x: 4, y: 20))
+        XCTAssertNotEqual(hoveredPixel, restRowPixel, "the hovered row must light up within a frame or two")
         XCTAssertEqual(try stageBytes(window), restBytes, "40ms in: the stage must not have changed")
 
         spin(0.6) // 150ms dwell + 220ms cross-fade
@@ -289,7 +301,10 @@ final class SettingsHoverIntentViewTests: XCTestCase {
 
         row.mouseExited(with: try event(.mouseExited, in: window, at: at))
         spin(0.4)
-        XCTAssertEqual(try pixel(in: window, of: row, at: NSPoint(x: 4, y: 20)), restRowPixel, "the fill goes away on exit")
+        // Full hover grey goes away; the row the stage is showing keeps a half-strength tint (prototype `.row.active`).
+        let leftPixel = try pixel(in: window, of: row, at: NSPoint(x: 4, y: 20))
+        XCTAssertNotEqual(leftPixel, hoveredPixel, "the hover fill goes away on exit")
+        XCTAssertNotEqual(leftPixel, restRowPixel, "…leaving the half-strength 'stage shows this row' tint")
 
         if ProcessInfo.processInfo.environment["NANOPOD_SETTINGS_RENDER_DIR"] != nil {
             row.mouseEntered(with: try event(.mouseEntered, in: window, at: at))
@@ -299,6 +314,32 @@ final class SettingsHoverIntentViewTests: XCTestCase {
                 name: "window-general-light-hover-showInDock.png")
             row.mouseExited(with: try event(.mouseExited, in: window, at: at))
         }
+    }
+
+    /// The whole chain in the real window: rest → the row's scene MOVES → leave → it finishes on its
+    /// rest frame and holds (the stage is the 300×169 box at y 24…193).
+    func test_realView_hoverRunsTheRowsScene_leavingLetsItSettle() throws {
+        let window = try host()
+        let row = try tracker(.showInDock, in: window)
+        func stage() throws -> [UInt8] {
+            let rep = SettingsWindowRenderTests.capture(try XCTUnwrap(window.contentView))
+            let data = try XCTUnwrap(rep.bitmapData)
+            return Array(UnsafeBufferPointer(start: data + 48 * rep.bytesPerRow, count: 338 * rep.bytesPerRow))
+        }
+        let at = NSPoint(x: 100, y: 20)
+        row.mouseEntered(with: try event(.mouseEntered, in: window, at: at))
+        spin(0.7)                       // dwell 0.15 + fade 0.28: the loop is ~0.3s in, nothing has moved yet
+        let before = try stage()
+        spin(1.0)                       // ~1.3s in: the dock icon is dropping in (0.8 → 1.7s)
+        let during = try stage()
+        XCTAssertNotEqual(during, before, "the row's scene is running")
+
+        row.mouseExited(with: try event(.mouseExited, in: window, at: at))
+        spin(3.5)                       // finishes its lap on the rest frame (2.6s) and stops
+        let settled = try stage()
+        spin(0.5)
+        XCTAssertEqual(try stage(), settled, "after the rest frame nothing moves any more")
+        XCTAssertNotEqual(settled, before, "rest frame with the icon seated differs from the start of the lap")
     }
 
     func test_realView_fastPass_leavesTheStageUntouched() throws {

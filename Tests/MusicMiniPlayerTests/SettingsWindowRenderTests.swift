@@ -5,7 +5,7 @@
 // Hosts the real SettingsWindowView in a fixed 480x562 titled window (same
 // construction as AppMain.createSettingsWindow) far off screen, and captures
 // its content view at exactly 2x: every tab x {light, dark} x {en, zh}, plus
-// every demo-stage still x {light, dark}. Output dir:
+// every demo scene at rest x {light, dark}. Output dir:
 // $NANOPOD_SETTINGS_RENDER_DIR, else a throwaway temp dir. Deterministic:
 // permissions / shortcuts / settings values are injected, the brand accent is
 // installed through SettingsPalette.accentOverride (a bare test process has no
@@ -57,9 +57,10 @@ final class SettingsWindowRenderTests: XCTestCase {
         return rep
     }
 
-    static func writePNG(_ rep: NSBitmapImageRep, name: String) throws {
-        try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
-        try rep.representation(using: .png, properties: [:])!.write(to: outputDir.appendingPathComponent(name))
+    static func writePNG(_ rep: NSBitmapImageRep, name: String, into dir: URL? = nil) throws {
+        let dir = dir ?? outputDir
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try rep.representation(using: .png, properties: [:])!.write(to: dir.appendingPathComponent(name))
     }
 
     private static let renderContext = SettingsDemoContext(
@@ -107,17 +108,21 @@ final class SettingsWindowRenderTests: XCTestCase {
         }
     }
 
-    // MARK: every demo still
+    // MARK: every demo, at rest
 
-    func test_render_everyDemoStill_lightDark() throws {
+    func test_render_everyDemoAtRest_lightDark() throws {
         L10n.languageOverride = "en"
         for dark in [false, true] {
             for demo in SettingsDemo.allCases {
-                let stage = DemoStage(demo: demo, context: Self.renderContext, reduceMotion: true, caption: demo.rawValue)
-                    .padding(20)
+                let model = DemoStageModel()
+                model.show(demo)
+                var context = Self.renderContext
+                context.captions[demo] = demo.rawValue
+                let stage = DemoStage(model: model, context: context)
+                    .padding(EdgeInsets(top: 20, leading: 90, bottom: 20, trailing: 90))
                     .background(SettingsPalette.windowBackground)
                 let hosting = NSHostingView(rootView: stage)
-                hosting.frame = NSRect(x: 0, y: 0, width: 480, height: 160)
+                hosting.frame = NSRect(x: 0, y: 0, width: 480, height: 209)
                 let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
                 window.contentView = hosting
                 window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
@@ -128,41 +133,7 @@ final class SettingsWindowRenderTests: XCTestCase {
                 let rep = Self.capture(hosting)
                 XCTAssertEqual(rep.pixelsWide, 960)
                 let prefix = ProcessInfo.processInfo.environment["NANOPOD_RENDER_PREFIX"] ?? ""
-                try Self.writePNG(rep, name: "\(prefix)still-\(demo.rawValue)-\(dark ? "dark" : "light").png")
-                window.close()
-            }
-        }
-    }
-
-    // MARK: cross-fade midpoint
-
-    /// What the stage looks like halfway through a row-to-row swap: the outgoing
-    /// and incoming pairs are both on screen at complementary opacity (the
-    /// `.transition(.opacity)` pair at t = 0.5). Composited by hand: a still
-    /// capture cannot freeze SwiftUI's animation clock.
-    func test_render_crossFadeMidpoint_lightDark() throws {
-        L10n.languageOverride = "en"
-        let pairs: [(SettingsDemo, SettingsDemo)] = [(.fullscreenCover, .edgeShowSongOnTrackChange), (.launchAtLogin, .showInDock)]
-        for dark in [false, true] {
-            for (from, to) in pairs {
-                let stage = ZStack {
-                    DemoTilePair(demo: from, context: Self.renderContext, caption: from.rawValue).opacity(0.5)
-                    DemoTilePair(demo: to, context: Self.renderContext, caption: to.rawValue).opacity(0.5)
-                }
-                .frame(width: 440, height: 120)
-                .padding(20)
-                .background(SettingsPalette.windowBackground)
-                let hosting = NSHostingView(rootView: stage)
-                hosting.frame = NSRect(x: 0, y: 0, width: 480, height: 160)
-                let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-                window.contentView = hosting
-                window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-                window.setFrameOrigin(NSPoint(x: -20000, y: -20000))
-                window.isReleasedWhenClosed = false
-                window.orderFront(nil)
-                spin(0.15)
-                let prefix = ProcessInfo.processInfo.environment["NANOPOD_RENDER_PREFIX"] ?? ""
-                try Self.writePNG(Self.capture(hosting), name: "\(prefix)crossfade-mid-\(from.rawValue)-to-\(to.rawValue)-\(dark ? "dark" : "light").png")
+                try Self.writePNG(rep, name: "\(prefix)rest-\(demo.rawValue)-\(dark ? "dark" : "light").png")
                 window.close()
             }
         }

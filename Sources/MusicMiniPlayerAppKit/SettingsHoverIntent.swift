@@ -10,7 +10,7 @@
  *        so you can see where you are); `stageDemo` changes only after the
  *        pointer has rested on a row (≥150ms, drift ≤4pt), so sweeping across
  *        rows never churns the demo stage. Leaving all rows leaves the stage
- *        on the last committed still.
+ *        on the last committed scene (which plays out to its rest frame).
  */
 
 import SwiftUI
@@ -30,6 +30,11 @@ final class SettingsHoverIntentModel: ObservableObject {
     /// Row whose still the pointer has rested on (nil = none yet on this page:
     /// the stage then shows the page's first row).
     @Published private(set) var stageDemo: SettingsDemo?
+
+    /// Bumped on every commit — including a re-commit of the SAME row (pointer came back
+    /// inside the exit grace, or rested on it again), which leaves `stageDemo` unchanged.
+    /// The stage listens to this to start (or keep) that row's scene running.
+    @Published private(set) var commitCount = 0
 
     private(set) var candidate: SettingsDemo?
     private(set) var engineState: ProgressHoverIntentEngine.State = .idle
@@ -97,7 +102,10 @@ final class SettingsHoverIntentModel: ObservableObject {
             schedule(max(0, deadline - now()), item)
         case .commit:
             cancelTimer()
-            if let candidate { stageDemo = candidate }
+            if let candidate {
+                stageDemo = candidate
+                commitCount += 1
+            }
         case .uncommit:
             // Leaving all rows keeps the last still — nothing to undo.
             cancelTimer()

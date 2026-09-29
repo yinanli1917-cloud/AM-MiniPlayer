@@ -166,6 +166,7 @@ struct SettingsWindowView: View {
     /// `TourPersistence` and no longer read here.
     @StateObject private var onboardingState = OnboardingState.shared
     @StateObject private var hover = SettingsHoverIntentModel()
+    @StateObject private var stage = DemoStageModel()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var confirmingClearHistory = false
     /// Bumped after a permission request so the status rows re-query.
@@ -191,7 +192,7 @@ struct SettingsWindowView: View {
     var body: some View {
         VStack(spacing: 0) {
             stageArea
-                .frame(height: SettingsMetrics.stageHeight)
+                .frame(width: SettingsMetrics.contentWidth, height: SettingsMetrics.stageHeight)
                 .padding(.bottom, SettingsMetrics.stageToSegmented)
 
             SettingsSegmentedControl(tabs: SettingsTab.visibleCases, selection: $state.selectedTab)
@@ -200,12 +201,32 @@ struct SettingsWindowView: View {
             pageArea
                 .frame(width: SettingsMetrics.contentWidth, height: SettingsMetrics.pageViewportHeight, alignment: .top)
         }
-        .padding(.top, SettingsMetrics.outerPadding)
+        .padding(.top, SettingsMetrics.topPadding)
         .padding(.horizontal, SettingsMetrics.outerPadding)
         .frame(width: SettingsMetrics.windowSize.width, height: SettingsMetrics.windowSize.height, alignment: .top)
         .background(SettingsPalette.windowBackground)
+        .background(DemoWindowVisibilityObserver { stage.settle() })
         .environmentObject(hover)
-        .onChange(of: state.selectedTab) { _, _ in hover.resetStage() }
+        .onAppear {
+            stage.reduceMotion = reduceMotion
+            if let demo = state.selectedTab.defaultDemo { stage.show(demo) }
+        }
+        .onChange(of: reduceMotion) { _, value in
+            stage.reduceMotion = value
+            if value { stage.settle() }
+        }
+        .onChange(of: state.selectedTab) { _, tab in
+            hover.resetStage()
+            if let demo = tab.defaultDemo { stage.show(demo) }
+        }
+        // The pointer rested on a row (dwell gate passed): that row's scene starts.
+        .onChange(of: hover.commitCount) { _, _ in
+            if let demo = hover.stageDemo, demo.tab == state.selectedTab {
+                stage.begin(demo, isOn: demoContext.isOn(demo))
+            }
+        }
+        // The pointer left the committed row: its loop plays out to the rest frame.
+        .onChange(of: hover.highlightedRow) { _, row in stage.pointerMoved(to: row) }
         .confirmationDialog(
             L10n.localized("clearHistoryConfirmTitle"),
             isPresented: $confirmingClearHistory,
@@ -232,16 +253,8 @@ struct SettingsWindowView: View {
             Color.clear
         #endif
         default:
-            if let demo = shownDemo {
-                DemoStage(demo: demo, context: demoContext, reduceMotion: reduceMotion, caption: captionText(for: demo))
-            }
+            DemoStage(model: stage, context: demoContext)
         }
-    }
-
-    /// The rested-on row's still if it belongs to this page, else the page's first row.
-    private var shownDemo: SettingsDemo? {
-        if let rested = hover.stageDemo, rested.tab == state.selectedTab { return rested }
-        return state.selectedTab.defaultDemo
     }
 
     @ViewBuilder
@@ -274,12 +287,42 @@ struct SettingsWindowView: View {
     // MARK: Stage context
 
     private var demoContext: SettingsDemoContext {
-        SettingsDemoContext(
+        var context = SettingsDemoContext(
             translationSampleText: translationSampleText,
             shortcutDescriptions: Dictionary(uniqueKeysWithValues: GlobalShortcutAction.allCases.map {
                 ($0, KeyboardShortcuts.getShortcut(for: $0.name)?.description ?? "")
             })
         )
+        context.switchStates = [
+            .fullscreenCover: UserDefaults.standard.bool(forKey: "fullscreenAlbumCover"),
+            .edgeShowSongOnTrackChange: edgeShowSongBinding.wrappedValue,
+            .showTranslation: lyricsService.showTranslation,
+            .launchAtLogin: LaunchAtLoginBridge.status == .enabled,
+            .showInDock: AppMain.shared?.showInDock ?? true,
+        ]
+        for demo in SettingsDemo.allCases {
+            context.captions[demo] = captionText(for: demo)
+            context.chips[demo] = chipText(for: demo, context: context)
+        }
+        return context
+    }
+
+    /// The pill's state text: On / Off for switches, the language for "Translate To",
+    /// the recorded combination for shortcuts.
+    private func chipText(for demo: SettingsDemo, context: SettingsDemoContext) -> String? {
+        switch demo {
+        case .fullscreenCover, .edgeShowSongOnTrackChange, .showTranslation, .launchAtLogin, .showInDock:
+            return L10n.localized(context.isOn(demo) ? "stateOn" : "stateOff")
+        case .translateTo:
+            let current = lyricsService.translationLanguage
+            let code = current == L10n.systemLanguageCode ? "system" : current
+            return L10n.translationLanguageOptions.first { $0.code == code }?.name
+        case .gettingToKnowNanoPod, .musicAutomation, .appleMusicAccess, .playbackHistory:
+            return nil
+        case .playPauseShortcut, .nextTrackShortcut, .previousTrackShortcut, .showHidePlayerShortcut, .hideToEdgeShortcut:
+            let text = demo.shortcutAction.map(context.shortcutLabel(for:)) ?? ""
+            return text.isEmpty ? nil : text
+        }
     }
 
     private var translationSampleText: String {
@@ -316,9 +359,13 @@ struct SettingsWindowView: View {
 
     // MARK: - Row helpers
 
+    /// A switch row. Flipping the switch replays the change once on the stage (spec A.2).
     private func toggleRow(_ demo: SettingsDemo, title: String, detail: String? = nil, isOn: Binding<Bool>) -> some View {
-        SettingsRow(demo: demo, title: title, detail: detail) {
-            Toggle(isOn: isOn) { Text(title) }
+        let replaying = Binding(
+            get: { isOn.wrappedValue },
+            set: { isOn.wrappedValue = $0; stage.replay(demo, isOn: $0) })
+        return SettingsRow(demo: demo, title: title, detail: detail) {
+            Toggle(isOn: replaying) { Text(title) }
                 .toggleStyle(SettingsSwitchStyle())
                 .accessibilityLabel(title)
         }
@@ -328,49 +375,50 @@ struct SettingsWindowView: View {
 
     @ViewBuilder
     private var playerPage: some View {
-        SettingsCard {
-            toggleRow(.fullscreenCover,
-                      title: L10n.localized("fullscreenCover"),
-                      detail: L10n.localized("fullscreenCoverDesc"),
-                      isOn: UserDefaultsBinding.bool(forKey: "fullscreenAlbumCover"))
-        }
-
-        SettingsSectionHeader(title: L10n.localized("sectionEdge"))
-        SettingsCard {
-            toggleRow(.edgeShowSongOnTrackChange,
-                      title: L10n.localized("edgeShowSongOnTrackChange"),
-                      detail: L10n.localized("edgeShowSongOnTrackChangeDesc"),
-                      isOn: edgeShowSongBinding)
-        }
-
-        if #available(macOS 15.0, *) {
-            SettingsSectionHeader(title: L10n.localized("sectionLyrics"))
+        VStack(alignment: .leading, spacing: 0) {
             SettingsCard {
-                toggleRow(.showTranslation,
-                          title: L10n.localized("showTranslation"),
-                          detail: L10n.localized("showTranslationDesc"),
-                          isOn: Binding(
-                            get: { lyricsService.showTranslation },
-                            set: { lyricsService.showTranslation = $0 }))
+                toggleRow(.fullscreenCover,
+                          title: L10n.localized("fullscreenCover"),
+                          detail: L10n.localized("fullscreenCoverDesc"),
+                          isOn: UserDefaultsBinding.bool(forKey: "fullscreenAlbumCover"))
                 SettingsDivider()
-                SettingsRow(demo: .translateTo, title: L10n.localized("translateTo")) {
-                    Picker(L10n.localized("translateTo"), selection: Binding(
-                        get: {
-                            let currentLang = lyricsService.translationLanguage
-                            return currentLang == L10n.systemLanguageCode ? "system" : currentLang
-                        },
-                        set: { code in
-                            lyricsService.translationLanguage = code == "system" ? L10n.systemLanguageCode : code
+                toggleRow(.edgeShowSongOnTrackChange,
+                          title: L10n.localized("edgeShowSongOnTrackChange"),
+                          detail: L10n.localized("edgeShowSongOnTrackChangeDesc"),
+                          isOn: edgeShowSongBinding)
+                if #available(macOS 15.0, *) {
+                    SettingsDivider()
+                    toggleRow(.showTranslation,
+                              title: L10n.localized("showTranslation"),
+                              detail: L10n.localized("showTranslationDesc"),
+                              isOn: Binding(
+                                get: { lyricsService.showTranslation },
+                                set: { lyricsService.showTranslation = $0 }))
+                    SettingsDivider()
+                    SettingsRow(demo: .translateTo, title: L10n.localized("translateTo")) {
+                        Picker(L10n.localized("translateTo"), selection: Binding(
+                            get: {
+                                let currentLang = lyricsService.translationLanguage
+                                return currentLang == L10n.systemLanguageCode ? "system" : currentLang
+                            },
+                            set: { code in
+                                lyricsService.translationLanguage = code == "system" ? L10n.systemLanguageCode : code
+                                // The chosen language shows on the stage at once (spec A.6.3).
+                                stage.replay(.translateTo, isOn: true)
+                            }
+                        )) {
+                            ForEach(L10n.translationLanguageOptions, id: \.code) { option in
+                                Text(option.name).tag(option.code)
+                            }
                         }
-                    )) {
-                        ForEach(L10n.translationLanguageOptions, id: \.code) { option in
-                            Text(option.name).tag(option.code)
-                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .fixedSize()
                     }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                    .fixedSize()
                 }
+            }
+            if #available(macOS 15.0, *) {
+                SettingsSectionFooter(text: L10n.localized("playerFooter"))
             }
         }
     }
@@ -406,7 +454,7 @@ struct SettingsWindowView: View {
                     }
                     Toggle(isOn: Binding(
                         get: { LaunchAtLoginBridge.status == .enabled },
-                        set: { LaunchAtLoginBridge.setEnabled($0); permissionRefresh += 1 }
+                        set: { LaunchAtLoginBridge.setEnabled($0); permissionRefresh += 1; stage.replay(.launchAtLogin, isOn: $0) }
                     )) { Text(L10n.localized("launchAtLogin")) }
                         .toggleStyle(SettingsSwitchStyle())
                         .accessibilityLabel(L10n.localized("launchAtLogin"))
@@ -422,11 +470,8 @@ struct SettingsWindowView: View {
             SettingsRow(demo: .gettingToKnowNanoPod, title: L10n.localized("tour.settings.title")) {
                 tourButton
             }
-        }
-
-        SettingsSectionHeader(title: L10n.localized("sectionPermissions"))
-        SettingsCard {
-            SettingsRow(demo: .musicAutomation, title: L10n.localized("automation")) {
+            SettingsDivider()
+            SettingsRow(demo: .musicAutomation, title: L10n.localized("automation"), detail: L10n.localized("automationDesc")) {
                 permissionControl(
                     status: automationStatusProvider(),
                     grant: {
@@ -447,11 +492,7 @@ struct SettingsWindowView: View {
                     },
                     openSettings: "x-apple.systempreferences:com.apple.preference.security?Privacy_Media")
             }
-        }
-        SettingsSectionFooter(text: L10n.localized("automationFooter"))
-
-        SettingsSectionHeader(title: L10n.localized("sectionData"))
-        SettingsCard {
+            SettingsDivider()
             SettingsRow(
                 demo: .playbackHistory,
                 title: L10n.localized("playbackHistory"),
