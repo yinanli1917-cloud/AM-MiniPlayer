@@ -18,8 +18,17 @@ enum L10n {
 
     /// 系统语言代码
     static var systemLanguageCode: String {
-        Locale.current.language.languageCode?.identifier ?? "en"
+        #if DEBUG
+        if let languageOverride { return languageOverride }
+        #endif
+        return Locale.current.language.languageCode?.identifier ?? "en"
     }
+
+    #if DEBUG
+    /// Test seam: pin the UI language regardless of the machine's locale
+    /// (settings render + mixed-language checks run both en and zh).
+    nonisolated(unsafe) static var languageOverride: String?
+    #endif
 
     /// 统一本地化字典
     static func localized(_ key: String) -> String {
@@ -41,7 +50,7 @@ enum L10n {
     }
 
     // 菜单栏用短标签，设置窗口用完整标签，分别用不同 key
-    private static let allStrings: [String: (en: String, zh: String)] = [
+    static let allStrings: [String: (en: String, zh: String)] = [
         // ── 菜单栏（v3.2，2026-09-27 定稿：4 项 3 组，零勾选，功能项带图标） ──
         "showPlayer":           ("Show Player", "显示面板"),
         "hidePlayer":           ("Hide Player", "隐藏面板"),
@@ -90,6 +99,21 @@ enum L10n {
         "tour.settings.again":      ("Get to know nanoPod again", "重新认识 nanoPod"),
         // 仍被 automationStatusControl（设置 › 通用）复用，不属于旧向导专属键。
         "onboarding.auth.authorized":   ("Authorized", "已授权"),
+        "authDenied":               ("Denied", "已拒绝"),
+        "authNotDetermined":        ("Not Determined", "未决定"),
+
+        // ── 设置窗口（v3.2 重做）分组标题 / 行 / 关于页 ──
+        "sectionEdge":              ("Edge", "贴边"),
+        "sectionLyrics":            ("Lyrics", "歌词"),
+        "sectionPermissions":       ("Permissions", "权限"),
+        "sectionData":              ("Data", "数据"),
+        "appleMusic":               ("Apple Music", "Apple Music"),
+        "playbackHistory":          ("Playback History", "播放记录"),
+        "clearButton":              ("Clear\u{2026}", "清除\u{2026}"),
+        "clearHistoryConfirmTitle": ("Clear playback history?", "清除播放记录？"),
+        "clearHistoryConfirmMessage": ("This removes nanoPod's own record of played tracks. It can't be undone.", "这会删除 nanoPod 自己记录的播放历史，无法撤销。"),
+        "cancel":                   ("Cancel", "取消"),
+        "aboutTagline":             ("A menu bar companion for Apple Music.", "Apple Music 的菜单栏伙伴。"),
 
         // ── 「认识 nanoPod」引导（v3.3，docs/design/2026-09-25-onboarding/proposal.md §9）──
         "tour.stop":                ("Stop here", "先到这里"),

@@ -82,7 +82,7 @@ enum ProgressHoverStyle {
 ///   state resets immediately: nothing is on screen there to flicker.
 // `public` (2026-09-27): the settings-window redesign reuses this exact
 // reducer + its default numbers for row hover-intent
-// (SettingsRowHoverIntentHost in MusicMiniPlayerAppKit — docs/design/
+// (SettingsHoverIntentModel in MusicMiniPlayerAppKit — docs/design/
 // 2026-09-25-menu-settings/proposal.md §4.4), so it must be visible outside
 // this module.
 public enum ProgressHoverIntentEngine {

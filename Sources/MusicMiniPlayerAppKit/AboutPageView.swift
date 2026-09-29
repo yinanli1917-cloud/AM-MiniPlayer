@@ -1,50 +1,21 @@
 /**
- * [INPUT]: Depends on LocalizedStrings' L10n; Bundle.main for the version string.
- * [OUTPUT]: Exports AboutPageView.
+ * [INPUT]: Depends on LocalizedStrings' L10n; SettingsPalette (accent);
+ *          Bundle.main for the version string; NSApp's application icon.
+ * [OUTPUT]: Exports AboutHeaderView (icon + name + version, sits in the stage
+ *           slot) and AboutLinksView (tagline + three links, sits in the page
+ *           slot).
  * [POS]: Settings window's About tab (docs/design/2026-09-25-menu-settings/
- *        proposal.md §4.3 "About" row + §4.4: "无动画。整块区域预留给动画会话，
- *        实现放独立 AboutPageView") — a deliberate placeholder, no animation.
+ *        proposal.md §4.3 "About" row + mockup `.about`) — a deliberate
+ *        placeholder, no animation; the animation session replaces it. The
+ *        segmented control stays where it is on every tab (mockup moves it to
+ *        the top for About; a control that jumps 134pt under the cursor was
+ *        judged worse than the small deviation).
  */
 
 import SwiftUI
+import AppKit
 
-struct AboutPageView: View {
-    var body: some View {
-        VStack(spacing: 14) {
-            Spacer()
-
-            Image(systemName: "music.note")
-                .font(.system(size: 56, weight: .light))
-                .foregroundStyle(Color.accentColor)
-
-            Text("nanoPod")
-                .font(.system(size: 20, weight: .semibold, design: .rounded))
-
-            Text("\(L10n.localized("version")) \(Self.marketingVersion)")
-                .font(.system(size: 12, design: .rounded))
-                .foregroundStyle(.secondary)
-
-            Spacer()
-
-            HStack(spacing: 16) {
-                Link(destination: Self.githubURL) {
-                    Text("GitHub")
-                }
-                Link(destination: Self.githubURL.appending(path: "blob/main/CLAUDE.md")) {
-                    Text(L10n.localized("acknowledgements"))
-                }
-                Link(destination: Self.githubURL.appending(path: "issues/new")) {
-                    Text(L10n.localized("reportIssue"))
-                }
-            }
-            .font(.system(size: 11))
-            .buttonStyle(.link)
-
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
+enum AboutInfo {
     static let githubURL = URL(string: "https://github.com/yinanli1917-cloud/AM-MiniPlayer")!
 
     static var marketingVersion: String {
@@ -54,5 +25,43 @@ struct AboutPageView: View {
             return "\(short) (\(build))"
         }
         return short
+    }
+}
+
+/// `.about .appicon` 64pt, `.name` 17 semibold, `.ver` 11 secondary.
+struct AboutHeaderView: View {
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(nsImage: NSApp?.applicationIconImage ?? NSImage())
+                .resizable()
+                .frame(width: 64, height: 64)
+            Text("nanoPod")
+                .font(.system(size: 17, weight: .semibold))
+                .padding(.top, 2)
+            Text("\(L10n.localized("version")) \(AboutInfo.marketingVersion)")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// `.about .tag` 13 secondary, `.links` 12pt in the accent colour.
+struct AboutLinksView: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            Text(L10n.localized("aboutTagline"))
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 14) {
+                Link("GitHub", destination: AboutInfo.githubURL)
+                Link(L10n.localized("acknowledgements"), destination: AboutInfo.githubURL.appending(path: "blob/main/CLAUDE.md"))
+                Link(L10n.localized("reportIssue"), destination: AboutInfo.githubURL.appending(path: "issues/new"))
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(SettingsPalette.accent)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 24)
     }
 }
