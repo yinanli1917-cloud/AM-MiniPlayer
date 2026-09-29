@@ -2,7 +2,7 @@
 // SettingsWindowRenderTests — offscreen PNG render of the REAL settings window
 // (docs/design/2026-09-25-menu-settings/mockup.html is the visual reference).
 //
-// Hosts the real SettingsWindowView in a fixed 480x562 titled window (same
+// Hosts the real SettingsWindowView in a fixed 480x520 toolbar-tab window (same
 // construction as AppMain.createSettingsWindow) far off screen, and captures
 // its content view at exactly 2x: every tab x {light, dark} x {en, zh}, plus
 // every demo scene at rest x {light, dark}. Output dir:
@@ -68,22 +68,27 @@ final class SettingsWindowRenderTests: XCTestCase {
         shortcutDescriptions: [.togglePanel: "\u{2325}\u{2318}P"]
     )
 
+    /// The real settings window (native toolbar tabs, one hosted page per tab)
+    /// with deterministic permission state. `hover`, when given, drives the
+    /// selected tab's page so a hovered-row state can be staged without events.
+    static func makeSettingsWindow(state: SettingsWindowState, dark: Bool, hover: SettingsHoverIntentModel? = nil) -> NSWindow {
+        let window = SettingsTabViewController.makeWindow(state: state, autosaveName: nil) { tab in
+            var view = SettingsWindowView(state: state, tab: tab, hover: tab == state.selectedTab ? hover : nil)
+            view.automationStatusProvider = { .authorized }
+            view.appleMusicStatusProvider = { .notDetermined }
+            return NSHostingController(rootView: view.environmentObject(MusicController(preview: true)))
+        }
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        window.setFrameOrigin(NSPoint(x: -20000, y: -20000))
+        window.orderFront(nil)
+        return window
+    }
+
     private func makeSettingsWindow(tab: SettingsTab, dark: Bool) -> (NSWindow, SettingsWindowState) {
         let defaults = UserDefaults(suiteName: "nanopod.test.settings-render.\(UUID().uuidString)")!
         let state = SettingsWindowState(defaults: defaults)
         state.selectedTab = tab
-        var view = SettingsWindowView(state: state)
-        view.automationStatusProvider = { .authorized }
-        view.appleMusicStatusProvider = { .notDetermined }
-        let host = NSHostingController(rootView: view.environmentObject(MusicController(preview: true)))
-        let window = NSWindow(contentViewController: host)
-        window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 480, height: 562))
-        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        window.setFrameOrigin(NSPoint(x: -20000, y: -20000))
-        window.isReleasedWhenClosed = false
-        window.orderFront(nil)
-        return (window, state)
+        return (Self.makeSettingsWindow(state: state, dark: dark), state)
     }
 
     // MARK: whole window
@@ -96,10 +101,10 @@ final class SettingsWindowRenderTests: XCTestCase {
                     let (window, _) = makeSettingsWindow(tab: tab, dark: dark)
                     spin(0.5)
                     let content = try XCTUnwrap(window.contentView)
-                    XCTAssertEqual(content.bounds.size, NSSize(width: 480, height: 562))
+                    XCTAssertEqual(content.bounds.size, NSSize(width: 480, height: 520))
                     let rep = Self.capture(content)
                     XCTAssertEqual(rep.pixelsWide, 960)
-                    XCTAssertEqual(rep.pixelsHigh, 1124)
+                    XCTAssertEqual(rep.pixelsHigh, 1040)
                     let prefix = ProcessInfo.processInfo.environment["NANOPOD_RENDER_PREFIX"] ?? ""
                     try Self.writePNG(rep, name: "\(prefix)window-\(tab.rawValue)-\(dark ? "dark" : "light")-\(langTag).png")
                     window.close()

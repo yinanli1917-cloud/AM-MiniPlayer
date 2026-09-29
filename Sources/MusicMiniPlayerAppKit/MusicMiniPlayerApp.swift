@@ -39,7 +39,8 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
     /// 计划者偏离设计文档——不把呈现态挂到 `MusicController`，用独立模型，随
     /// `musicController` 一起注入给 SwiftUI 内容层。
     let edgePresentationModel = MainActor.assumeIsolated { EdgePresentationModel() }
-    let settingsWindowState = SettingsWindowState()
+    /// `var` so tests can inject a state backed by a private defaults suite.
+    var settingsWindowState = SettingsWindowState()
     private var windowDelegate: FloatingWindowDelegate?
     /// Liquid edge: tucks the panel into a screen edge as one liquid object
     /// (research/spikes/edge-collapse-spike, founder-approved 2026-09-22).
@@ -763,20 +764,20 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
 
     func createSettingsWindow() {
         guard settingsWindow == nil else { return }
-        let settingsContent = SettingsWindowView(state: settingsWindowState)
-            .environmentObject(musicController)
-
-        let hostingController = NSHostingController(rootView: settingsContent)
-
-        let window = NSWindow(contentViewController: hostingController)
-        window.title = L10n.isSystemChinese ? "设置" : "Settings"
-        // v3.2: no resize, no minimize (HIG Settings windows are fixed-size);
-        // the content view itself is a hard 480×562 (proposal §4.2).
-        window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 480, height: 562))
-        window.setFrameAutosaveName("Settings")
+        let state = settingsWindowState
+        let musicController = self.musicController
+        // v3.2 + native toolbar tabs: one hosted page per tab; the strip, the
+        // selection tint and the window title (= page name) are AppKit's.
+        // Fixed size, no minimize (HIG Settings windows); each page's content
+        // is a hard 480×520 (SettingsMetrics.windowSize).
+        let window = MainActor.assumeIsolated {
+            SettingsTabViewController.makeWindow(state: state, autosaveName: "Settings") { tab in
+                NSHostingController(
+                    rootView: SettingsWindowView(state: state, tab: tab)
+                        .environmentObject(musicController))
+            }
+        }
         window.center()
-        window.isReleasedWhenClosed = false
 
         settingsWindowDelegate = SettingsWindowDelegate()
         window.delegate = settingsWindowDelegate

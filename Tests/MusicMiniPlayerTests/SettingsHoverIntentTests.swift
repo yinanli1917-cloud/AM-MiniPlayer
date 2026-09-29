@@ -227,16 +227,7 @@ final class SettingsHoverIntentViewTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "nanopod.test.settings-hover.\(UUID().uuidString)"))
         let state = SettingsWindowState(defaults: defaults)
         state.selectedTab = .general
-        var view = SettingsWindowView(state: state)
-        view.automationStatusProvider = { .authorized }
-        view.appleMusicStatusProvider = { .notDetermined }
-        let controller = NSHostingController(rootView: view.environmentObject(MusicController(preview: true)))
-        let window = NSWindow(contentViewController: controller)
-        window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 480, height: 562))
-        window.setFrameOrigin(NSPoint(x: -20000, y: -20000))
-        window.isReleasedWhenClosed = false
-        window.orderFront(nil)
+        let window = SettingsWindowRenderTests.makeSettingsWindow(state: state, dark: false)
         self.window = window
         spin(0.4)
         return window

@@ -19,6 +19,14 @@ import SwiftUI
 @MainActor
 final class SettingsWindowLayoutTests: XCTestCase {
 
+    private var suites: [String] = []
+
+    override func tearDown() {
+        for suite in suites { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        suites = []
+        super.tearDown()
+    }
+
     private func spin(_ s: Double) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
 
     private func allSubviews(_ view: NSView) -> [NSView] {
@@ -26,10 +34,14 @@ final class SettingsWindowLayoutTests: XCTestCase {
     }
 
     private func hostedPage(_ tab: SettingsTab) throws -> (window: NSWindow, scroll: NSScrollView?) {
+        let suite = "nanopod.test.settings-layout.\(UUID().uuidString)"
+        suites.append(suite)
         let app = AppMain()
+        app.settingsWindowState = SettingsWindowState(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
+        app.settingsWindowState.selectedTab = tab
         app.createSettingsWindow()
         let window = try XCTUnwrap(app.settingsWindow)
-        app.settingsWindowState.selectedTab = tab
+        window.setFrameAutosaveName("") // never persist the parked frame into real defaults
         window.setFrameOrigin(NSPoint(x: -20000, y: -20000))
         window.orderFront(nil)
         spin(0.5)
@@ -49,7 +61,7 @@ final class SettingsWindowLayoutTests: XCTestCase {
             let (window, scroll) = try hostedPage(tab)
             defer { window.close() }
             let contentBounds = try XCTUnwrap(window.contentView).bounds
-            XCTAssertEqual(contentBounds.size, NSSize(width: 480, height: 562), "\(tab)")
+            XCTAssertEqual(contentBounds.size, NSSize(width: 480, height: 520), "\(tab)")
             let scrollView = try XCTUnwrap(scroll, "\(tab): the page must live in a scroll view")
             let doc = try XCTUnwrap(scrollView.documentView)
             let viewport = scrollView.contentView.bounds.height
@@ -72,11 +84,12 @@ final class SettingsWindowLayoutTests: XCTestCase {
     func test_metrics_addUpToTheWindow() {
         let m = SettingsMetrics.self
         XCTAssertEqual(
-            m.topPadding + m.stageHeight + m.stageToSegmented + m.segmentedHeight + m.segmentedToContent + m.pageViewportHeight,
+            m.topPadding + m.stageHeight + m.stageToPage + m.pageViewportHeight,
             m.windowSize.height, accuracy: 0.001)
-        XCTAssertEqual(m.windowSize, CGSize(width: 480, height: 562))
+        XCTAssertEqual(m.windowSize, CGSize(width: 480, height: 520))
         XCTAssertEqual(m.contentWidth + 2 * m.outerPadding, m.windowSize.width)
-        XCTAssertEqual(m.segmentedHeight, 24)
+        // Dropping the segmented control took its 60pt out of the window, not out of the rows.
+        XCTAssertEqual(m.pageViewportHeight, 309)
         // The stage: a centred 16:9 rounded rectangle, one corner radius with the cards below.
         XCTAssertEqual(CGSize(width: m.stageWidth, height: m.stageHeight), CGSize(width: 300, height: 169))
         XCTAssertEqual(m.stageWidth / m.stageHeight, 16.0 / 9.0, accuracy: 0.01)

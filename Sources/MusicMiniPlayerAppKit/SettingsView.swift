@@ -1,13 +1,13 @@
 /**
  * [INPUT]: 依赖 MusicMiniPlayerCore 的 MusicController/LyricsService/TourPersistence/
  *          GlobalShortcutAction；依赖 LocalizedStrings 的 L10n/UserDefaultsBinding；
- *          依赖 SettingsControls（卡片/行/开关/分段）、SettingsHoverIntent（悬停意图）、
+ *          依赖 SettingsControls（卡片/行/开关）、SettingsHoverIntent（悬停意图）、
  *          SettingsDemoStage（演示台）、SettingsPalette、AboutPageView。
  * [OUTPUT]: 导出 SettingsWindowView、SettingsWindowState、SettingsTab、
  *           GettingToKnowNanoPodAction、TourButtonPolicy、LaunchAtLoginBridge、
  *           LaunchAtLoginProviding。
- * [POS]: MusicMiniPlayerApp 的设置界面（v3.2：演示台 + 分段控件 + 分组卡片，
- *        无 sidebar 无工具栏；视觉以 mockup.html 为准 —
+ * [POS]: MusicMiniPlayerApp 的设置界面（演示台 + 分组卡片；页签是窗口原生
+ *        工具栏标签页 SettingsTabViewController，无 sidebar；视觉以 mockup.html 为准 —
  *        docs/design/2026-09-25-menu-settings/proposal.md §4）
  */
 
@@ -157,15 +157,20 @@ enum GettingToKnowNanoPodAction {
 // MARK: - SettingsWindowView
 // ──────────────────────────────────────────────
 
+/// One settings page (demo stage + rows). The page switcher is the window's
+/// native toolbar-tab strip (`SettingsTabViewController`); each tab hosts its
+/// own `SettingsWindowView(tab:)`.
 struct SettingsWindowView: View {
     @EnvironmentObject var musicController: MusicController
     @ObservedObject var state: SettingsWindowState
+    /// The page this view renders.
+    let tab: SettingsTab
     @StateObject private var lyricsService = LyricsService.shared
     /// Kept for its Automation/MusicKit authorization queries and the Automation
     /// grant request; its old onboarding bookkeeping is superseded by
     /// `TourPersistence` and no longer read here.
     @StateObject private var onboardingState = OnboardingState.shared
-    @StateObject private var hover = SettingsHoverIntentModel()
+    @StateObject private var hover: SettingsHoverIntentModel
     @StateObject private var stage = DemoStageModel()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var confirmingClearHistory = false
@@ -185,18 +190,20 @@ struct SettingsWindowView: View {
     var automationStatusProvider: () -> OnboardingAuthorizationStatus = { OnboardingState.shared.automationStatus }
     var appleMusicStatusProvider: () -> OnboardingAuthorizationStatus = { OnboardingState.shared.musicKitStatus }
 
-    init(state: SettingsWindowState) {
+    /// `hover` is a test seam: a screenshot can put the pointer on a row without
+    /// synthesising mouse events.
+    @MainActor
+    init(state: SettingsWindowState, tab: SettingsTab, hover: SettingsHoverIntentModel? = nil) {
         self.state = state
+        self.tab = tab
+        _hover = StateObject(wrappedValue: hover ?? SettingsHoverIntentModel())
     }
 
     var body: some View {
         VStack(spacing: 0) {
             stageArea
                 .frame(width: SettingsMetrics.contentWidth, height: SettingsMetrics.stageHeight)
-                .padding(.bottom, SettingsMetrics.stageToSegmented)
-
-            SettingsSegmentedControl(tabs: SettingsTab.visibleCases, selection: $state.selectedTab)
-                .padding(.bottom, SettingsMetrics.segmentedToContent)
+                .padding(.bottom, SettingsMetrics.stageToPage)
 
             pageArea
                 .frame(width: SettingsMetrics.contentWidth, height: SettingsMetrics.pageViewportHeight, alignment: .top)
@@ -209,19 +216,22 @@ struct SettingsWindowView: View {
         .environmentObject(hover)
         .onAppear {
             stage.reduceMotion = reduceMotion
-            if let demo = state.selectedTab.defaultDemo { stage.show(demo) }
+            hover.resetStage()
+            if let demo = tab.defaultDemo { stage.show(demo) }
         }
         .onChange(of: reduceMotion) { _, value in
             stage.reduceMotion = value
             if value { stage.settle() }
         }
-        .onChange(of: state.selectedTab) { _, tab in
+        // Coming back to this page from another tab: its stage starts from the first row.
+        .onChange(of: state.selectedTab) { _, selected in
+            guard selected == tab else { return }
             hover.resetStage()
             if let demo = tab.defaultDemo { stage.show(demo) }
         }
         // The pointer rested on a row (dwell gate passed): that row's scene starts.
         .onChange(of: hover.commitCount) { _, _ in
-            if let demo = hover.stageDemo, demo.tab == state.selectedTab {
+            if let demo = hover.stageDemo, demo.tab == tab {
                 stage.begin(demo, isOn: demoContext.isOn(demo))
             }
         }
@@ -245,7 +255,7 @@ struct SettingsWindowView: View {
 
     @ViewBuilder
     private var stageArea: some View {
-        switch state.selectedTab {
+        switch tab {
         case .about:
             AboutHeaderView()
         #if DEBUG || LOCAL_DEVELOPER_BUILD
@@ -259,7 +269,7 @@ struct SettingsWindowView: View {
 
     @ViewBuilder
     private var pageArea: some View {
-        switch state.selectedTab {
+        switch tab {
         #if DEBUG || LOCAL_DEVELOPER_BUILD
         case .diagnostics:
             DiagnosticsDebugPanel(musicController: musicController)
@@ -267,7 +277,7 @@ struct SettingsWindowView: View {
         default:
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
-                    switch state.selectedTab {
+                    switch tab {
                     case .player: playerPage
                     case .general: generalPage
                     case .shortcuts: shortcutsPage
