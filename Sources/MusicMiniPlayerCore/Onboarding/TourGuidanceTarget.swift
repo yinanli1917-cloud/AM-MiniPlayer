@@ -2,7 +2,7 @@
  * [INPUT]: TourModel's TourPhase/TourStep; TourAnchorRegistry's TourAnchorID;
  *          MusicController's PlayerPage; LiquidEdgeState.
  * [OUTPUT]: Exports TourRingSubject, TourRingMode, TourRingTarget, TourSurface,
- *           TourPanelHint, TourGuidanceResolver — the pure answer to "what is
+ *           TourPanelHint, TourPreface, TourGuidanceResolver — the pure answer to "what is
  *           the ring on right now, and is it a hint or a press-now?".
  * [POS]: MusicMiniPlayerCore/Onboarding. Replaces the controller's old
  *        `currentAnchorRect`/`haloSize` switches, which pointed the ring at
@@ -85,6 +85,39 @@ public enum TourPanelHint: Equatable, Sendable {
     case gestureInvite
 }
 
+/// A step whose control lives on only some pages, begun on a page that lacks it, opens with a
+/// leading beat that walks the user there (prototype C.4.4). The speech bubble at the bottom
+/// left is the control that changes page, so the ring sits on it until the panel arrives.
+public enum TourPreface: Equatable, Sendable {
+    /// The move step off the cover page: corners only work on the cover.
+    case backToCover
+    /// The translate step off the lyrics page: the translate button exists only there.
+    case toLyrics
+    /// The corners step on the queue page: the two corner buttons are not on the queue.
+    case leaveQueue
+
+    /// The leading beat `step` needs when it begins with the panel on `page`, or nil.
+    public static func needed(for step: TourStep, on page: PlayerPage) -> TourPreface? {
+        let preface: TourPreface
+        switch step {
+        case .moveTuck: preface = .backToCover
+        case .translate: preface = .toLyrics
+        case .corners: preface = .leaveQueue
+        default: return nil
+        }
+        return preface.isDone(on: page) ? nil : preface
+    }
+
+    /// The panel is on a page where the step's control exists.
+    public func isDone(on page: PlayerPage) -> Bool {
+        switch self {
+        case .backToCover: return page == .album
+        case .toLyrics: return page == .lyrics
+        case .leaveQueue: return page != .playlist
+        }
+    }
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - Resolver
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -122,10 +155,13 @@ public enum TourGuidanceResolver {
     }
 
     /// The ring for `phase`, or nil when the step has no control to point at.
-    /// `moveNeedsAlbumFirst`: the move step began with the panel on a page that
-    /// cannot be nudged into a corner, so its first beat is "back to the cover".
-    public static func target(phase: TourPhase, surface: TourSurface, moveNeedsAlbumFirst: Bool = false) -> TourRingTarget? {
+    /// `preface`: the step began on a page that lacks its control, so its first beat is
+    /// "go to the right page". Until the panel is there the ring sits on the speech bubble.
+    public static func target(phase: TourPhase, surface: TourSurface, preface: TourPreface? = nil) -> TourRingTarget? {
         let mode: TourRingMode = surface.controlsVisible ? .pressNow : .hint
+        if case .step = phase, let preface, !preface.isDone(on: surface.page) {
+            return .circle(.control(.lyricsNav), lyricsDiameter, mode)
+        }
         switch phase {
         case .step(.reveal, _):
             return .circle(.control(.playPause), controlDiameter, mode)
@@ -149,11 +185,7 @@ public enum TourGuidanceResolver {
             return .circle(.control(.translate), controlDiameter, .hint)
 
         case .step(.moveTuck, _):
-            // The only control the move step ever points at: the speech
-            // bubble, which turns the lyrics page back into the cover.
-            if moveNeedsAlbumFirst, surface.page != .album {
-                return .circle(.control(.lyricsNav), lyricsDiameter, mode)
-            }
+            // The gesture has no control to point at (the "back to the cover" ring is the preface's).
             return nil
 
         case .step(.back, let beats):

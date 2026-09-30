@@ -72,9 +72,10 @@ final class TourController: ObservableObject {
     private var closingFlashPending = false
 
     // Guidance bookkeeping
-    /// The move step began with the panel on a page that cannot be nudged into a
-    /// corner: its first beat is "back to the cover page".
-    private var moveNeedsAlbum = false
+    /// The current step began with the panel on a page that lacks its control (corners on the
+    /// queue, translate off the lyrics page, move off the cover): its first beat walks the user
+    /// to the right page. Fixed at step entry, so a step begun in the right place never grows one.
+    private var preface: TourPreface?
     private var ringHeld = false
     private var ringHoldToken = 0
     private var lastRingSubject: TourRingSubject?
@@ -269,11 +270,9 @@ final class TourController: ObservableObject {
 
     /// Per-step bookkeeping that is not part of the pure machine.
     private func noteStepEntry(previous: TourPhase, next: TourPhase) {
-        if case .step(.moveTuck, _) = next {
-            if case .step(.moveTuck, _) = previous {} else { moveNeedsAlbum = musicController.currentPage != .album }
-        } else {
-            moveNeedsAlbum = false
-        }
+        guard case .step(let step, _) = next else { preface = nil; return }
+        if case .step(let was, _) = previous, was == step { return }
+        preface = TourPreface.needed(for: step, on: musicController.currentPage)
     }
 
     private func scheduleTransitionIfNeeded() {
@@ -446,7 +445,7 @@ final class TourController: ObservableObject {
         skipWork?.cancel(); skipWork = nil
         skipping = false
         cardYielded = false
-        moveNeedsAlbum = false
+        preface = nil
         hideCard()
         TourAnchorRegistry.shared.reset()
     }
@@ -613,12 +612,20 @@ final class TourController: ObservableObject {
             )
 
         case .step(.corners, let beats):
-            var list = [TourBeatModel(id: 0, text: L("tour.corners.beat1"), checked: beats[0]),
-                        TourBeatModel(id: 1, text: L("tour.corners.beat2"), checked: beats[1])]
+            var list: [TourBeatModel] = []
+            var body = beats.allSatisfy { $0 } ? L("tour.corners.body") : awayOr(L("tour.corners.body"))
+            if preface == .leaveQueue {
+                // Not a machine beat: the corner buttons are not on the queue page.
+                let there = TourPreface.leaveQueue.isDone(on: surface.page)
+                list.append(TourBeatModel(id: 2, text: L("tour.corners.beat0"), checked: there || beats.contains(true)))
+                if !there { body = L("tour.corners.bodyQueue") }
+            }
+            list.append(TourBeatModel(id: 0, text: L("tour.corners.beat1"), checked: beats[0]))
+            list.append(TourBeatModel(id: 1, text: L("tour.corners.beat2"), checked: beats[1]))
             markSkipped(&list)
             return TourCardModel(
                 kind: .step(.corners), title: L("tour.corners.title"),
-                body: skipBody() ?? (beats.allSatisfy { $0 } ? L("tour.corners.body") : awayOr(L("tour.corners.body"))), beats: list,
+                body: skipBody() ?? body, beats: list,
                 ringCompleted: state.completedCount, stepLabel: "\(TourStep.corners.index(in: total))"
             )
 
@@ -631,10 +638,18 @@ final class TourController: ObservableObject {
             )
 
         case .step(.translate, let beats):
-            var list = [TourBeatModel(id: 0, text: L("tour.translate.beat1"), checked: beats[0])]
+            var list: [TourBeatModel] = []
+            var body = awayOr(L("tour.translate.body"))
+            if preface == .toLyrics {
+                // Not a machine beat: the translate button exists only on the lyrics page.
+                let there = TourPreface.toLyrics.isDone(on: surface.page)
+                list.append(TourBeatModel(id: 2, text: L("tour.translate.beat0"), checked: there || beats[0]))
+                if !there { body = L("tour.translate.bodyGoLyrics") }
+            }
+            list.append(TourBeatModel(id: 0, text: L("tour.translate.beat1"), checked: beats[0]))
             markSkipped(&list)
             return TourCardModel(
-                kind: .step(.translate), title: L("tour.translate.title"), body: skipBody() ?? awayOr(L("tour.translate.body")), beats: list,
+                kind: .step(.translate), title: L("tour.translate.title"), body: skipBody() ?? body, beats: list,
                 ringCompleted: state.completedCount, stepLabel: "\(TourStep.translate.index(in: total))"
             )
 
@@ -647,7 +662,7 @@ final class TourController: ObservableObject {
             else if !onAlbum { body = L("tour.move.bodyLyrics") }
             else { body = L("tour.move.body") }
             var list: [TourBeatModel] = []
-            if moveNeedsAlbum {
+            if preface == .backToCover {
                 // Not a machine beat: a precondition the card walks the user through.
                 list.append(TourBeatModel(id: 2, text: L("tour.move.beat0"), checked: onAlbum || tucked))
             }
@@ -759,7 +774,7 @@ final class TourController: ObservableObject {
     private func cardAnchorRect(for phase: TourPhase) -> CGRect {
         guard let panel else { return .zero }
         if case .step(.moveTuck, _) = phase { return panel.frame }
-        if let target = TourGuidanceResolver.target(phase: phase, surface: currentSurface(), moveNeedsAlbumFirst: moveNeedsAlbum),
+        if let target = TourGuidanceResolver.target(phase: phase, surface: currentSurface(), preface: preface),
            let r = rect(for: target.subject) { return r }
         return panel.frame
     }
@@ -810,7 +825,7 @@ final class TourController: ObservableObject {
         // A card that stands beside the whole panel (the move step) still points its beak at what the
         // ring is on right now, so the beak follows the ring when it changes control within the step.
         if case .step(.moveTuck, _) = phase,
-           let target = TourGuidanceResolver.target(phase: phase, surface: currentSurface(), moveNeedsAlbumFirst: moveNeedsAlbum),
+           let target = TourGuidanceResolver.target(phase: phase, surface: currentSurface(), preface: preface),
            let aim = rect(for: target.subject) {
             placement = TourPlacement.aimBeak(placement, atMidY: aim.midY, cardHeight: cardSize.height)
         }
@@ -1027,7 +1042,7 @@ final class TourController: ObservableObject {
         if ringHeld { return }
 
         let surface = currentSurface()
-        let target = TourGuidanceResolver.target(phase: state.phase, surface: surface, moveNeedsAlbumFirst: moveNeedsAlbum)
+        let target = TourGuidanceResolver.target(phase: state.phase, surface: surface, preface: preface)
         if let target, let rect = rect(for: target.subject) {
             let geo = ringGeometry(for: target, rect: rect)
             if !motion.ringVisible || lastRingSubject != target.subject {
@@ -1067,7 +1082,9 @@ final class TourController: ObservableObject {
         if !inside { refreshGuidance(); return }
         let subjects = TourGuidanceResolver.beatSubjects(for: step)
         let subject: TourRingSubject?
-        if step == .moveTuck { subject = id == 2 ? .control(.lyricsNav) : nil } else { subject = subjects.indices.contains(id) ? subjects[id] : nil }
+        if id == 2 { subject = preface == nil ? nil : .control(.lyricsNav) }   // the leading beat: the bubble
+        else if step == .moveTuck { subject = nil }
+        else { subject = subjects.indices.contains(id) ? subjects[id] : nil }
         guard let subject, subject != lastRingSubject, let rect = rect(for: subject) else {
             guidance.motion.pulseRing()
             guidance.kick()

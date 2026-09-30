@@ -251,6 +251,71 @@ final class TourGuidanceControllerTests: XCTestCase {
     func test_item7_translationAlreadyOn_turningItOffCompletesTheStep() throws { try translateStep(initiallyOn: true) }
     func test_item7_translationOff_turningItOnCompletesTheStep() throws { try translateStep(initiallyOn: false) }
 
+    // MARK: - Item 7b: translation begun off the lyrics page (device, 2026-09-29: no ring, generic hint)
+
+    func test_item7b_translate_beganOnTheCover_leadsWithGoToLyrics_ringOnTheBubble_thenSpringsToTheTranslateButton() throws {
+        f = TourRealPanelFixture(page: .album)
+        f.showControls(on: .album)
+        f.lyricsService.debugSetCanTranslate(true)
+        TourHookBus.shared.controlsVisible.send(true)
+        f.controller.send(.resume(completed: [.connect, .reveal, .corners, .lyrics]))
+        XCTAssertEqual(f.controller.state.phase, .step(.translate, beats: [false]))
+        XCTAssertTrue(f.wait { f.controller.debugHaloFrame != nil })
+        f.spin(0.7)
+        let model = try XCTUnwrap(f.controller.debugCardStore?.model)
+        XCTAssertEqual(model.beats.map(\.id), [2, 0], "the leading beat comes first")
+        XCTAssertEqual(model.beats.first?.text, L("tour.translate.beat0"))
+        XCTAssertEqual(model.beats.first?.checked, false)
+        XCTAssertEqual(model.body, L("tour.translate.bodyGoLyrics"), "the card says where the button lives, not just 'bring your cursor back'")
+        assertRing(on: f.restingRect(.lyricsNav), "the speech bubble that opens the lyrics page")
+
+        // The panel reaches the lyrics page: the beat ticks and the ring springs to the translate button.
+        f.music.userManuallyOpenedLyrics = true
+        f.music.currentPage = .lyrics
+        f.spin(0.4)
+        f.lyricsService.debugSetCanTranslate(true)      // LyricsView re-derives it on entry
+        TourHookBus.shared.controlsVisible.send(true)
+        XCTAssertTrue(f.wait { f.controller.debugCardStore?.model.beats.first?.checked == true }, "the leading beat ticks")
+        XCTAssertTrue(f.wait { f.controller.debugCardStore?.model.body != self.L("tour.translate.bodyGoLyrics") }, "and the body is the normal translation copy")
+        f.spin(0.9)
+        assertRing(on: f.restingRect(.translate), "the translate button, bottom right")
+        XCTAssertEqual(f.controller.debugCardStore?.model.beats.map(\.id), [2, 0])
+    }
+
+    func test_item7b_translate_beganOnTheLyricsPage_hasNoLeadingBeat() throws {
+        try translateStep(initiallyOn: false)
+        XCTAssertNil(f.controller.debugCardStore?.model.beats.first { $0.id == 2 }, "unchanged from before")
+    }
+
+    func test_item7b_cornersBeganOnTheQueue_leadsWithLeaveTheQueue_ringOnTheBubble() throws {
+        f = TourRealPanelFixture(page: .playlist)
+        TourHookBus.shared.controlsVisible.send(true)
+        f.controller.send(.resume(completed: [.connect, .reveal]))
+        XCTAssertEqual(f.controller.state.phase, .step(.corners, beats: [false, false]))
+        XCTAssertTrue(f.wait { f.controller.debugHaloFrame != nil })
+        f.spin(0.7)
+        let model = try XCTUnwrap(f.controller.debugCardStore?.model)
+        XCTAssertEqual(model.beats.map(\.id), [2, 0, 1])
+        XCTAssertEqual(model.beats.first?.text, L("tour.corners.beat0"))
+        XCTAssertEqual(model.body, L("tour.corners.bodyQueue"))
+        assertRing(on: f.restingRect(.lyricsNav), "the bubble that leaves the queue")
+        f.music.currentPage = .album
+        XCTAssertTrue(f.wait { f.controller.debugCardStore?.model.beats.first?.checked == true })
+        XCTAssertTrue(f.wait { f.controller.debugCardStore?.model.body == self.L("tour.corners.body") })
+        f.spin(0.9)
+        assertRing(on: f.restingRect(.audioOutput), "the ring moves on to the first corner")
+    }
+
+    func test_item7b_newCopy_isWarm_inBothLanguages_andNeverUsesTheBannedWord() throws {
+        for key in ["tour.translate.beat0", "tour.translate.bodyGoLyrics", "tour.corners.beat0", "tour.corners.bodyQueue"] {
+            let pair = try XCTUnwrap(L10n.allStrings[key], key)
+            XCTAssertFalse(pair.en.isEmpty || pair.zh.isEmpty, key)
+            XCTAssertFalse(pair.zh.contains("甩"), key)
+        }
+        XCTAssertTrue(try XCTUnwrap(L10n.allStrings["tour.translate.bodyGoLyrics"]).en.contains("lyrics page"))
+        XCTAssertTrue(try XCTUnwrap(L10n.allStrings["tour.translate.bodyGoLyrics"]).zh.contains("歌词页"))
+    }
+
     // MARK: - Item 8: the move step
 
     func test_item8_moveStep_onTheCover_bodyStatesBothRules_noTopEdgeContact() throws {

@@ -161,6 +161,9 @@ enum L10n {
         "tour.corners.body":        ("Top right picks where the sound comes out. Top left takes you to Music.", "右上角选声音从哪里出，左上角一步到 Music。"),
         "tour.corners.beat1":       ("Top right: where the sound goes", "右上角：声音从哪出"),
         "tour.corners.beat2":       ("Top left: over to Music", "左上角：去 Music"),
+        // Begun on the queue page, where neither corner button exists: a leading beat walks the user out.
+        "tour.corners.beat0":       ("Step out of the queue first", "先离开播放列表"),
+        "tour.corners.bodyQueue":   ("The two corner buttons aren't on the queue page. The speech bubble at the bottom left takes you out of it.", "播放列表里没有这两个角上的按钮。点左下角的小气泡，先从这里出来。"),
         "tour.corners.musicOpened": ("Music's open. Come back whenever you're ready.", "Music 打开了，回来接着来。"),
         "tour.corners.confirm":     ("Both corners, right there.", "两个角都在这儿。"),
 
@@ -172,6 +175,9 @@ enum L10n {
 
         "tour.translate.title":     ("Translation", "翻译"),
         "tour.translate.body":      ("The button at the bottom right. Each line gets one underneath.", "右下角的按钮。译文会跟在每一句下面。"),
+        // Begun off the lyrics page, where the translate button does not exist: a leading beat walks the user there.
+        "tour.translate.beat0":     ("Go to the lyrics page first", "先到歌词页"),
+        "tour.translate.bodyGoLyrics": ("The translate button lives on the lyrics page. Bring your cursor over and tap the speech bubble at the bottom left to get there.", "翻译按钮在歌词页里。鼠标移到面板上，点左下角的小气泡就过去了。"),
         "tour.translate.beat1":     ("Tap the translate button", "点一下翻译按钮"),
         "tour.translate.confirm":   ("Translated.", "译文来了。"),
         "tour.translate.deferred.title": ("This one doesn't need it", "这首不用翻"),

@@ -1304,6 +1304,8 @@ const CORNER = { TR: { x: CW - 16 - PW, y: MB + 16 }, BL: { x: 16, y: CH - 16 - 
 const Cd = { defer: true };                       // 翻译那一步是否延后（S4 跳过）
 const glyphHTML = v => `<div class="tp" data-act="glyph" title="点一下，代替双指手势"><div class="pad ${v}"><i class="f a"></i><i class="f b"></i></div></div><div class="tpcap">点这里，代替双指手势</div>`;
 const LINKS = `<div class="cfoot"><a class="clink" data-act="skip" tabindex="0" role="button">这一步先不做</a><a class="clink" data-act="stop" tabindex="0" role="button">先到这里</a></div>`;
+const S4_BODY = '右下角的按钮。译文会跟在每一句下面。', S4_BODY_COVER = '翻译按钮在歌词页里。鼠标移到面板上，点左下角的小气泡就过去了。';
+const S4_BEAT0 = '先到歌词页', S4_BEAT1 = '点一下翻译按钮';
 const S5_BODY = '在封面页，双指按住面板往一个角轻推，它会自己落好。歌词页不能随意挪，只能往屏幕边上推，让它藏进去。', S5_TUCK = '落好了。往左边再推一下，它会藏进屏幕边。';
 /* 09-29 创始人定：落角只在封面页有效，歌词页只能推向屏幕边。面板在歌词页时进入这一步，第一拍是「先回到封面页」，环在歌词气泡上。 */
 const S5_BODY_LYR = '落角只在封面页能用，我们先回到封面页。（歌词页只能往屏幕边上推，不能挪到角落。）';
@@ -1316,7 +1318,9 @@ const CSTEPS = [
   { id: 'S1', title: '把鼠标挪过来', body: '面板平时只留封面，控件在你需要的时候才出来。', bodyArmed: '控件出来了，按一下播放。', bodyAway: '鼠标再回到面板上。', beats: ['移到面板上', '按一下播放'], num: 2, anchor: 'play', foot: LINKS },
   { id: 'S2', title: '专辑页的两个角', body: '右上角选声音从哪里出，左上角一步到 Music。', bodyAway: '鼠标再回到面板上。', beats: ['右上角：声音从哪出', '左上角：去 Music'], num: 3, anchor: 'out', foot: LINKS },
   { id: 'S3', title: '歌词在这儿', body: '左下角的小气泡，或者点一下封面。', bodyAway: '鼠标再回到面板上。', beats: [], num: 4, anchor: 'nav', foot: LINKS },
-  { id: 'S4', title: '翻译', body: '右下角的按钮。译文会跟在每一句下面。', bodyAway: '鼠标再回到面板上。', beats: [], num: 5, anchor: 'tr', foot: LINKS },
+  /* 09-29 真机：翻译钮只在歌词页有。面板在封面页时进入这一步（例如跳过了歌词那一步），第一拍是「先到歌词页」，环在歌词气泡上；到了歌词页打勾，环弹到翻译钮，正文换回翻译那段。 */
+  { id: 'S4', title: '翻译', _body: null, get body() { return this._body ?? (Q.s4first ? S4_BODY_COVER : S4_BODY); }, set body(v) { this._body = v; },
+    bodyAway: '鼠标再回到面板上。', get beats() { return Q.s4first ? [S4_BEAT0, S4_BEAT1] : []; }, num: 5, anchor: 'tr', foot: LINKS },
   { id: 'S5', title: '放到你喜欢的角落', _body: null, get body() { return this._body ?? (Q.s5first ? S5_BODY_LYR : S5_BODY); }, set body(v) { this._body = v; },
     get beats() { return Q.s5first ? [S5_BEAT0, ...S5_BEATS] : S5_BEATS; }, num: 6, anchor: 'edge', acts: S5_ACTS(), foot: LINKS },
   { id: 'S6', title: '它就在这条边上', body: '', beats: ['鼠标停上去，它会探出来', '点一下，回来'], num: 7, anchor: 'strip', foot: LINKS },
@@ -1377,7 +1381,7 @@ const cel = { stage: $('#c-stage'), mp: cqs('mp'), art: cqs('art'), t1: cqs('t1'
 
 /* ---- 状态与动画值 ---- */
 const Q = { corner: 'TR', tucked: false, playing: false, page: 0, trOn: false, realHover: false, simHover: false, auto: false, autoAt: null, stopped: false, done: false, lock: false,
-  stepId: 'S0', s5first: false, gl0: null, rs: 1, ro: 0, beakSide: 'R', haloKind: null, haloMode: 'hint', peekKind: null, breathT0: null, gc: { t0: null }, dwell: null, stallT0: 0, bodyMode: 'base', cardShown: false, capOut: false, popT: null };
+  stepId: 'S0', s4first: false, s5first: false, gl0: null, rs: 1, ro: 0, beakSide: 'R', haloKind: null, haloMode: 'hint', peekKind: null, breathT0: null, gc: { t0: null }, dwell: null, stallT0: 0, bodyMode: 'base', cardShown: false, capOut: false, popT: null };
 const TC = makeTour('c-', {
   steps: CSTEPS, prefill: 1, ownTransform: true, logLines: 10, flowOf: cflow,
   onHandoffStart: (n, ff) => cHandoffStart(n, ff), onSwap: (n, ff) => cSwap(n, ff), onFrame: dt => cFrame(dt), onContent: () => { Q.bodyMode = 'base'; }
@@ -1462,6 +1466,7 @@ function moveCard(pl, delay) {
 function cHandoffStart(next, ff) {
   const d = CSTEPS[next];
   haloHide(); hintStop(); popHide(); Q.stallT0 = 0;
+  if (d.id === 'S4') Q.s4first = CV.page.v < .5;            // 面板在封面页：第一拍是「先到歌词页」
   if (d.id === 'S5') Q.s5first = CV.page.v > .5;            // 面板在歌词页：第一拍是「先回到封面页」
   if (d.id === 'S6' && !Q.tucked) panelTuck();
   if (d.id === 'S7' && Q.tucked) panelReturn();
@@ -1605,11 +1610,11 @@ function enterStep(id) {
     case 'S1': haloShow('play', 'hint'); hintStart(); break;
     case 'S2': haloShow('out', hovering() ? 'wait' : 'hint'); break;
     case 'S3': haloShow('nav', hovering() ? 'wait' : 'hint'); break;
-    case 'S4': haloShow('tr', hovering() ? 'wait' : 'hint'); break;
+    case 'S4': haloShow(Q.s4first ? 'nav' : 'tr', hovering() ? 'wait' : 'hint'); break;
     case 'S5': if (Q.s5first) haloShow('nav', hovering() ? 'wait' : 'hint'); else if (!S.rm) Q.gl0 = TC.B.now; break;
     case 'S6': haloShow('strip', 'wait'); break;
   }
-  if (id === 'S2' || id === 'S3' || id === 'S4') { if (!hovering()) { setBody(cur().bodyAway); Q.bodyMode = 'away'; } }
+  if (id === 'S2' || id === 'S3' || (id === 'S4' && !Q.s4first)) { if (!hovering()) { setBody(cur().bodyAway); Q.bodyMode = 'away'; } }
 }
 
 /* ---- 用户动作 → 引导事件 ---- */
@@ -1624,6 +1629,7 @@ function userDid(ev) {
   const id = Q.stepId, b = Bt().beats, o = (id === 'S5' && Q.s5first) ? 1 : 0;
   if (Bt().busy) return;
   if (id === 'S5' && o && !b[0].done && (ev === 'corner' || ev === 'tuck')) return;      // 歌词页推不到角落：先回到封面页
+  if (id === 'S4' && Q.s4first && !b[0].done && ev === 'translate') return;             // 封面页没有翻译钮：先到歌词页
   switch (id + ':' + ev) {
     case 'S0:start': TC.advanceQuiet(CIDX.S1); break;
     case 'S1:hover': if (!b[0].done) { beatDone(0); refreshArmed(); } break;
@@ -1631,6 +1637,7 @@ function userDid(ev) {
     case 'S2:out': if (!b[0].done) { popShow(); beatDone(0) || (b[1].done || haloShow('music', 'wait')); } break;
     case 'S2:music': if (!b[1].done) { beatDone(1) || (b[0].done || haloShow('out', 'wait')); } break;
     case 'S3:nav': haloHide(); TC.completeStep(); break;
+    case 'S4:nav': if (Q.s4first && !b[0].done) { TC.beatCheck(0, false); TC.haptic('.levelChange'); CSTEPS[CIDX.S4]._body = S4_BODY; setBody(S4_BODY); Q.bodyMode = 'base'; haloShow('tr', hovering() ? 'wait' : 'hint'); } break;
     case 'S4:translate': haloHide(); TC.completeStep(); break;
     case 'S5:nav': if (o && !b[0].done) { TC.beatCheck(0, false); TC.haptic('.levelChange'); haloHide(); CSTEPS[CIDX.S5]._body = S5_BODY; setBody(S5_BODY); if (!S.rm) Q.gl0 = TC.B.now; } break;
     case 'S5:corner': if (!b[o].done) doCorner(); break;
@@ -1738,7 +1745,7 @@ function nextAction() {
     case 'S1': if (!d0) { Q.simHover = true; updateHover(); } else { sim(); press('play', cel.play); } break;
     case 'S2': sim(); press(d0 ? 'music' : 'out', $(d0 ? '.hp-music' : '.hp-out', cel.mp)); break;
     case 'S3': sim(); press('nav', $('.hp-nav', cel.mp)); break;
-    case 'S4': sim(); press('translate', $('.hp-tr', cel.mp)); break;
+    case 'S4': sim(); if (Q.s4first && !d0) press('nav', $('.hp-nav', cel.mp)); else press('translate', $('.hp-tr', cel.mp)); break;
     case 'S5': if (Q.s5first && !d0) { sim(); press('nav', $('.hp-nav', cel.mp)); } else userDid(Bt().beats[Q.s5first ? 1 : 0].done ? 'tuck' : 'corner'); break;
     case 'S6': userDid(d0 ? 'return' : 'peek'); break;
     case 'S7': finishTour('引导结束'); break;
@@ -1748,7 +1755,7 @@ function nextAction() {
 function nextLabel() {
   if (Q.stopped) return '已停下（点「重来」）'; if (Q.done) return '已结束（点「重来」）';
   const id = Q.stepId, d0 = Bt().beats[0]?.done;
-  return { S0: '点「开始」', S1: d0 ? '按一下播放' : '鼠标移到面板上', S2: d0 ? '点左上角 Music' : '点右上角输出', S3: '点左下角歌词气泡', S4: '点右下角翻译', S5: Q.s5first && !d0 ? '点左下角歌词气泡，回到封面页' : (Bt().beats[Q.s5first ? 1 : 0]?.done ? '往边上再推一下' : '双指推到一个角'), S6: d0 ? '点一下小卡，回来' : '鼠标停到小条上', S7: '点「好」' }[id];
+  return { S0: '点「开始」', S1: d0 ? '按一下播放' : '鼠标移到面板上', S2: d0 ? '点左上角 Music' : '点右上角输出', S3: '点左下角歌词气泡', S4: Q.s4first && !d0 ? '点左下角歌词气泡，到歌词页' : '点右下角翻译', S5: Q.s5first && !d0 ? '点左下角歌词气泡，回到封面页' : (Bt().beats[Q.s5first ? 1 : 0]?.done ? '往边上再推一下' : '双指推到一个角'), S6: d0 ? '点一下小卡，回来' : '鼠标停到小条上', S7: '点「好」' }[id];
 }
 function refreshNextLabel() { $('#cNextLbl').textContent = nextLabel(); }
 
@@ -1826,7 +1833,7 @@ TC.card.addEventListener('pointerup', e => {                    // 松开：回�
 });
 TC.card.addEventListener('mouseover', e => {                    // beat 行悬停：环指到这一拍的控件
   const li = e.target.closest('.beats li'); if (!li) return;
-  const i = [...li.parentNode.children].indexOf(li), tg = BEAT_TARGET[Q.stepId];
+  const i = [...li.parentNode.children].indexOf(li), tg = (Q.stepId === 'S4' && Q.s4first) ? ['nav', 'tr'] : BEAT_TARGET[Q.stepId];
   if (tg && Q.haloKind) haloPeek(tg[i]); else if (Q.haloKind && !S.rm) { CV.pulse.set(1); CV.pulse.to(1.14, { dur: .1, ease: 'out' }); TC.cue(.1, () => CV.pulse.to(1, { spring: [.5, .3] })); }
   wake();
 });
@@ -1841,6 +1848,7 @@ function markStep() { $$('#cSteps span').forEach(s => s.classList.toggle('on', s
 function syncAutoBtn() { const b = $('#cAuto'); b.textContent = Q.auto ? '⏸ 暂停自动播放' : '▶ 自动播放'; }
 function resetC() {
   Object.assign(Q, { corner: 'TR', tucked: false, playing: false, trOn: false, realHover: false, simHover: false, auto: Q.auto, autoAt: null, stopped: false, done: false, lock: false, stepId: 'S0', haloKind: null, breathT0: null, dwell: null, bodyMode: 'base', capOut: false, popT: null });
+  CSTEPS[CIDX.S4]._body = null; Q.s4first = false;
   CSTEPS[CIDX.S5]._body = null; CSTEPS[CIDX.S5].acts = S5_ACTS(); Q.s5first = false; Q.gl0 = null;
   TC.reset();
   [CV.pOp, CV.stripOp, CV.hov, CV.page, CV.tr, CV.cap, CV.hop, CV.cop, CV.capp].forEach(v => v.set(0)); CV.pOp.set(1);

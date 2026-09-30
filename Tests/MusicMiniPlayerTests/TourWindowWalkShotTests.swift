@@ -180,6 +180,38 @@ final class TourWindowWalkShotTests: XCTestCase {
         settle(f, 3.2); try shoot("S7-finale", dark: dark, fixture: f); done(f)
     }
 
+    /// The translation step begun on the cover page: the leading beat and the ring on the bubble, then the
+    /// panel on the lyrics page (beat ticked, ring on the translate button). Same capture rules as the walk.
+    private func translateFromCover(dark: Bool) throws {
+        NSApplication.shared.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        let visible = try XCTUnwrap(NSScreen.main).visibleFrame
+        let bd = makeBackdrop(dark: dark, visible: visible)
+        backdrop = bd
+        bd.orderFrontRegardless()
+        defer { bd.orderOut(nil); backdrop = nil; NSApplication.shared.appearance = savedAppearance }
+
+        let f = TourRealPanelFixture(dark: dark, page: .album)
+        bd.orderFrontRegardless(); f.panel.orderFrontRegardless()
+        f.showControls(on: .album); f.lyricsService.debugSetCanTranslate(true); f.spin(0.5)
+        TourHookBus.shared.controlsVisible.send(true)
+        f.controller.send(.resume(completed: [.connect, .reveal, .corners, .lyrics]))
+        f.spin(2.6); try shoot("tf3-S4-translate-cover", dark: dark, fixture: f)
+        f.music.userManuallyOpenedLyrics = true
+        f.music.currentPage = .lyrics
+        f.spin(0.4)
+        f.lyricsService.debugSetCanTranslate(true)
+        TourHookBus.shared.controlsVisible.send(true)
+        f.spin(2.6); try shoot("tf3-S4-translate-afterSwitch", dark: dark, fixture: f)
+        f.tearDown(); bd.orderFrontRegardless()
+    }
+
+    func test_translateFromCover_stills_lightAndDark() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["TOUR_WALK_SHOTS"] == "1", "opt-in: puts windows on the screen for a few seconds")
+        savedAppearance = NSApplication.shared.appearance
+        try translateFromCover(dark: false)
+        try translateFromCover(dark: true)
+    }
+
     func test_walkEveryStep_realPanel_lightAndDark() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["TOUR_WALK_SHOTS"] == "1", "opt-in: puts windows on the screen for a couple of minutes")
         savedAppearance = NSApplication.shared.appearance
