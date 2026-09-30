@@ -80,8 +80,16 @@ struct TourGestureGlyph: View {
     var kind: TourGestureKind
     var reduceMotion: Bool
 
-    @State private var startedAt = Date()
-    @State private var finished = false
+    @State private var startedAt: Date
+    @State private var finished: Bool
+
+    /// `startedAt` is a test seam (a glyph that started 10 s ago is already at rest).
+    init(kind: TourGestureKind, reduceMotion: Bool, startedAt: Date = Date()) {
+        self.kind = kind
+        self.reduceMotion = reduceMotion
+        _startedAt = State(initialValue: startedAt)
+        _finished = State(initialValue: TourGestureMotion.isFinished(elapsed: Date().timeIntervalSince(startedAt)))
+    }
 
     private let outlineSize = CGSize(width: 96 * TourGestureMotion.scale, height: 72 * TourGestureMotion.scale)
     private let dotSize: CGFloat = 11 * TourGestureMotion.scale

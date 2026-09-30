@@ -364,6 +364,61 @@ final class TourGuidanceControllerTests: XCTestCase {
         XCTAssertTrue(f.wait(3) { f.controller.debugCardStore?.model.kind == .finale(deferred: true) || f.controller.debugCardStore?.model.kind == .finale(deferred: false) })
     }
 
+    /// Before the panel has tucked there is no strip to stand beside: the card used to be placed from empty
+    /// (zero) regions, 292pt off the left edge of the screen, and never moved once the strip existed.
+    func test_item10_backCard_isOnScreenBeforeTheTuck_andBesideTheStripAfter() throws {
+        f = TourRealPanelFixture(page: .album)
+        f.controller.send(.resume(completed: Set(TourStep.orderedSteps).subtracting([.back])))
+        XCTAssertTrue(f.wait { f.cardWindow != nil })
+        f.spin(0.8)
+        let visible = try XCTUnwrap(NSScreen.main).visibleFrame
+        XCTAssertTrue(visible.contains(try XCTUnwrap(f.cardWindow).frame), "on screen even before the strip exists")
+        XCTAssertTrue(f.liquidEdge.collapse(to: .right))
+        XCTAssertTrue(f.wait(4) { f.liquidEdge.state == .tucked })
+        f.spin(1.2)
+        let card = try XCTUnwrap(f.cardWindow).frame
+        let hit = f.liquidEdge.floatingHitRegionInScreen
+        XCTAssertEqual(hit.minX - card.maxX, TourPlacement.sliverGap, accuracy: 1, "20pt off the strip's hit region")
+    }
+
+    // MARK: - Item 13: the step transition (prototype C.3)
+
+    func test_item13_stepTransition_cardSpringsToTheNextAnchor_beforeItsContentSwaps_andTheRingReturnsLast() throws {
+        f = TourRealPanelFixture(page: .album)
+        f.showControls(on: .album)
+        TourHookBus.shared.controlsVisible.send(true)
+        f.controller.send(.resume(completed: [.connect]))
+        XCTAssertTrue(f.wait { f.controller.debugHaloFrame != nil })
+        f.spin(0.8)
+        let window = try XCTUnwrap(f.cardWindow)
+        let startY = window.frame.midY
+        f.controller.send(.signal(.controlsRevealed))
+        f.spin(0.2)
+        let t0 = Date()
+        f.music.isPlaying.toggle()                                   // the user presses play: step complete
+        var samples: [(t: Double, y: CGFloat, corners: Bool, ring: Bool)] = []
+        while Date().timeIntervalSince(t0) < 2.6 {
+            f.spin(0.012)
+            samples.append((Date().timeIntervalSince(t0), window.frame.midY,
+                            f.controller.debugCardStore?.model.kind == .step(.corners), f.controller.debugHaloFrame != nil))
+        }
+        let moved = try XCTUnwrap(samples.first { abs($0.y - startY) > 3 }, "the card must move to the next anchor")   // (window frames round to half points)
+        let swapped = try XCTUnwrap(samples.first { $0.corners }, "and the next step's content must arrive")
+        XCTAssertEqual(moved.t, 0.80, accuracy: 0.16, "the move starts ~40 ms after the handoff (760 ms)")
+        XCTAssertLessThan(moved.t, swapped.t, "the card is already on its way when the content swaps (C.3: move at H+40, swap at H+140)")
+        XCTAssertEqual(swapped.t, 0.90, accuracy: 0.18)
+        // A spring, not a jump.
+        let jumps = zip(samples.dropFirst(), samples).map { abs($0.y - $1.y) }
+        XCTAssertLessThan(jumps.max() ?? 0, 60, "no teleport between frames")
+        XCTAssertGreaterThan(jumps.filter { $0 > 1 }.count, 6, "it travels over many frames")
+        // The ring sits out the handoff and comes back last (H + 560 ms).
+        let ringGone = samples.filter { $0.t > 0.95 && $0.t < 1.15 }
+        XCTAssertTrue(ringGone.allSatisfy { !$0.ring }, "no ring while the card changes hands")
+        XCTAssertTrue(try XCTUnwrap(samples.last).ring, "and the new step's ring is back at the end")
+        let pose = try XCTUnwrap(f.controller.debugLastPlacement)
+        XCTAssertEqual(try XCTUnwrap(samples.last).y, pose.origin.y + window.frame.height / 2, accuracy: 1, "it landed on the placement")
+    }
+
     // MARK: - Item 11: the finale's primary button
 
     func test_item11_primaryButtonsUseTheAccent() throws {

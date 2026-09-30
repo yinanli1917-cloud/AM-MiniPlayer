@@ -150,6 +150,7 @@ struct TourFeedbackRing: View {
     var stepLabel: String = ""
     var palette: TourCardPalette
     @ObservedObject var feedback: TourCompletionFeedback
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var diameter: CGFloat { TourMotionPolicy.Tokens.ringOuterDiameter }
     /// Room for the swollen stroke, the 1.08 seal scale and the halo.
@@ -178,7 +179,10 @@ struct TourFeedbackRing: View {
                 .monospacedDigit()
                 .tracking(-0.2)
                 .foregroundStyle(palette.ink)
+                // A quiet step change (skip, "Begin") rolls the number up (C.3, 0.22 s); during a
+                // completion the feedback drives the number itself.
                 .contentTransition(.numericText())
+                .animation(engaged || reduceMotion ? nil : .easeOut(duration: 0.22), value: stepLabel)
                 .opacity(numberOpacity)
                 .scaleEffect(engaged ? f.numberScale : 1)
                 .offset(y: engaged ? f.numberOffsetY : 0)

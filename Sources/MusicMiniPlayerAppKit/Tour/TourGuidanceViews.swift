@@ -58,7 +58,10 @@ enum TourGuidanceDrawing {
         let c0 = local(CGPoint(x: panel.minX, y: panel.maxY), in: overlay)
         let rect = CGRect(x: c0.x, y: c0.y, width: panel.width, height: panel.height)
         let shape = Path(roundedRect: rect, cornerRadius: 16, style: .continuous)
+        // The outer glow paints OUTSIDE the panel only (a CSS box-shadow does): inside it would
+        // read as a dark red vignette over the cover.
         var outer = ctx
+        outer.clip(to: shape, options: .inverse)
         outer.addFilter(.blur(radius: (6 + 22 * g) / 2))
         outer.stroke(shape, with: .color(palette.accent.opacity(0.35 * g)), style: StrokeStyle(lineWidth: 6 + 22 * g))
         var inner = ctx

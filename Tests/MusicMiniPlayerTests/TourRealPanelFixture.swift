@@ -25,7 +25,6 @@ final class TourRealPanelFixture {
     let defaults: UserDefaults
     private let suiteName: String
     private let savedPage: PlayerPage
-    private let savedFullscreen: Any?
     private let savedPlaying: Bool
     private let savedShowTranslation: Bool
     private let savedLanguage: String?
@@ -36,7 +35,6 @@ final class TourRealPanelFixture {
         suiteName = "TourRealPanelFixture-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)!
         savedPage = music.currentPage
-        savedFullscreen = UserDefaults.standard.object(forKey: "fullscreenAlbumCover")
         savedPlaying = music.isPlaying
         savedShowTranslation = LyricsService.shared.showTranslation
         savedLanguage = L10n.languageOverride
@@ -45,6 +43,8 @@ final class TourRealPanelFixture {
         LyricsService.shared.debugSetCanTranslate(canTranslate)
         TourAnchorRegistry.shared.reset()
         TourHookBus.shared.controlsVisible.send(false)
+        // The lyrics page with no lyrics would otherwise fall back to the cover on its own.
+        music.userManuallyOpenedLyrics = page == .lyrics
         music.currentPage = page
 
         let visible = NSScreen.main!.visibleFrame
@@ -83,11 +83,11 @@ final class TourRealPanelFixture {
         TourAnchorRegistry.shared.reset()
         TourHookBus.shared.controlsVisible.send(false)
         music.isPlaying = savedPlaying
+        music.userManuallyOpenedLyrics = false
         LyricsService.shared.debugSetCanTranslate(false)
         LyricsService.shared.showTranslation = savedShowTranslation
         L10n.languageOverride = savedLanguage
         music.currentPage = savedPage
-        UserDefaults.standard.set(savedFullscreen, forKey: "fullscreenAlbumCover")
         defaults.removePersistentDomain(forName: suiteName)
     }
 
@@ -105,12 +105,15 @@ final class TourRealPanelFixture {
         } else {
             music.currentPage = .album
             spin(0.4)
+            music.userManuallyOpenedLyrics = true     // else a panel with no lyrics bounces back to the cover
             music.currentPage = .lyrics
         }
         spin(1.4)
+        if music.currentPage != page { XCTFail("the fixture could not hold the panel on \(page); it is on \(music.currentPage)") }
     }
 
     func hideControls(on page: PlayerPage) {
+        if page == .lyrics { music.userManuallyOpenedLyrics = true }
         music.currentPage = page
         spin(1.0)
     }
@@ -165,7 +168,7 @@ extension TourRealPanelFixture {
 
     /// The card window as it is on screen right now.
     var cardWindow: TourCardWindow? {
-        NSApp.windows.first { $0 is TourCardWindow && $0.isVisible } as? TourCardWindow
+        controller.debugCardWindow.flatMap { $0.isVisible ? $0 : nil }
     }
 
     /// Where the panel says each control rests (the published anchor rect, or the

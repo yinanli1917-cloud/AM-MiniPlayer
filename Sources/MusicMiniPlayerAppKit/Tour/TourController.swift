@@ -114,6 +114,7 @@ final class TourController: ObservableObject {
     }
     var debugRingIsDashed: Bool { guidance.motion.makeFrame().ringDashed }
     var debugOverlayWindow: NSWindow? { haloWindow }
+    var debugCardWindow: TourCardWindow? { cardWindow }
     private(set) var debugLastPlacement: TourCardPlacement?
     private(set) var debugLastAnchorRect: CGRect?
 
@@ -784,7 +785,9 @@ final class TourController: ObservableObject {
         var placement = TourCardPlacement(origin: .zero, beakSide: beakSide, beakOffset: 40)
         for _ in 0..<2 {
             cardSize = measureCardSize(model: model, beakSide: beakSide, gestureKind: gestureKind, arm: arm)
-            if isSliverAnchored(phase) {
+            // (Until the panel has really tucked there is no strip to stand beside: the
+            // regions are empty and the card would land 292pt off the screen's left edge.)
+            if isSliverAnchored(phase), !liquidEdge.tuckedRegionInScreen.isEmpty {
                 let edge: TourCardSide = liquidEdge.side == .left ? .left : .right
                 let region = liquidEdge.tuckedRegionInScreen
                 placement = TourPlacement.placeNearSliver(
@@ -837,8 +840,19 @@ final class TourController: ObservableObject {
         guard let placed = computePlacement(model: model, phase: phase, gestureKind: gestureKind, arm: store.arm, currentSide: store.beakSide) else { return }
         debugLastPlacement = placed.placement
         debugLastAnchorRect = placed.anchor
-        let pose = placed.pose
         let motion = guidance.motion
+        // After a completion the phase is already "transitioning" (or idle, for the closing flash)
+        // while the finished step's card is still up, checking its last dot: that card STAYS where it
+        // is — re-placing it for a phase that has no anchor sent it toward the panel's middle at the
+        // very moment it should sit still. The handoff moves it to the next anchor (C.3).
+        var holdsPlace = false
+        switch state.phase {
+        case .transitioning(let from, _): holdsPlace = from != .translate
+        case .idle: holdsPlace = true
+        default: break
+        }
+        var pose = placed.pose
+        if holdsPlace, motion.cardVisible, let target = motion.targetPose { pose = target }
 
         let newContent = store.model.kind != model.kind || store.model.title != model.title
         let appearing = !motion.cardVisible
@@ -1076,7 +1090,14 @@ final class TourController: ObservableObject {
             guidance.kick()
             return
         }
-        if cardWindow != nil { DispatchQueue.main.async { [weak self] in self?.refreshGuidance() } }
+        // The strip / peek regions only exist once the panel has tucked: the sliver-anchored
+        // card and the ring find their place then.
+        if cardWindow != nil {
+            DispatchQueue.main.async { [weak self] in
+                self?.surfaceDidChange()
+                self?.refreshGuidance()
+            }
+        }
     }
 
     private func panelDidMove() {
