@@ -185,6 +185,24 @@ final class TourGuidanceControllerTests: XCTestCase {
         })
     }
 
+    /// Root cause of the ring vanishing after a click (items 5 and 7): pressing a control makes the panel
+    /// key (`SnappablePanel.mouseDown`), and a key window comes to the front of its level — the ring and
+    /// card were at the SAME level, so the panel buried them. The baseline probe measured it:
+    /// z-rank ring 25 / panel 27 before the click, ring 26 / panel 25 after.
+    func test_item5_7_clickingThePanel_doesNotBuryTheRingOrTheCard() throws {
+        f = TourRealPanelFixture()
+        f.controller.send(.resume(completed: [.connect]))
+        XCTAssertTrue(f.wait { f.controller.debugHaloFrame != nil })
+        f.spin(0.6)
+        let overlay = try XCTUnwrap(f.controller.debugOverlayWindow)
+        let card = try XCTUnwrap(f.cardWindow)
+        f.panel.makeKeyAndOrderFront(nil)           // what pressing a control inside the panel does
+        f.spin(0.4)
+        let panelRank = try XCTUnwrap(f.zRank(f.panel))
+        XCTAssertLessThan(try XCTUnwrap(f.zRank(overlay)), panelRank, "the ring stays above the panel")
+        XCTAssertLessThan(try XCTUnwrap(f.zRank(card)), panelRank, "and so does the card")
+    }
+
     // MARK: - Item 6: the lyrics step
 
     func test_item6_lyricsStep_ringOnTheBubble_andACardWithABeat() throws {
