@@ -790,16 +790,29 @@ final class TourController: ObservableObject {
             if isSliverAnchored(phase), !liquidEdge.tuckedRegionInScreen.isEmpty {
                 let edge: TourCardSide = liquidEdge.side == .left ? .left : .right
                 let region = liquidEdge.tuckedRegionInScreen
+                // The card stands 20pt off whatever is on screen at the edge: the strip while it is a
+                // strip, the peek capsule's region only while the capsule is out. (The capsule's padded
+                // hit region is ~150pt wide and exists as geometry even when only the strip is showing:
+                // measuring from it left the beak ~160pt short of the strip.)
+                let occupied = liquidEdge.state == .floating && !liquidEdge.floatingHitRegionInScreen.isEmpty
+                    ? liquidEdge.floatingHitRegionInScreen : region
                 placement = TourPlacement.placeNearSliver(
                     cardSize: cardSize, sliverEdge: edge,
-                    floatingHitRegion: liquidEdge.floatingHitRegionInScreen.isEmpty ? region : liquidEdge.floatingHitRegionInScreen,
-                    sliverMidY: region.isEmpty ? panel.frame.midY : region.midY, visibleFrame: visibleFrame
+                    floatingHitRegion: occupied,
+                    sliverMidY: region.midY, visibleFrame: visibleFrame
                 )
             } else {
                 placement = TourPlacement.placeNearPanel(cardSize: cardSize, anchor: anchor, panelFrame: panel.frame, visibleFrame: visibleFrame)
             }
             if placement.beakSide == beakSide { break }
             beakSide = placement.beakSide
+        }
+        // A card that stands beside the whole panel (the move step) still points its beak at what the
+        // ring is on right now, so the beak follows the ring when it changes control within the step.
+        if case .step(.moveTuck, _) = phase,
+           let target = TourGuidanceResolver.target(phase: phase, surface: currentSurface(), moveNeedsAlbumFirst: moveNeedsAlbum),
+           let aim = rect(for: target.subject) {
+            placement = TourPlacement.aimBeak(placement, atMidY: aim.midY, cardHeight: cardSize.height)
         }
         let pose = TourCardPose(
             x: placement.origin.x, top: placement.origin.y + cardSize.height, width: cardSize.width, height: cardSize.height,

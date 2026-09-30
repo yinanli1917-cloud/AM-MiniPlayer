@@ -117,3 +117,25 @@ final class TourPlacementTests: XCTestCase {
         XCTAssertFalse(cardRect.intersects(hitRegion))
     }
 }
+
+/// `aimBeak`: the card stays put, only the beak tip moves, clamped to the straight edge.
+final class TourPlacementAimBeakTests: XCTestCase {
+    private let base = TourCardPlacement(origin: CGPoint(x: 100, y: 200), beakSide: .right, beakOffset: 120)
+
+    func test_aimsAtTheTarget_cardDoesNotMove() {
+        let p = TourPlacement.aimBeak(base, atMidY: 230, cardHeight: 240)
+        XCTAssertEqual(p.origin, base.origin)
+        XCTAssertEqual(p.beakSide, .right)
+        XCTAssertEqual(p.beakOffset, 30, accuracy: 0.001, "tip 30pt above the card's bottom edge")
+    }
+
+    func test_clampsAwayFromTheCorners() {
+        XCTAssertEqual(TourPlacement.aimBeak(base, atMidY: 10, cardHeight: 240).beakOffset, TourPlacement.beakCornerClamp, accuracy: 0.001)
+        XCTAssertEqual(TourPlacement.aimBeak(base, atMidY: 900, cardHeight: 240).beakOffset, 240 - TourPlacement.beakCornerClamp, accuracy: 0.001)
+    }
+
+    func test_verticalBeaksAreUntouched() {
+        let top = TourCardPlacement(origin: .zero, beakSide: .top, beakOffset: 118)
+        XCTAssertEqual(TourPlacement.aimBeak(top, atMidY: 500, cardHeight: 100), top)
+    }
+}

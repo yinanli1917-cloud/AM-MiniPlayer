@@ -165,15 +165,17 @@ final class TourWindowWalkShotTests: XCTestCase {
         settle(f, 2.6); try shoot("S5-move-lyrics-backToCover", dark: dark, fixture: f); done(f)
 
         // S6 back — strip, peek card, then the finale
-        f = fresh(); f.controller.send(.resume(completed: all.subtracting([.back])))
+        // (the real path: the move card's "Tuck it for me" button, then the strip, the peek, the click)
+        f = fresh(); f.controller.send(.resume(completed: all.subtracting([.moveTuck, .back])))
         f.spin(1.0)
-        _ = f.liquidEdge.collapse(to: .right)
-        f.wait(4) { f.liquidEdge.state == .tucked }
-        settle(f, 2.4); try shoot("S6-back-strip", dark: dark, fixture: f)
+        f.controller.debugCardStore?.onFallback?()
+        f.wait(6) { f.liquidEdge.state == .tucked }
+        settle(f, 3.0); try shoot("S6-back-strip", dark: dark, fixture: f)
         f.liquidEdge.hoverEntered()
         f.wait(4) { f.liquidEdge.state == .floating }
         settle(f, 2.4); try shoot("S6-back-peek", dark: dark, fixture: f)
         f.liquidEdge.expand()
+        f.spin(0.5); try shoot("S6-back-afterClick-0.5s", dark: dark, fixture: f)
         f.wait(6) { f.controller.state.phase == .finale }
         settle(f, 3.2); try shoot("S7-finale", dark: dark, fixture: f); done(f)
     }

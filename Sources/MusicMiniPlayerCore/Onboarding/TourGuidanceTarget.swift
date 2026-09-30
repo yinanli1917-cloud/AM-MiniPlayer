@@ -157,11 +157,22 @@ public enum TourGuidanceResolver {
             return nil
 
         case .step(.back, let beats):
+            // The ring belongs to what is on screen at the edge NOW. Once the panel is on its way back
+            // (`expanding`) or back (`card`) the strip and the peek card are gone, and a ring left on
+            // their rect would hang over the returned panel (the click landed while the first beat's
+            // feedback still played, so the ring was never taken down).
+            switch surface.edge {
+            case .card, .expanding: return nil
+            case .tucked, .collapsing, .floating: break
+            }
             if beats.indices.contains(0), !beats[0] {
                 return TourRingTarget(subject: .sliver, size: sliverSize, cornerRadius: sliverSize.width / 2, mode: .pressNow)
             }
             if beats.indices.contains(1), !beats[1] {
-                return TourRingTarget(subject: .peekCard, size: peekSize, cornerRadius: 32, mode: .pressNow)
+                // The peek card exists only while it is out; between peeks the strip is what to point at.
+                return surface.edge == .floating
+                    ? TourRingTarget(subject: .peekCard, size: peekSize, cornerRadius: 32, mode: .pressNow)
+                    : TourRingTarget(subject: .sliver, size: sliverSize, cornerRadius: sliverSize.width / 2, mode: .pressNow)
             }
             return nil
 

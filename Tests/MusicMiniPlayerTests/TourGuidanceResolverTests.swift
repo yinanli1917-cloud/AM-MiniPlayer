@@ -99,6 +99,17 @@ final class TourGuidanceResolverTests: XCTestCase {
         XCTAssertEqual(first?.mode, .pressNow)
     }
 
+    func test_back_noRingOnceThePanelIsReturning_andNoPeekRingWhileOnlyTheStripIsOut() {
+        for edge in [LiquidEdgeState.expanding, .card] {
+            for beats in [[false, false], [true, false]] {
+                XCTAssertNil(TourGuidanceResolver.target(phase: .step(.back, beats: beats), surface: surface(edge: edge)),
+                             "\(edge) \(beats): the strip and the peek card are gone, so is their ring")
+            }
+        }
+        let backOnStrip = TourGuidanceResolver.target(phase: .step(.back, beats: [true, false]), surface: surface(edge: .tucked))
+        XCTAssertEqual(backOnStrip?.subject, .sliver, "the peek withdrew (hover left): point at the strip again")
+    }
+
     // MARK: - hints (C.4.2)
 
     func test_hoverInvite_onlyWhileTheMouseIsAway() {

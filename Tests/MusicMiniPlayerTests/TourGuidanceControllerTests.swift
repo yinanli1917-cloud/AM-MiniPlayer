@@ -395,8 +395,8 @@ final class TourGuidanceControllerTests: XCTestCase {
         XCTAssertTrue(f.wait(4) { f.liquidEdge.state == .tucked })
         f.spin(1.2)
         let card = try XCTUnwrap(f.cardWindow).frame
-        let hit = f.liquidEdge.floatingHitRegionInScreen
-        XCTAssertEqual(hit.minX - card.maxX, TourPlacement.sliverGap, accuracy: 1, "20pt off the strip's hit region")
+        let strip = f.liquidEdge.tuckedRegionInScreen
+        XCTAssertEqual(strip.minX - card.maxX, TourPlacement.sliverGap, accuracy: 1, "20pt off the strip itself (not the peek card's wider hit region)")
     }
 
     // MARK: - Item 13: the step transition (prototype C.3)

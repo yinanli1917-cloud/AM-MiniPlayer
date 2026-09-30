@@ -101,6 +101,19 @@ public enum TourPlacement {
         return TourCardPlacement(origin: CGPoint(x: x, y: y), beakSide: beakSide, beakOffset: beakOffset)
     }
 
+    /// Re-aims a left/right beak at `midY` (a control the card is not centred on, e.g. the ring's
+    /// target while the card stands beside the whole panel), clamped to the card's straight edge.
+    /// The card itself does not move. Top/bottom beaks keep their offset.
+    public static func aimBeak(_ placement: TourCardPlacement, atMidY midY: CGFloat, cardHeight: CGFloat) -> TourCardPlacement {
+        switch placement.beakSide {
+        case .left, .right:
+            return TourCardPlacement(origin: placement.origin, beakSide: placement.beakSide,
+                                     beakOffset: clampedBeakOffset(midY: midY, y: placement.origin.y, cardHeight: cardHeight))
+        case .top, .bottom:
+            return placement
+        }
+    }
+
     // MARK: - Internals
 
     private static func horizontal(
