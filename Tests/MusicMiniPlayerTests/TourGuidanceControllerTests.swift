@@ -474,9 +474,9 @@ final class TourGuidanceControllerTests: XCTestCase {
         XCTAssertTrue(f.wait { f.controller.debugHaloFrame != nil })
         f.spin(0.8)
         let window = try XCTUnwrap(f.cardWindow)
-        let startY = window.frame.midY
-        f.controller.send(.signal(.controlsRevealed))
-        f.spin(0.2)
+        f.controller.send(.signal(.controlsRevealed))                // the body text changes: the card re-settles on its anchor…
+        f.spin(0.7)                                                  // …(let that spring finish: under load 0.2 s was not enough and the
+        let startY = window.frame.midY                               //  tail of it read as "the card moved" at the very first sample)
         let t0 = Date()
         f.music.isPlaying.toggle()                                   // the user presses play: step complete
         var samples: [(t: Double, y: CGFloat, corners: Bool, ring: Bool)] = []

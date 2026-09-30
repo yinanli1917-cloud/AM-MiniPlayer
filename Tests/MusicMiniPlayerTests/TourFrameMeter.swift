@@ -47,6 +47,7 @@ final class TourFrameMeter {
         startedAt = CACurrentMediaTime()
         #if DEBUG
         TourPerfProbe.resetCounts()
+        TourPerfProbe.resetMarks()
         TourPerfProbe.tickSink = { [weak self] source, interval, apply in
             // Called on the main thread from the tour's own tick.
             MainActor.assumeIsolated {
@@ -102,6 +103,10 @@ final class TourFrameMeter {
         #endif
         let worst = busyAt.sorted { $0.busy > $1.busy }.prefix(5).map { String(format: "%.2fs:%.1fms", $0.t, $0.busy * 1000) }
         lines.append("[frames]   worst turns: \(worst.joined(separator: " "))")
+        #if DEBUG
+        let marks = TourPerfProbe.marks.map { String(format: "%.2fs %@", $0.t - startedAt, $0.name) }
+        lines.append("[frames]   marks: \(marks.joined(separator: " | "))")
+        #endif
         return lines.joined(separator: "\n")
     }
 }

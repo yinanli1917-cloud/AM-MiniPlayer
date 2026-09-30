@@ -28,13 +28,20 @@ final class TourGestureRoutingTests: XCTestCase {
         return out
     }
 
+    /// A window of THIS process. (Another app's window over the panel — a notification banner in the top-right corner, say —
+    /// is not the tour's doing and must not fail these tests; it did once, on the panel's top corners.)
+    private func isOurs(_ windowNumber: Int) -> Bool { NSApp.window(withWindowNumber: windowNumber) != nil }
+
     /// Who WindowServer says gets a scroll at `p` (screen, y up).
     private func topWindowNumber(at p: NSPoint) -> Int { NSWindow.windowNumber(at: p, belowWindowWithWindowNumber: 0) }
 
     private func describe(_ n: Int) -> String {
         if n == f.panel.windowNumber { return "PANEL" }
         for (name, w) in tourWindows() where w.windowNumber == n { return "TOUR:\(name)" }
-        return "other(\(n))"
+        if let ours = NSApp.window(withWindowNumber: n) { return "OURS:\(type(of: ours)) level=\(ours.level.rawValue) frame=\(ours.frame) visible=\(ours.isVisible)" }
+        let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+        let info = list.first { ($0[kCGWindowNumber as String] as? Int) == n }
+        return "other(\(n)) owner=\(info?[kCGWindowOwnerName as String] ?? "?") layer=\(info?[kCGWindowLayer as String] ?? "?") bounds=\(info?[kCGWindowBounds as String] ?? "?")"
     }
 
     /// Control experiment: does the hit test honour ignoresMouseEvents at all?
@@ -69,7 +76,7 @@ final class TourGestureRoutingTests: XCTestCase {
                 let p = NSPoint(x: fr.minX + fr.width * fx, y: fr.minY + fr.height * fy)
                 let n = topWindowNumber(at: p)
                 samples += 1
-                if n != f.panel.windowNumber {
+                if isOurs(n), n != f.panel.windowNumber {
                     bad.append(String(format: "t=%.2f (%.1f,%.1f) -> %@", Date().timeIntervalSince(t0), fx, fy, describe(n)))
                 }
             }
@@ -80,42 +87,67 @@ final class TourGestureRoutingTests: XCTestCase {
         XCTAssertTrue(bad.isEmpty, "a tour window sits over the panel: \(bad.prefix(8))")
     }
 
-    /// Every step of the tour, on both pages, panel in every corner: WindowServer's topmost window at the panel's points is the panel.
-    func test_everyStep_everyCorner_thePanelOwnsItsOwnPixels() throws {
+    /// The move step and the step before it, on both pages, panel in a corner on each side: WindowServer's topmost
+    /// window at the panel's points is the panel. (The full 7 steps x 4 corners x 2 pages sweep, 140 s, found nothing either.)
+    func test_moveStepAndNeighbour_theTopmostWindowAtThePanelIsThePanel() throws {
         var bad: [String] = []
-        for corner in [ScreenCorner.topRight, .bottomRight, .topLeft, .bottomLeft] {
-            for (i, step) in TourStep.orderedSteps.enumerated() where step != .back {
+        for corner in [ScreenCorner.topRight, .bottomLeft] {
+            for step in [TourStep.translate, .moveTuck] {
                 for page in [PlayerPage.album, .lyrics] {
                     f = TourRealPanelFixture(corner: corner, page: page)
-                    let done = Set(TourStep.orderedSteps.prefix(i))
-                    f.controller.send(step == .connect ? .launch : .resume(completed: done))
-                    f.spin(1.6)
+                    let i = TourStep.orderedSteps.firstIndex(of: step)!
+                    f.controller.send(.resume(completed: Set(TourStep.orderedSteps.prefix(i))))
+                    f.spin(1.4)
                     let fr = f.panel.frame
                     for (fx, fy) in [(0.5, 0.5), (0.1, 0.1), (0.9, 0.1), (0.1, 0.9), (0.9, 0.9)] {
                         let p = NSPoint(x: fr.minX + fr.width * fx, y: fr.minY + fr.height * fy)
                         let n = topWindowNumber(at: p)
-                        if n != f.panel.windowNumber { bad.append("\(corner) \(step) \(page) (\(fx),\(fy)) -> \(describe(n))") }
+                        if isOurs(n), n != f.panel.windowNumber { bad.append("\(corner) \(step) \(page) (\(fx),\(fy)) -> \(describe(n))") }
                     }
                     f.tearDown(); f = nil
                 }
             }
         }
-        print("[routing] sweep bad=\(bad.count) \(bad.prefix(6))")
         XCTAssertTrue(bad.isEmpty, "\(bad.prefix(8))")
     }
 
-    /// Where does a two-finger drag of a given size leave a panel that starts in the top-right corner?
-    /// (Candidate (e): can "nudge it to a corner" from the corner the panel already sits in ever work?)
-    func test_nudgeFromTopRight_whatEachGestureSizeDoes() throws {
-        struct Case { let name: String; let dx: CGFloat; let dy: CGFloat; let steps: Int; let stepMs: Double }
+    /// The tour could not be made to swallow the drag in-process, so it leaves evidence for the real app (project rule: what
+    /// cannot be reproduced gets DEBUG instrumentation): with the diagnostic log on, one `TourScroll` line per scroll burst says
+    /// which window got it and which window is topmost at the cursor. Off (the default) it writes nothing.
+    func test_scrollTrace_leavesEvidenceInTheDiagnosticLog_onlyWhenTheLogIsOn() throws {
+        let logURL = FileManager.default.temporaryDirectory.appendingPathComponent("tf4-scroll-trace-\(UUID().uuidString).log")
+        defer { DebugLogger.resetLogURL(); try? FileManager.default.removeItem(at: logURL) }
+        DebugLogger.setLogURL(logURL)
+        f = TourRealPanelFixture(page: .album)
+        f.controller.send(.resume(completed: allButMoveAndBack))
+        XCTAssertTrue(f.wait { f.cardWindow != nil })
+        f.spin(0.5)
+
+        // Log off: a scroll burst leaves nothing.
+        if let e = f.gestureEvent(dx: -4, dy: 3, phase: .changed) { NSApp.sendEvent(e) }
+        DebugLogger.flush()
+        XCTAssertFalse((try? String(contentsOf: logURL, encoding: .utf8))?.contains("TourScroll") ?? false)
+
+        // Log on: the burst is on record, with where it went.
+        DebugLogger.setDiagnosticsFileLoggingEnabled(true)
+        if let e = f.gestureEvent(dx: 0, dy: 0, phase: .began) { NSApp.sendEvent(e) }
+        DebugLogger.flush()
+        let text = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
+        XCTAssertTrue(text.contains("[TourScroll] burst"), "no TourScroll line in: \(text.prefix(300))")
+        XCTAssertTrue(text.contains("topmostAtCursor="))
+        XCTAssertTrue(text.contains("tour=step(") || text.contains("tour=step"), "it names the tour's state")
+    }
+
+    /// Candidate (e) — can "nudge it to a corner" from the corner the panel already sits in work? It does, with the panel
+    /// following the fingers 1.5x and, on release, landing in the corner its projected centre is nearest (`calculateTargetCorner`):
+    /// a tiny push settles straight back in the same corner (the beat still completes: any settle in a corner counts), a
+    /// medium push down lands in the other corner of that edge, a firm one across the screen. Nothing swallows the gesture.
+    func test_nudgeFromTopRight_followsTheFingers_andSettlesInTheNearestCornerOfWhereItWouldLand() throws {
+        struct Case { let name: String; let dx: CGFloat; let dy: CGFloat; let lands: ScreenCorner }
         let cases = [
-            Case(name: "tiny push  left-down  (12 x (-3,+3))", dx: -3, dy: 3, steps: 12, stepMs: 16),
-            Case(name: "light push left-down  (12 x (-8,+6))", dx: -8, dy: 6, steps: 12, stepMs: 16),
-            Case(name: "medium push left-down (12 x (-20,+15))", dx: -20, dy: 15, steps: 12, stepMs: 16),
-            Case(name: "firm push  left-down  (12 x (-40,+30))", dx: -40, dy: 30, steps: 12, stepMs: 16),
-            Case(name: "light push down       (12 x (0,+10))", dx: 0, dy: 10, steps: 12, stepMs: 16),
-            Case(name: "medium push down      (12 x (0,+25))", dx: 0, dy: 25, steps: 12, stepMs: 16),
-            Case(name: "medium push left      (12 x (-25,0))", dx: -25, dy: 0, steps: 12, stepMs: 16),
+            Case(name: "tiny push left-down (12 x (-3,+3))", dx: -3, dy: 3, lands: .topRight),
+            Case(name: "medium push down (12 x (0,+25))", dx: 0, dy: 25, lands: .bottomRight),
+            Case(name: "firm push left-down (12 x (-40,+30))", dx: -40, dy: 30, lands: .bottomLeft),
         ]
         for c in cases {
             f = TourRealPanelFixture(page: .album)
@@ -123,16 +155,16 @@ final class TourGestureRoutingTests: XCTestCase {
             f.controller.send(.resume(completed: allButMoveAndBack))
             f.spin(1.0)
             if let e = f.gestureEvent(dx: 0, dy: 0, phase: .began) { f.panel.sendEvent(e) }
-            for _ in 0..<c.steps {
+            for _ in 0..<12 {
                 if let e = f.gestureEvent(dx: c.dx, dy: c.dy, phase: .changed) { f.panel.sendEvent(e) }
-                f.spin(c.stepMs / 1000)
+                f.spin(0.016)
             }
             let held = f.panel.frame.origin
+            XCTAssertEqual(held.x - start.x, 12 * c.dx * 1.5, accuracy: 10, "\(c.name): the panel follows the fingers (1.5x) while they are down")
+            XCTAssertEqual(held.y - start.y, -12 * c.dy * 1.5, accuracy: 10, "\(c.name)")
             if let e = f.gestureEvent(dx: 0, dy: 0, phase: .ended) { f.panel.sendEvent(e) }
-            f.spin(1.6)
-            let end = f.panel.frame.origin
-            let corner = f.panel.currentCorner()
-            print("[routing] \(c.name): followed fingers by \(Int(held.x - start.x)),\(Int(held.y - start.y)) -> settled at \(String(describing: corner)) (moved \(Int(end.x - start.x)),\(Int(end.y - start.y))) beat1=\(f.controller.state.phase)")
+            XCTAssertTrue(f.wait(3) { f.panel.currentCorner() == c.lands }, "\(c.name): settles in \(c.lands), is at \(String(describing: f.panel.currentCorner()))")
+            XCTAssertTrue(f.wait(2) { f.controller.state.phase == .step(.moveTuck, beats: [true, false]) }, "\(c.name): the first beat completes")
             f.tearDown(); f = nil
         }
     }
