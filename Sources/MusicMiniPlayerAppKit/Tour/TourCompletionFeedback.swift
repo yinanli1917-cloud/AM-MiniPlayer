@@ -89,6 +89,9 @@ final class TourCompletionFeedback: ObservableObject {
     private let autoTick: Bool
     private var lastClock: TimeInterval = 0
     private var lastCardOffset: CGFloat = 0
+    #if DEBUG
+    private var lastTickWall: TimeInterval = 0
+    #endif
     private let ticker = TourFeedbackTicker()
     private let sparks: TourSparkOverlay
 
@@ -107,7 +110,15 @@ final class TourCompletionFeedback: ObservableObject {
         self.choreographer.ownsSwap = true
         ticker.onTick = { [weak self] in
             guard let self else { return }
+            #if DEBUG
+            let began = CACurrentMediaTime()
+            let interval = began - self.lastTickWall
+            self.lastTickWall = began
+            #endif
             self.advance(to: self.clock())
+            #if DEBUG
+            TourPerfProbe.tick("feedback", interval: interval, apply: CACurrentMediaTime() - began)
+            #endif
         }
     }
 
@@ -250,7 +261,9 @@ final class TourSparkOverlay {
         let local = CGPoint(x: ringCenter.x - rect.minX, y: rect.maxY - ringCenter.y)
         let window = self.window ?? TourCelebrationWindow()
         self.window = window
-        if window.contentView == nil {
+        // (An NSWindow is never without a content view: a fresh one holds a plain NSView, so the old
+        // `contentView == nil` test never installed the hosting view and the FX window stayed empty.)
+        if !(window.contentView is TourHostingView<TourFXHost>) {
             window.contentView = TourHostingView(rootView: TourFXHost(feedback: feedback))
         }
         window.setFrame(rect, display: true)

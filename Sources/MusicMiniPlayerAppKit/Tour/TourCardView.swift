@@ -66,7 +66,10 @@ struct TourCardRoot: View {
     }
 
     var body: some View {
-        TourCardView(
+        #if DEBUG
+        TourPerfProbe.bump(.cardBody)
+        #endif
+        return TourCardView(
             model: store.model, beakSide: store.beakSide, beakOffset: store.beakOffset,
             gestureKind: store.gestureKind, arm: store.arm, feedback: store.feedback,
             contentKey: store.contentKey,

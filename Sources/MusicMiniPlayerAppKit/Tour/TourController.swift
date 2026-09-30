@@ -375,9 +375,12 @@ final class TourController: ObservableObject {
         event.confetti = confetti
         if let window = cardWindow {
             let target = guidance.motion.targetPose
-            // The window may be mid-approach: the sparks fly from where the card WILL rest.
+            // The window may be mid-approach — or not yet the size of the card that is arriving (the finale card
+            // replaces a shorter one): the sparks and the confetti fly from where the card WILL rest, at the size
+            // it WILL have. (Only the origin was taken from the pose before: with a stale height the ring centre
+            // and the confetti's launch line were ~165pt below the real ones.)
             var frame = window.frame
-            if let target { frame.origin = NSPoint(x: target.x, y: target.top - target.height) }
+            if let target { frame = NSRect(x: target.x, y: target.top - target.height, width: target.width, height: target.height) }
             event.ringCenterOnScreen = TourCardView.ringCenter(inWindowFrame: frame, beakSide: store.beakSide)
             event.cardFrameOnScreen = TourCardView.bodyFrame(inWindowFrame: frame, beakSide: store.beakSide)
         }

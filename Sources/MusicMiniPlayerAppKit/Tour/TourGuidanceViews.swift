@@ -149,6 +149,9 @@ struct TourGuidanceOverlayView: View {
         let overlay = store.overlayFrame
         let panel = store.panelFrame
         return Canvas { ctx, _ in
+            #if DEBUG
+            TourPerfProbe.bump(.overlayRender)
+            #endif
             TourGuidanceDrawing.draw(ctx, frame: f, overlay: overlay, panel: panel, palette: palette)
         }
         .allowsHitTesting(false)

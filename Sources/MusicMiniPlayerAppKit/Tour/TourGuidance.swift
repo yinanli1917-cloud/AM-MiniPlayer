@@ -66,8 +66,14 @@ final class TourGuidance {
         let now = clock()
         let dt = min(max(now - lastClock, 0), 0.1)
         lastClock = now
+        #if DEBUG
+        let began = CACurrentMediaTime()
+        #endif
         motion.advance(by: dt)
         apply()
+        #if DEBUG
+        TourPerfProbe.tick("guidance", interval: dt, apply: CACurrentMediaTime() - began)
+        #endif
         if !motion.isAnimating { ticker.stop() }
     }
 
@@ -113,7 +119,12 @@ final class TourGuidance {
         case .bottom: y -= f.cardApproach
         }
         let target = NSRect(x: x, y: y, width: max(f.cardWidth, 1), height: max(f.cardHeight, 1))
-        if window.frame != target { window.setFrame(target, display: false) }
+        if window.frame != target {
+            window.setFrame(target, display: false)
+            #if DEBUG
+            TourPerfProbe.bump(.cardSetFrame)
+            #endif
+        }
         window.alphaValue = CGFloat(min(max(f.cardOpacity, 0), 1))
         window.ignoresMouseEvents = f.cardOpacity < 0.05
         if !window.isVisible { window.orderFront(nil) }

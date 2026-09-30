@@ -352,6 +352,9 @@ struct TourFXCanvas: View {
 
     var body: some View {
         Canvas { ctx, _ in
+            #if DEBUG
+            TourPerfProbe.bump(.fxRender)
+            #endif
             for p in snapshot.particles {
                 var g = ctx
                 switch p.kind {
