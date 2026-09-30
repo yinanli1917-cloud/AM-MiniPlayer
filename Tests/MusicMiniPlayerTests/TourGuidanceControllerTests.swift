@@ -495,7 +495,9 @@ final class TourGuidanceControllerTests: XCTestCase {
         XCTAssertLessThan(jumps.max() ?? 0, 60, "no teleport between frames")
         XCTAssertGreaterThan(jumps.filter { $0 > 1 }.count, 6, "it travels over many frames")
         // The ring sits out the handoff and comes back last (H + 560 ms).
-        let ringGone = samples.filter { $0.t > 0.95 && $0.t < 1.15 }
+        // Wall-clock sampling: under heavy load the 0.16 s fade tail lands up to ~1.03 s, so
+        // probe the middle of the gap (the ring returns at ~1.32 s) rather than its edges.
+        let ringGone = samples.filter { $0.t > 1.08 && $0.t < 1.22 }
         XCTAssertTrue(ringGone.allSatisfy { !$0.ring }, "no ring while the card changes hands")
         XCTAssertTrue(try XCTUnwrap(samples.last).ring, "and the new step's ring is back at the end")
         let pose = try XCTUnwrap(f.controller.debugLastPlacement)
