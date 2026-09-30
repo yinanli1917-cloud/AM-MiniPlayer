@@ -70,7 +70,8 @@ final class SettingsDemoMotionTests: XCTestCase {
         XCTAssertEqual(frame(0.3).panelOffsetX, 0)
         XCTAssertEqual(frame(2.0).panelOffsetX, 170, "tucked past the screen edge")
         XCTAssertEqual(frame(2.0).stripOpacity, 1)
-        XCTAssertEqual(frame(2.8).pulse, 1, accuracy: 1e-9, "the strip lights at the track change")
+        XCTAssertEqual(frame(2.05).pulse, 1, accuracy: 1e-9, "the strip lights at the track change, just before the card takes over")
+        XCTAssertEqual(frame(2.8).pulse, 0, "the glow is over by the time the card is out")
         XCTAssertEqual(frame(4.5).cp, 1, "the card holds 2.5s (3.2 → 5.7)")
         XCTAssertEqual(frame(3.2).cp, 1)
         XCTAssertEqual(frame(5.7).cp, 1)
@@ -78,6 +79,70 @@ final class SettingsDemoMotionTests: XCTestCase {
         XCTAssertEqual(frame(4.5, on: false).stripOpacity, 1)
         XCTAssertEqual(frame(0.3).fillPercent, 62)
         XCTAssertEqual(frame(2.4).fillPercent, 8, accuracy: 1e-9, "new song: the progress light restarts")
+    }
+
+    /// Founder, 2026-09-29: while the peek card is out the thin edge strip must not also show.
+    /// Sampled every 10 ms over two loops, both switch states.
+    func test_peek_stripAndCardAreNeverBothVisible() {
+        func frame(_ t: Double, on: Bool) -> PeekFrame {
+            var o = DemoOptions(); o.isOn = on
+            guard case .peek(let f) = SettingsDemo.edgeShowSongOnTrackChange.frame(at: t, options: o) else { fatalError() }
+            return f
+        }
+        var cardSeen = false, stripSeenBeforeCard = false, stripSeenAfterCard = false
+        for i in 0...1680 {
+            let t = Double(i) / 100
+            let f = frame(t, on: true)
+            XCTAssertLessThanOrEqual(min(f.stripOpacity, f.cardPresence), 1e-6, "t=\(t): strip \(f.stripOpacity) and card \(f.cardPresence) together")
+            if f.cardPresence > 0.001 { cardSeen = true }
+            if f.stripOpacity > 0.5 { if cardSeen { stripSeenAfterCard = true } else { stripSeenBeforeCard = true } }
+            // Switch off: no card, and the strip is not touched by the handoff.
+            let off = frame(t, on: false)
+            XCTAssertEqual(off.cardPresence, 0)
+            XCTAssertEqual(off.stripOpacity, DemoEase.io.value(demoClamp((off.tuck - 0.5) / 0.5)), accuracy: 1e-12)
+        }
+        XCTAssertTrue(stripSeenBeforeCard, "the strip shows first (the tucked panel)")
+        XCTAssertTrue(cardSeen)
+        XCTAssertTrue(stripSeenAfterCard, "and comes back after the card retracts")
+        // Handoff points: strip gone before the card reaches the screen edge; back only once the card is off again.
+        XCTAssertEqual(frame(2.4, on: true).stripOpacity, 1, accuracy: 1e-9, "still fully there when the card starts moving")
+        XCTAssertEqual(frame(2.6, on: true).stripOpacity, 0, accuracy: 1e-9)
+        XCTAssertEqual(frame(2.6, on: true).cardPresence, 0, accuracy: 0.05, "the card is barely on screen yet")
+        XCTAssertEqual(frame(4.5, on: true).stripOpacity, 0, "gone while the card holds")
+        XCTAssertGreaterThan(frame(4.5, on: true).cardPresence, 0.99)
+        XCTAssertGreaterThan(frame(6.6, on: true).stripOpacity, 0.9, "back after the card retracted (cp 0 at 6.5)")
+    }
+
+    /// Founder, 2026-09-29: every album panel is drawn in the fullscreen-cover look, except the
+    /// Fullscreen Cover scene itself, whose off → on contrast is the point.
+    func test_panelStyle_isFullscreenLookEverywhereExceptTheCoverScene() {
+        XCTAssertEqual(CoverFrame.fullscreenLook.s, 1)
+        XCTAssertEqual(CoverFrame.fullscreenLook.artSide, 1)
+        XCTAssertEqual(CoverFrame.fullscreenLook.blurUnderlayOpacity, 1)
+        var o = DemoOptions(); o.keyLabels = ["\u{2318}"]
+        var panelScenes = Set<SettingsDemo>()
+        for demo in SettingsDemo.allCases {
+            for on in [true, false] {
+                o.isOn = on
+                let times: [Double] = demo.timing.isAnimated ? stride(from: 0.0, through: demo.timing.loop, by: 0.25).map { $0 } : [0]
+                for t in times {
+                    let cover = demo.frame(at: t, options: o).panelCover
+                    if demo == .fullscreenCover {
+                        XCTAssertNotNil(cover)
+                    } else if let cover {
+                        panelScenes.insert(demo)
+                        XCTAssertEqual(cover, .fullscreenLook, "\(demo.rawValue) t=\(t)")
+                    }
+                }
+            }
+        }
+        // Inset look survives only where the toggle changes it.
+        XCTAssertEqual(cover(0.3).s, 0)
+        // The scenes that draw an album panel (not lyrics pages, not the dock).
+        XCTAssertTrue(panelScenes.isSuperset(of: [.edgeShowSongOnTrackChange, .showHidePlayerShortcut, .hideToEdgeShortcut, .launchAtLogin,
+                                                  .gettingToKnowNanoPod, .musicAutomation, .appleMusicAccess]))
+        XCTAssertNil(SettingsDemo.showTranslation.frame(at: 2, options: DemoOptions()).panelCover, "a lyrics page has no album panel")
+        XCTAssertNil(SettingsDemo.playbackHistory.frame(at: 0, options: DemoOptions()).panelCover, "nor does the history list")
     }
 
     func test_translation_keyframes() {

@@ -97,15 +97,17 @@ enum DemoDrawing {
     // MARK: scene entry
 
     static func drawScene(_ frame: DemoFrame, in ctx: inout GraphicsContext, palette p: DemoPalette) {
+        // Every album panel is fullscreen-look except the Fullscreen Cover scene's own (see DemoFrame.panelCover).
+        let panel = frame.panelCover ?? .fullscreenLook
         switch frame {
         case .cover(let f): drawCover(f, &ctx, p)
-        case .peek(let f): drawPeek(f, &ctx, p)
+        case .peek(let f): drawPeek(f, panel, &ctx, p)
         case .lyrics(let f): drawLyrics(f, &ctx, p)
-        case .showHide(let f): drawShowHide(f, &ctx, p)
-        case .hideEdge(let f): drawHideEdge(f, &ctx, p)
-        case .login(let f): drawLogin(f, &ctx, p)
+        case .showHide(let f): drawShowHide(f, panel, &ctx, p)
+        case .hideEdge(let f): drawHideEdge(f, panel, &ctx, p)
+        case .login(let f): drawLogin(f, panel, &ctx, p)
         case .dock(let f): drawDock(f, &ctx, p)
-        case .still(let kind): drawStill(kind, &ctx, p)
+        case .still(let kind): drawStill(kind, panel, &ctx, p)
         }
     }
 
@@ -116,14 +118,14 @@ enum DemoDrawing {
         drawAlbumPanel(&ctx, p, x: 105, y: 30, pw: 110, cover: f)
     }
 
-    private static func drawPeek(_ f: PeekFrame, _ ctx: inout GraphicsContext, _ p: DemoPalette) {
+    private static func drawPeek(_ f: PeekFrame, _ panel: CoverFrame, _ ctx: inout GraphicsContext, _ p: DemoPalette) {
         drawMenuBar(&ctx, p)
         // The panel slides out through the right screen edge and fades as it goes.
         if f.panelOpacity > 0.001 {
             var c = ctx
             c.fadeGroup(f.panelOpacity)
             c.translateBy(x: f.panelOffsetX, y: 0)
-            c.drawLayer { l in drawAlbumPanel(&l, p, x: 170, y: 24, pw: 104, cover: CoverFrame(s: 0)) }
+            c.drawLayer { l in drawAlbumPanel(&l, p, x: 170, y: 24, pw: 104, cover: panel) }
         }
         drawEdgeStrip(&ctx, p, opacity: f.stripOpacity, offsetX: f.stripOffsetX, fillPercent: f.fillPercent, pulse: f.pulse)
         if f.cardOpacity > 0.001 {
@@ -137,11 +139,8 @@ enum DemoDrawing {
     private static func drawLyrics(_ f: LyricsFrame, _ ctx: inout GraphicsContext, _ p: DemoPalette) {
         let pw: CGFloat = 214, x: CGFloat = 53, y: CGFloat = 10
         let height = pw * 2.2
-        drawPanelChrome(&ctx, x: x, y: y, width: pw, height: height, radius: 0.07 * pw,
-                        glows: [
-                            Glow(cx: 0.92, cy: 0.60, rx: 1.0, ry: 0.4, color: Color(.sRGB, red: 0x7D / 255, green: 0x6C / 255, blue: 1, opacity: 1), fadeAt: 0.58),
-                            Glow(cx: 0.14, cy: 0.0, rx: 1.1, ry: 0.4, color: Color(.sRGB, red: 1, green: 0x9A / 255, blue: 0xA8 / 255, opacity: 1), fadeAt: 0.62),
-                        ]) { c in
+        drawPanelChrome(&ctx, x: x, y: y, width: pw, height: height, radius: 0.07 * pw, glows: [],
+                        background: fullscreenPageBackground) { c in
             let fs = pw * 0.07
             let lineH = fs * 1.3
             let left: CGFloat = 18
@@ -175,7 +174,7 @@ enum DemoDrawing {
         }
     }
 
-    private static func drawShowHide(_ f: ShowHideFrame, _ ctx: inout GraphicsContext, _ p: DemoPalette) {
+    private static func drawShowHide(_ f: ShowHideFrame, _ panel: CoverFrame, _ ctx: inout GraphicsContext, _ p: DemoPalette) {
         drawMenuBar(&ctx, p)
         if f.showsBackgroundWindow { drawBackgroundWindow(&ctx, p, rect: CGRect(x: 160, y: 30, width: 140, height: 100)) }
         if f.panelOpacity > 0.001 {
@@ -185,26 +184,26 @@ enum DemoDrawing {
             c.translateBy(x: 184, y: 26)
             c.scaleBy(x: f.panelScale, y: f.panelScale)
             c.translateBy(x: -184, y: -26)
-            c.drawLayer { l in drawAlbumPanel(&l, p, x: 184, y: 26, pw: 92, cover: CoverFrame(s: 0)) }
+            c.drawLayer { l in drawAlbumPanel(&l, p, x: 184, y: 26, pw: 92, cover: panel) }
         }
         drawKeycaps(&ctx, p, labels: f.keys, press: f.press)
     }
 
-    private static func drawHideEdge(_ f: HideEdgeFrame, _ ctx: inout GraphicsContext, _ p: DemoPalette) {
+    private static func drawHideEdge(_ f: HideEdgeFrame, _ panel: CoverFrame, _ ctx: inout GraphicsContext, _ p: DemoPalette) {
         drawMenuBar(&ctx, p)
         if f.panelOpacity > 0.001 {
             var c = ctx
             c.fadeGroup(f.panelOpacity)
             c.translateBy(x: f.panelOffsetX, y: 0)
-            c.drawLayer { l in drawAlbumPanel(&l, p, x: 170, y: 24, pw: 104, cover: CoverFrame(s: 0)) }
+            c.drawLayer { l in drawAlbumPanel(&l, p, x: 170, y: 24, pw: 104, cover: panel) }
         }
         drawEdgeStrip(&ctx, p, opacity: f.stripOpacity, offsetX: f.stripOffsetX, fillPercent: 62, pulse: 0)
         drawKeycaps(&ctx, p, labels: f.keys, press: f.press)
     }
 
-    private static func drawLogin(_ f: LoginFrame, _ ctx: inout GraphicsContext, _ p: DemoPalette) {
+    private static func drawLogin(_ f: LoginFrame, _ panel: CoverFrame, _ ctx: inout GraphicsContext, _ p: DemoPalette) {
         drawMenuBar(&ctx, p, noteScale: f.noteScale, noteOpacity: f.noteOpacity)
-        drawAlbumPanel(&ctx, p, x: 108, y: 34, pw: 104, cover: CoverFrame(s: 0))
+        drawAlbumPanel(&ctx, p, x: 108, y: 34, pw: 104, cover: panel)
         ctx.fill(Path(CGRect(origin: .zero, size: CGSize(width: sceneWidth, height: sceneSize.height + 1))),
                  with: .color(.black.opacity(f.dim)))
     }
@@ -239,11 +238,11 @@ enum DemoDrawing {
         }
     }
 
-    private static func drawStill(_ kind: DemoStillKind, _ ctx: inout GraphicsContext, _ p: DemoPalette) {
+    private static func drawStill(_ kind: DemoStillKind, _ panel: CoverFrame, _ ctx: inout GraphicsContext, _ p: DemoPalette) {
         drawMenuBar(&ctx, p)
         switch kind {
         case .tour:
-            drawAlbumPanel(&ctx, p, x: 64, y: 26, pw: 104, cover: CoverFrame(s: 0))
+            drawAlbumPanel(&ctx, p, x: 64, y: 26, pw: 104, cover: panel)
             let card = CGRect(x: 172, y: 58, width: 92, height: 62)
             drawGlassCard(&ctx, p, rect: card, radius: 11)
             let ringCenter = CGPoint(x: card.minX + 24, y: card.minY + 22)
@@ -263,9 +262,9 @@ enum DemoDrawing {
             var chevron = Path()
             chevron.move(to: CGPoint(x: 150, y: 80)); chevron.addLine(to: CGPoint(x: 156, y: 85)); chevron.addLine(to: CGPoint(x: 150, y: 90))
             ctx.stroke(chevron, with: .color(p.capInk), style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
-            drawAlbumPanel(&ctx, p, x: 176, y: 34, pw: 88, cover: CoverFrame(s: 0))
+            drawAlbumPanel(&ctx, p, x: 176, y: 34, pw: 88, cover: panel)
         case .appleMusic:
-            drawAlbumPanel(&ctx, p, x: 108, y: 26, pw: 104, cover: CoverFrame(s: 0))
+            drawAlbumPanel(&ctx, p, x: 108, y: 26, pw: 104, cover: panel)
         case .history:
             drawHistoryPanel(&ctx, p, x: 108, y: 26, pw: 104)
         }
@@ -364,7 +363,8 @@ enum DemoDrawing {
     /// Panel shell: outside-only drop shadow, gradient body, hairline ring; `content` paints
     /// in panel-local points (origin = panel top-left) already clipped to the rounded body.
     private static func drawPanelChrome(_ ctx: inout GraphicsContext, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat,
-                                        radius: CGFloat, glows: [Glow], content: (inout GraphicsContext) -> Void) {
+                                        radius: CGFloat, glows: [Glow], background: ((CGRect) -> GraphicsContext.Shading)? = nil,
+                                        content: (inout GraphicsContext) -> Void) {
         let box = CGRect(x: x, y: y, width: width, height: height)
         // box-shadow: 0 .09em .22em rgba(30,20,70,.3) — outside the box only.
         do {
@@ -381,7 +381,7 @@ enum DemoDrawing {
         let local = CGRect(origin: .zero, size: box.size)
         let shape = Path(roundedRect: local, cornerRadius: radius)
         c.clip(to: shape)
-        c.fill(Path(local), with: .color(albumBase))
+        c.fill(Path(local), with: background?(local) ?? .color(albumBase))
         for g in glows { fillEllipticalGlow(&c, in: local, cx: g.cx, cy: g.cy, rx: g.rx, ry: g.ry, color: g.color, fadeAt: g.fadeAt) }
         // inset 0 0 0 .004em rgba(255,255,255,.28)
         let t = 0.004 * width
@@ -389,6 +389,16 @@ enum DemoDrawing {
         ring.addPath(Path(roundedRect: local.insetBy(dx: t, dy: t), cornerRadius: max(0, radius - t)))
         c.fill(ring, with: .color(.white.opacity(0.28)), style: FillStyle(eoFill: true))
         content(&c)
+    }
+
+    /// Backdrop of the pages that show no cover (lyrics, history) in the fullscreen look: the cover's own
+    /// colours (coral sky → violet → deep sea) without the sun, so white text stays readable.
+    private static func fullscreenPageBackground(_ rect: CGRect) -> GraphicsContext.Shading {
+        cssLinear(170, in: rect, stops: [
+            (Color(.sRGB, red: 1, green: 0x7F / 255, blue: 0x8F / 255, opacity: 1), 0),
+            (Color(.sRGB, red: 0x6B / 255, green: 0x5B / 255, blue: 0xD6 / 255, opacity: 1), 0.62),
+            (Color(.sRGB, red: 0x2F / 255, green: 0x2A / 255, blue: 0x85 / 255, opacity: 1), 1),
+        ])
     }
 
     private static func albumGlows() -> [Glow] {
@@ -485,7 +495,8 @@ enum DemoDrawing {
     }
 
     private static func drawHistoryPanel(_ ctx: inout GraphicsContext, _ p: DemoPalette, x: CGFloat, y: CGFloat, pw: CGFloat) {
-        drawPanelChrome(&ctx, x: x, y: y, width: pw, height: 1.136 * pw, radius: 0.07 * pw, glows: albumGlows()) { c in
+        drawPanelChrome(&ctx, x: x, y: y, width: pw, height: 1.136 * pw, radius: 0.07 * pw, glows: [],
+                        background: fullscreenPageBackground) { c in
             for i in 0..<4 {
                 let top = 0.09 * pw + CGFloat(i) * 0.2 * pw
                 let art = CGRect(x: 0.09 * pw, y: top, width: 0.15 * pw, height: 0.15 * pw)

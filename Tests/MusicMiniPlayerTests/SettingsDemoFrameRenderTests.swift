@@ -22,7 +22,7 @@ final class SettingsDemoFrameRenderTests: XCTestCase {
     /// (rest · mid-motion · end of motion · hold · back to rest).
     static let matrix: [(id: String, demo: SettingsDemo, times: [Double])] = [
         ("cover", .fullscreenCover, [0.3, 1.0, 1.35, 1.8, 3.0, 3.95, 4.35, 4.8, 5.5]),
-        ("peek", .edgeShowSongOnTrackChange, [0.3, 1.1, 1.7, 2.75, 3.6, 4.5, 6.0, 7.15, 8.0]),
+        ("peek", .edgeShowSongOnTrackChange, [0.3, 1.1, 1.7, 2.5, 2.6, 2.75, 3.6, 4.5, 6.0, 6.45, 6.6, 7.15, 8.0]),
         ("trans", .showTranslation, [0.3, 1.25, 1.5, 2.6, 4.35, 5.5]),
         ("transTo", .translateTo, [0.3, 1.2, 1.85, 2.5, 5.2, 6.7]),
         ("showhide", .showHidePlayerShortcut, [0.3, 1.07, 1.16, 1.6, 3.57, 3.8, 5.0]),
@@ -30,6 +30,11 @@ final class SettingsDemoFrameRenderTests: XCTestCase {
         // General-page scenes from spec A.9 (no prototype counterpart: written for the eye, not compared).
         ("login", .launchAtLogin, [0.3, 0.9, 1.25, 2.6, 3.6]),
         ("dock", .showInDock, [0.3, 1.25, 2.6, 3.85]),
+        // Stills (no prototype counterpart either): the fullscreen-look album panel / history page.
+        ("tour", .gettingToKnowNanoPod, [0]),
+        ("automation", .musicAutomation, [0]),
+        ("applemusic", .appleMusicAccess, [0]),
+        ("history", .playbackHistory, [0]),
     ]
 
     override func setUp() {
@@ -104,6 +109,39 @@ final class SettingsDemoFrameRenderTests: XCTestCase {
         let rep = SettingsWindowRenderTests.capture(hosting)
         window.close()
         return rep
+    }
+
+    /// The colour of a probe inside the album panel, `em` = panel width, in the 2x capture of the stage
+    /// (scene units are scaled by 300/320 x 2 = 1.875 px).
+    private func panelPixel(_ rep: NSBitmapImageRep, left: Double, top: Double, pw: Double, dx: Double, dy: Double) -> NSColor {
+        let k = 1.875
+        let x = (left + dx * pw) * k, y = (top + dy * pw) * k
+        return (rep.colorAt(x: Int(x), y: Int(y)) ?? .black).usingColorSpace(.sRGB) ?? .black
+    }
+
+    /// Founder, 2026-09-29: album panels default to the fullscreen-cover look. Probe just inside the
+    /// panel's left edge, halfway down: the inset look shows the magenta backdrop there, the fullscreen
+    /// look shows the cover's coral sky. The Fullscreen Cover scene in its OFF state keeps the inset look.
+    func test_render_albumPanelsAreFullscreenLook_exceptTheCoverOffState() {
+        for dark in [false, true] {
+            let inset = Self.renderStage(.fullscreenCover, at: 0.3, dark: dark)                    // s = 0
+            let insetRed = panelPixel(inset, left: 105, top: 30, pw: 110, dx: 0.05, dy: 0.5).redComponent
+            XCTAssertLessThan(insetRed, 0.83, "control: the inset look's backdrop is magenta, not coral (dark=\(dark))")
+            let cases: [(SettingsDemo, Double, (Double, Double, Double))] = [
+                (.fullscreenCover, 2.7, (105, 30, 110)),            // the contrast's ON state
+                (.edgeShowSongOnTrackChange, 0.3, (170, 24, 104)),
+                (.showHidePlayerShortcut, 0.3, (184, 26, 92)),
+                (.hideToEdgeShortcut, 0.3, (170, 24, 104)),
+                (.launchAtLogin, 2.6, (108, 34, 104)),
+                (.appleMusicAccess, 0, (108, 26, 104)),
+            ]
+            for (demo, t, g) in cases {
+                let rep = Self.renderStage(demo, at: t, dark: dark)
+                let c = panelPixel(rep, left: g.0, top: g.1, pw: g.2, dx: 0.05, dy: 0.5)
+                XCTAssertGreaterThan(c.redComponent, 0.94, "\(demo.rawValue) draws the fullscreen-look panel (dark=\(dark), red=\(c.redComponent))")
+                XCTAssertGreaterThan(c.greenComponent, 0.42, "\(demo.rawValue) (dark=\(dark), green=\(c.greenComponent))")
+            }
+        }
     }
 
     func test_render_compareFrames_lightDark() throws {

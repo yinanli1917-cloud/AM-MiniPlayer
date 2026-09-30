@@ -175,6 +175,10 @@ struct CoverFrame: Equatable {
     var artOpacityAtBottom: Double { 1 - s }
     var blurUnderlayOpacity: Double { s }
     var artHasShadow: Bool { s <= 0.98 }
+
+    /// How every demo panel is drawn unless the scene is the Fullscreen Cover contrast itself
+    /// (creator's decision, 2026-09-29: the fullscreen-cover look is the default look).
+    static let fullscreenLook = CoverFrame(s: 1)
 }
 
 struct PeekFrame: Equatable {
@@ -185,10 +189,17 @@ struct PeekFrame: Equatable {
     var fillPercent: Double
     var panelOffsetX: Double { tuck * 170 }
     var panelOpacity: Double { 1 - DemoEase.io.value(demoClamp((tuck - 0.55) / 0.45)) }
-    var stripOpacity: Double { DemoEase.io.value(demoClamp((tuck - 0.5) / 0.5)) }
+    /// The strip and the card never show together: the card replaces the strip. The strip has
+    /// faded and slid back into the edge before the card clears the screen edge (`cp` ≈ 0.16),
+    /// and on the way back it returns only once the card is off screen again.
+    var stripHandoff: Double { DemoEase.io.value(demoClamp(cp / 0.12)) }
+    var stripOpacity: Double { DemoEase.io.value(demoClamp((tuck - 0.5) / 0.5)) * (1 - stripHandoff) }
     var stripOffsetX: Double { (1 - stripOpacity) * 5 }
     var cardOffsetX: Double { (1 - cp) * 80 }
     var cardOpacity: Double { demoClamp(cp * 3) }
+    /// What of the card is actually on screen: its opacity × the share of its 60pt width inside the
+    /// screen (the card rests at x = 253…313 and slides in from beyond the right edge at 320).
+    var cardPresence: Double { cardOpacity * demoClamp((67 - cardOffsetX) / 60) }
 }
 
 struct LyricsFrame: Equatable {
@@ -245,6 +256,17 @@ enum DemoFrame: Equatable {
     case login(LoginFrame)
     case dock(DockFrame)
     case still(DemoStillKind)
+
+    /// The cover state the scene draws its album panel in (nil = the scene has no album panel).
+    /// Only the Fullscreen Cover scene animates it; every other album panel is fullscreen-look.
+    var panelCover: CoverFrame? {
+        switch self {
+        case .cover(let f): return f
+        case .peek, .showHide, .hideEdge, .login: return .fullscreenLook
+        case .still(let kind): return kind == .history ? nil : .fullscreenLook
+        case .lyrics, .dock: return nil
+        }
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -286,7 +308,8 @@ extension SettingsDemo {
         case .edgeShowSongOnTrackChange:
             let tuck = demoStateValue(t, initial: 0, [DemoStep(0.7, 1, .io, 0.92), DemoStep(6.7, 0, .io, 0.92)])
             let cp = o.isOn ? demoStateValue(t, initial: 0, [DemoStep(2.4, 1, .io, 0.8), DemoStep(5.7, 0, .io, 0.8)]) : 0
-            return .peek(PeekFrame(tuck: tuck, cp: cp, pulse: demoBump(t, 2.3, 1.0),
+            // The strip lights up at the track change, then hands over to the card (cp starts at 2.4).
+            return .peek(PeekFrame(tuck: tuck, cp: cp, pulse: demoBump(t, 1.6, 0.9),
                                    fillPercent: t < 2.4 ? 62 : 8 + (t - 2.4) * 1.5))
 
         case .showTranslation:

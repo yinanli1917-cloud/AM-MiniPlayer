@@ -40,6 +40,8 @@ final class SettingsToolbarTabsScreenshotTests: XCTestCase {
             let frame = window.frame
             window.setFrameOrigin(NSPoint(x: screen.visibleFrame.maxX - frame.width - 24, y: screen.visibleFrame.minY + 24))
         }
+        // .floating: nothing of another app can sit between the window and the capture.
+        window.level = .floating
         window.orderFront(nil)
         window.makeKey()
     }
@@ -71,6 +73,32 @@ final class SettingsToolbarTabsScreenshotTests: XCTestCase {
                 spin(1.0)
                 XCTAssertEqual(window.title, tab.title)
                 try shoot(window, to: dir.appendingPathComponent("tab-\(tab.rawValue)-\(dark ? "dark" : "light").png"))
+                window.close()
+            }
+        }
+    }
+
+    /// Real-time hovers that park a demo scene in a known phase (the pointer rests on the row and the
+    /// stage's loop starts at the commit, ~0.15s in): peek card out (scene ≈ 4.5s of 3.2…5.7),
+    /// translation shown (≈ 2.9s), tucked panel + keycaps (≈ 2.5s), launch-at-login lit (≈ 2.9s).
+    func test_shoot_demoScenes_hoveredMidLoop() throws {
+        let dir = try outputDir()
+        L10n.languageOverride = "en"
+        let scenes: [(name: String, tab: SettingsTab, demo: SettingsDemo, wait: Double)] = [
+            ("peek-card-out", .player, .edgeShowSongOnTrackChange, 4.6),
+            ("translation", .player, .showTranslation, 3.0),
+            ("hide-to-edge", .shortcuts, .hideToEdgeShortcut, 2.6),
+            ("login", .general, .launchAtLogin, 3.0),
+        ]
+        for dark in [false, true] {
+            for scene in scenes {
+                let hover = SettingsHoverIntentModel()
+                let window = SettingsWindowRenderTests.makeSettingsWindow(state: try makeState(scene.tab), dark: dark, hover: hover)
+                present(window)
+                spin(0.8)
+                hover.pointerEntered(scene.demo, at: CGPoint(x: 100, y: 20))
+                spin(scene.wait)
+                try shoot(window, to: dir.appendingPathComponent("scene-\(scene.name)-\(dark ? "dark" : "light").png"))
                 window.close()
             }
         }

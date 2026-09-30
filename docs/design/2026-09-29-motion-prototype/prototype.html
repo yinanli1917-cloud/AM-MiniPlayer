@@ -572,6 +572,22 @@ const ICON = {
   next: '<svg viewBox="0 0 14 12" style="width:.062em"><path d="M1 1V11L7 6Z M7 1V11L13 6Z"/></svg>'
 };
 const panelHTML = pw => `<div class="pn" style="--pw:${pw}"><div class="bk"><i class="sun"></i><i class="sea"></i></div><div class="art"><i class="sun"></i><i class="wv1"></i><i class="wv2"></i></div><b class="t1"></b><b class="t2"></b><div class="ctl">${ICON.prev}${ICON.play}${ICON.next}</div></div>`;
+/* 全屏封面外观：s = 0 封面留边（紫渐变底），s = 1 封面铺满面板。cover 场景逐帧驱动 s；
+   其余场景一律用 s = 1（创始人 09-29：面板默认画成全屏封面的样子，只有「全屏封面」一行演示 0 → 1 的对比）。 */
+function setCover(pn, s) {
+  const art = pn.querySelector('.art'), bk = pn.querySelector('.bk'), t1 = pn.querySelector('.t1'), t2 = pn.querySelector('.t2'), ctl = pn.querySelector('.ctl');
+  const sz = lerp(.68, 1, s);
+  art.style.width = art.style.height = sz + 'em';
+  art.style.left = (1 - sz) / 2 + 'em'; art.style.top = lerp(.075, 0, s) + 'em';
+  art.style.borderRadius = lerp(.04, 0, s) + 'em';
+  art.style.boxShadow = s > .98 ? 'none' : '';
+  bk.style.opacity = s;                                    // 模糊底：封面自身颜色放大铺满面板并模糊
+  const blend = 40 * s;                                    // 封面底部 40 % 渐隐进模糊底（真实值 100pt / 250pt）
+  const m = `linear-gradient(to bottom,#000 ${100 - blend}%,rgba(0,0,0,${1 - s}) 100%)`;
+  art.style.webkitMaskImage = art.style.maskImage = m;
+  t1.style.top = lerp(.885, .79, s) + 'em'; t2.style.top = lerp(.94, .845, s) + 'em'; ctl.style.top = lerp(1.0, .915, s) + 'em';
+}
+const fullscreenLook = el => el.querySelectorAll('.pn:not(.pg)').forEach(pn => setCover(pn, 1));
 const MENUBAR = `<div class="menubar"><svg class="apple" viewBox="0 0 12 14"><path d="M6 3.7c.8-.5 2.2-.6 3.1.6-1.2.8-1.3 2.6.1 3.4-.5 1.5-1.4 3-2.4 3-.5 0-.6-.3-1-.3s-.6.3-1.1.3C3.5 10.7 2.2 7.1 3.3 5.1c.8-1.2 2-1.9 2.7-1.4z"/><path d="M6.4 3.1c0-1 .6-1.9 1.7-2.3 0 1-.5 2-1.7 2.3z"/></svg>
   <span class="mn"><i style="width:15px"></i><i style="width:9px"></i><i style="width:11px"></i><i style="width:9px"></i><i style="width:12px"></i></span><span class="sp"></span>
   <span class="st"><svg viewBox="0 0 8 10" class="np"><ellipse cx="2.5" cy="7.6" rx="2.2" ry="1.7"/><path d="M4 7.4V1l3.4 1.3v1.5L5.2 3v4.4z"/></svg>
@@ -588,21 +604,8 @@ const SCENES = {
     name: '全屏封面', loop: 6.2, once: { on: [0.7, 2.7], off: [3.7, 5.4] }, rest: sw => sw ? 2.7 : 0.3,
     build(el) {
       el.innerHTML = `${MENUBAR}<div class="abs" id="p" style="left:105px;top:30px">${panelHTML(110)}</div>`;
-      const pn = el.querySelector('.pn'), art = pn.querySelector('.art'), bk = pn.querySelector('.bk'),
-        t1 = pn.querySelector('.t1'), t2 = pn.querySelector('.t2'), ctl = pn.querySelector('.ctl');
-      return t => {
-        const s = sv(t, 0, [[0.9, 1, 'io', .9], [3.9, 0, 'io', .9]]);
-        const sz = lerp(.68, 1, s);
-        art.style.width = art.style.height = sz + 'em';
-        art.style.left = (1 - sz) / 2 + 'em'; art.style.top = lerp(.075, 0, s) + 'em';
-        art.style.borderRadius = lerp(.04, 0, s) + 'em';
-        art.style.boxShadow = s > .98 ? 'none' : '';
-        bk.style.opacity = s;                                    // 模糊底：封面自身颜色放大铺满面板并模糊
-        const blend = 40 * s;                                    // 封面底部 40 % 渐隐进模糊底（真实值 100pt / 250pt）
-        const m = `linear-gradient(to bottom,#000 ${100 - blend}%,rgba(0,0,0,${1 - s}) 100%)`;
-        art.style.webkitMaskImage = art.style.maskImage = m;
-        t1.style.top = lerp(.885, .79, s) + 'em'; t2.style.top = lerp(.94, .845, s) + 'em'; ctl.style.top = lerp(1.0, .915, s) + 'em';
-      };
+      const pn = el.querySelector('.pn');
+      return t => setCover(pn, sv(t, 0, [[0.9, 1, 'io', .9], [3.9, 0, 'io', .9]]));
     }
   },
   peek: {
@@ -614,15 +617,19 @@ const SCENES = {
         <div class="vcard" id="cap"><div class="th"></div><b class="ti"></b><b class="ar"></b>
           <svg class="pl" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8.6" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="1.8"/><circle cx="10" cy="10" r="8.6" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="36 54" transform="rotate(-90 10 10)"/><path d="M8 6.3v7.4l6-3.7z" fill="#fff"/></svg>
           <svg class="nx" viewBox="0 0 14 12"><path d="M1 1V11L7 6Z M7 1V11L13 6Z"/></svg></div>`;
+      fullscreenLook(el);
       const p = el.querySelector('#p'), strip = el.querySelector('#strip'), fill = el.querySelector('#fill'), cap = el.querySelector('#cap');
       return t => {
         const tuck = sv(t, 0, [[0.7, 1, 'io', .92], [6.7, 0, 'io', .92]]);
         const cp = o.capsule === false ? 0 : sv(t, 0, [[2.4, 1, 'io', .8], [5.7, 0, 'io', .8]]);
         p.style.transform = `translateX(${tuck * 170}px)`;
         p.style.opacity = 1 - E.io(clamp((tuck - .55) / .45));
-        const sa = E.io(clamp((tuck - .5) / .5));
+        /* 小卡与贴边条互斥：小卡还没探出屏幕外沿（cp ≈ 0.16 之前），贴边条已经淡出并缩回边里；
+           小卡收回时反过来，条在小卡完全出屏后才回来。 */
+        const handoff = E.io(clamp(cp / .12));
+        const sa = E.io(clamp((tuck - .5) / .5)) * (1 - handoff);
         strip.style.opacity = sa; strip.style.transform = `translateX(${(1 - sa) * 5}px)`;
-        const pulse = bump(t, 2.3, 1.0);
+        const pulse = bump(t, 1.6, .9);
         strip.style.boxShadow = `0 0 0 .5px var(--glass-line), 0 0 ${pulse * 12}px ${pulse * 3}px rgba(250,64,88,${pulse * .55})`;
         fill.style.height = (t < 2.4 ? 62 : 8 + (t - 2.4) * 1.5) + '%';
         cap.style.transform = `translateX(${(1 - cp) * 80}px)`; cap.style.opacity = clamp(cp * 3);
@@ -644,6 +651,7 @@ const SCENES = {
         <div class="bgwin" style="left:160px;top:30px;width:140px;height:100px"><b style="top:26px;width:70px"></b><b style="top:42px;width:100px"></b><b style="top:58px;width:54px"></b><b style="top:74px;width:84px"></b></div>
         <div class="abs" id="p" style="left:184px;top:26px">${panelHTML(92)}</div>
         <div class="keys" id="keys" style="left:24px;top:76px">${keysHTML(KEYS)}</div>`;
+      fullscreenLook(el);
       const p = el.querySelector('#p'), keys = $$('.key', el);
       return t => {
         const press = Math.max(bump(t, 0.9, .34), bump(t, 3.4, .34));
@@ -663,6 +671,7 @@ const SCENES = {
         <div class="abs" id="p" style="left:170px;top:24px">${panelHTML(104)}</div>
         <div class="strip" id="strip"><div class="fill" style="height:62%"></div></div>
         <div class="keys" id="keys" style="left:24px;top:76px">${keysHTML(['⌥', '⌘', 'E'])}</div>`;
+      fullscreenLook(el);
       const p = el.querySelector('#p'), strip = el.querySelector('#strip'), keys = $$('.key', el);
       return t => {
         const press = Math.max(bump(t, 0.9, .34), bump(t, 3.9, .34));
@@ -681,7 +690,7 @@ const LANGS = [
 const CYCLE = ['我们去看海吧', '海を見に行こう', '바다 보러 가자', 'Allons voir la mer'];
 function buildLyrics(el, o, cycle) {
   const pw = 214;
-  el.innerHTML = `<div class="abs" style="left:${(320 - pw) / 2}px;top:10px"><div class="pn" style="--pw:${pw};height:2.2em;background:radial-gradient(110% 40% at 14% 0%,#ff9aa8 0,transparent 62%),radial-gradient(100% 40% at 92% 60%,#7d6cff 0,transparent 58%),#b9508f">
+  el.innerHTML = `<div class="abs" style="left:${(320 - pw) / 2}px;top:10px"><div class="pn pg" style="--pw:${pw};height:2.2em;background:linear-gradient(170deg,#ff7f8f 0%,#6b5bd6 62%,#2f2a85 100%)">
     <div class="lyric" id="l0" style="top:6px;opacity:.42">Down by the water</div>
     <div class="lyric" id="l1" style="top:30px"><b style="font-weight:650">Let’s go see the sea</b><span class="tr"><span id="trA"></span><span id="trB"></span>&nbsp;</span></div>
     <div class="lyric" id="l2" style="top:66px;opacity:.42">Just you, just me</div>
