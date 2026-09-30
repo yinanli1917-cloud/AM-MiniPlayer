@@ -76,6 +76,11 @@ struct TourGuidanceFrame: Equatable {
     var cardApproach = 0.0
     var contentOpacity: [Double] = [1, 1, 1]
     var contentOffsetY: [Double] = [0, 0, 0]
+    /// The move step's trackpad demo: how present it is (0 = not in the card, 1 = fully in;
+    /// springs with the card's height so the band and the bubble grow together).
+    var glyphPresence = 0.0
+    /// Seconds into the demo's cycle, nil = no cycle is running (it rests at its start pose).
+    var glyphElapsed: Double?
 
     // Ring
     var ringVisible = false
@@ -99,6 +104,81 @@ struct TourGuidanceFrame: Equatable {
     var panelGlow = 0.0
 
     static let idle = TourGuidanceFrame()
+}
+
+/// The part of a frame the card's SwiftUI content draws from. The card's WINDOW (position, size, alpha) is
+/// driven straight from the frame; this is only what changes the card's own pixels, so a frame in which the
+/// card merely travels (or only the ring breathes) leaves it Equal and the card view is not re-evaluated.
+struct TourCardVisual: Equatable {
+    var cardVisible = false
+    var cardHeight = 0.0
+    var cardBeakSide: TourCardSide = .right
+    var cardBeakOffset = 0.0
+    var beakScale = 1.0
+    var cardScale = 1.0
+    var contentOpacity: [Double] = [1, 1, 1]
+    var contentOffsetY: [Double] = [0, 0, 0]
+    var glyphPresence = 0.0
+    var glyphElapsed: Double?
+
+    static let hidden = TourCardVisual()
+
+    init() {}
+
+    init(_ f: TourGuidanceFrame) {
+        cardVisible = f.cardVisible
+        cardHeight = f.cardHeight
+        cardBeakSide = f.cardBeakSide
+        cardBeakOffset = f.cardBeakOffset
+        beakScale = f.beakScale
+        cardScale = f.cardScale
+        contentOpacity = f.contentOpacity
+        contentOffsetY = f.contentOffsetY
+        glyphPresence = f.glyphPresence
+        glyphElapsed = f.glyphElapsed
+    }
+}
+
+/// What the ring / ghost-cursor / panel-glow overlay draws. Equal frames are not redrawn.
+struct TourOverlayVisual: Equatable {
+    var ringVisible = false
+    var ring = TourRingGeometry(cx: 0, cy: 0, w: 40, h: 40, corner: 20)
+    var ringOpacity = 1.0
+    var ringScale = 1.0
+    var ringPulse = 1.0
+    var ringDashed = false
+    var breath = 0.0
+    var ripples: [Double] = []
+    var ghostVisible = false
+    var ghost = CGPoint.zero
+    var ghostOpacity = 0.0
+    var ghostRipple: Double?
+    var panelGlow = 0.0
+
+    static let hidden = TourOverlayVisual()
+
+    init() {}
+
+    init(_ f: TourGuidanceFrame) {
+        ringVisible = f.ringVisible
+        ring = f.ring
+        ringOpacity = f.ringOpacity
+        ringScale = f.ringScale
+        ringPulse = f.ringPulse
+        ringDashed = f.ringDashed
+        breath = f.breath
+        ripples = f.ripples
+        ghostVisible = f.ghostVisible
+        ghost = f.ghost
+        ghostOpacity = f.ghostOpacity
+        ghostRipple = f.ghostRipple
+        panelGlow = f.panelGlow
+    }
+
+    /// Something is on screen (the overlay window can be parked otherwise).
+    var hasContent: Bool {
+        (panelGlow > 0.003) || (ringVisible && ringOpacity > 0.003) || (ghostVisible && ghostOpacity > 0.003)
+    }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -127,6 +207,12 @@ enum TourGuidanceTokens {
     static let beakOutDuration = 0.1
     static let beakSwapAt = 0.12
     static let beakInDuration = 0.16
+    // Move-step trackpad demo (founder 2026-09-29: only on the beat that asks for the gesture)
+    /// The band grows with the card's own height spring, so bubble and band move as one.
+    static let glyphSpring: (duration: Double, bounce: Double) = heightSpring
+    static let glyphOutDuration = 0.16
+    /// The demo's own 0->1 fade would double the band's; it starts once the band is mostly in.
+    static let glyphCycleDelay = 0.12
     // C.4.1 ring
     /// Founder 2026-09-29: the ring eases in from a little smaller, not from a bigger halo.
     static let ringAppearScale = 0.85
@@ -174,6 +260,9 @@ final class TourGuidanceMotion {
     private let capp: TourFeedbackValue
     private let contentOp: [TourFeedbackValue]
     private let contentY: [TourFeedbackValue]
+    private let glyph: TourFeedbackValue
+    private var glyphStart: Double?
+    private(set) var glyphWanted = false
     private var cardWidth = 272.0
     private var beakSide: TourCardSide = .right
     private(set) var cardVisible = false
@@ -211,6 +300,7 @@ final class TourGuidanceMotion {
         cop = TourFeedbackValue(0, clock: c); csc = TourFeedbackValue(1, clock: c); capp = TourFeedbackValue(0, clock: c)
         contentOp = (0..<3).map { _ in TourFeedbackValue(1, clock: c) }
         contentY = (0..<3).map { _ in TourFeedbackValue(0, clock: c) }
+        glyph = TourFeedbackValue(0, clock: c)
         hx = TourFeedbackValue(0, clock: c); hy = TourFeedbackValue(0, clock: c)
         hw = TourFeedbackValue(40, clock: c); hh = TourFeedbackValue(40, clock: c)
         hop = TourFeedbackValue(0, clock: c); hsc = TourFeedbackValue(1, clock: c); hpulse = TourFeedbackValue(1, clock: c)
@@ -223,8 +313,9 @@ final class TourGuidanceMotion {
     /// True while anything still moves or a hint is still running — the shell
     /// keeps its display link alive only while this holds (zero idle cost).
     var isAnimating: Bool {
-        let values: [TourFeedbackValue] = [cx, ctop, ch, bOff, bScale, cop, csc, capp, hx, hy, hw, hh, hop, hsc, hpulse] + contentOp + contentY
+        let values: [TourFeedbackValue] = [cx, ctop, ch, bOff, bScale, cop, csc, capp, glyph, hx, hy, hw, hh, hop, hsc, hpulse] + contentOp + contentY
         if values.contains(where: { $0.isActive }) { return true }
+        if glyphIsRunning { return true }
         if !cues.isEmpty { return true }
         if ghostStart != nil || breathStart != nil { return true }
         if glowStart != nil { return true }
@@ -233,7 +324,7 @@ final class TourGuidanceMotion {
 
     func step(_ dt: Double) {
         clock.now += dt
-        let all: [TourFeedbackValue] = [cx, ctop, ch, bOff, bScale, cop, csc, capp, hx, hy, hw, hh, hop, hsc, hpulse] + contentOp + contentY
+        let all: [TourFeedbackValue] = [cx, ctop, ch, bOff, bScale, cop, csc, capp, glyph, hx, hy, hw, hh, hop, hsc, hpulse] + contentOp + contentY
         all.forEach { $0.step(dt) }
         // Cues, in time order (a cue may register more cues).
         var guardCount = 0
@@ -388,6 +479,43 @@ final class TourGuidanceMotion {
         }
     }
 
+    // MARK: Trackpad demo (move step)
+
+    /// The demo is in the card while `present`. `animated: false` puts it there at once (the card is appearing,
+    /// or a new card's content is swapping in); animated, it grows on the card's height spring.
+    /// `restart` plays the cycle again from the top (a new demo, or a hover replay).
+    func setGlyph(present: Bool, animated: Bool = true, restart: Bool = false) {
+        if present {
+            let already = glyphWanted
+            glyphWanted = true
+            if reduceMotion || !animated {
+                glyph.set(1)
+                glyphStart = reduceMotion ? nil : clock.now + T.glyphCycleDelay
+            } else if !already {
+                glyph.to(1, springDuration: T.glyphSpring.duration, bounce: T.glyphSpring.bounce)
+                glyphStart = clock.now + T.glyphCycleDelay
+            } else if restart {
+                glyphStart = clock.now
+            }
+        } else {
+            glyphWanted = false
+            glyphStart = nil
+            if reduceMotion || !animated { glyph.set(0) }
+            else { glyph.to(0, springDuration: T.glyphSpring.duration, bounce: T.glyphSpring.bounce) }
+        }
+    }
+
+    /// Hover replay: the cycle starts over.
+    func replayGlyph() {
+        guard glyphWanted, !reduceMotion else { return }
+        glyphStart = clock.now
+    }
+
+    private var glyphIsRunning: Bool {
+        guard let g = glyphStart else { return false }
+        return clock.now - g < Double(TourGestureMotion.cycles) * TourGestureMotion.cycleDuration
+    }
+
     // MARK: Ring (C.4.1)
 
     private func ringOpacityTarget(_ mode: TourRingMode) -> Double { mode == .hint ? T.ringHintOpacity : 1 }
@@ -518,6 +646,8 @@ final class TourGuidanceMotion {
         f.cardApproach = capp.v
         f.contentOpacity = contentOp.map { $0.v }
         f.contentOffsetY = contentY.map { $0.v }
+        f.glyphPresence = glyph.v
+        if let g = glyphStart, glyphIsRunning { f.glyphElapsed = max(clock.now - g, 0) }
 
         f.ringVisible = ringVisible || hop.v > 0.003
         f.ring = TourRingGeometry(cx: hx.v, cy: hy.v, w: hw.v, h: hh.v, corner: ringCorner)

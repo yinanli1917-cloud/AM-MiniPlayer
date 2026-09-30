@@ -321,7 +321,7 @@ private struct TourFeedbackBlock: ViewModifier {
     @ObservedObject var feedback: TourCompletionFeedback
     /// The card guidance's own per-block fade (appear stagger, step-to-step
     /// swap): multiplies the completion feedback's, nil = not driven.
-    var guide: TourGuidanceFrame?
+    var guide: TourCardVisual?
 
     func body(content: Content) -> some View {
         let f = feedback.frame
@@ -336,7 +336,7 @@ private struct TourFeedbackBlock: ViewModifier {
 }
 
 extension View {
-    func tourFeedbackBlock(_ index: Int, _ feedback: TourCompletionFeedback, guide: TourGuidanceFrame? = nil) -> some View {
+    func tourFeedbackBlock(_ index: Int, _ feedback: TourCompletionFeedback, guide: TourCardVisual? = nil) -> some View {
         modifier(TourFeedbackBlock(index: index, feedback: feedback, guide: guide))
     }
 }

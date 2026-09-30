@@ -48,3 +48,29 @@ struct TourCardModel: Equatable {
     var showSkipStep: Bool = true
     var showFallbackButton: Bool = false
 }
+
+/// Everything about a model that changes how tall the card is. A beat turning solid, the ring growing, the step
+/// number changing or a beat going pending change none of it, so the card is NOT re-measured (a measure builds a
+/// whole hosting view and lays it out: ~35 ms in a debug build, right on the frame the check lands).
+struct TourCardLayoutKey: Equatable {
+    var kind: TourCardModel.Kind
+    var title: String
+    var body: String
+    var beatTexts: [String]
+    var confirm: String?
+    var primaryTitle: String?
+    var secondaryTitle: String?
+    var footNote: String?
+    var chip: String?
+    var showStop: Bool
+    var showSkipStep: Bool
+    var showFallbackButton: Bool
+}
+
+extension TourCardModel {
+    var layoutKey: TourCardLayoutKey {
+        TourCardLayoutKey(kind: kind, title: title, body: body, beatTexts: beats.map(\.text), confirm: confirm,
+                          primaryTitle: primaryTitle, secondaryTitle: secondaryTitle, footNote: footNote, chip: chip,
+                          showStop: showStop, showSkipStep: showSkipStep, showFallbackButton: showFallbackButton)
+    }
+}

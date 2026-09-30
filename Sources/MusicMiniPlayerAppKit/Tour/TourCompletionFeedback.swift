@@ -28,42 +28,6 @@ import QuartzCore
 import MusicMiniPlayerCore
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// MARK: - Ticker
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-/// One callback per display refresh (display link, macOS 14+); a 60 Hz timer
-/// when there is no screen (headless).
-@MainActor
-final class TourFeedbackTicker: NSObject {
-    private var link: CADisplayLink?
-    private var timer: Timer?
-    var onTick: (() -> Void)?
-    var isRunning: Bool { link != nil || timer != nil }
-
-    func start() {
-        guard link == nil, timer == nil else { return }
-        if let screen = NSScreen.main {
-            let l = screen.displayLink(target: self, selector: #selector(fire))
-            l.add(to: .main, forMode: .common)
-            link = l
-        } else {
-            let t = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.onTick?() }
-            }
-            RunLoop.main.add(t, forMode: .common)
-            timer = t
-        }
-    }
-
-    func stop() {
-        link?.invalidate(); link = nil
-        timer?.invalidate(); timer = nil
-    }
-
-    @objc private func fire() { onTick?() }
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - The entry point
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -231,6 +195,10 @@ final class TourCompletionFeedback: ObservableObject {
     var debugSparkOverlay: TourSparkOverlay { sparks }
     /// Raises the FX window above a card window that was just re-ordered.
     func raiseOverlay() { sparks.raise() }
+    /// Builds the (parked) FX window ahead of the first completion.
+    func prewarmOverlay() { sparks.warm(feedback: self) }
+    /// The tour ended: releases the FX window.
+    func releaseOverlay() { sparks.release() }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -245,9 +213,29 @@ final class TourCompletionFeedback: ObservableObject {
 final class TourSparkOverlay {
     static let sparkRadius: CGFloat = 64
 
-    private(set) var window: TourCelebrationWindow?
+    /// The FX window lives (parked, ordered out) for the whole tour: building a window and its hosting view on the
+    /// frame the check lands cost ~30 ms right there. `window` is the OPEN one (nil while parked).
+    private var storage: TourCelebrationWindow?
+    var window: TourCelebrationWindow? { storage.flatMap { $0.isVisible ? $0 : nil } }
     private(set) var originInWindow: CGPoint?
     private(set) var frameOnScreen: CGRect?
+
+    /// Builds the parked window + hosting view ahead of time (the tour has just opened its first card).
+    func warm(feedback: TourCompletionFeedback) {
+        _ = ensureWindow(feedback: feedback)
+    }
+
+    @discardableResult
+    private func ensureWindow(feedback: TourCompletionFeedback) -> TourCelebrationWindow {
+        let window = storage ?? TourCelebrationWindow()
+        storage = window
+        // (An NSWindow is never without a content view: a fresh one holds a plain NSView, so a `contentView == nil`
+        // test never installs the hosting view and the FX window stays empty — the confetti bug of 2026-09-29.)
+        if !(window.contentView is TourHostingView<TourFXHost>) {
+            window.contentView = TourHostingView(rootView: TourFXHost(feedback: feedback))
+        }
+        return window
+    }
 
     /// Positions the window and returns the FX geometry in its local space.
     func prepare(ringCenter: CGPoint, cardBody: CGRect?, wantsConfetti: Bool, feedback: TourCompletionFeedback) -> TourFXGeometry {
@@ -259,15 +247,12 @@ final class TourSparkOverlay {
                           width: Self.sparkRadius * 2, height: Self.sparkRadius * 2)
         }
         let local = CGPoint(x: ringCenter.x - rect.minX, y: rect.maxY - ringCenter.y)
-        let window = self.window ?? TourCelebrationWindow()
-        self.window = window
-        // (An NSWindow is never without a content view: a fresh one holds a plain NSView, so the old
-        // `contentView == nil` test never installed the hosting view and the FX window stayed empty.)
-        if !(window.contentView is TourHostingView<TourFXHost>) {
-            window.contentView = TourHostingView(rootView: TourFXHost(feedback: feedback))
-        }
-        window.setFrame(rect, display: true)
+        let window = ensureWindow(feedback: feedback)
+        window.setFrame(rect, display: false)
         window.orderFront(nil)
+        #if DEBUG
+        TourPerfProbe.mark("fx window orderFront")
+        #endif
         frameOnScreen = rect
         originInWindow = local
         let cardTop = cardBody.map { Double(rect.maxY - $0.maxY) } ?? Double(local.y)
@@ -277,10 +262,18 @@ final class TourSparkOverlay {
 
     func raise() { window?.orderFront(nil) }
 
+    /// The sequence is over: park the window (ordered out, hosting view kept for the next one).
     func stop() {
-        window?.contentView = nil
-        window?.orderOut(nil)
-        window = nil
+        storage?.orderOut(nil)
+        originInWindow = nil
+        frameOnScreen = nil
+    }
+
+    /// The tour is over: nothing of it may stay allocated (this also breaks feedback -> window -> hosting view -> feedback).
+    func release() {
+        storage?.contentView = nil
+        storage?.orderOut(nil)
+        storage = nil
         originInWindow = nil
         frameOnScreen = nil
     }

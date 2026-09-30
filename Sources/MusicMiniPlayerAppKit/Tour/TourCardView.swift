@@ -27,7 +27,12 @@ final class TourCardStore: ObservableObject {
     @Published var beakSide: TourCardSide = .right
     /// Y-down / x-right distance to the beak tip (TourBubbleShape's convention).
     @Published var beakOffset: CGFloat = 40
-    @Published var gestureKind: TourGestureKind?
+    /// The demo the current beat asks for; nil = the beat has no demo (the band is folded away).
+    @Published var gestureKind: TourGestureKind? {
+        didSet { if let gestureKind { lastGestureKind = gestureKind } }
+    }
+    /// The last demo shown: it stays drawn while its band folds away.
+    private(set) var lastGestureKind: TourGestureKind?
     /// Bumps when a DIFFERENT card (not just a checked beat) takes over, so
     /// SwiftUI cross-fades the content instead of morphing it.
     @Published var contentKey = 0
@@ -47,6 +52,8 @@ final class TourCardStore: ObservableObject {
     var onFallback: (() -> Void)?
     /// A beat row was hovered (`id`, `inside`): the ring peeks at its control.
     var onBeatHover: ((Int, Bool) -> Void)?
+    /// The resting demo was hovered: play it again.
+    var onGlyphReplay: (() -> Void)?
 
     init(model: TourCardModel, feedback: TourCompletionFeedback, arm: TourCardMaterialArm = .current(), guidance: TourGuidanceStore? = nil) {
         self.model = model
@@ -58,11 +65,11 @@ final class TourCardStore: ObservableObject {
 
 struct TourCardRoot: View {
     @ObservedObject var store: TourCardStore
-    @ObservedObject var guidance: TourGuidanceStore
+    @ObservedObject var guidance: TourCardVisualStore
 
     init(store: TourCardStore) {
         self.store = store
-        self.guidance = store.guidance
+        self.guidance = store.guidance.cardStore
     }
 
     var body: some View {
@@ -73,10 +80,13 @@ struct TourCardRoot: View {
             model: store.model, beakSide: store.beakSide, beakOffset: store.beakOffset,
             gestureKind: store.gestureKind, arm: store.arm, feedback: store.feedback,
             contentKey: store.contentKey,
-            guide: guidance.driven && guidance.frame.cardVisible ? guidance.frame : nil,
+            guide: guidance.driven && guidance.visual.cardVisible ? guidance.visual : nil,
+            fadingGestureKind: store.lastGestureKind,
+            glyphClock: store.guidance.glyphClock,
             stalled: store.stalled,
             onPrimary: store.onPrimary, onSecondary: store.onSecondary, onStop: store.onStop,
-            onSkipStep: store.onSkipStep, onFallback: store.onFallback, onBeatHover: store.onBeatHover
+            onSkipStep: store.onSkipStep, onFallback: store.onFallback, onBeatHover: store.onBeatHover,
+            onGlyphReplay: store.onGlyphReplay
         )
     }
 }
@@ -97,7 +107,11 @@ struct TourCardView: View {
     var contentKey = 0
     /// Non-nil = the card is driven by `TourGuidanceMotion` (height, beak, scale
     /// and block fades come from the frame); nil = a static card (tests, renders).
-    var guide: TourGuidanceFrame?
+    var guide: TourCardVisual?
+    /// The demo that is folding away (`gestureKind` is already nil): drawn until its band is gone. Driven cards only.
+    var fadingGestureKind: TourGestureKind?
+    /// The demo's clock (driven cards); the demo observes it, the card does not.
+    var glyphClock: TourGlyphClock?
     var stalled = false
     var onPrimary: (() -> Void)?
     var onSecondary: (() -> Void)?
@@ -105,6 +119,7 @@ struct TourCardView: View {
     var onSkipStep: (() -> Void)?
     var onFallback: (() -> Void)?
     var onBeatHover: ((Int, Bool) -> Void)?
+    var onGlyphReplay: (() -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
@@ -196,11 +211,8 @@ struct TourCardView: View {
             }
             if let chip = model.chip { chipView(chip).tourFeedbackBlock(1, feedback, guide: guide) }
             if !model.beats.isEmpty { beatsView.tourFeedbackBlock(2, feedback, guide: guide) }
-            if let gestureKind {
-                TourGestureGlyph(kind: gestureKind, reduceMotion: reduceMotion)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, M.gestureTop)
-                    .tourFeedbackBlock(2, feedback, guide: guide)
+            if let kind = shownGestureKind {
+                glyphBand(kind).tourFeedbackBlock(2, feedback, guide: guide)
             }
             if isMoveStep, let note = model.footNote { noteView(note).tourFeedbackBlock(2, feedback, guide: guide) }
             if let confirm = model.confirm {
@@ -218,6 +230,36 @@ struct TourCardView: View {
         .padding(.bottom, M.paddingBottom)
         .id(contentKey)
         .transition(.opacity)
+    }
+
+    /// The demo to draw: the one the beat asks for, or (driven cards) the one still folding away.
+    private var shownGestureKind: TourGestureKind? {
+        if let gestureKind { return gestureKind }
+        if let guide, guide.glyphPresence > 0.003 { return fadingGestureKind }
+        return nil
+    }
+
+    /// The trackpad demo's band. Driven, it grows in (and folds away) with the card's own height spring —
+    /// `glyphPresence` is that spring — while the demo fades and scales in from its top edge; static cards
+    /// show it fully. Its clock is the tour's (no clock of its own).
+    private func glyphBand(_ kind: TourGestureKind) -> some View {
+        let presence = guide.map { min(max($0.glyphPresence, 0), 1.25) } ?? 1
+        let shown = min(presence, 1)
+        let natural = M.gestureTop + TourGestureGlyphFace.size.height
+        return Group {
+            if guide != nil, let glyphClock {
+                TourDrivenGestureGlyph(kind: kind, clock: glyphClock, reduceMotion: reduceMotion, onReplay: onGlyphReplay)
+            } else {
+                TourGestureGlyph(kind: kind, reduceMotion: reduceMotion)
+            }
+        }
+        .padding(.top, M.gestureTop)
+        .frame(maxWidth: .infinity)
+        .frame(height: natural, alignment: .top)
+        .opacity(shown)
+        .scaleEffect(0.9 + 0.1 * shown, anchor: .top)
+        .frame(height: natural * presence, alignment: .top)
+        .clipped()
     }
 
     private var isMoveStep: Bool { if case .step(.moveTuck) = model.kind { return true }; return false }
@@ -321,7 +363,7 @@ struct TourCardView: View {
 /// Scales the whole bubble about its beak tip (C.2: the card grows from the
 /// tip that points at the anchor, and shrinks back toward it).
 private struct TourCardScale: ViewModifier {
-    var guide: TourGuidanceFrame?
+    var guide: TourCardVisual?
 
     func body(content: Content) -> some View {
         guard let guide, abs(guide.cardScale - 1) > 0.0005 else { return AnyView(content) }

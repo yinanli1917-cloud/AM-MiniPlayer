@@ -87,7 +87,13 @@ final class TourController: ObservableObject {
     private var skipping = false
     /// The pose the handoff already started moving the card to (C.3 "H + 40").
     private var pendingHandoffPose: TourCardPose?
-    private var measured: (model: TourCardModel, side: TourCardSide, gesture: TourGestureKind?, size: CGSize)?
+    private var measured: (key: TourCardLayoutKey, side: TourCardSide, gesture: TourGestureKind?, size: CGSize)?
+    /// The system's Automation permission for Music (test seam: counting it proves which events pay for the query).
+    var automationStatusProvider: () -> OnboardingAuthorizationStatus = { OnboardingState.shared.automationStatus }
+    /// Where the card's anchor was when the card was last placed (a height change under the SAME anchor is a relayout, not a move).
+    private var lastPlacedAnchorMidY: CGFloat?
+    private var measuringHost: TourHostingView<TourCardView>?
+    private let measuringFeedback = TourCompletionFeedback(autoTick: false)
 
     #if DEBUG || LOCAL_DEVELOPER_BUILD
     static var debugForceShow = false
@@ -246,9 +252,15 @@ final class TourController: ObservableObject {
 
     // MARK: - Event pump
 
-    private func makeSnapshot() -> TourSnapshot {
-        TourSnapshot(
-            automationAuthorized: OnboardingState.shared.automationStatus == .authorized,
+    /// `automationAuthorized` is read by the machine for `.start` ONLY (does the tour begin with Music already connected?),
+    /// and reading it is a synchronous system query (`AEDeterminePermissionToAutomateTarget`: 30-45 ms on the main thread, it
+    /// talks to the TCC daemon). It used to run on EVERY event, so every step completion paid it on the very frame its check
+    /// began: the "laggy checkmark" (founder 2026-09-29). Now only `.start` pays.
+    private func makeSnapshot(for event: TourEvent) -> TourSnapshot {
+        var needsAutomation = false
+        if case .start = event { needsAutomation = true }
+        return TourSnapshot(
+            automationAuthorized: needsAutomation && automationStatusProvider() == .authorized,
             canTranslate: lyricsService.canTranslate,
             showTranslation: lyricsService.showTranslation,
             onLyricsPage: musicController.currentPage == .lyrics
@@ -258,7 +270,7 @@ final class TourController: ObservableObject {
     /// Internal (not `private`) so tests can drive the machine directly via
     /// `@testable import` without hosting real button clicks.
     func send(_ event: TourEvent) {
-        let (next, effects) = TourMachine.reduce(state, event, snapshot: makeSnapshot())
+        let (next, effects) = TourMachine.reduce(state, event, snapshot: makeSnapshot(for: event))
         let previous = state
         state = next
         noteStepEntry(previous: previous.phase, next: next.phase)
@@ -438,6 +450,50 @@ final class TourController: ObservableObject {
         TourCompletionFeedback.performSystemHaptic(kind)
     }
 
+    // MARK: - Scroll trace (evidence for "the two-finger drag does nothing during the move step")
+
+    /// While the tour is on screen, and only when the opt-in diagnostic log is on (`defaults write com.yinanli.nanoPod
+    /// enableDebugFileLog -bool YES`, relaunch; the log is /tmp/nanopod_debug.log), one `TourScroll` line per scroll burst says
+    /// WHERE the burst went: the window our app handed it to (a local monitor sees every scroll event this app receives), the
+    /// window WindowServer says is topmost at the cursor, and — from a global monitor, which sees the bursts that went to
+    /// ANOTHER app — that the cursor was over the panel while somebody else got the scroll. Not being able to reproduce the
+    /// report in-process (2026-09-29: routing, ordering, yielding, edge ownership all checked) is what this is for.
+    private var scrollTraceMonitors: [Any] = []
+    private var lastScrollTraceAt: CFTimeInterval = 0
+
+    private func installScrollTrace() {
+        guard scrollTraceMonitors.isEmpty else { return }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel, handler: { [weak self] event in
+            self?.traceScroll(event, receivedByThisApp: true)
+            return event
+        }) { scrollTraceMonitors.append(local) }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel, handler: { [weak self] event in
+            self?.traceScroll(event, receivedByThisApp: false)
+        }) { scrollTraceMonitors.append(global) }
+    }
+
+    private func removeScrollTrace() {
+        scrollTraceMonitors.forEach { NSEvent.removeMonitor($0) }
+        scrollTraceMonitors = []
+    }
+
+    private func traceScroll(_ event: NSEvent, receivedByThisApp: Bool) {
+        guard DebugLogger.isLoggingEnabled, let panel else { return }
+        let mouse = NSEvent.mouseLocation
+        let overPanel = panel.frame.contains(mouse)
+        // The global monitor reports every scroll on the machine: only the ones over the panel are evidence.
+        if !receivedByThisApp, !overPanel { return }
+        let now = CACurrentMediaTime()
+        guard event.phase == .began || event.phase == .mayBegin || now - lastScrollTraceAt > 0.6 else { return }
+        lastScrollTraceAt = now
+        let topmost = NSWindow.windowNumber(at: mouse, belowWindowWithWindowNumber: 0)
+        let topmostName = NSApp.window(withWindowNumber: topmost).map { String(describing: type(of: $0)) } ?? "another app's window"
+        let target = receivedByThisApp ? (event.window.map { String(describing: type(of: $0)) } ?? "no window") : "ANOTHER APP"
+        DebugLogger.log("TourScroll", "burst phase=\(event.phase.rawValue) mom=\(event.momentumPhase.rawValue) d=(\(event.scrollingDeltaX),\(event.scrollingDeltaY)) precise=\(event.hasPreciseScrollingDeltas) "
+            + "cursorOverPanel=\(overPanel) deliveredTo=\(target) topmostAtCursor=\(topmostName)#\(topmost) panel#\(panel.windowNumber) "
+            + "page=\(musicController.currentPage) tour=\(state.phase) yielded=\(cardYielded) card=\(cardWindow?.frame ?? .zero)")
+    }
+
     // MARK: - Teardown (§11.2: zero standing cost afterward)
 
     private func teardown() {
@@ -498,8 +554,12 @@ final class TourController: ObservableObject {
         haloWindow?.contentView = nil
         haloWindow?.orderOut(nil)
         haloWindow = nil
+        feedback.releaseOverlay()
+        removeScrollTrace()
         pendingHandoffPose = nil
         measured = nil
+        measuringHost = nil
+        lastPlacedAnchorMidY = nil
     }
 
     // MARK: - Card content assembly (proposal §3.3/§9)
@@ -734,11 +794,17 @@ final class TourController: ObservableObject {
 
     private func skipBody() -> String? { skipping ? L10n.localized("tour.skip.ack") : nil }
 
+    /// The two-finger demo the CURRENT beat asks for, nil when the current beat has nothing to demonstrate.
+    /// The move step's beats, in order: (leading, only off the cover) go back to the cover page -> nudge it to a
+    /// corner -> push it into the edge. The demo belongs to the last two: on the leading beat the user is being
+    /// walked to another page and a trackpad picture would be teaching a gesture that does not work there
+    /// (founder 2026-09-29: it showed on "Back to the cover page").
     private func gestureKind(for phase: TourPhase) -> TourGestureKind? {
-        guard case .step(.moveTuck, let beats) = phase else { return nil }
+        guard case .step(.moveTuck, let beats) = phase, beats.count >= 2 else { return nil }
+        if !beats[0] {
+            return musicController.currentPage == .album ? .nudgeToCorner : nil
+        }
         let rightward = (panel?.currentCorner() == .topRight || panel?.currentCorner() == .bottomRight) || liquidEdge.side != .left
-        // Off the cover page there are no corners to nudge toward: only the edge.
-        if !beats[0], musicController.currentPage == .album { return .nudgeToCorner }
         return .swipeToEdge(rightward: rightward)
     }
 
@@ -840,13 +906,23 @@ final class TourController: ObservableObject {
     }
 
     private func measureCardSize(model: TourCardModel, beakSide: TourCardSide, gestureKind: TourGestureKind?, arm: TourCardMaterialArm) -> CGSize {
-        if let m = measured, m.model == model, m.side == beakSide, m.gesture == gestureKind { return m.size }
+        if let m = measured, m.key == model.layoutKey, m.side == beakSide, m.gesture == gestureKind { return m.size }
+        #if DEBUG
+        let measureBegan = CACurrentMediaTime()
+        defer { TourPerfProbe.mark(String(format: "measure card %.1fms", (CACurrentMediaTime() - measureBegan) * 1000)) }
+        #endif
         // The footer's links and buttons only render when their handlers exist; a
         // measuring copy WITHOUT handlers is one footer row (~14pt) shorter than
         // the live card — the second reason the bottom links were cut off.
-        let view = TourCardView(model: model, beakSide: beakSide, beakOffset: 40, gestureKind: gestureKind, arm: arm, feedback: feedback,
+        // (A measuring copy is not fed the live feedback object: its frames never change the card's height, and a
+        // hosting view subscribed to them would be re-evaluated on every feedback tick for nothing.)
+        let view = TourCardView(model: model, beakSide: beakSide, beakOffset: 40, gestureKind: gestureKind, arm: arm, feedback: measuringFeedback,
                                 onPrimary: {}, onSecondary: {}, onStop: {}, onSkipStep: {}, onFallback: {})
-        let hosting = TourHostingView(rootView: view)
+        // ONE measuring hosting view for the whole tour: building a hosting view is most of what a measure costs, and a
+        // measure lands on the frame a check or a handoff is being drawn.
+        let hosting: TourHostingView<TourCardView>
+        if let existing = measuringHost { existing.rootView = view; hosting = existing }
+        else { hosting = TourHostingView(rootView: view); measuringHost = hosting }
         let width = TourCardView.windowWidth(beakSide: beakSide)
         hosting.frame = NSRect(x: 0, y: 0, width: width, height: 1)
         let fitting = hosting.fittingSize
@@ -854,7 +930,7 @@ final class TourController: ObservableObject {
         // (fittingSize was (0, 0) and 150 was used instead).
         assert(fitting.height > 0, "TourHostingView must report its content size")
         let size = CGSize(width: width, height: max(fitting.height, 92))
-        measured = (model, beakSide, gestureKind, size)
+        measured = (model.layoutKey, beakSide, gestureKind, size)
         return size
     }
 
@@ -906,6 +982,7 @@ final class TourController: ObservableObject {
             entryGeneration += 1
             commit(store, bumpKey: newContent)
             motion.presentCard(at: pose)
+            motion.setGlyph(present: gestureKind != nil, animated: false)
             raiseTourWindows()
             holdRing(for: 0.3)
             scheduleStallHint()
@@ -914,6 +991,7 @@ final class TourController: ObservableObject {
             // content swaps now, the ring comes back 0.42 s later.
             entryGeneration += 1
             commit(store, bumpKey: true)
+            motion.setGlyph(present: gestureKind != nil, animated: false)
             if pendingHandoffPose != pose { motion.moveCard(to: pose, delay: 0) }
             pendingHandoffPose = nil
             feedback.cardDidSwap()
@@ -933,6 +1011,7 @@ final class TourController: ObservableObject {
             motion.schedule(after: 0.14) { [weak self] in
                 guard let self, let store = self.cardStore else { return }
                 commit(store, bumpKey: true)
+                self.guidance.motion.setGlyph(present: gestureKind != nil, animated: false)
                 self.guidance.motion.staggerContentIn()
             }
             holdRing(for: 0.56)
@@ -941,7 +1020,12 @@ final class TourController: ObservableObject {
         } else {
             // Same card: a beat turned solid, the body text changed, the anchor moved.
             let bodyChanged = store.model.body != model.body
+            // The demo comes and goes with the beat: it grows in (fades, scales in) when the beat that asks for the
+            // gesture becomes current and folds away when it is done — on the card's own height spring, which the
+            // re-measured pose below retargets in the same instant. A different demo replays from the top.
+            let previousKind = store.gestureKind
             store.gestureKind = gestureKind
+            guidance.motion.setGlyph(present: gestureKind != nil, animated: true, restart: previousKind != nil && gestureKind != nil && previousKind != gestureKind)
             if bodyChanged {
                 motion.crossfadeBody { [weak self] in
                     guard let store = self?.cardStore else { return }
@@ -953,7 +1037,11 @@ final class TourController: ObservableObject {
             store.beakSide = pose.beakSide
             store.beakOffset = CGFloat(pose.beakOffset)
             if let target = motion.targetPose, target != pose {
-                if abs(target.x - pose.x) < 0.5, abs(target.top - pose.top) < 0.5, target.beakSide == pose.beakSide {
+                // Same spot = the same x and the same ANCHOR (the card is centred on its anchor, clamped to the screen, so a
+                // taller card's top moves and can even clamp: that is still the same anchor, and it must spring like the
+                // height — treating it as an anchor move made the height wait 0.1 s and the demo band outgrow its bubble).
+                if abs(target.x - pose.x) < 0.5, target.beakSide == pose.beakSide,
+                   let was = lastPlacedAnchorMidY, abs(was - placed.anchor.midY) < 0.5 {
                     motion.relayoutCard(to: pose)        // same spot, new height / beak
                 } else {
                     motion.moveCard(to: pose, delay: 0)  // the anchor moved (the ring jumped to the next control)
@@ -961,6 +1049,7 @@ final class TourController: ObservableObject {
             }
         }
         cardPlacedOrigin = NSPoint(x: pose.x, y: pose.top - pose.height)
+        lastPlacedAnchorMidY = placed.anchor.midY
         feedback.raiseOverlay()
         guidance.kick()
     }
@@ -972,7 +1061,7 @@ final class TourController: ObservableObject {
     private func raiseTourWindows() {
         if let panel, panel.isVisible, !liquidEdge.isActive { panel.orderFrontRegardless() }
         cardWindow?.orderFront(nil)
-        haloWindow?.orderFront(nil)
+        // (The ring overlay orders itself in when it has something to draw, and out when it has not.)
     }
 
     private func ensureWindows() {
@@ -987,6 +1076,10 @@ final class TourController: ObservableObject {
             store.onSkipStep = { [weak self] in self?.handleSkipStepOrDeniedContinue() }
             store.onFallback = { [weak self] in self?.handleFallback() }
             store.onBeatHover = { [weak self] id, inside in self?.beatHovered(id, inside: inside) }
+            store.onGlyphReplay = { [weak self] in
+                self?.guidance.motion.replayGlyph()
+                self?.guidance.kick()
+            }
             let window = TourCardWindow(store: store)
             window.isDriven = true
             window.onContentSizeChanged = { [weak self] in self?.relayoutFromStore() }
@@ -1001,15 +1094,19 @@ final class TourController: ObservableObject {
         }
         if haloWindow == nil {
             let window = TourHaloWindow()
-            window.contentView = TourHostingView(rootView: TourGuidanceOverlayView(store: guidance.store))
+            window.contentView = TourHostingView(rootView: TourGuidanceOverlayView(store: guidance.store.overlayStore))
             haloWindow = window
         }
-        if let panel, let screen = panel.screen ?? NSScreen.main, let overlay = haloWindow {
-            if overlay.frame != screen.frame { overlay.setFrame(screen.frame, display: false) }
+        if let panel {
+            // The overlay is sized to what it draws and stays parked until it draws something (TourGuidance);
+            // it may grow anywhere on the panel's screen.
+            guidance.screenFrame = { [weak panel] in (panel?.screen ?? NSScreen.main)?.frame ?? .zero }
             guidance.store.panelFrame = panel.frame
-            if !overlay.isVisible { overlay.orderFront(nil) }
+            TourFrameDriver.shared.screenProvider = { [weak panel] in panel?.screen ?? NSScreen.main }
         }
         guidance.attach(card: cardWindow, overlay: haloWindow)
+        feedback.prewarmOverlay()
+        installScrollTrace()
     }
 
     // MARK: - Ring, hints (prototype C.4)
@@ -1141,6 +1238,9 @@ final class TourController: ObservableObject {
     }
 
     private func panelMovementBegan() {
+        #if DEBUG
+        TourPerfProbe.mark("panel movement began")
+        #endif
         guard cardWindow != nil, guidance.motion.cardVisible, !cardYielded, !feedback.isActive, !skipping else { return }
         if isSliverAnchored(state.phase) { return }
         switch state.phase {
@@ -1164,6 +1264,9 @@ final class TourController: ObservableObject {
             self.resumeWork = nil
             guard self.cardYielded else { return }
             self.cardYielded = false
+            #if DEBUG
+            TourPerfProbe.mark("resume after yield")
+            #endif
             self.presentCurrentCard()
             self.refreshGuidance()
         }
@@ -1183,7 +1286,7 @@ final class TourController: ObservableObject {
         let nextState: TourState
         switch state.phase {
         case .transitioning(_, _):
-            (nextState, _) = TourMachine.reduce(state, .advanceTransition, snapshot: makeSnapshot())
+            (nextState, _) = TourMachine.reduce(state, .advanceTransition, snapshot: makeSnapshot(for: .advanceTransition))
         case .finale:
             nextState = state
         default:
@@ -1279,7 +1382,7 @@ final class TourController: ObservableObject {
 
     private func connectMusic() {
         OnboardingState.shared.requestAutomationAccess()
-        if OnboardingState.shared.automationStatus == .authorized {
+        if automationStatusProvider() == .authorized {
             send(.signal(.automationAuthorized))
         } else {
             connectDenied = true

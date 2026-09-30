@@ -7,6 +7,7 @@
  */
 
 import Foundation
+import QuartzCore
 
 #if DEBUG
 enum TourPerfProbe {
@@ -43,6 +44,22 @@ enum TourPerfProbe {
 
     static func tick(_ source: String, interval: Double, apply: Double) {
         tickSink?(source, interval, apply)
+    }
+
+    private static var markStorage: [(t: Double, name: String)] = []
+
+    /// A named instant (window shown / hidden, a card measured…): the tests line these up with the slow turns.
+    static func mark(_ name: String) {
+        lock.lock(); markStorage.append((CACurrentMediaTime(), name)); lock.unlock()
+    }
+
+    static var marks: [(t: Double, name: String)] {
+        lock.lock(); defer { lock.unlock() }
+        return markStorage
+    }
+
+    static func resetMarks() {
+        lock.lock(); markStorage = []; lock.unlock()
     }
 }
 #endif

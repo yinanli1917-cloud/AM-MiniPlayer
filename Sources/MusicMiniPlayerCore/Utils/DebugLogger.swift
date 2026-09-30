@@ -39,6 +39,9 @@ public enum DebugLogger {
 
     // ── 公共接口 ──
 
+    /// True while the opt-in diagnostic log is on (lets a caller skip building expensive context, e.g. a window hit test).
+    public static var isLoggingEnabled: Bool { isEnabled() }
+
     /// 写入调试日志（Release 模式下为空操作）
     @inline(__always)
     public static func log(_ message: @autoclosure () -> String, file: String = #file, line: Int = #line) {

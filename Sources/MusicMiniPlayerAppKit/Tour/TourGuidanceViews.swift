@@ -1,14 +1,17 @@
 /**
- * [INPUT]: SwiftUI (Canvas); TourGuidanceMotion's TourGuidanceFrame /
- *          TourRingGeometry; TourCardStyle's palette.
- * [OUTPUT]: Exports TourGuidanceStore (what both the card and the overlay
- *           observe), TourGuidanceDrawing (pure drawing of one frame),
- *           TourGuidanceOverlayView (the overlay window's root).
+ * [INPUT]: SwiftUI (Canvas); TourGuidanceMotion's TourCardVisual /
+ *          TourOverlayVisual / TourRingGeometry; TourCardStyle's palette.
+ * [OUTPUT]: Exports TourGuidanceStore and its three observable objects (TourCardVisualStore, TourGlyphClock,
+ *           TourOverlayStore — separate, so a frame that changes only the ring redraws only the ring, one that
+ *           changes only the demo's clock re-renders only the demo, one that only moves the card redraws nothing),
+ *           TourOverlayRegion (the smallest screen rect the overlay needs), TourGuidanceDrawing (pure drawing
+ *           of one frame), TourGuidanceOverlayView (the overlay window's root).
  * [POS]: MusicMiniPlayerAppKit/Tour. Draws the highlight ring, the ghost
  *        cursor and the panel-edge glow (prototype C.4) in ONE click-through
- *        overlay window that spans the panel's screen, so nothing about the
- *        ring ever resizes or moves a window per frame: the ring is a Canvas
- *        drawing in screen-derived coordinates.
+ *        overlay window. The window is only as big as what is drawn in it (it used to span the
+ *        whole 2560x1440 screen: a 59 MB transparent backing store re-rendered every frame) and
+ *        is parked while nothing is drawn; inside it the ring is a Canvas drawing in
+ *        screen-derived coordinates, so the ring itself never moves a window.
  */
 
 import SwiftUI
@@ -19,15 +22,102 @@ import MusicMiniPlayerCore
 // MARK: - Store
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+/// What the card's SwiftUI content draws (height, beak, scale, block fades, the demo band). Its OWN observable object:
+/// SwiftUI re-evaluates a view whenever ANY `@Published` of an observed object changes, so a card that observed the ring's
+/// breathing (or the panel's frame, which changes on every scroll event of a drag) was rebuilt for nothing.
 @MainActor
-final class TourGuidanceStore: ObservableObject {
-    @Published var frame: TourGuidanceFrame = .idle
-    /// The overlay window's frame and the panel's frame, screen space (y up).
-    @Published var overlayFrame: CGRect = .zero
-    @Published var panelFrame: CGRect = .zero
+final class TourCardVisualStore: ObservableObject {
+    @Published var visual: TourCardVisual = .hidden
     /// The card is driven by the guidance motion (springs) rather than by
     /// static placement: tests that render a bare card leave this false.
     @Published var driven = false
+}
+
+/// The trackpad demo's clock (seconds into its cycle, nil = at rest) — its own observable object too, so the ~7 s the demo
+/// plays re-render the demo alone, not the card around it (title, body, beats, buttons).
+@MainActor
+final class TourGlyphClock: ObservableObject {
+    @Published var elapsed: Double?
+}
+
+/// What the overlay window draws (ring, ghost cursor, panel glow) and where: its frame and the panel's frame, screen space (y up).
+@MainActor
+final class TourOverlayStore: ObservableObject {
+    @Published var visual: TourOverlayVisual = .hidden
+    @Published var frame: CGRect = .zero
+    @Published var panelFrame: CGRect = .zero
+}
+
+/// The three observable pieces of the guidance, and the plain accessors the shell and the controller write through.
+@MainActor
+final class TourGuidanceStore {
+    let cardStore = TourCardVisualStore()
+    let glyphClock = TourGlyphClock()
+    let overlayStore = TourOverlayStore()
+
+    var card: TourCardVisual {
+        get { cardStore.visual }
+        set { cardStore.visual = newValue }
+    }
+    var overlay: TourOverlayVisual {
+        get { overlayStore.visual }
+        set { overlayStore.visual = newValue }
+    }
+    var overlayFrame: CGRect {
+        get { overlayStore.frame }
+        set { overlayStore.frame = newValue }
+    }
+    var panelFrame: CGRect {
+        get { overlayStore.panelFrame }
+        set { overlayStore.panelFrame = newValue }
+    }
+    var driven: Bool {
+        get { cardStore.driven }
+        set { cardStore.driven = newValue }
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Overlay region
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// The screen rect (AppKit, y up) the overlay window has to cover for one frame: the panel-edge glow's halo,
+/// the ring with its pulse, sonar ripples and soft glow, the ghost cursor with its ripple. nil = nothing is drawn.
+enum TourOverlayRegion {
+    /// Room past a shape for the blurred glows (a 12+12g pt CSS glow reaches ~3 sigma out).
+    static let glowMargin: CGFloat = 56
+    /// The ring's largest scale: appear pulse 1.14 x breath 1.035 x sonar 1.35.
+    static let maxRingScale: CGFloat = 1.14 * 1.035 * 1.35
+    static let ghostReach: CGFloat = 64
+
+    static func needed(for f: TourOverlayVisual, panel: CGRect) -> CGRect? {
+        var region: CGRect?
+        func add(_ r: CGRect) { region = region.map { $0.union(r) } ?? r }
+        if f.panelGlow > 0.003, !panel.isEmpty {
+            let reach = 6 + 22 * CGFloat(f.panelGlow) + glowMargin
+            add(panel.insetBy(dx: -reach, dy: -reach))
+        }
+        if f.ringVisible, f.ringOpacity > 0.003 {
+            let grow = (CGFloat(max(f.ring.w, f.ring.h)) * (maxRingScale - 1)) / 2 + glowMargin
+            add(f.ring.rect.insetBy(dx: -grow, dy: -grow))
+        }
+        if f.ghostVisible, f.ghostOpacity > 0.003 {
+            add(CGRect(x: f.ghost.x - ghostReach, y: f.ghost.y - ghostReach, width: ghostReach * 2, height: ghostReach * 2))
+        }
+        return region
+    }
+
+    /// The window frame to use given the one it has: keep it while it still contains `needed` and is not
+    /// wastefully large (resizing a window is the expensive part, not drawing in it); otherwise grow to cover
+    /// `needed` plus the panel's neighbourhood (rings hop between controls inside it), clamped to the screen.
+    static func windowFrame(current: CGRect, needed: CGRect, panel: CGRect, screen: CGRect) -> CGRect {
+        let wanted = needed.intersection(screen)
+        if current.contains(wanted), current.width * current.height <= 4 * max(wanted.width * wanted.height, 160_000) { return current }
+        var target = needed
+        let neighbourhood = panel.insetBy(dx: -120, dy: -120)
+        if !panel.isEmpty, neighbourhood.intersects(needed) { target = target.union(neighbourhood) }
+        return target.intersection(screen).integral
+    }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -47,7 +137,7 @@ enum TourGuidanceDrawing {
         return Path(roundedRect: rect, cornerRadius: min(g.corner * scale, min(w, h) / 2), style: .continuous)
     }
 
-    static func draw(_ ctx: GraphicsContext, frame f: TourGuidanceFrame, overlay: CGRect, panel: CGRect, palette: TourCardPalette) {
+    static func draw(_ ctx: GraphicsContext, frame f: TourOverlayVisual, overlay: CGRect, panel: CGRect, palette: TourCardPalette) {
         if f.panelGlow > 0.003 { drawPanelGlow(ctx, g: f.panelGlow, overlay: overlay, panel: panel, palette: palette) }
         if f.ringVisible, f.ringOpacity > 0.003 { drawRing(ctx, f: f, overlay: overlay, palette: palette) }
         if f.ghostVisible, f.ghostOpacity > 0.003 { drawGhost(ctx, f: f, overlay: overlay, palette: palette) }
@@ -71,7 +161,7 @@ enum TourGuidanceDrawing {
 
     /// `1.5px accent border; 0 0 0 (3+4g)px ring-track, 0 0 (12+12g)px accent(.32+.22g)`,
     /// dashed while it is only a hint, plus the sonar ripples.
-    static func drawRing(_ ctx: GraphicsContext, f: TourGuidanceFrame, overlay: CGRect, palette: TourCardPalette) {
+    static func drawRing(_ ctx: GraphicsContext, f: TourOverlayVisual, overlay: CGRect, palette: TourCardPalette) {
         let g = f.breath
         let scale = f.ringScale * f.ringPulse * (1 + 0.035 * g)
         var layer = ctx
@@ -107,7 +197,7 @@ enum TourGuidanceDrawing {
 
     /// The prototype's arrow (`M2 1.5v17l4.4-4 3 7 3.2-1.4-3-6.8H16z`) with the
     /// hotspot at (2, 1.5), a drop shadow, and the "parked here" ripple.
-    static func drawGhost(_ ctx: GraphicsContext, f: TourGuidanceFrame, overlay: CGRect, palette: TourCardPalette) {
+    static func drawGhost(_ ctx: GraphicsContext, f: TourOverlayVisual, overlay: CGRect, palette: TourCardPalette) {
         let tip = local(f.ghost, in: overlay)
         var g = ctx
         g.opacity = f.ghostOpacity
@@ -140,13 +230,13 @@ enum TourGuidanceDrawing {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 struct TourGuidanceOverlayView: View {
-    @ObservedObject var store: TourGuidanceStore
+    @ObservedObject var store: TourOverlayStore
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let palette = TourCardPalette.resolve(dark: colorScheme == .dark)
-        let f = store.frame
-        let overlay = store.overlayFrame
+        let f = store.visual
+        let overlay = store.frame
         let panel = store.panelFrame
         return Canvas { ctx, _ in
             #if DEBUG

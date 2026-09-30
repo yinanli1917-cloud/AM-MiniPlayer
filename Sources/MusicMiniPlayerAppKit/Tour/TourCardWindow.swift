@@ -33,6 +33,9 @@ extension NSWindow.Level {
 final class TourCardWindow: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+    /// The controller places this window exactly (LiquidEdgeStageWindow's precedent): AppKit must not nudge it back
+    /// under the menu bar, or every frame would find it "not where it was put" and put it again.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 
     /// The size/position the window is heading for (the controller's frame,
     /// possibly mid-animation). `refitToContent` compares against THIS, never
@@ -104,6 +107,7 @@ final class TourCardWindow: NSPanel {
 final class TourHaloWindow: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 
     init() {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -124,6 +128,7 @@ final class TourHaloWindow: NSPanel {
 final class TourCelebrationWindow: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 
     init() {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
