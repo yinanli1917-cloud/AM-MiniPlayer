@@ -276,6 +276,14 @@ public enum TourMachine {
                 return (state, effects)
             }
 
+            // The panel is already on the lyrics page: nothing to open.
+            if s == .lyrics, snapshot.onLyricsPage {
+                state.stepStates[.lyrics] = .completed
+                effects.append(.growRing(to: state.completedCount))
+                cursor = TourMachine.next(after: s)
+                continue
+            }
+
             let initialBeats = state.pendingBeats[s] ?? Array(repeating: false, count: s.beatCount)
             if !initialBeats.isEmpty, initialBeats.allSatisfy({ $0 }) {
                 state.stepStates[s] = .completed

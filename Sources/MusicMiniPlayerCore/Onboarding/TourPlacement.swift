@@ -47,7 +47,9 @@ public enum TourPlacement {
     /// §4.3: card sits 20pt outside the tucked sliver's floating hit region.
     public static let sliverGap: CGFloat = 20
     /// §4.3: vertical clamp margin off the visible frame's top/bottom.
-    public static let edgeInset: CGFloat = 8
+    /// Also the panel's own 16pt corner margin: a tall card (the move step's) must not
+    /// touch the menu bar (8pt did — founder 2026-09-29).
+    public static let edgeInset: CGFloat = 16
     /// §4.3: beak never sits within 18pt of the card's own top/bottom corner.
     public static let beakCornerClamp: CGFloat = 18
 

@@ -301,6 +301,10 @@ final class TourFeedbackChoreographer {
     /// Called at the frame the old content has faded out and the controller
     /// must swap the card. nil = swap immediately (comparison harness).
     var onSwapDue: (() -> Void)?
+    /// Fires at the start of the handoff (spec C.3 "H"): the old content is about
+    /// to fade, the ring and the card should start their own transition. Called
+    /// once per handoff, before the content starts fading.
+    var onHandoffStart: (() -> Void)?
     /// A controller owns the card swap (it will call `cardDidSwap()` itself, its own
     /// timer being the fallback). false = the comparison harness, which swaps at once.
     var ownsSwap = false
@@ -607,6 +611,7 @@ final class TourFeedbackChoreographer {
 
     private func handoff(fin: Bool, ff: Bool) {
         enter(.handoff)
+        onHandoffStart?()
         // Fast-forwarded while a controller owns the swap: its own timer
         // delivers the swap and the old content stays visible until then.
         // Without an owner (comparison harness) the prototype's behavior

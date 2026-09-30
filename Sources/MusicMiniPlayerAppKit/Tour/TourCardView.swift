@@ -32,32 +32,48 @@ final class TourCardStore: ObservableObject {
     /// SwiftUI cross-fades the content instead of morphing it.
     @Published var contentKey = 0
     @Published var arm: TourCardMaterialArm
+    /// The step has sat unfinished for a while: "skip this one" turns accent-ink.
+    @Published var stalled = false
 
     let feedback: TourCompletionFeedback
+    /// The card's motion (position, height, beak, scale, block fades) —
+    /// written per frame by `TourGuidance`.
+    let guidance: TourGuidanceStore
 
     var onPrimary: (() -> Void)?
     var onSecondary: (() -> Void)?
     var onStop: (() -> Void)?
     var onSkipStep: (() -> Void)?
     var onFallback: (() -> Void)?
+    /// A beat row was hovered (`id`, `inside`): the ring peeks at its control.
+    var onBeatHover: ((Int, Bool) -> Void)?
 
-    init(model: TourCardModel, feedback: TourCompletionFeedback, arm: TourCardMaterialArm = .current()) {
+    init(model: TourCardModel, feedback: TourCompletionFeedback, arm: TourCardMaterialArm = .current(), guidance: TourGuidanceStore? = nil) {
         self.model = model
         self.feedback = feedback
         self.arm = arm
+        self.guidance = guidance ?? TourGuidanceStore()
     }
 }
 
 struct TourCardRoot: View {
     @ObservedObject var store: TourCardStore
+    @ObservedObject var guidance: TourGuidanceStore
+
+    init(store: TourCardStore) {
+        self.store = store
+        self.guidance = store.guidance
+    }
 
     var body: some View {
         TourCardView(
             model: store.model, beakSide: store.beakSide, beakOffset: store.beakOffset,
             gestureKind: store.gestureKind, arm: store.arm, feedback: store.feedback,
             contentKey: store.contentKey,
+            guide: guidance.driven && guidance.frame.cardVisible ? guidance.frame : nil,
+            stalled: store.stalled,
             onPrimary: store.onPrimary, onSecondary: store.onSecondary, onStop: store.onStop,
-            onSkipStep: store.onSkipStep, onFallback: store.onFallback
+            onSkipStep: store.onSkipStep, onFallback: store.onFallback, onBeatHover: store.onBeatHover
         )
     }
 }
@@ -76,17 +92,26 @@ struct TourCardView: View {
     var arm: TourCardMaterialArm = .glass
     var feedback: TourCompletionFeedback
     var contentKey = 0
+    /// Non-nil = the card is driven by `TourGuidanceMotion` (height, beak, scale
+    /// and block fades come from the frame); nil = a static card (tests, renders).
+    var guide: TourGuidanceFrame?
+    var stalled = false
     var onPrimary: (() -> Void)?
     var onSecondary: (() -> Void)?
     var onStop: (() -> Void)?
     var onSkipStep: (() -> Void)?
     var onFallback: (() -> Void)?
+    var onBeatHover: ((Int, Bool) -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
     private var palette: TourCardPalette { .resolve(dark: colorScheme == .dark) }
-    private var shape: TourBubbleShape { TourBubbleShape(beakSide: beakSide, beakOffset: beakOffset) }
+    private var effectiveSide: TourCardSide { guide?.cardBeakSide ?? beakSide }
+    private var effectiveOffset: CGFloat { guide.map { CGFloat($0.cardBeakOffset) } ?? beakOffset }
+    private var shape: TourBubbleShape {
+        TourBubbleShape(beakSide: effectiveSide, beakOffset: effectiveOffset, beakScale: guide.map { CGFloat($0.beakScale) } ?? 1)
+    }
 
     /// Window width = body + beak on the beak's side.
     static func windowWidth(beakSide: TourCardSide) -> CGFloat {
@@ -120,18 +145,32 @@ struct TourCardView: View {
     }
 
     var body: some View {
-        content
+        let side = effectiveSide
+        let laidOut = content
             .frame(width: M.bodyWidth, alignment: .leading)
-            .padding(.top, beakSide == .top ? M.beakSize : 0)
-            .padding(.bottom, beakSide == .bottom ? M.beakSize : 0)
-            .padding(.leading, beakSide == .left ? M.beakSize : 0)
-            .padding(.trailing, beakSide == .right ? M.beakSize : 0)
+            .padding(.top, side == .top ? M.beakSize : 0)
+            .padding(.bottom, side == .bottom ? M.beakSize : 0)
+            .padding(.leading, side == .left ? M.beakSize : 0)
+            .padding(.trailing, side == .right ? M.beakSize : 0)
             .fixedSize(horizontal: false, vertical: true)
+        return heightDriven(laidOut)
             .tourCardMaterial(arm, shape: shape, dark: colorScheme == .dark)
             .overlay(shape.stroke(palette.hairline, lineWidth: 0.5))
+            .modifier(TourCardScale(guide: guide))
             // The card window is never key. Controls and materials that dim
             // themselves in inactive windows must still read as active here.
             .environment(\.controlActiveState, .key)
+    }
+
+    /// While the height springs, the bubble is exactly the animated height and
+    /// the content (natural size, top-aligned) is clipped to it.
+    @ViewBuilder
+    private func heightDriven<V: View>(_ view: V) -> some View {
+        if let guide, guide.cardHeight > 1 {
+            view.frame(height: CGFloat(guide.cardHeight), alignment: .top).clipped()
+        } else {
+            view
+        }
     }
 
     // MARK: Content
@@ -150,26 +189,26 @@ struct TourCardView: View {
                     .lineSpacing(M.bodyLineSpacing)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, M.bodyTop)
-                    .tourFeedbackBlock(1, feedback)
+                    .tourFeedbackBlock(1, feedback, guide: guide)
             }
-            if let chip = model.chip { chipView(chip).tourFeedbackBlock(1, feedback) }
-            if !model.beats.isEmpty { beatsView.tourFeedbackBlock(2, feedback) }
+            if let chip = model.chip { chipView(chip).tourFeedbackBlock(1, feedback, guide: guide) }
+            if !model.beats.isEmpty { beatsView.tourFeedbackBlock(2, feedback, guide: guide) }
             if let gestureKind {
                 TourGestureGlyph(kind: gestureKind, reduceMotion: reduceMotion)
                     .frame(maxWidth: .infinity)
                     .padding(.top, M.gestureTop)
-                    .tourFeedbackBlock(2, feedback)
+                    .tourFeedbackBlock(2, feedback, guide: guide)
             }
-            if isMoveStep, let note = model.footNote { noteView(note).tourFeedbackBlock(2, feedback) }
+            if isMoveStep, let note = model.footNote { noteView(note).tourFeedbackBlock(2, feedback, guide: guide) }
             if let confirm = model.confirm {
                 Text(confirm)
                     .font(.system(size: M.confirmSize, weight: .semibold))
                     .foregroundStyle(palette.ink)
                     .padding(.top, M.confirmTop)
-                    .tourFeedbackBlock(2, feedback)
+                    .tourFeedbackBlock(2, feedback, guide: guide)
             }
-            footer.tourFeedbackBlock(2, feedback)
-            if !isMoveStep, let note = model.footNote, hasFooter { noteView(note).tourFeedbackBlock(2, feedback) }
+            footer.tourFeedbackBlock(2, feedback, guide: guide)
+            if !isMoveStep, let note = model.footNote, hasFooter { noteView(note).tourFeedbackBlock(2, feedback, guide: guide) }
         }
         .padding(.top, M.paddingTop)
         .padding(.horizontal, M.paddingSide)
@@ -189,7 +228,7 @@ struct TourCardView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, M.titleTopInset)
-                .tourFeedbackBlock(0, feedback)
+                .tourFeedbackBlock(0, feedback, guide: guide)
             TourFeedbackRing(
                 completed: model.ringCompleted, closed: model.ringClosed,
                 stepLabel: model.stepLabel, palette: palette, feedback: feedback
@@ -211,7 +250,7 @@ struct TourCardView: View {
     private var beatsView: some View {
         VStack(alignment: .leading, spacing: M.beatGap) {
             ForEach(model.beats) { beat in
-                TourFeedbackBeatRow(beat: beat, palette: palette, size: M.beatSize, feedback: feedback)
+                TourFeedbackBeatRow(beat: beat, palette: palette, size: M.beatSize, feedback: feedback, onHover: onBeatHover)
             }
         }
         .padding(.top, M.beatsTop)
@@ -267,11 +306,30 @@ struct TourCardView: View {
         } else if model.showFallbackButton, let title = model.secondaryTitle, let onFallback {
             Button(title, action: onFallback).buttonStyle(TourSecondaryButtonStyle(palette: palette))
         } else if model.showSkipStep, let onSkipStep {
-            link(L10n.localized("tour.skipStep"), onSkipStep)
+            link(L10n.localized("tour.skipStep"), onSkipStep, emphasized: stalled)
         }
     }
 
-    private func link(_ title: String, _ action: @escaping () -> Void) -> some View {
-        Button(title, action: action).buttonStyle(TourLinkStyle(palette: palette))
+    private func link(_ title: String, _ action: @escaping () -> Void, emphasized: Bool = false) -> some View {
+        Button(title, action: action).buttonStyle(TourLinkStyle(palette: palette, emphasized: emphasized))
+    }
+}
+
+/// Scales the whole bubble about its beak tip (C.2: the card grows from the
+/// tip that points at the anchor, and shrinks back toward it).
+private struct TourCardScale: ViewModifier {
+    var guide: TourGuidanceFrame?
+
+    func body(content: Content) -> some View {
+        guard let guide, abs(guide.cardScale - 1) > 0.0005 else { return AnyView(content) }
+        let h = max(guide.cardHeight, 1)
+        let anchor: UnitPoint
+        switch guide.cardBeakSide {
+        case .right: anchor = UnitPoint(x: 1, y: guide.cardBeakOffset / h)
+        case .left: anchor = UnitPoint(x: 0, y: guide.cardBeakOffset / h)
+        case .top: anchor = UnitPoint(x: 0.5, y: 0)
+        case .bottom: anchor = UnitPoint(x: 0.5, y: 1)
+        }
+        return AnyView(content.scaleEffect(CGFloat(guide.cardScale), anchor: anchor))
     }
 }

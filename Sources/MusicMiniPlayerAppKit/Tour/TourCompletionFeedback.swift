@@ -34,10 +34,11 @@ import MusicMiniPlayerCore
 /// One callback per display refresh (display link, macOS 14+); a 60 Hz timer
 /// when there is no screen (headless).
 @MainActor
-private final class TourFeedbackTicker: NSObject {
+final class TourFeedbackTicker: NSObject {
     private var link: CADisplayLink?
     private var timer: Timer?
     var onTick: (() -> Void)?
+    var isRunning: Bool { link != nil || timer != nil }
 
     func start() {
         guard link == nil, timer == nil else { return }
@@ -76,6 +77,11 @@ final class TourCompletionFeedback: ObservableObject {
     /// The finale card bounce: the controller moves the real window by this many
     /// points (negative = up) — the window moves, so nothing clips at its edge.
     var applyCardOffset: ((CGFloat) -> Void)?
+    /// Spec C.3 "H": the handoff to the next card starts (see the choreographer).
+    var onHandoffStart: (() -> Void)? {
+        get { choreographer.onHandoffStart }
+        set { choreographer.onHandoffStart = newValue }
+    }
 
     let choreographer: TourFeedbackChoreographer
     private let clock: () -> TimeInterval

@@ -78,6 +78,8 @@ struct TourCardPalette: Equatable {
     var accentInk: Color
     var ringTrack: Color
     var hairline: Color
+    /// Beat-row hover wash: accent 12 % (dark 18 %), prototype C.5.2.
+    var rowHover: Color
 
     static func resolve(dark: Bool) -> TourCardPalette {
         dark ? .dark : .light
@@ -89,7 +91,7 @@ struct TourCardPalette: Equatable {
         track: Color.black.opacity(0.10),
         buttonFill: Color(hex: 0x1A1A1F), buttonInk: .white,
         accent: Color(hex: 0xFA4058), accentInk: Color(hex: 0xD42640), ringTrack: Color(hex: 0xFA4058).opacity(0.22),
-        hairline: Color.black.opacity(0.08)
+        hairline: Color.black.opacity(0.08), rowHover: Color(hex: 0xFA4058).opacity(0.12)
     )
 
     /// `#FB546C` on dark (§4.7).
@@ -98,7 +100,7 @@ struct TourCardPalette: Equatable {
         track: Color.white.opacity(0.14),
         buttonFill: Color(hex: 0xF3F2F6), buttonInk: Color(hex: 0x1A1A1F),
         accent: Color(hex: 0xFB546C), accentInk: Color(hex: 0xFF8497), ringTrack: Color(hex: 0xFB546C).opacity(0.28),
-        hairline: Color.white.opacity(0.10)
+        hairline: Color.white.opacity(0.10), rowHover: Color(hex: 0xFB546C).opacity(0.18)
     )
 }
 
@@ -145,41 +147,105 @@ enum TourContrast {
 // MARK: - Button styles (window-state independent)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// `.card .link`: 12pt, secondary ink, no chrome. Pressed = ink.
+/// Prototype C.5.1's press feel, shared by the three styles: hover eases the
+/// scale to 1.03, press drops it to 0.96 in 0.07 s, release springs back with
+/// a small overshoot (Spring(duration: 0.26, bounce: 0.4)). Reduce Motion: no
+/// scaling at all (hover only changes colour, press dims to 0.75).
+enum TourPressFeel {
+    static func scale(hovering: Bool, pressed: Bool, reduceMotion: Bool) -> CGFloat {
+        if reduceMotion { return 1 }
+        if pressed { return 0.96 }
+        return hovering ? 1.03 : 1
+    }
+
+    static func animation(pressed: Bool, reduceMotion: Bool) -> Animation? {
+        if reduceMotion { return nil }
+        return pressed ? .easeOut(duration: 0.07) : .spring(duration: 0.26, bounce: 0.4)
+    }
+}
+
+/// Tracks hover for a `ButtonStyle` (a style has no state of its own).
+private struct TourHoverBody<Content: View>: View {
+    var configuration: ButtonStyleConfiguration
+    @ViewBuilder var content: (_ hovering: Bool, _ pressed: Bool) -> Content
+    @State private var hovering = false
+
+    var body: some View {
+        content(hovering, configuration.isPressed)
+            .onHover { hovering = $0 }
+    }
+}
+
+/// `.card .link`: 12pt, secondary ink, no chrome. Hover: ink + the underline
+/// draws from the left in 0.18 s; pressed 0.55 opacity. `emphasized` (the step
+/// has sat unfinished for 6 s) tints it with the accent ink, no motion.
 struct TourLinkStyle: ButtonStyle {
     var palette: TourCardPalette
+    var emphasized = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: TourCardMetrics.linkSize))
-            .foregroundStyle(configuration.isPressed ? palette.ink : palette.muted)
-            .contentShape(Rectangle())
+        TourHoverBody(configuration: configuration) { hovering, pressed in
+            let base: Color = emphasized ? palette.accentInk : palette.muted
+            configuration.label
+                .font(.system(size: TourCardMetrics.linkSize))
+                .foregroundStyle(hovering || pressed ? (emphasized ? palette.accentInk : palette.ink) : base)
+                .overlay(alignment: .bottomLeading) {
+                    Rectangle()
+                        .frame(height: 1)
+                        .scaleEffect(x: hovering ? 1 : 0, anchor: .leading)
+                        .offset(y: 1)
+                        .foregroundStyle(emphasized ? palette.accentInk : palette.ink)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: hovering)
+                }
+                .opacity(pressed ? (reduceMotion ? 0.75 : 0.55) : 1)
+                .animation(.easeOut(duration: 0.14), value: hovering)
+                .contentShape(Rectangle())
+        }
     }
 }
 
-/// `.card .mbtn`: solid capsule, 12pt semibold, inverse ink.
+/// `.card .cbtn.pri`: solid ACCENT capsule, white 12pt semibold. (It was the ink
+/// colour — a black button on the finale card, 2026-09-29.) Hover: brightness
+/// +7 %, scale 1.03; press: brightness -7 %, scale 0.96.
 struct TourPrimaryButtonStyle: ButtonStyle {
     var palette: TourCardPalette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: TourCardMetrics.buttonSize, weight: .semibold))
-            .foregroundStyle(palette.buttonInk)
-            .padding(.horizontal, TourCardMetrics.buttonPaddingH)
-            .padding(.vertical, TourCardMetrics.buttonPaddingV)
-            .background(Capsule().fill(palette.buttonFill))
-            .opacity(configuration.isPressed ? 0.82 : 1)
+        TourHoverBody(configuration: configuration) { hovering, pressed in
+            configuration.label
+                .font(.system(size: TourCardMetrics.buttonSize, weight: .semibold))
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, TourCardMetrics.buttonPaddingH)
+                .padding(.vertical, TourCardMetrics.buttonPaddingV)
+                .background(Capsule().fill(palette.accent))
+                .brightness(pressed ? -0.07 : (hovering ? 0.07 : 0))
+                .opacity(pressed && reduceMotion ? 0.75 : 1)
+                .scaleEffect(TourPressFeel.scale(hovering: hovering, pressed: pressed, reduceMotion: reduceMotion))
+                .animation(TourPressFeel.animation(pressed: pressed, reduceMotion: reduceMotion), value: pressed)
+                .animation(reduceMotion ? nil : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.14), value: hovering)
+        }
     }
 }
 
-/// `.card .mbtn.sec`: 10-14% contrast fill, ink text.
+/// `.card .mbtn.sec`: 10-14% contrast fill (16 -> 26 % on hover, 36 % pressed), ink text.
 struct TourSecondaryButtonStyle: ButtonStyle {
     var palette: TourCardPalette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: TourCardMetrics.buttonSize, weight: .semibold))
-            .foregroundStyle(palette.ink)
-            .padding(.horizontal, TourCardMetrics.buttonPaddingH)
-            .padding(.vertical, TourCardMetrics.buttonPaddingV)
-            .background(Capsule().fill(palette.track))
-            .opacity(configuration.isPressed ? 0.7 : 1)
+        TourHoverBody(configuration: configuration) { hovering, pressed in
+            configuration.label
+                .font(.system(size: TourCardMetrics.buttonSize, weight: .semibold))
+                .foregroundStyle(palette.ink)
+                .padding(.horizontal, TourCardMetrics.buttonPaddingH)
+                .padding(.vertical, TourCardMetrics.buttonPaddingV)
+                .background(Capsule().fill(palette.ink.opacity(pressed ? 0.36 : (hovering ? 0.26 : 0.16))))
+                .opacity(pressed && reduceMotion ? 0.75 : 1)
+                .scaleEffect(TourPressFeel.scale(hovering: hovering, pressed: pressed, reduceMotion: reduceMotion))
+                .animation(TourPressFeel.animation(pressed: pressed, reduceMotion: reduceMotion), value: pressed)
+                .animation(reduceMotion ? nil : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.14), value: hovering)
+        }
     }
 }

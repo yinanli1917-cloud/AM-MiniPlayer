@@ -1,0 +1,141 @@
+/**
+ * [INPUT]: MusicMiniPlayerCore's TourGuidanceResolver / TourSurface / TourPhase / TourMachine.
+ * [OUTPUT]: TourGuidanceResolverTests — every step / beat / page / controls-visible
+ *           combination the ring can be in, table-tested.
+ * [POS]: Tests. Pins the ring's target rules (founder walk 2026-09-29, items 5, 6, 7,
+ *        8, 10): next UNFINISHED beat's control, hint vs press-now, sliver then peek card,
+ *        the move step's "back to the cover" ring, and the machine's quiet lyrics step.
+ */
+
+import XCTest
+@testable import MusicMiniPlayerCore
+
+final class TourGuidanceResolverTests: XCTestCase {
+    private func surface(_ page: PlayerPage = .album, visible: Bool = true, edge: LiquidEdgeState = .card) -> TourSurface {
+        TourSurface(page: page, controlsVisible: visible, edge: edge)
+    }
+
+    // MARK: - reveal
+
+    func test_reveal_ringIsOnPlay_dashedUntilTheControlsAreOut() {
+        let phase = TourPhase.step(.reveal, beats: [false, false])
+        let hidden = TourGuidanceResolver.target(phase: phase, surface: surface(visible: false))
+        XCTAssertEqual(hidden?.subject, .control(.playPause))
+        XCTAssertEqual(hidden?.mode, .hint, "controls hidden: dashed hint")
+        XCTAssertEqual(TourGuidanceResolver.target(phase: phase, surface: surface(visible: true))?.mode, .pressNow)
+        XCTAssertEqual(hidden?.size, CGSize(width: 40, height: 40))
+    }
+
+    func test_reveal_sameOnEveryPage() {
+        for page in [PlayerPage.album, .lyrics, .playlist] {
+            let t = TourGuidanceResolver.target(phase: .step(.reveal, beats: [true, false]), surface: surface(page))
+            XCTAssertEqual(t?.subject, .control(.playPause), "\(page)")
+        }
+    }
+
+    // MARK: - corners (item 5)
+
+    func test_corners_ringFollowsTheNextUnfinishedBeat() {
+        func subject(_ beats: [Bool]) -> TourRingSubject? {
+            TourGuidanceResolver.target(phase: .step(.corners, beats: beats), surface: surface())?.subject
+        }
+        XCTAssertEqual(subject([false, false]), .control(.audioOutput))
+        XCTAssertEqual(subject([true, false]), .control(.musicButton), "output done: the ring must JUMP to Music, not vanish")
+        XCTAssertEqual(subject([false, true]), .control(.audioOutput), "Music first: the ring goes back to the output button")
+        XCTAssertNil(subject([true, true]))
+    }
+
+    func test_corners_musicRingIsTheCapsule() {
+        let t = TourGuidanceResolver.target(phase: .step(.corners, beats: [true, false]), surface: surface())
+        XCTAssertEqual(t?.size, CGSize(width: 82, height: 42))
+    }
+
+    // MARK: - lyrics / translate (items 6, 7)
+
+    func test_lyrics_ringIsOnTheSpeechBubble() {
+        let t = TourGuidanceResolver.target(phase: .step(.lyrics, beats: [false]), surface: surface())
+        XCTAssertEqual(t?.subject, .control(.lyricsNav))
+        XCTAssertEqual(t?.size, CGSize(width: 36, height: 36))
+    }
+
+    func test_translate_ringStaysOnTheButtonUntilTheStepCompletes() {
+        let phase = TourPhase.step(.translate, beats: [false])
+        XCTAssertEqual(TourGuidanceResolver.target(phase: phase, surface: surface(.lyrics))?.subject, .control(.translate))
+        XCTAssertEqual(TourGuidanceResolver.target(phase: phase, surface: surface(.lyrics))?.mode, .pressNow)
+        XCTAssertEqual(TourGuidanceResolver.target(phase: phase, surface: surface(.album))?.mode, .hint,
+                       "not on the lyrics page: the button is not there yet")
+        XCTAssertEqual(TourGuidanceResolver.target(phase: phase, surface: surface(.lyrics, visible: false))?.mode, .hint)
+    }
+
+    // MARK: - move (item 8)
+
+    func test_move_ringOnlyWhenTheFirstBeatIsBackToTheCoverPage() {
+        let phase = TourPhase.step(.moveTuck, beats: [false, false])
+        XCTAssertNil(TourGuidanceResolver.target(phase: phase, surface: surface(.album)))
+        XCTAssertNil(TourGuidanceResolver.target(phase: phase, surface: surface(.lyrics)), "no album-first beat: no ring")
+        let t = TourGuidanceResolver.target(phase: phase, surface: surface(.lyrics), moveNeedsAlbumFirst: true)
+        XCTAssertEqual(t?.subject, .control(.lyricsNav), "the bubble is what turns the lyrics page back into the cover")
+        XCTAssertNil(TourGuidanceResolver.target(phase: phase, surface: surface(.album), moveNeedsAlbumFirst: true),
+                     "back on the cover: the precondition is met")
+    }
+
+    func test_panelHint_moveOnTheCoverIsAGlow_notOnLyrics() {
+        let phase = TourPhase.step(.moveTuck, beats: [false, false])
+        XCTAssertEqual(TourGuidanceResolver.panelHint(phase: phase, surface: surface(.album)), .gestureInvite)
+        XCTAssertEqual(TourGuidanceResolver.panelHint(phase: phase, surface: surface(.lyrics)), .none)
+        XCTAssertEqual(TourGuidanceResolver.panelHint(phase: .step(.moveTuck, beats: [true, true]), surface: surface(.album)), .none)
+    }
+
+    // MARK: - back (item 10)
+
+    func test_back_sliverThenPeekCard() {
+        let first = TourGuidanceResolver.target(phase: .step(.back, beats: [false, false]), surface: surface(edge: .tucked))
+        XCTAssertEqual(first?.subject, .sliver)
+        XCTAssertEqual(first?.size, CGSize(width: 18, height: 72))
+        let second = TourGuidanceResolver.target(phase: .step(.back, beats: [true, false]), surface: surface(edge: .floating))
+        XCTAssertEqual(second?.subject, .peekCard, "the ring must jump from the strip to the peek card")
+        XCTAssertEqual(second?.size, CGSize(width: 132, height: 216))
+        XCTAssertEqual(second?.cornerRadius, 32)
+        XCTAssertEqual(first?.mode, .pressNow)
+    }
+
+    // MARK: - hints (C.4.2)
+
+    func test_hoverInvite_onlyWhileTheMouseIsAway() {
+        let phase = TourPhase.step(.reveal, beats: [false, false])
+        XCTAssertEqual(TourGuidanceResolver.panelHint(phase: phase, surface: surface(visible: false)), .hoverInvite)
+        XCTAssertEqual(TourGuidanceResolver.panelHint(phase: phase, surface: surface(visible: true)), .none,
+                       "the mouse is over the panel: ghost cursor and glow stop")
+        XCTAssertEqual(TourGuidanceResolver.panelHint(phase: .step(.reveal, beats: [true, false]), surface: surface(visible: false)), .none)
+    }
+
+    // MARK: - beat subjects (row hover peeks)
+
+    func test_beatSubjects() {
+        XCTAssertEqual(TourGuidanceResolver.beatSubjects(for: .corners), [.control(.audioOutput), .control(.musicButton)])
+        XCTAssertEqual(TourGuidanceResolver.beatSubjects(for: .back), [.sliver, .peekCard])
+        XCTAssertEqual(TourGuidanceResolver.beatSubjects(for: .reveal), [.control(.playPause), .control(.playPause)])
+    }
+
+    // MARK: - The machine: the lyrics step is quiet when the panel is already on the lyrics page (item 6)
+
+    func test_machine_lyricsStep_isSkippedQuietlyWhenAlreadyOnTheLyricsPage() {
+        var state = TourState()
+        state.status = .inProgress
+        state.stepStates = [.connect: .completed, .reveal: .completed, .corners: .completed]
+        let onLyrics = TourSnapshot(canTranslate: true, onLyricsPage: true)
+        let (next, effects) = TourMachine.reduce(state, .resume(completed: state.completedSteps), snapshot: onLyrics)
+        XCTAssertEqual(next.stepStates[.lyrics], .completed, "already there: the step counts")
+        XCTAssertEqual(next.phase, .step(.translate, beats: [false]), "and the tour moves on to translation")
+        XCTAssertTrue(effects.contains(.growRing(to: 4)))
+        XCTAssertFalse(effects.contains(.showStepCard(.lyrics)))
+    }
+
+    func test_machine_lyricsStep_showsItsCardOffTheLyricsPage() {
+        var state = TourState()
+        state.stepStates = [.connect: .completed, .reveal: .completed, .corners: .completed]
+        let off = TourSnapshot(canTranslate: true, onLyricsPage: false)
+        let (next, _) = TourMachine.reduce(state, .resume(completed: state.completedSteps), snapshot: off)
+        XCTAssertEqual(next.phase, .step(.lyrics, beats: [false]))
+    }
+}

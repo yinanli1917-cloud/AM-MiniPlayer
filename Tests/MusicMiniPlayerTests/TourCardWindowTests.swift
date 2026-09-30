@@ -78,7 +78,10 @@ final class TourCardWindowTests: XCTestCase {
     /// What the card's content needs at the window's width, measured on a
     /// fresh default hosting view (independent of the code under test).
     private func neededSize(_ store: TourCardStore, width: CGFloat) -> CGSize {
-        let ref = NSHostingView(rootView: TourCardRoot(store: store))
+        // A STATIC card (no guidance frame): its natural height, not the animated one.
+        let ref = NSHostingView(rootView: TourCardView(
+            model: store.model, beakSide: store.beakSide, beakOffset: store.beakOffset, gestureKind: store.gestureKind,
+            arm: store.arm, feedback: store.feedback, onPrimary: {}, onSecondary: {}, onStop: {}, onSkipStep: {}, onFallback: {}))
         ref.frame = NSRect(x: 0, y: 0, width: width, height: 1)
         return ref.fittingSize
     }
@@ -111,7 +114,7 @@ final class TourCardWindowTests: XCTestCase {
         store.gestureKind = .nudgeToCorner
         store.model = TourSceneFixtures.move(.en)
         store.contentKey += 1
-        spin(0.4)
+        spin(1.0)   // the height springs (0.4 s) to the new content
         let need = neededSize(store, width: window.frame.width)
         XCTAssertGreaterThan(need.height, before.height + 20, "sanity: the new card really is taller")
         XCTAssertGreaterThanOrEqual(window.frame.height, need.height - 0.5, "the window must be re-measured for the new content")

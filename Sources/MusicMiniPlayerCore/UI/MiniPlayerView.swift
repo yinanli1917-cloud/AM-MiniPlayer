@@ -336,7 +336,7 @@ public struct MiniPlayerView: View {
         // Onboarding tour anchors (§4.2): every `.tourAnchor(_:)` in the page
         // stack (play/pause, ↖ Music, audio output, lyrics nav, translate,
         // artwork) bubbles its screen rect up to here.
-        .onPreferenceChange(TourAnchorKey.self) { TourAnchorRegistry.shared.update($0) }
+        .tourPageHooks(controlsShown: showControls, page: musicController.currentPage, reportsFor: { $0 != .lyrics })
     }
 
     // C2 三时钟：geometry(hero) / content(文案控件) / material(整页crossfade)
@@ -569,10 +569,9 @@ extension MiniPlayerView {
                         dragPosition: $dragPosition
                     )
                     .blur(radius: controlsBlurAmount)
-                    .offset(y: controlsOffsetY)
                     // The tour points at where these controls REST, not at the
                     // spot they slide in from while the panel is not hovered.
-                    .environment(\.tourAnchorRestOffset, controlsOffsetY)
+                    .tourControlsSlide(offsetY: controlsOffsetY)
                 }
                 .opacity(showOverlayContent ? 1 : 0)
                 .allowsHitTesting(showOverlayContent)

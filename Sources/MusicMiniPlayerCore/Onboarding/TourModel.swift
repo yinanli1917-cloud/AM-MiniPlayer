@@ -84,10 +84,14 @@ public enum TourPhase: Equatable, Sendable {
 public enum TourSignal: Equatable, Sendable {
     case automationAuthorized
     case controlsRevealed
+    /// Playback was toggled (play OR pause — the reveal step's second beat
+    /// accepts either, whichever the panel offered).
     case isPlaying
     case audioOutputMenuOpened
     case musicButtonTapped
     case onLyricsPage
+    /// The translation switch was toggled (on OR off) — the step is about
+    /// finding the button, not about the resulting state.
     case translationEnabled
     /// The capsule peeked out of the tucked sliver — `LiquidEdgeState ==
     /// .floating` (S6 beat ①, "鼠标停上去，它会探出来").
@@ -103,11 +107,16 @@ public struct TourSnapshot: Equatable, Sendable {
     public var automationAuthorized: Bool
     public var canTranslate: Bool
     public var showTranslation: Bool
+    /// The panel is already on the lyrics page when the lyrics step comes up:
+    /// there is nothing to open, so the step completes quietly (2026-09-29:
+    /// the card asked the founder to go lyrics -> cover -> lyrics to finish it).
+    public var onLyricsPage: Bool
 
-    public init(automationAuthorized: Bool = false, canTranslate: Bool = false, showTranslation: Bool = false) {
+    public init(automationAuthorized: Bool = false, canTranslate: Bool = false, showTranslation: Bool = false, onLyricsPage: Bool = false) {
         self.automationAuthorized = automationAuthorized
         self.canTranslate = canTranslate
         self.showTranslation = showTranslation
+        self.onLyricsPage = onLyricsPage
     }
 }
 

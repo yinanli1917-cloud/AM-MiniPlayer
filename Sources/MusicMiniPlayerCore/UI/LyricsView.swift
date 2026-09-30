@@ -940,7 +940,7 @@ public struct LyricsView: View {
         // Onboarding tour anchors (§4.2) — same registry MiniPlayerView feeds;
         // the lyrics page has its own instances of the translate/nav/music/
         // audio-output controls.
-        .onPreferenceChange(TourAnchorKey.self) { TourAnchorRegistry.shared.update($0) }
+        .tourPageHooks(controlsShown: showControls)
     }
 
     // MARK: - Sub-views
@@ -1718,7 +1718,11 @@ public struct LyricsView: View {
                     )
                 }
                 .blur(radius: controlsBlurAmount)
-                .offset(y: controlsOffsetY)
+                // Same slide the album page uses: the tour anchors publish the
+                // controls' RESTING rect, not the hidden one.
+                // Same slide the album page uses: the tour anchors publish the
+                // controls' RESTING rect, not the hidden one.
+                .tourControlsSlide(offsetY: controlsOffsetY)
                 .transition(.opacity)
             }
         }

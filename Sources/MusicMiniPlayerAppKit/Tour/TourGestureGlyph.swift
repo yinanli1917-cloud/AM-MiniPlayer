@@ -1,16 +1,17 @@
 /**
  * [INPUT]: SwiftUI (TimelineView).
- * [OUTPUT]: Exports TourGestureGlyph — the trackpad two-finger-nudge demo
- *           inside the S5 card (proposal §8.7).
- * [POS]: MusicMiniPlayerAppKit/Tour. Scaled 0.51× from the System Settings
- *        Trackpad page reference frames (research/trackpad-demo-frames.md):
- *        96×72pt outline, two 11pt dots, one 3.55s cycle (fade in → hold →
- *        move → hold → dim → hold → fade out → hidden), two cycles then
- *        stops at rest; re-arms on hover. The trailing motion-blur streak
- *        from §8.7's full spec is not reproduced here — the dots-and-outline
- *        silhouette carries the gesture on its own at this size, and the
- *        streak is a pure embellishment, not load-bearing for what the tour
- *        needs to teach.
+ * [OUTPUT]: Exports TourGestureKind, TourGestureMotion (the pure timeline),
+ *           TourGestureGlyph — the trackpad two-finger-nudge demo inside the
+ *           move step's card (proposal §8.7, prototype C.4.3).
+ * [POS]: MusicMiniPlayerAppKit/Tour. Scaled from the System Settings Trackpad
+ *        page reference frames (research/trackpad-demo-frames.md): outline
+ *        96x72pt -> 1.15x = 110x83 on the 260pt card, two 11pt (x1.15) dots, one
+ *        3.55s cycle (fade in -> hold -> move -> hold -> dim -> hold -> fade out ->
+ *        hidden), TWO cycles, then it RESTS at the start pose at 0.31 opacity and
+ *        the clock stops; hovering the glyph plays it again. (The first version
+ *        derived the phase from the wall clock and paused itself on a cycle
+ *        boundary — where the timeline is fully transparent — so after two
+ *        cycles the band in the card was blank for good: founder 2026-09-29.)
  */
 
 import SwiftUI
@@ -22,95 +23,112 @@ enum TourGestureKind: Equatable {
     case swipeToEdge(rightward: Bool)
 }
 
+/// The glyph's motion as a pure function of elapsed time since it (re)started.
+enum TourGestureMotion {
+    static let cycleDuration: TimeInterval = 3.55
+    static let cycles = 2
+    /// Prototype C.4.3: the demo is shown 1.15x on the 260pt card.
+    static let scale: CGFloat = 1.15
+    static let restOpacity = 0.31
+
+    struct Frame: Equatable {
+        var dx: CGFloat
+        var dy: CGFloat
+        var opacity: Double
+    }
+
+    static func displacement(_ kind: TourGestureKind) -> (dx: CGFloat, dy: CGFloat) {
+        switch kind {
+        case .nudgeToCorner: return (30 * scale, 18 * scale)
+        case .swipeToEdge(let rightward): return ((rightward ? 36 : -36) * scale, 0)
+        }
+    }
+
+    /// True once the two cycles have played: the clock can stop.
+    static func isFinished(elapsed: TimeInterval) -> Bool { elapsed >= cycleDuration * Double(cycles) }
+
+    /// `reduceMotion`: only the start pose, static (09-25 §8.4).
+    static func frame(kind: TourGestureKind, elapsed: TimeInterval, reduceMotion: Bool) -> Frame {
+        if reduceMotion || isFinished(elapsed: elapsed) || elapsed < 0 { return Frame(dx: 0, dy: 0, opacity: restOpacity) }
+        let t = elapsed.truncatingRemainder(dividingBy: cycleDuration)
+        let (totalDX, totalDY) = displacement(kind)
+        switch t {
+        case 0..<0.45: return Frame(dx: 0, dy: 0, opacity: t / 0.45)
+        case 0.45..<0.80: return Frame(dx: 0, dy: 0, opacity: 1)
+        case 0.80..<1.75:
+            let k = smoothstep((t - 0.80) / 0.95)
+            return Frame(dx: totalDX * k, dy: totalDY * k, opacity: 1)
+        case 1.75..<2.10: return Frame(dx: totalDX, dy: totalDY, opacity: 1)
+        case 2.10..<2.40:
+            let k = (t - 2.10) / 0.30
+            return Frame(dx: totalDX, dy: totalDY, opacity: 1 - k * (1 - restOpacity))
+        case 2.40..<2.98: return Frame(dx: totalDX, dy: totalDY, opacity: restOpacity)
+        case 2.98..<3.40:
+            let k = (t - 2.98) / 0.42
+            return Frame(dx: totalDX, dy: totalDY, opacity: restOpacity * (1 - k))
+        default: return Frame(dx: totalDX, dy: totalDY, opacity: 0)
+        }
+    }
+
+    private static func smoothstep(_ x: Double) -> CGFloat {
+        let c = min(max(x, 0), 1)
+        return CGFloat(c * c * (3 - 2 * c))
+    }
+}
+
 struct TourGestureGlyph: View {
     var kind: TourGestureKind
     var reduceMotion: Bool
 
-    @State private var armed = true
-    @State private var cyclesPlayed = 0
+    @State private var startedAt = Date()
+    @State private var finished = false
 
-    private let outlineSize = CGSize(width: 96, height: 72)
-    private let dotSize: CGFloat = 11
-    private let dotSpacing: CGFloat = 16
-    private let cycleDuration: TimeInterval = 3.55
-    private let maxCycles = 2
+    private let outlineSize = CGSize(width: 96 * TourGestureMotion.scale, height: 72 * TourGestureMotion.scale)
+    private let dotSize: CGFloat = 11 * TourGestureMotion.scale
+    private let dotSpacing: CGFloat = 16 * TourGestureMotion.scale
 
     var body: some View {
         Group {
-            if reduceMotion {
-                staticGlyph(dx: 0, dy: 0, opacity: 0.31)
+            if reduceMotion || finished {
+                glyph(TourGestureMotion.frame(kind: kind, elapsed: .infinity, reduceMotion: reduceMotion))
             } else {
-                TimelineView(.animation(paused: !armed)) { timeline in
-                    let t = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: cycleDuration)
-                    let (dx, dy, opacity) = phase(at: t)
-                    staticGlyph(dx: dx, dy: dy, opacity: opacity)
-                        .onChange(of: timeline.date) { _, _ in advanceCycleTrackingIfNeeded(t: t) }
+                TimelineView(.animation) { timeline in
+                    let elapsed = timeline.date.timeIntervalSince(startedAt)
+                    glyph(TourGestureMotion.frame(kind: kind, elapsed: elapsed, reduceMotion: false))
+                        .onChange(of: TourGestureMotion.isFinished(elapsed: elapsed)) { _, done in
+                            if done { finished = true }
+                        }
                 }
             }
         }
         .frame(width: outlineSize.width, height: outlineSize.height)
+        .contentShape(Rectangle())
         .onHover { hovering in
-            guard hovering, cyclesPlayed >= maxCycles else { return }
-            cyclesPlayed = 0
-            armed = true
+            // Hovering the glyph plays it again once it has rested.
+            guard hovering, finished, !reduceMotion else { return }
+            startedAt = Date()
+            finished = false
+        }
+        .onChange(of: kind) { _, _ in
+            // A new demo (the step moved from "corner" to "edge"): play it from the top.
+            startedAt = Date()
+            finished = false
         }
         .accessibilityHidden(true)
     }
 
     @ViewBuilder
-    private func staticGlyph(dx: CGFloat, dy: CGFloat, opacity: Double) -> some View {
+    private func glyph(_ f: TourGestureMotion.Frame) -> some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 8 * TourGestureMotion.scale, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1.5)
             HStack(spacing: dotSpacing) {
                 Circle().fill(Color(red: 0x6B / 255, green: 0x9C / 255, blue: 0xFD / 255)).frame(width: dotSize, height: dotSize)
                 Circle().fill(Color(red: 0x6B / 255, green: 0x9C / 255, blue: 0xFD / 255)).frame(width: dotSize, height: dotSize)
             }
-            .offset(x: dx, y: dy)
+            .offset(x: f.dx, y: f.dy)
+            .opacity(f.opacity)
         }
-        .opacity(opacity)
         .frame(width: outlineSize.width, height: outlineSize.height)
-    }
-
-    /// One cycle, §8.7's timing collapsed to (dx, dy, opacity):
-    /// 0.00–0.45 fade in to 1.0; hold to 0.80; 0.80–1.75 move
-    /// (cubic-bezier(.42,0,.58,1) ~ smoothstep); hold to 2.10; 2.10–2.40 dim
-    /// to 0.31; hold to 2.98; 2.98–3.40 fade to 0; hidden to 3.55.
-    private func phase(at t: TimeInterval) -> (dx: CGFloat, dy: CGFloat, opacity: Double) {
-        let (totalDX, totalDY) = displacement
-        switch t {
-        case 0..<0.45: return (0, 0, t / 0.45)
-        case 0.45..<0.80: return (0, 0, 1)
-        case 0.80..<1.75:
-            let k = smoothstep((t - 0.80) / 0.95)
-            return (totalDX * k, totalDY * k, 1)
-        case 1.75..<2.10: return (totalDX, totalDY, 1)
-        case 2.10..<2.40:
-            let k = (t - 2.10) / 0.30
-            return (totalDX, totalDY, 1 - k * (1 - 0.31))
-        case 2.40..<2.98: return (totalDX, totalDY, 0.31)
-        case 2.98..<3.40:
-            let k = (t - 2.98) / 0.42
-            return (totalDX, totalDY, 0.31 * (1 - k))
-        default: return (totalDX, totalDY, 0)
-        }
-    }
-
-    private var displacement: (CGFloat, CGFloat) {
-        switch kind {
-        case .nudgeToCorner: return (30, 18)
-        case .swipeToEdge(let rightward): return (rightward ? 36 : -36, 0)
-        }
-    }
-
-    private func smoothstep(_ x: Double) -> CGFloat {
-        let c = min(max(x, 0), 1)
-        return CGFloat(c * c * (3 - 2 * c))
-    }
-
-    private func advanceCycleTrackingIfNeeded(t: TimeInterval) {
-        guard t < 0.02 else { return }
-        cyclesPlayed += 1
-        if cyclesPlayed >= maxCycles { armed = false }
     }
 }

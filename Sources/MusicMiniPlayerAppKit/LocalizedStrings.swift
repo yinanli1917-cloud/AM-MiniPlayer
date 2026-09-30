@@ -122,6 +122,8 @@ enum L10n {
         "tour.stop":                ("Stop here", "先到这里"),
         "tour.skipStep":            ("Skip this one", "这一步先不做"),
         "tour.idleHint":            ("No rush. Stop whenever you like.", "不着急，随时可以停下。"),
+        "tour.body.away":           ("Bring your cursor back over the panel.", "鼠标再回到面板上。"),
+        "tour.skip.ack":            ("OK, we'll leave that for later.", "好，先放一放。"),
 
         "tour.welcome.title":       ("Hi, glad you're here", "你好，很高兴见到你"),
         "tour.welcome.body":        ("Over the next couple of minutes I'll walk through nanoPod with you. Small, everyday things. No rush.", "接下来几分钟，我陪你把 nanoPod 走一遍。都是些顺手的小事，不着急。"),
@@ -143,10 +145,14 @@ enum L10n {
         "tour.connect.continue":    ("Go on for now", "先往下"),
 
         "tour.reveal.title":        ("Bring your cursor over", "把鼠标挪过来"),
-        "tour.reveal.body":         ("At rest it's just the cover. The controls come out when you need them.", "面板平时只留封面，控件在你需要的时候才出来。"),
+        // Page-neutral: the panel may be on the cover, the lyrics or the queue when this card shows.
+        "tour.reveal.body":         ("The controls stay out of the way until you need them.", "控件平时不出来挡着，需要的时候才会出现。"),
+        "tour.reveal.bodyArmedPlay": ("The controls are out. Press play.", "控件出来了，按一下播放。"),
+        "tour.reveal.bodyArmedPause": ("The controls are out. Press pause.", "控件出来了，按一下暂停。"),
         "tour.reveal.beat1":        ("Hover the panel", "移到面板上"),
+        // The second beat asks for whatever the panel offers right now; either toggle finishes it.
         "tour.reveal.beat2":        ("Press play", "按一下播放"),
-        "tour.reveal.beat2done":    ("Already playing", "已经在放了"),
+        "tour.reveal.beat2pause":   ("Press pause", "按一下暂停"),
         "tour.reveal.openingMusic": ("Opening Music…", "正在打开 Music…"),
         "tour.reveal.needAccess":   ("Once Music's connected, you can play from here", "连上 Music 之后，就能从这里放"),
         "tour.reveal.confirm":      ("There's the music.", "有声音了。"),
@@ -160,11 +166,13 @@ enum L10n {
 
         "tour.lyrics.title":        ("The lyrics", "歌词在这儿"),
         "tour.lyrics.body":         ("The little speech bubble at the bottom left, or click the cover.", "左下角的小气泡，或者点一下封面。"),
+        "tour.lyrics.beat1":        ("Tap the speech bubble", "点一下左下角的小气泡"),
         "tour.lyrics.hoverBack":    ("Bring your cursor back over", "鼠标再回到面板上"),
         "tour.lyrics.confirm":      ("Here they are.", "到了。"),
 
         "tour.translate.title":     ("Translation", "翻译"),
         "tour.translate.body":      ("The button at the bottom right. Each line gets one underneath.", "右下角的按钮。译文会跟在每一句下面。"),
+        "tour.translate.beat1":     ("Tap the translate button", "点一下翻译按钮"),
         "tour.translate.confirm":   ("Translated.", "译文来了。"),
         "tour.translate.deferred.title": ("This one doesn't need it", "这首不用翻"),
         "tour.translate.deferred.body":  ("When a song in another language comes along, I'll show you where translation is.", "等有一首外文歌的时候，我再来告诉你翻译在哪。"),
@@ -174,7 +182,10 @@ enum L10n {
         "tour.later.confirm":       ("Translated.", "译文来了。"),
 
         "tour.move.title":          ("Put it in a corner you like", "放到你喜欢的角落"),
-        "tour.move.body":           ("Two fingers on the panel, nudge it toward a corner. It settles there on its own.", "双指按住面板，轻轻往一个角推过去，它会自己落好。"),
+        // Corners work on the cover page only; the lyrics page can only be pushed into a screen edge.
+        "tour.move.body":           ("On the cover page, two fingers nudge the panel toward a corner and it settles there. The lyrics page can't be moved around; it only slides into a screen edge.", "在封面页，双指按住面板往一个角轻推，它会自己落好。歌词页不能随意挪，只能往屏幕边上推，让它藏进去。"),
+        "tour.move.bodyLyrics":     ("Corners only work on the cover page, so let's go back there first. (On the lyrics page the panel can only be pushed into a screen edge.)", "落角只在封面页能用，我们先回到封面页。（歌词页只能往屏幕边上推，不能挪到角落。）"),
+        "tour.move.beat0":          ("Back to the cover page", "先回到封面页"),
         "tour.move.beat1":          ("Nudge it to a corner", "推到一个角落"),
         "tour.move.beat2":          ("Now nudge it into the edge", "再往屏幕边上推一下"),
         "tour.move.bodyTuckRight":  ("Settled. Nudge it right once more and it slips into the edge.", "落好了。往右边再推一下，它会藏进屏幕边。"),

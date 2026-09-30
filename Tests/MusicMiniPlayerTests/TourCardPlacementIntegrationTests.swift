@@ -26,6 +26,7 @@ final class TourCardPlacementIntegrationTests: XCTestCase {
         suiteName = "TourCardPlacementIntegrationTests-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
         TourAnchorRegistry.shared.reset()
+        music.currentPage = .album
 
         let visible = NSScreen.main!.visibleFrame
         let size = PanelWindowMetrics.defaultSize
@@ -98,7 +99,7 @@ final class TourCardPlacementIntegrationTests: XCTestCase {
 
     func test_haloCentersOnTheAnchoredControl() throws {
         controller.send(.resume(completed: [.connect]))
-        spin(0.3)
+        spin(1.0)
         let halo = try XCTUnwrap(controller.debugHaloFrame, "reveal step draws a halo")
         XCTAssertEqual(halo.midX, expectedPlayCenter.x, accuracy: 6)
         XCTAssertEqual(halo.midY, expectedPlayCenter.y, accuracy: 6)
@@ -118,7 +119,7 @@ final class TourCardPlacementIntegrationTests: XCTestCase {
 
     func test_lyricsStep_anchorsToTheLyricsButton_bottomLeftOfThePanel() throws {
         controller.send(.resume(completed: [.connect, .reveal, .corners]))
-        spin(0.3)
+        spin(1.0)
         let anchor = try XCTUnwrap(controller.debugLastAnchorRect)
         XCTAssertEqual(anchor.midX, panel.frame.minX + 25, accuracy: 10)
         XCTAssertEqual(anchor.midY, panel.frame.minY + 31, accuracy: 10)

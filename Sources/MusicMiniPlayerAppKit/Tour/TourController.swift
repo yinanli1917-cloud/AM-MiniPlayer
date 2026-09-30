@@ -1,15 +1,21 @@
 /**
  * [INPUT]: AppKit/SwiftUI/Combine; MusicMiniPlayerCore's TourMachine/TourState/
  *          TourPersistence/TourDetectors/TourHookBus/TourDeferredWatcher/
- *          TourPlacement/TourAnchorRegistry/TourMotionPolicy/OnboardingState/
- *          MusicController/LyricsService/SnappablePanel/LiquidEdgeController;
- *          this Tour/ folder's TourCardWindow/TourCardView (+TourCardStore)/
- *          TourCompletionFeedback/TourHaloView.
+ *          TourPlacement/TourAnchorRegistry/TourGuidanceResolver/TourMotionPolicy/
+ *          OnboardingState/MusicController/LyricsService/SnappablePanel/
+ *          LiquidEdgeController; this Tour/ folder's TourCardWindow/TourCardView
+ *          (+TourCardStore)/TourCompletionFeedback/TourGuidance (motion shell).
  * [OUTPUT]: Exports TourController — the @MainActor effect executor that
  *           turns TourMachine's pure output into real windows.
  * [POS]: MusicMiniPlayerAppKit/Tour. Owned by AppMain; constructed once the
  *        floating panel and its LiquidEdgeController exist. This is the ONLY
  *        piece of the tour that touches a window, a timer, or a haptic.
+ *        Two layers of "what is on screen": the CARD (content + placement,
+ *        `presentCard`) and the GUIDANCE (the ring, the ghost cursor, the panel
+ *        glow, `refreshGuidance`). The guidance is re-derived from live state
+ *        (page, controls visible, anchors, edge state, panel frame) on every
+ *        change — it used to be computed once per card, so it went stale the
+ *        moment the panel's controls slid in.
  */
 
 import AppKit
@@ -34,8 +40,10 @@ final class TourController: ObservableObject {
     /// ONE persistent hosting view + store for the card window's whole life —
     /// changes flow through `cardStore`, never through a new hosting controller.
     private var cardStore: TourCardStore?
+    /// The ring / ghost cursor / panel-glow overlay (click-through, spans the panel's screen).
     private var haloWindow: TourHaloWindow?
-    private var haloStore: TourHaloStore?
+    /// The motion behind the card's position and the ring (prototype section C).
+    let guidance: TourGuidance
     /// The "you finished it" animation (sparks and confetti included, in its
     /// own FX window): the controller calls `begin(_:onSwapDue:)`,
     /// `cardDidSwap()` and `cancel()`.
@@ -48,6 +56,11 @@ final class TourController: ObservableObject {
     private var cardPlacedOrigin: NSPoint?
     private var cardBounceBase: NSPoint?
     private var closingFlashWork: DispatchWorkItem?
+    private var releaseWork: DispatchWorkItem?
+    private var skipWork: DispatchWorkItem?
+    private var stallWork: DispatchWorkItem?
+    private var resumeWork: DispatchWorkItem?
+    private var storeObserver: AnyCancellable?
     private var connectDenied = false
     /// The last model actually shown — needed for the S4L-completion "closing
     /// flash" (§5.2's `deferredTip` completion): the reducer already flips
@@ -58,13 +71,30 @@ final class TourController: ObservableObject {
     /// S4L closing flash: hide the card once the feedback has had its second.
     private var closingFlashPending = false
 
+    // Guidance bookkeeping
+    /// The move step began with the panel on a page that cannot be nudged into a
+    /// corner: its first beat is "back to the cover page".
+    private var moveNeedsAlbum = false
+    private var ringHeld = false
+    private var ringHoldToken = 0
+    private var lastRingSubject: TourRingSubject?
+    private var entryGeneration = 0
+    private var hintGeneration = -1
+    /// The card stepped aside while the user moves the panel (C.2 "让路").
+    private var cardYielded = false
+    /// "这一步先不做" was pressed: the card shows the acknowledgement until the quiet transition.
+    private var skipping = false
+    /// The pose the handoff already started moving the card to (C.3 "H + 40").
+    private var pendingHandoffPose: TourCardPose?
+    private var measured: (model: TourCardModel, side: TourCardSide, gesture: TourGestureKind?, size: CGSize)?
+
     #if DEBUG || LOCAL_DEVELOPER_BUILD
     static var debugForceShow = false
     #endif
 
     /// Test seam (§11.1 TourTeardownTests): how many of the three overlay
-    /// windows are currently allocated, and whether any of the three timers
-    /// (transition / finale auto-dismiss / closing-flash) are still armed.
+    /// windows are currently allocated, and whether any of the timers
+    /// (transition / finale auto-dismiss / closing-flash / release) are still armed.
     var debugAllocatedWindowCount: Int {
         [cardWindow != nil, haloWindow != nil, feedback.debugSparkOverlay.window != nil].filter { $0 }.count
     }
@@ -72,19 +102,27 @@ final class TourController: ObservableObject {
     var debugCardStore: TourCardStore? { cardStore }
     var debugHasPendingTimers: Bool {
         transitionWork != nil || finaleWork != nil || closingFlashWork != nil || finaleCardWork != nil
+            || releaseWork != nil || skipWork != nil || stallWork != nil || resumeWork != nil
     }
     var debugIsDeferredWatcherArmed: Bool { deferredWatcher.isArmed }
     /// Geometry seams for TourCardPlacementIntegrationTests (screen coordinates).
     var debugCardFrame: NSRect? { cardWindow?.frame }
-    var debugHaloFrame: NSRect? { haloWindow?.isVisible == true ? haloWindow?.frame : nil }
+    /// The ring's rect right now (springs included), nil when no ring is showing.
+    var debugHaloFrame: NSRect? {
+        let f = guidance.motion.makeFrame()
+        return f.ringVisible && f.ringOpacity > 0.05 ? f.ring.rect : nil
+    }
+    var debugRingIsDashed: Bool { guidance.motion.makeFrame().ringDashed }
+    var debugOverlayWindow: NSWindow? { haloWindow }
     private(set) var debugLastPlacement: TourCardPlacement?
     private(set) var debugLastAnchorRect: CGRect?
 
     init(panel: SnappablePanel, liquidEdge: LiquidEdgeController,
          musicController: MusicController = .shared, lyricsService: LyricsService = .shared,
-         defaults: UserDefaults = .standard, feedback: TourCompletionFeedback? = nil) {
+         defaults: UserDefaults = .standard, feedback: TourCompletionFeedback? = nil, guidance: TourGuidance? = nil) {
         self.defaults = defaults
         self.feedback = feedback ?? TourCompletionFeedback()
+        self.guidance = guidance ?? TourGuidance()
         self.panel = panel
         self.liquidEdge = liquidEdge
         self.musicController = musicController
@@ -93,7 +131,9 @@ final class TourController: ObservableObject {
 
         panel.onSnappedToCorner = { [weak self] _, corner in self?.snappedCornerSubject.send(corner) }
         self.feedback.applyCardOffset = { [weak self] dy in self?.bounceCard(by: dy) }
+        self.feedback.onHandoffStart = { [weak self] in self?.handoffDidStart() }
         wireDetectors()
+        wireGuidanceTriggers()
     }
 
     // MARK: - Entry points
@@ -112,11 +152,14 @@ final class TourController: ObservableObject {
     }
 
     /// Settings › 通用's "接着认识 nanoPod" / "重新认识 nanoPod" row.
+    /// "Again" starts from the welcome card like a first run (it used to send
+    /// `.start` and jumped straight to the second step, skipping the welcome).
     func requestTour(fromStart: Bool) {
         if fromStart {
+            teardown()
             TourPersistence.reset(defaults)
             state = TourState()
-            send(.start)
+            send(.launch)
         } else {
             send(.resume(completed: state.completedSteps))
         }
@@ -156,32 +199,80 @@ final class TourController: ObservableObject {
     private func wireDetectors() {
         let detectors = TourDetectors(
             controlsRevealed: TourHookBus.shared.controlsRevealed.eraseToAnyPublisher(),
-            isPlaying: musicController.$isPlaying.eraseToAnyPublisher(),
+            // Every CHANGE of playback is a toggle (initial value dropped): the
+            // reveal step's second beat takes pause exactly like play.
+            isPlaying: musicController.$isPlaying.dropFirst().removeDuplicates().eraseToAnyPublisher(),
             audioOutputMenuOpened: TourHookBus.shared.audioOutputMenuOpened.eraseToAnyPublisher(),
             musicButtonTapped: TourHookBus.shared.musicButtonTapped.eraseToAnyPublisher(),
             currentPageIsLyrics: musicController.$currentPage.map { $0 == .lyrics }.eraseToAnyPublisher(),
-            showTranslationEnabled: lyricsService.$showTranslation.filter { $0 }.map { _ in () }.eraseToAnyPublisher(),
+            // The translation switch changing in EITHER direction finishes the step.
+            showTranslationEnabled: lyricsService.$showTranslation.dropFirst().removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
             snappedCorner: snappedCornerSubject.eraseToAnyPublisher(),
             liquidEdgeState: liquidEdge.statePublisher.eraseToAnyPublisher()
         )
-        detectors.events.sink { [weak self] event in self?.send(event) }.store(in: &cancellables)
+        detectors.events.sink { [weak self] event in
+            guard let self else { return }
+            // Playback toggles OUTSIDE the tour (a track ending, Music's own play key) are not
+            // the user answering the reveal step's question: they are never held back as an
+            // "early" completion. (Hover, lyrics and translation early-completions are real
+            // user acts and stay recorded.)
+            if case .signal(.isPlaying) = event, case .idle = self.state.phase { return }
+            self.send(event)
+        }.store(in: &cancellables)
+    }
+
+    /// Everything the ring / card depend on that can change without a tour event.
+    private func wireGuidanceTriggers() {
+        TourHookBus.shared.controlsVisible.dropFirst().removeDuplicates()
+            .sink { [weak self] _ in self?.surfaceDidChange() }.store(in: &cancellables)
+        TourAnchorRegistry.shared.$anchors.dropFirst()
+            .sink { [weak self] _ in
+                // @Published fires BEFORE the value lands: read it on the next turn.
+                DispatchQueue.main.async { self?.refreshGuidance() }
+            }.store(in: &cancellables)
+        musicController.$currentPage.dropFirst().removeDuplicates()
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.surfaceDidChange() } }.store(in: &cancellables)
+        musicController.$isPlaying.dropFirst().removeDuplicates()
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.surfaceDidChange() } }.store(in: &cancellables)
+        liquidEdge.statePublisher.removeDuplicates()
+            .sink { [weak self] edge in self?.edgeStateDidChange(edge) }.store(in: &cancellables)
+        NotificationCenter.default.publisher(for: NSWindow.didMoveNotification, object: panel)
+            .sink { [weak self] _ in self?.panelDidMove() }.store(in: &cancellables)
+        NotificationCenter.default.publisher(for: Notification.Name("windowMovementBegan"), object: panel)
+            .sink { [weak self] _ in self?.panelMovementBegan() }.store(in: &cancellables)
     }
 
     // MARK: - Event pump
 
+    private func makeSnapshot() -> TourSnapshot {
+        TourSnapshot(
+            automationAuthorized: OnboardingState.shared.automationStatus == .authorized,
+            canTranslate: lyricsService.canTranslate,
+            showTranslation: lyricsService.showTranslation,
+            onLyricsPage: musicController.currentPage == .lyrics
+        )
+    }
+
     /// Internal (not `private`) so tests can drive the machine directly via
     /// `@testable import` without hosting real button clicks.
     func send(_ event: TourEvent) {
-        let snapshot = TourSnapshot(
-            automationAuthorized: OnboardingState.shared.automationStatus == .authorized,
-            canTranslate: lyricsService.canTranslate,
-            showTranslation: lyricsService.showTranslation
-        )
-        let (next, effects) = TourMachine.reduce(state, event, snapshot: snapshot)
+        let (next, effects) = TourMachine.reduce(state, event, snapshot: makeSnapshot())
+        let previous = state
         state = next
+        noteStepEntry(previous: previous.phase, next: next.phase)
         apply(effects, userCompletion: Self.isUserCompletion(event))
         scheduleTransitionIfNeeded()
         scheduleFinaleAutoDismissIfNeeded()
+        refreshGuidance()
+    }
+
+    /// Per-step bookkeeping that is not part of the pure machine.
+    private func noteStepEntry(previous: TourPhase, next: TourPhase) {
+        if case .step(.moveTuck, _) = next {
+            if case .step(.moveTuck, _) = previous {} else { moveNeedsAlbum = musicController.currentPage != .album }
+        } else {
+            moveNeedsAlbum = false
+        }
     }
 
     private func scheduleTransitionIfNeeded() {
@@ -222,8 +313,11 @@ final class TourController: ObservableObject {
         var haptics: [TourHaptic] = []
         // The finale (spec §B.3): the last step's card STAYS while the ring
         // closes and the confetti flies; the finale card takes over at the
-        // handoff (the feedback calls `presentFinaleCard()`).
-        let holdForFinale = userCompletion && cardStore != nil && lastPresentedModel != nil
+        // handoff (the feedback calls `presentFinaleCard()`). Unless that card
+        // already left: clicking the peek card starts the panel's return, and the
+        // old card steps out of its way first (below); then the finale card grows
+        // in and the ring closes on IT.
+        let holdForFinale = userCompletion && cardStore != nil && lastPresentedModel != nil && guidance.motion.cardVisible
             && effects.contains { if case .showFinaleCard = $0 { return true }; return false }
             && effects.contains { if case .growRing = $0 { return true }; return false }
         for effect in effects {
@@ -237,10 +331,10 @@ final class TourController: ObservableObject {
             case .checkBeat(let step, let index):
                 // Only a dot that is not yet solid on screen animates.
                 let onScreen = cardStore?.model.beats ?? []
-                let wasChecked = onScreen.indices.contains(index) ? onScreen[index].checked : false
+                let wasChecked = onScreen.first { $0.id == index }?.checked ?? false
                 if patchDisplayedCard(fromLast: holdForFinale, { model in
-                    guard model.beats.indices.contains(index), case .step(let shown) = model.kind, shown == step else { return false }
-                    model.beats[index].checked = true
+                    guard let at = model.beats.firstIndex(where: { $0.id == index }), case .step(let shown) = model.kind, shown == step else { return false }
+                    model.beats[at].checked = true
                     return true
                 }), !wasChecked { pops.append(index) }
             case .growRing(let to):
@@ -250,7 +344,7 @@ final class TourController: ObservableObject {
             case .pulseRing: closes = true
             case .confetti: confetti = true
             case .haptic(let kind): haptics.append(kind)
-            case .relocateCardToPanel: presentCurrentCard()
+            case .relocateCardToPanel: cardYielded = false; presentCurrentCard()
             case .persist: TourPersistence.save(state, to: defaults)
             case .armDeferredWatcher: armDeferredWatcher()
             case .cancelDeferredWatcher: deferredWatcher.cancel()
@@ -280,8 +374,12 @@ final class TourController: ObservableObject {
         event.sparks = spark
         event.confetti = confetti
         if let window = cardWindow {
-            event.ringCenterOnScreen = TourCardView.ringCenter(inWindowFrame: window.frame, beakSide: store.beakSide)
-            event.cardFrameOnScreen = TourCardView.bodyFrame(inWindowFrame: window.frame, beakSide: store.beakSide)
+            let target = guidance.motion.targetPose
+            // The window may be mid-approach: the sparks fly from where the card WILL rest.
+            var frame = window.frame
+            if let target { frame.origin = NSPoint(x: target.x, y: target.top - target.height) }
+            event.ringCenterOnScreen = TourCardView.ringCenter(inWindowFrame: frame, beakSide: store.beakSide)
+            event.cardFrameOnScreen = TourCardView.bodyFrame(inWindowFrame: frame, beakSide: store.beakSide)
         }
         var onSwapDue: (() -> Void)?
         if holdForFinale {
@@ -344,20 +442,52 @@ final class TourController: ObservableObject {
         finaleWork?.cancel(); finaleWork = nil
         finaleCardWork?.cancel(); finaleCardWork = nil
         closingFlashWork?.cancel(); closingFlashWork = nil
+        skipWork?.cancel(); skipWork = nil
+        skipping = false
+        cardYielded = false
+        moveNeedsAlbum = false
         hideCard()
         TourAnchorRegistry.shared.reset()
     }
 
-    /// Fully releases the overlay windows (not just orders them out) —
-    /// §11.2's "结束后无窗口...effectViews 清单必须回到引导前" means the
-    /// window OBJECTS must go, not just become invisible. Nothing else holds
-    /// a strong reference to them, so dropping these is deinit or nothing.
-    private func hideCard() {
+    /// The card steps out (C.2: 0.16 s ease-in, toward its anchor), the ring and
+    /// the hints go with it, then every overlay window is released — the window
+    /// OBJECTS must go, not just become invisible (§11.2), so a second later
+    /// nothing of the tour is left. With Reduce Motion, or when nothing is on
+    /// screen, it is immediate.
+    private func hideCard(approach: Double? = nil) {
         closingFlashWork?.cancel(); closingFlashWork = nil
         finaleCardWork?.cancel(); finaleCardWork = nil
+        stallWork?.cancel(); stallWork = nil
+        resumeWork?.cancel(); resumeWork = nil
         closingFlashPending = false
         lastPresentedModel = nil
         feedback.cancel()
+        ringHeld = false
+        ringHoldToken += 1
+        lastRingSubject = nil
+        guard cardWindow != nil || haloWindow != nil else { releaseWindows(); return }
+        guidance.syncReduceMotion()
+        if guidance.motion.cardVisible, !guidance.motion.reduceMotion {
+            guidance.motion.dismissCard(approach: approach ?? TourGuidanceTokens.disappearApproach)
+            guidance.motion.hideRing()
+            guidance.motion.stopHint()
+            guidance.kick()
+            releaseWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.releaseWindows() }
+            releaseWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + TourGuidanceTokens.disappearDuration + 0.06, execute: work)
+        } else {
+            releaseWindows()
+        }
+    }
+
+    private func releaseWindows() {
+        releaseWork?.cancel(); releaseWork = nil
+        guidance.stop()
+        guidance.attach(card: nil, overlay: nil)
+        guidance.reset()
+        storeObserver = nil
         cardWindow?.contentView = nil
         cardWindow?.orderOut(nil)
         cardWindow = nil
@@ -365,13 +495,14 @@ final class TourController: ObservableObject {
         haloWindow?.contentView = nil
         haloWindow?.orderOut(nil)
         haloWindow = nil
-        haloStore = nil
+        pendingHandoffPose = nil
+        measured = nil
     }
 
     // MARK: - Card content assembly (proposal §3.3/§9)
 
     private func presentCurrentCard() {
-        guard let model = cardModel(for: state.phase) else { hideCard(); return }
+        guard let model = cardModel(for: state.phase, in: state) else { hideCard(); return }
         lastPresentedModel = model
         presentCard(model: model, gestureKind: gestureKind(for: state.phase))
     }
@@ -384,7 +515,7 @@ final class TourController: ObservableObject {
     /// closing flash) the last card shown. Returns whether it changed.
     @discardableResult
     private func patchDisplayedCard(fromLast: Bool = false, _ patch: (inout TourCardModel) -> Bool) -> Bool {
-        let live = fromLast ? nil : cardModel(for: state.phase)
+        let live = fromLast ? nil : cardModel(for: state.phase, in: state)
         var model: TourCardModel
         if let live { model = live } else if let last = lastPresentedModel { model = last } else { return false }
         guard patch(&model) else { return false }
@@ -409,9 +540,16 @@ final class TourController: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + TourMotionPolicy.Tokens.stepCompletionFeedback + 0.25, execute: work)
     }
 
-    private func cardModel(for phase: TourPhase) -> TourCardModel? {
+    private func cardModel(for phase: TourPhase, in state: TourState) -> TourCardModel? {
         let L = { (key: String) in L10n.localized(key) }
         let total = TourStep.orderedSteps.count
+        let surface = currentSurface()
+
+        /// Body text for the steps that need the controls out (prototype C.5.3):
+        /// while the mouse is away the card asks for it back.
+        func awayOr(_ text: String) -> String {
+            surface.controlsVisible ? text : L("tour.body.away")
+        }
 
         switch phase {
         case .idle:
@@ -450,43 +588,76 @@ final class TourController: ObservableObject {
             return model
 
         case .step(.reveal, let beats):
-            let beat2Label = musicController.isPlaying ? L("tour.reveal.beat2done") : L("tour.reveal.beat2")
+            // Ask for the action the panel actually offers (pause while playing,
+            // play while paused); either toggle finishes the beat.
+            let playing = surface.isPlaying
+            let beat2 = playing ? L("tour.reveal.beat2pause") : L("tour.reveal.beat2")
+            var body = L("tour.reveal.body")
+            var pending = false
+            if beats[0], !beats[1] {
+                if surface.controlsVisible {
+                    body = L(playing ? "tour.reveal.bodyArmedPause" : "tour.reveal.bodyArmedPlay")
+                    pending = true
+                } else {
+                    body = L("tour.body.away")
+                }
+            }
+            var list = [TourBeatModel(id: 0, text: L("tour.reveal.beat1"), checked: beats[0]),
+                        TourBeatModel(id: 1, text: beat2, checked: beats[1])]
+            list[1].pending = pending
+            markSkipped(&list)
             return TourCardModel(
-                kind: .step(.reveal), title: L("tour.reveal.title"), body: L("tour.reveal.body"),
-                beats: [TourBeatModel(id: 0, text: L("tour.reveal.beat1"), checked: beats[0]),
-                        TourBeatModel(id: 1, text: beat2Label, checked: beats[1])],
-                ringCompleted: state.completedCount, stepLabel: "\(TourStep.reveal.index(in: total) )"
+                kind: .step(.reveal), title: L("tour.reveal.title"), body: skipBody() ?? body, beats: list,
+                ringCompleted: state.completedCount, stepLabel: "\(TourStep.reveal.index(in: total))"
             )
 
         case .step(.corners, let beats):
+            var list = [TourBeatModel(id: 0, text: L("tour.corners.beat1"), checked: beats[0]),
+                        TourBeatModel(id: 1, text: L("tour.corners.beat2"), checked: beats[1])]
+            markSkipped(&list)
             return TourCardModel(
-                kind: .step(.corners), title: L("tour.corners.title"), body: L("tour.corners.body"),
-                beats: [TourBeatModel(id: 0, text: L("tour.corners.beat1"), checked: beats[0]),
-                        TourBeatModel(id: 1, text: L("tour.corners.beat2"), checked: beats[1])],
+                kind: .step(.corners), title: L("tour.corners.title"),
+                body: skipBody() ?? (beats.allSatisfy { $0 } ? L("tour.corners.body") : awayOr(L("tour.corners.body"))), beats: list,
                 ringCompleted: state.completedCount, stepLabel: "\(TourStep.corners.index(in: total))"
             )
 
-        case .step(.lyrics, _):
+        case .step(.lyrics, let beats):
+            var list = [TourBeatModel(id: 0, text: L("tour.lyrics.beat1"), checked: beats[0])]
+            markSkipped(&list)
             return TourCardModel(
-                kind: .step(.lyrics), title: L("tour.lyrics.title"), body: L("tour.lyrics.body"),
+                kind: .step(.lyrics), title: L("tour.lyrics.title"), body: skipBody() ?? awayOr(L("tour.lyrics.body")), beats: list,
                 ringCompleted: state.completedCount, stepLabel: "\(TourStep.lyrics.index(in: total))"
             )
 
-        case .step(.translate, _):
+        case .step(.translate, let beats):
+            var list = [TourBeatModel(id: 0, text: L("tour.translate.beat1"), checked: beats[0])]
+            markSkipped(&list)
             return TourCardModel(
-                kind: .step(.translate), title: L("tour.translate.title"), body: L("tour.translate.body"),
+                kind: .step(.translate), title: L("tour.translate.title"), body: skipBody() ?? awayOr(L("tour.translate.body")), beats: list,
                 ringCompleted: state.completedCount, stepLabel: "\(TourStep.translate.index(in: total))"
             )
 
         case .step(.moveTuck, let beats):
             let tucked = beats[0]
+            let onAlbum = surface.page == .album
             let rightward = (panel?.currentCorner() == .topRight || panel?.currentCorner() == .bottomRight) || liquidEdge.side != .left
+            let body: String
+            if tucked { body = L(rightward ? "tour.move.bodyTuckRight" : "tour.move.bodyTuckLeft") }
+            else if !onAlbum { body = L("tour.move.bodyLyrics") }
+            else { body = L("tour.move.body") }
+            var list: [TourBeatModel] = []
+            if moveNeedsAlbum {
+                // Not a machine beat: a precondition the card walks the user through.
+                list.append(TourBeatModel(id: 2, text: L("tour.move.beat0"), checked: onAlbum || tucked))
+            }
+            list.append(TourBeatModel(id: 0, text: L("tour.move.beat1"), checked: beats[0]))
+            list.append(TourBeatModel(id: 1, text: L("tour.move.beat2"), checked: beats[1]))
+            markSkipped(&list)
             var model = TourCardModel(
                 kind: .step(.moveTuck),
                 title: L("tour.move.title"),
-                body: tucked ? L(rightward ? "tour.move.bodyTuckRight" : "tour.move.bodyTuckLeft") : L("tour.move.body"),
-                beats: [TourBeatModel(id: 0, text: L("tour.move.beat1"), checked: beats[0]),
-                        TourBeatModel(id: 1, text: L("tour.move.beat2"), checked: beats[1])],
+                body: skipBody() ?? body,
+                beats: list,
                 secondaryTitle: L("tour.move.forMe"), footNote: L("tour.move.mouseNote"),
                 ringCompleted: state.completedCount, stepLabel: "\(TourStep.moveTuck.index(in: total))"
             )
@@ -494,10 +665,11 @@ final class TourController: ObservableObject {
             return model
 
         case .step(.back, let beats):
+            var list = [TourBeatModel(id: 0, text: L("tour.back.beat1"), checked: beats[0]),
+                        TourBeatModel(id: 1, text: L("tour.back.beat2"), checked: beats[1])]
+            markSkipped(&list)
             return TourCardModel(
-                kind: .step(.back), title: L("tour.back.title"), body: "",
-                beats: [TourBeatModel(id: 0, text: L("tour.back.beat1"), checked: beats[0]),
-                        TourBeatModel(id: 1, text: L("tour.back.beat2"), checked: beats[1])],
+                kind: .step(.back), title: L("tour.back.title"), body: skipBody() ?? "", beats: list,
                 ringCompleted: state.completedCount, stepLabel: "\(TourStep.back.index(in: total))"
             )
 
@@ -527,7 +699,7 @@ final class TourController: ObservableObject {
 
         case .deferredTip:
             var model = TourCardModel(
-                kind: .deferredTip, title: L("tour.later.title"), body: L("tour.later.body"),
+                kind: .deferredTip, title: L("tour.later.title"), body: awayOr(L("tour.later.body")),
                 ringCompleted: state.completedCount, stepLabel: "\(TourStep.translate.index(in: total))"
             )
             model.showStop = true; model.showSkipStep = false
@@ -535,71 +707,84 @@ final class TourController: ObservableObject {
         }
     }
 
+    /// "这一步先不做" pressed: the unchecked dots turn dashed (C.5.4).
+    private func markSkipped(_ beats: inout [TourBeatModel]) {
+        guard skipping else { return }
+        for i in beats.indices where !beats[i].checked { beats[i].skipped = true; beats[i].pending = false }
+    }
+
+    private func skipBody() -> String? { skipping ? L10n.localized("tour.skip.ack") : nil }
+
     private func gestureKind(for phase: TourPhase) -> TourGestureKind? {
         guard case .step(.moveTuck, let beats) = phase else { return nil }
-        if !beats[0] { return .nudgeToCorner }
         let rightward = (panel?.currentCorner() == .topRight || panel?.currentCorner() == .bottomRight) || liquidEdge.side != .left
+        // Off the cover page there are no corners to nudge toward: only the edge.
+        if !beats[0], musicController.currentPage == .album { return .nudgeToCorner }
         return .swipeToEdge(rightward: rightward)
     }
 
-    // MARK: - Anchors & placement
+    // MARK: - Surface, anchors, targets
 
-    private var isSliverAnchored: Bool {
-        if case .step(.back, _) = state.phase { return true }
-        if case .deferredTip = state.phase, liquidEdge.isActive { return true }
+    private func currentSurface() -> TourSurface {
+        TourSurface(page: musicController.currentPage, controlsVisible: TourHookBus.shared.controlsVisible.value,
+                    edge: liquidEdge.state, isPlaying: musicController.isPlaying)
+    }
+
+    private func isSliverAnchored(_ phase: TourPhase) -> Bool {
+        if case .step(.back, _) = phase { return true }
+        if case .deferredTip = phase, liquidEdge.isActive { return true }
         return false
     }
 
-    private func currentAnchorRect() -> CGRect? {
+    /// The screen rect of what the ring points at. Controls that have never been
+    /// rendered (they only exist while hovered) fall back to their resting layout.
+    private func rect(for subject: TourRingSubject) -> CGRect? {
         guard let panel else { return nil }
-        // Anchors are stored as SwiftUI global rects; placement runs in
-        // screen space — convert through the panel's real hosting view.
-        func screen(_ id: TourAnchorID) -> CGRect? { TourAnchorRegistry.shared.screenRect(for: id, in: panel) }
-        switch state.phase {
-        case .step(.reveal, _):
-            return screen(.playPause)
-        case .step(.corners, let beats):
-            return screen(beats[0] ? .musicButton : .audioOutput)
-        case .step(.lyrics, _):
-            return screen(.lyricsNav)
-        case .step(.translate, _), .deferredTip:
-            return screen(.translate)
-        case .transitioning(let from, _) where from == .translate:
-            return screen(.translate)
-        default:
-            return panel.frame
+        switch subject {
+        case .control(let id):
+            return TourAnchorRegistry.shared.resolvedScreenRect(for: id, in: panel)
+        case .sliver:
+            let r = liquidEdge.tuckedRegionInScreen
+            return r.isEmpty ? nil : r
+        case .peekCard:
+            let hit = liquidEdge.floatingHitRegionInScreen
+            if !hit.isEmpty { return hit }
+            let r = liquidEdge.tuckedRegionInScreen
+            return r.isEmpty ? nil : r
         }
     }
 
-    private func haloSize(for phase: TourPhase) -> CGSize? {
-        switch phase {
-        case .step(.reveal, _), .step(.translate, _), .deferredTip: return CGSize(width: 40, height: 40)
-        case .step(.corners, _): return CGSize(width: 40, height: 40)
-        case .step(.lyrics, _): return CGSize(width: 36, height: 36)
-        case .step(.back, _): return CGSize(width: 18, height: 72)
-        case .transitioning(let from, _) where from == .translate: return CGSize(width: 40, height: 40)
-        default: return nil
-        }
+    /// The rect the CARD points its beak at (and sits beside).
+    private func cardAnchorRect(for phase: TourPhase) -> CGRect {
+        guard let panel else { return .zero }
+        if case .step(.moveTuck, _) = phase { return panel.frame }
+        if let target = TourGuidanceResolver.target(phase: phase, surface: currentSurface(), moveNeedsAlbumFirst: moveNeedsAlbum),
+           let r = rect(for: target.subject) { return r }
+        return panel.frame
     }
 
-    /// Places the card next to its anchor and puts `model` in it. The first
-    /// call of a tour builds the window + hosting view; every later call only
-    /// feeds the store and moves the window.
-    private func presentCard(model: TourCardModel, gestureKind: TourGestureKind?) {
-        guard let panel, let screen = panel.screen ?? NSScreen.main else { return }
+    // MARK: - Placement
+
+    private struct Placed {
+        var placement: TourCardPlacement
+        var size: CGSize
+        var anchor: CGRect
+        var pose: TourCardPose
+    }
+
+    private func computePlacement(model: TourCardModel, phase: TourPhase, gestureKind: TourGestureKind?, arm: TourCardMaterialArm, currentSide: TourCardSide) -> Placed? {
+        guard let panel, let screen = panel.screen ?? NSScreen.main else { return nil }
         let visibleFrame = screen.visibleFrame
-        let anchor = currentAnchorRect() ?? panel.frame
-        ensureWindows()
-        guard let store = cardStore, let window = cardWindow else { return }
+        let anchor = cardAnchorRect(for: phase)
 
         // Two passes: the beak's side (hence the window's width/height) is a
         // product of the placement, and the placement needs the size.
-        var beakSide = store.beakSide
+        var beakSide = currentSide
         var cardSize = CGSize(width: TourCardView.windowWidth(beakSide: .left), height: 150)
         var placement = TourCardPlacement(origin: .zero, beakSide: beakSide, beakOffset: 40)
         for _ in 0..<2 {
-            cardSize = measureCardSize(model: model, beakSide: beakSide, gestureKind: gestureKind, arm: store.arm)
-            if isSliverAnchored {
+            cardSize = measureCardSize(model: model, beakSide: beakSide, gestureKind: gestureKind, arm: arm)
+            if isSliverAnchored(phase) {
                 let edge: TourCardSide = liquidEdge.side == .left ? .left : .right
                 let region = liquidEdge.tuckedRegionInScreen
                 placement = TourPlacement.placeNearSliver(
@@ -613,46 +798,15 @@ final class TourController: ObservableObject {
             if placement.beakSide == beakSide { break }
             beakSide = placement.beakSide
         }
-        debugLastPlacement = placement
-        debugLastAnchorRect = anchor
-
-        let newContent = store.model.kind != model.kind || store.model.title != model.title
-        // A different card is taking over while the completion feedback waits
-        // for exactly that: the feedback already faded the old content out and
-        // fades the new one in — no crossfade of our own on top of it.
-        let feedbackHandoff = newContent && feedback.expectsSwap
-        let apply = {
-            store.beakSide = placement.beakSide
-            store.beakOffset = placement.beakOffsetFromTop(cardHeight: cardSize.height)
-            store.gestureKind = gestureKind
-            store.model = model
-            if newContent { store.contentKey += 1 }
-        }
-        if feedbackHandoff {
-            apply()
-            feedback.cardDidSwap()
-        } else if newContent {
-            feedback.cancel()
-            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { apply() } else {
-                withAnimation(.easeOut(duration: TourMotionPolicy.Tokens.cardDismissDuration)) { apply() }
-            }
-        } else {
-            apply()
-        }
-
-        window.hasShadow = store.arm.needsWindowShadow
-        let target = NSRect(origin: placement.origin, size: cardSize)
-        window.place(target, animated: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-                     duration: TourMotionPolicy.Tokens.cardTravelResponse,
-                     timing: CAMediaTimingFunction(controlPoints: 0.3, 1.0, 0.5, 1.0))
-        window.orderFront(nil)
-        feedback.raiseOverlay()
-        cardPlacedOrigin = target.origin
-
-        positionHalo(anchor: anchor)
+        let pose = TourCardPose(
+            x: placement.origin.x, top: placement.origin.y + cardSize.height, width: cardSize.width, height: cardSize.height,
+            beakSide: placement.beakSide, beakOffset: placement.beakOffsetFromTop(cardHeight: cardSize.height)
+        )
+        return Placed(placement: placement, size: cardSize, anchor: anchor, pose: pose)
     }
 
     private func measureCardSize(model: TourCardModel, beakSide: TourCardSide, gestureKind: TourGestureKind?, arm: TourCardMaterialArm) -> CGSize {
+        if let m = measured, m.model == model, m.side == beakSide, m.gesture == gestureKind { return m.size }
         // The footer's links and buttons only render when their handlers exist; a
         // measuring copy WITHOUT handlers is one footer row (~14pt) shorter than
         // the live card — the second reason the bottom links were cut off.
@@ -665,61 +819,353 @@ final class TourController: ObservableObject {
         // No silent fallback height: a made-up size is what clipped every card
         // (fittingSize was (0, 0) and 150 was used instead).
         assert(fitting.height > 0, "TourHostingView must report its content size")
-        return CGSize(width: width, height: max(fitting.height, 92))
+        let size = CGSize(width: width, height: max(fitting.height, 92))
+        measured = (model, beakSide, gestureKind, size)
+        return size
     }
 
-    private func positionHalo(anchor: CGRect) {
-        guard let size = haloSize(for: state.phase) else {
-            haloWindow?.orderOut(nil)
-            haloStore?.appeared = false
-            return
-        }
+    /// Places the card next to its anchor and puts `model` in it (C.2 / C.3).
+    /// The first call of a tour builds the window + hosting view; every later
+    /// call only feeds the store and moves the window through the guidance motion.
+    private func presentCard(model: TourCardModel, gestureKind: TourGestureKind?) {
+        guard panel != nil else { return }
+        releaseWork?.cancel(); releaseWork = nil
         ensureWindows()
-        guard let haloWindow, let haloStore else { return }
-        let frame = NSRect(x: anchor.midX - size.width / 2, y: anchor.midY - size.height / 2, width: size.width, height: size.height)
-        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        if haloWindow.isVisible {
-            haloStore.size = size
-            if reduce || haloWindow.frame == frame {
-                haloWindow.setFrame(frame, display: true)
-            } else {
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.42
-                    context.timingFunction = CAMediaTimingFunction(controlPoints: 0.3, 1.1, 0.4, 1.0)
-                    haloWindow.animator().setFrame(frame, display: true)
+        guard let store = cardStore, let window = cardWindow else { return }
+        guidance.syncReduceMotion()
+        let phase = state.phase
+        guard let placed = computePlacement(model: model, phase: phase, gestureKind: gestureKind, arm: store.arm, currentSide: store.beakSide) else { return }
+        debugLastPlacement = placed.placement
+        debugLastAnchorRect = placed.anchor
+        let pose = placed.pose
+        let motion = guidance.motion
+
+        let newContent = store.model.kind != model.kind || store.model.title != model.title
+        let appearing = !motion.cardVisible
+        // A different card is taking over while the completion feedback waits
+        // for exactly that: the feedback already faded the old content out and
+        // fades the new one in — no fade of our own on top of it.
+        let feedbackHandoff = !appearing && newContent && feedback.expectsSwap
+        window.hasShadow = store.arm.needsWindowShadow
+
+        func commit(_ store: TourCardStore, bumpKey: Bool) {
+            store.beakSide = pose.beakSide
+            store.beakOffset = CGFloat(pose.beakOffset)
+            store.gestureKind = gestureKind
+            store.model = model
+            if bumpKey { store.contentKey += 1 }
+        }
+
+        if appearing {
+            // First appearance, or the card is coming back after stepping aside.
+            entryGeneration += 1
+            commit(store, bumpKey: newContent)
+            motion.presentCard(at: pose)
+            raiseTourWindows()
+            holdRing(for: 0.3)
+            scheduleStallHint()
+        } else if feedbackHandoff {
+            // C.3: the move already started at the handoff (H + 40 ms); the
+            // content swaps now, the ring comes back 0.42 s later.
+            entryGeneration += 1
+            commit(store, bumpKey: true)
+            if pendingHandoffPose != pose { motion.moveCard(to: pose, delay: 0) }
+            pendingHandoffPose = nil
+            feedback.cardDidSwap()
+            holdRing(for: 0.42)
+            scheduleStallHint()
+        } else if newContent {
+            // A quiet step-to-step transition (skip, welcome -> first step, a
+            // deferral note): fade out, move, swap, fade in — no tick, no sparks.
+            feedback.cancel()
+            entryGeneration += 1
+            pendingHandoffPose = nil
+            motion.hideRing()
+            motion.stopHint()
+            lastRingSubject = nil
+            motion.fadeContentOut()
+            motion.moveCard(to: pose)
+            motion.schedule(after: 0.14) { [weak self] in
+                guard let self, let store = self.cardStore else { return }
+                commit(store, bumpKey: true)
+                self.guidance.motion.staggerContentIn()
+            }
+            holdRing(for: 0.56)
+            raiseTourWindows()
+            scheduleStallHint()
+        } else {
+            // Same card: a beat turned solid, the body text changed, the anchor moved.
+            let bodyChanged = store.model.body != model.body
+            store.gestureKind = gestureKind
+            if bodyChanged {
+                motion.crossfadeBody { [weak self] in
+                    guard let store = self?.cardStore else { return }
+                    store.model = model
+                }
+            } else if store.model != model {
+                store.model = model
+            }
+            store.beakSide = pose.beakSide
+            store.beakOffset = CGFloat(pose.beakOffset)
+            if let target = motion.targetPose, target != pose {
+                if abs(target.x - pose.x) < 0.5, abs(target.top - pose.top) < 0.5, target.beakSide == pose.beakSide {
+                    motion.relayoutCard(to: pose)        // same spot, new height / beak
+                } else {
+                    motion.moveCard(to: pose, delay: 0)  // the anchor moved (the ring jumped to the next control)
                 }
             }
-        } else {
-            haloStore.size = size
-            haloStore.appeared = false
-            haloWindow.setFrame(frame, display: true)
-            haloWindow.orderFront(nil)
-            DispatchQueue.main.async { haloStore.appeared = true }
         }
+        cardPlacedOrigin = NSPoint(x: pose.x, y: pose.top - pose.height)
+        feedback.raiseOverlay()
+        guidance.kick()
+    }
+
+    /// The panel goes to the front of its level at every step, so a floating
+    /// window from another app can no longer sit over it and swallow the hover
+    /// and the two-finger gesture the step asks for (item 9). The tour's own
+    /// windows live one level higher and are never re-ordered under it.
+    private func raiseTourWindows() {
+        if let panel, panel.isVisible, !liquidEdge.isActive { panel.orderFrontRegardless() }
+        cardWindow?.orderFront(nil)
+        haloWindow?.orderFront(nil)
     }
 
     private func ensureWindows() {
         if cardWindow == nil {
             let store = TourCardStore(
                 model: TourCardModel(kind: .welcome, title: "", body: "", ringCompleted: 0),
-                feedback: feedback, arm: TourCardMaterialArm.current(defaults)
+                feedback: feedback, arm: TourCardMaterialArm.current(defaults), guidance: guidance.store
             )
             store.onPrimary = { [weak self] in self?.handlePrimary() }
             store.onSecondary = { [weak self] in self?.handleSecondary() }
             store.onStop = { [weak self] in self?.send(.stopTour) }
             store.onSkipStep = { [weak self] in self?.handleSkipStepOrDeniedContinue() }
             store.onFallback = { [weak self] in self?.handleFallback() }
+            store.onBeatHover = { [weak self] id, inside in self?.beatHovered(id, inside: inside) }
             let window = TourCardWindow(store: store)
+            window.isDriven = true
+            window.onContentSizeChanged = { [weak self] in self?.relayoutFromStore() }
+            // The content is clipped to the driven height, so the hosting view cannot
+            // say "I need more room" by itself: a model that changes under the window
+            // (copy, font, state) is re-measured here.
+            storeObserver = store.$model.dropFirst().sink { [weak self] _ in
+                DispatchQueue.main.async { self?.relayoutFromStore() }
+            }
             cardStore = store
             cardWindow = window
         }
         if haloWindow == nil {
-            let store = TourHaloStore()
             let window = TourHaloWindow()
-            window.contentView = TourHostingView(rootView: TourHaloRoot(store: store))
-            haloStore = store
+            window.contentView = TourHostingView(rootView: TourGuidanceOverlayView(store: guidance.store))
             haloWindow = window
         }
+        if let panel, let screen = panel.screen ?? NSScreen.main, let overlay = haloWindow {
+            if overlay.frame != screen.frame { overlay.setFrame(screen.frame, display: false) }
+            guidance.store.panelFrame = panel.frame
+            if !overlay.isVisible { overlay.orderFront(nil) }
+        }
+        guidance.attach(card: cardWindow, overlay: haloWindow)
+    }
+
+    // MARK: - Ring, hints (prototype C.4)
+
+    /// The ring stays down for `delay` seconds of motion time, then comes back.
+    private func holdRing(for delay: Double) {
+        ringHeld = true
+        ringHoldToken += 1
+        let token = ringHoldToken
+        guidance.motion.schedule(after: delay) { [weak self] in
+            guard let self, token == self.ringHoldToken else { return }
+            self.ringHeld = false
+            self.refreshGuidance()
+        }
+    }
+
+    private func ringGeometry(for target: TourRingTarget, rect: CGRect) -> TourRingGeometry {
+        TourRingGeometry(cx: rect.midX, cy: rect.midY, w: target.size.width, h: target.size.height, corner: target.cornerRadius)
+    }
+
+    /// Re-derives the ring, the ghost cursor and the panel glow from live state.
+    /// Idempotent: called on every send, anchor change, page change, hover
+    /// change, edge-state change and panel move.
+    func refreshGuidance() {
+        guard cardWindow != nil, let panel else { return }
+        guidance.syncReduceMotion()
+        let motion = guidance.motion
+        guidance.store.panelFrame = panel.frame
+        // Between a completion and the next card the ring belongs to the handoff.
+        if case .transitioning(let from, _) = state.phase, from != .translate { return }
+        if feedback.isActive, case .finale = state.phase { return }
+        if cardYielded || skipping { return }
+        if ringHeld { return }
+
+        let surface = currentSurface()
+        let target = TourGuidanceResolver.target(phase: state.phase, surface: surface, moveNeedsAlbumFirst: moveNeedsAlbum)
+        if let target, let rect = rect(for: target.subject) {
+            let geo = ringGeometry(for: target, rect: rect)
+            if !motion.ringVisible || lastRingSubject != target.subject {
+                motion.showRing(geo, mode: target.mode)
+            } else {
+                motion.retargetRing(geo)
+                motion.setRingMode(target.mode)
+            }
+            lastRingSubject = target.subject
+        } else {
+            motion.hideRing()
+            lastRingSubject = nil
+        }
+
+        // Panel-level hints: ONCE per step entry, and they stop the moment they no longer apply.
+        switch TourGuidanceResolver.panelHint(phase: state.phase, surface: surface) {
+        case .hoverInvite:
+            if hintGeneration != entryGeneration {
+                hintGeneration = entryGeneration
+                motion.startHover(target: CGPoint(x: panel.frame.minX + panel.frame.width * 0.6, y: panel.frame.maxY - panel.frame.height * 0.669))
+            }
+        case .gestureInvite:
+            if hintGeneration != entryGeneration {
+                hintGeneration = entryGeneration
+                motion.startGestureGlow()
+            }
+        case .none:
+            if motion.hintRunning { motion.stopHint() }
+        }
+        guidance.kick()
+    }
+
+    /// A beat row was hovered: the ring temporarily points at that beat's
+    /// control (C.4.1); leaving puts it back. A step with a single control just pulses.
+    private func beatHovered(_ id: Int, inside: Bool) {
+        guard case .step(let step, _) = state.phase, guidance.motion.ringVisible else { return }
+        if !inside { refreshGuidance(); return }
+        let subjects = TourGuidanceResolver.beatSubjects(for: step)
+        let subject: TourRingSubject?
+        if step == .moveTuck { subject = id == 2 ? .control(.lyricsNav) : nil } else { subject = subjects.indices.contains(id) ? subjects[id] : nil }
+        guard let subject, subject != lastRingSubject, let rect = rect(for: subject) else {
+            guidance.motion.pulseRing()
+            guidance.kick()
+            return
+        }
+        let shape = TourGuidanceResolver.ringShape(for: subject)
+        guidance.motion.peekRing(TourRingGeometry(cx: rect.midX, cy: rect.midY, w: shape.size.width, h: shape.size.height, corner: shape.cornerRadius))
+        guidance.kick()
+    }
+
+    // MARK: - Live state changes
+
+    /// The page, the controls' visibility or playback changed: the card's text
+    /// (body, beat labels) and the ring's mode may both need to follow.
+    private func surfaceDidChange() {
+        guard cardWindow != nil, !skipping, !cardYielded else { return }
+        if case .transitioning(let from, _) = state.phase, from != .translate { return }
+        if feedback.isActive { return }
+        if cardModel(for: state.phase, in: state) != nil, guidance.motion.cardVisible, cardStore?.model != nil {
+            presentCurrentCard()
+        }
+        refreshGuidance()
+    }
+
+    private func edgeStateDidChange(_ edge: LiquidEdgeState) {
+        // Clicking the peek card starts the panel's return. The card stood 20pt from
+        // the capsule, right where the returning panel lands: it steps out first
+        // (0.16 s, C.2), and the finale card grows in once the panel is back.
+        if edge == .expanding, case .step(.back, _) = state.phase, guidance.motion.cardVisible, !feedback.isActive {
+            guidance.motion.dismissCard()
+            guidance.motion.hideRing()
+            guidance.motion.stopHint()
+            guidance.kick()
+            return
+        }
+        if cardWindow != nil { DispatchQueue.main.async { [weak self] in self?.refreshGuidance() } }
+    }
+
+    private func panelDidMove() {
+        guard cardWindow != nil else { return }
+        refreshGuidance()
+        // A moving panel is not chased by the card: when it holds still again the card returns.
+        if cardYielded { scheduleResume() }
+    }
+
+    private func panelMovementBegan() {
+        guard cardWindow != nil, guidance.motion.cardVisible, !cardYielded, !feedback.isActive, !skipping else { return }
+        if isSliverAnchored(state.phase) { return }
+        switch state.phase {
+        case .step, .welcome, .deferredTip, .finale: break
+        default: return
+        }
+        cardYielded = true
+        guidance.motion.dismissCard()
+        guidance.motion.hideRing()
+        guidance.motion.stopHint()
+        lastRingSubject = nil
+        guidance.kick()
+        scheduleResume()
+    }
+
+    /// Debounced: comes back once the panel has been still for 0.4 s.
+    private func scheduleResume() {
+        resumeWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.resumeWork = nil
+            guard self.cardYielded else { return }
+            self.cardYielded = false
+            self.presentCurrentCard()
+            self.refreshGuidance()
+        }
+        resumeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    /// Spec C.3 "H": the completion feedback is about to fade the old content
+    /// out. The ring fades, the hints stop, and the card starts moving to where
+    /// the next card goes — 40 ms in, the content swaps 100 ms after that.
+    private func handoffDidStart() {
+        guard cardWindow != nil, let store = cardStore else { return }
+        guidance.syncReduceMotion()
+        guidance.motion.hideRing()
+        guidance.motion.stopHint()
+        lastRingSubject = nil
+        let nextState: TourState
+        switch state.phase {
+        case .transitioning(_, _):
+            (nextState, _) = TourMachine.reduce(state, .advanceTransition, snapshot: makeSnapshot())
+        case .finale:
+            nextState = state
+        default:
+            guidance.kick()
+            return
+        }
+        guard let model = cardModel(for: nextState.phase, in: nextState),
+              let placed = computePlacement(model: model, phase: nextState.phase, gestureKind: gestureKind(for: nextState.phase),
+                                            arm: store.arm, currentSide: store.beakSide) else { guidance.kick(); return }
+        pendingHandoffPose = placed.pose
+        guidance.motion.moveCard(to: placed.pose)
+        guidance.kick()
+    }
+
+    /// The card's content wants a different height than the pose it is heading
+    /// for (its text changed under a live window): spring the height, same top
+    /// edge, same beak tip.
+    private func relayoutFromStore() {
+        guard let store = cardStore, guidance.motion.cardVisible, let target = guidance.motion.targetPose else { return }
+        let size = measureCardSize(model: store.model, beakSide: store.beakSide, gestureKind: store.gestureKind, arm: store.arm)
+        guard abs(size.height - target.height) > 0.5 else { return }
+        var pose = target
+        pose.height = size.height
+        guidance.motion.relayoutCard(to: pose)
+        guidance.kick()
+    }
+
+    private func scheduleStallHint() {
+        stallWork?.cancel()
+        cardStore?.stalled = false
+        let work = DispatchWorkItem { [weak self] in
+            self?.stallWork = nil
+            self?.cardStore?.stalled = true
+        }
+        stallWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: work)
     }
 
     // MARK: - Button handlers
@@ -742,13 +1188,34 @@ final class TourController: ObservableObject {
         }
     }
 
+    /// "这一步先不做" (C.5.4): the unfinished dots turn dashed, the body says
+    /// "OK, we'll leave that for later", then a quiet transition (no tick, no
+    /// sparks, no haptic) moves on. A retreat, not a punishment: no confirmation.
     private func handleSkipStepOrDeniedContinue() {
         if case .step(.connect, _) = state.phase, connectDenied {
             connectDenied = false
             send(.skipStep)
-        } else {
-            send(.skipStep)
+            return
         }
+        guard case .step(let step, _) = state.phase, step != .connect, !skipping, !feedback.isActive else {
+            send(.skipStep)
+            return
+        }
+        skipping = true
+        guidance.syncReduceMotion()
+        guidance.motion.hideRing()
+        guidance.motion.stopHint()
+        lastRingSubject = nil
+        presentCurrentCard()
+        skipWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.skipWork = nil
+            self.skipping = false
+            self.send(.skipStep)
+        }
+        skipWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + (guidance.motion.reduceMotion ? 0.3 : 0.55), execute: work)
     }
 
     private func handleFallback() {

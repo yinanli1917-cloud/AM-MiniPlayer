@@ -14,6 +14,10 @@ struct TourBeatModel: Equatable, Identifiable {
     var id: Int
     var text: String
     var checked: Bool
+    /// "这一步先不做" pressed: the unchecked dot turns dashed and dim (C.5.4).
+    var skipped = false
+    /// The user has done everything but this beat and can do it now (C.5.3).
+    var pending = false
 }
 
 struct TourCardModel: Equatable {

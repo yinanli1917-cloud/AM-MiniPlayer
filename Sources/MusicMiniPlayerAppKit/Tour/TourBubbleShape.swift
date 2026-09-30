@@ -16,6 +16,10 @@ struct TourBubbleShape: Shape, Equatable {
     var beakOffset: CGFloat
     var cornerRadius: CGFloat = 14
     var beakSize: CGFloat = 12
+    /// 0...1: how far the drawn beak protrudes. The layout (`bodyRect`) always
+    /// reserves the full beak, so re-aiming the beak across the panel (spec C.3:
+    /// it fades out on one side and in on the other) never shifts the body.
+    var beakScale: CGFloat = 1
 
     /// The rounded-rect body (excludes the beak protrusion), for callers
     /// that need to lay content out inside it without the beak's inset.
@@ -68,32 +72,34 @@ struct TourBubbleShape: Shape, Equatable {
     private func beakTriangle(in rect: CGRect, body: CGRect) -> Path {
         let offset = clampedOffset(in: body)
         let overlap: CGFloat = 2
-        let half = beakSize / 2
+        let k = min(max(beakScale, 0), 1)
+        let half = beakSize / 2 * k
+        let reach = beakSize * k
         var beak = Path()
         switch beakSide {
         case .left:
-            let tip = CGPoint(x: rect.minX, y: body.minY + offset)
+            let tip = CGPoint(x: body.minX - reach, y: body.minY + offset)
             beak.move(to: tip)
             beak.addLine(to: CGPoint(x: body.minX, y: tip.y - half))
             beak.addLine(to: CGPoint(x: body.minX + overlap, y: tip.y - half))
             beak.addLine(to: CGPoint(x: body.minX + overlap, y: tip.y + half))
             beak.addLine(to: CGPoint(x: body.minX, y: tip.y + half))
         case .right:
-            let tip = CGPoint(x: rect.maxX, y: body.minY + offset)
+            let tip = CGPoint(x: body.maxX + reach, y: body.minY + offset)
             beak.move(to: tip)
             beak.addLine(to: CGPoint(x: body.maxX, y: tip.y - half))
             beak.addLine(to: CGPoint(x: body.maxX - overlap, y: tip.y - half))
             beak.addLine(to: CGPoint(x: body.maxX - overlap, y: tip.y + half))
             beak.addLine(to: CGPoint(x: body.maxX, y: tip.y + half))
         case .top:
-            let tip = CGPoint(x: body.minX + offset, y: rect.minY)
+            let tip = CGPoint(x: body.minX + offset, y: body.minY - reach)
             beak.move(to: tip)
             beak.addLine(to: CGPoint(x: tip.x - half, y: body.minY))
             beak.addLine(to: CGPoint(x: tip.x - half, y: body.minY + overlap))
             beak.addLine(to: CGPoint(x: tip.x + half, y: body.minY + overlap))
             beak.addLine(to: CGPoint(x: tip.x + half, y: body.minY))
         case .bottom:
-            let tip = CGPoint(x: body.minX + offset, y: rect.maxY)
+            let tip = CGPoint(x: body.minX + offset, y: body.maxY + reach)
             beak.move(to: tip)
             beak.addLine(to: CGPoint(x: tip.x - half, y: body.maxY))
             beak.addLine(to: CGPoint(x: tip.x - half, y: body.maxY - overlap))

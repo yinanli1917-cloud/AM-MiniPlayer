@@ -409,6 +409,12 @@ public class LyricsService: ObservableObject {
         for i in lyrics.indices { lyrics[i].translation = nil }
     }
 
+    #if DEBUG || LOCAL_DEVELOPER_BUILD
+    /// Test seam (tour tests): translation availability depends on fetched lyrics
+    /// in another language, which a headless test cannot produce.
+    func debugSetCanTranslate(_ value: Bool) { canTranslate = value }
+    #endif
+
     private func refreshTranslationAvailability() {
         canTranslate = Self.translationAvailability(
             lyrics: lyrics,

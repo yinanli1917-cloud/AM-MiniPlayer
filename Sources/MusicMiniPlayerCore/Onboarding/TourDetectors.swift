@@ -34,6 +34,13 @@ public final class TourHookBus {
     public let audioOutputMenuOpened = PassthroughSubject<Void, Never>()
     /// `MusicButtonView`'s action firing (§6 "↖ Music 点击").
     public let musicButtonTapped = PassthroughSubject<Void, Never>()
+    /// Whether the CURRENT page's controls are on screen (the mouse is over the
+    /// panel). Sent by the page that is showing: `MiniPlayerView` for the cover
+    /// and queue pages, `LyricsView` for the lyrics page. The tour needs this
+    /// level (not just the "revealed" edge) to tell a hint ring (control not
+    /// reachable yet) from a press-now ring, and to stop the ghost cursor the
+    /// moment the mouse arrives (prototype C.4.2).
+    public let controlsVisible = CurrentValueSubject<Bool, Never>(false)
 
     private init() {}
 }
@@ -110,7 +117,9 @@ public struct TourDetectors {
     ) {
         let automation = automationAuthorized.map { TourEvent.signal(.automationAuthorized) }
         let reveal = controlsRevealed.map { TourEvent.signal(.controlsRevealed) }
-        let playing = isPlaying.filter { $0 }.map { _ in TourEvent.signal(.isPlaying) }
+        // Every emission is a toggle (the caller drops the initial value and
+        // repeats): pausing counts exactly like playing.
+        let playing = isPlaying.map { _ in TourEvent.signal(.isPlaying) }
         let output = audioOutputMenuOpened.map { TourEvent.signal(.audioOutputMenuOpened) }
         let musicButton = musicButtonTapped.map { TourEvent.signal(.musicButtonTapped) }
         let lyricsPage = currentPageIsLyrics.filter { $0 }.map { _ in TourEvent.signal(.onLyricsPage) }

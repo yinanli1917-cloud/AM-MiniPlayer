@@ -30,7 +30,11 @@ final class TourDetectorTests: XCTestCase {
         XCTAssertEqual(received, [.signal(.controlsRevealed)])
     }
 
-    func test_isPlaying_onlyFiresOnTrue() {
+    /// Item 4 (2026-09-29): the reveal step's second beat took only "started playing",
+    /// so with music already playing it asked for a press that could never count.
+    /// Every emission is now a toggle (the controller feeds `dropFirst().removeDuplicates()`),
+    /// pause included.
+    func test_isPlaying_everyToggleFires_pauseIncluded() {
         let subject = PassthroughSubject<Bool, Never>()
         let detectors = TourDetectors(isPlaying: subject.eraseToAnyPublisher())
         var received: [TourEvent] = []
@@ -38,7 +42,7 @@ final class TourDetectorTests: XCTestCase {
         subject.send(false)
         subject.send(true)
         subject.send(false)
-        XCTAssertEqual(received, [.signal(.isPlaying)])
+        XCTAssertEqual(received, [.signal(.isPlaying), .signal(.isPlaying), .signal(.isPlaying)])
     }
 
     func test_currentPageIsLyrics_onlyFiresOnTrue() {

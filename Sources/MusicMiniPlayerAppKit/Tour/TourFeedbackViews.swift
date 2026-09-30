@@ -178,6 +178,7 @@ struct TourFeedbackRing: View {
                 .monospacedDigit()
                 .tracking(-0.2)
                 .foregroundStyle(palette.ink)
+                .contentTransition(.numericText())
                 .opacity(numberOpacity)
                 .scaleEffect(engaged ? f.numberScale : 1)
                 .offset(y: engaged ? f.numberOffsetY : 0)
@@ -195,11 +196,26 @@ struct TourFeedbackRing: View {
 enum TourBeatDotDrawing {
     /// 14 x 14 dot, drawn around `center`: outline r 6.25 / 1.5pt, solid disc
     /// r 6.9 * fill, white check `M4 7.3 L6.3 9.5 L10.2 4.8` (1.9pt), scale.
-    static func draw(_ ctx: GraphicsContext, center: CGPoint, fill: Double, draw: Double, scale: Double, palette: TourCardPalette) {
+    static func draw(_ ctx: GraphicsContext, center: CGPoint, fill: Double, draw: Double, scale: Double, palette: TourCardPalette,
+                     hover: Bool = false, skipped: Bool = false, pending: Double = 0) {
         var g = ctx
         g.translateBy(x: center.x, y: center.y)
         g.scaleBy(x: scale, y: scale)
-        g.stroke(Path(ellipseIn: CGRect(x: -6.25, y: -6.25, width: 12.5, height: 12.5)), with: .color(palette.dotTrack), style: StrokeStyle(lineWidth: 1.5))
+        let outline = Path(ellipseIn: CGRect(x: -6.25, y: -6.25, width: 12.5, height: 12.5))
+        if pending > 0.003 {
+            // "Ready for you" glow (C.5.3): a soft accent halo breathing around the dot.
+            var glow = g
+            glow.addFilter(.blur(radius: 2))
+            glow.stroke(outline, with: .color(palette.accent.opacity(0.75 * pending)), style: StrokeStyle(lineWidth: 1.5 + 3 * pending))
+        }
+        if skipped {
+            // "Not this time" (C.5.4): dashed and dimmed to 55 %.
+            var dim = g
+            dim.opacity = 0.55
+            dim.stroke(outline, with: .color(palette.dotTrack), style: StrokeStyle(lineWidth: 1.5, dash: [2.2, 2.2]))
+        } else {
+            g.stroke(outline, with: .color(hover || pending > 0.003 ? palette.accent : palette.dotTrack), style: StrokeStyle(lineWidth: 1.5))
+        }
         let r = 6.9 * min(max(fill, 0), 1)
         if r > 0.005 {
             g.fill(Path(ellipseIn: CGRect(x: -r, y: -r, width: r * 2, height: r * 2)), with: .color(palette.accent))
@@ -221,6 +237,13 @@ struct TourFeedbackBeatDot: View {
     var checked: Bool
     var palette: TourCardPalette
     @ObservedObject var feedback: TourCompletionFeedback
+    var hover = false
+    var skipped = false
+    /// The beat is ready for the user's last move (C.5.3): a glow that breathes 3 times.
+    var pending = false
+
+    @State private var pendingPhase = 0.0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let beat = feedback.frame.beats[index]
@@ -228,11 +251,19 @@ struct TourFeedbackBeatDot: View {
         let draw = beat?.draw ?? (checked ? 1 : 0)
         let scale = beat?.scale ?? 1
         let size = TourCardMetrics.beatDot
+        let glow = pending && !checked ? (reduceMotion ? 0.001 : pendingPhase) : 0
         return Canvas { ctx, canvas in
-            TourBeatDotDrawing.draw(ctx, center: CGPoint(x: canvas.width / 2, y: canvas.height / 2), fill: fill, draw: draw, scale: scale, palette: palette)
+            TourBeatDotDrawing.draw(ctx, center: CGPoint(x: canvas.width / 2, y: canvas.height / 2), fill: fill, draw: draw, scale: scale,
+                                    palette: palette, hover: hover, skipped: skipped && !checked, pending: glow)
         }
         .frame(width: 26, height: 26)
         .frame(width: size, height: size)
+        .onChange(of: pending) { _, isPending in
+            guard isPending, !reduceMotion else { pendingPhase = 0; return }
+            // drop-shadow 0 -> 4pt, period 1.4 s, 3 cycles, then rest (spec C.5.3).
+            pendingPhase = 0
+            withAnimation(.easeInOut(duration: 0.7).repeatCount(6, autoreverses: true)) { pendingPhase = 1 }
+        }
     }
 }
 
@@ -243,15 +274,35 @@ struct TourFeedbackBeatRow: View {
     var palette: TourCardPalette
     var size: CGFloat
     @ObservedObject var feedback: TourCompletionFeedback
+    /// The pointer moved onto / off this row: the ring peeks at the row's control (C.4.1).
+    var onHover: ((Int, Bool) -> Void)?
+
+    @State private var hovering = false
 
     var body: some View {
         let mix = feedback.frame.beats[beat.id]?.textMix ?? (beat.checked ? 1 : 0)
         return HStack(spacing: 8) {
-            TourFeedbackBeatDot(index: beat.id, checked: beat.checked, palette: palette, feedback: feedback)
+            TourFeedbackBeatDot(index: beat.id, checked: beat.checked, palette: palette, feedback: feedback,
+                                hover: hovering, skipped: beat.skipped, pending: beat.pending)
             Text(beat.text)
                 .font(.system(size: size))
-                .foregroundStyle(mixColors(palette.ink, palette.muted, mix))
+                .foregroundStyle(mixColors(palette.ink, palette.muted, beat.skipped ? 1 : mix))
                 .fixedSize(horizontal: false, vertical: true)
+        }
+        // A row is a status, not a button: the wash says "this is the one I mean",
+        // it does not invite a click. Sized 8pt out to each side WITHOUT taking layout room.
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(palette.rowHover)
+                .padding(.horizontal, -8)
+                .padding(.vertical, -3)
+                .opacity(hovering ? 1 : 0)
+                .animation(.easeOut(duration: 0.12), value: hovering)
+        }
+        .contentShape(Rectangle())
+        .onHover { inside in
+            hovering = inside
+            onHover?(beat.id, inside)
         }
     }
 }
@@ -264,18 +315,25 @@ struct TourFeedbackBeatRow: View {
 private struct TourFeedbackBlock: ViewModifier {
     var index: Int
     @ObservedObject var feedback: TourCompletionFeedback
+    /// The card guidance's own per-block fade (appear stagger, step-to-step
+    /// swap): multiplies the completion feedback's, nil = not driven.
+    var guide: TourGuidanceFrame?
 
     func body(content: Content) -> some View {
         let f = feedback.frame
-        let opacity = f.contentOpacity.indices.contains(index) ? f.contentOpacity[index] : 1
-        let dy = f.contentOffsetY.indices.contains(index) ? f.contentOffsetY[index] : 0
+        var opacity = f.contentOpacity.indices.contains(index) ? f.contentOpacity[index] : 1
+        var dy = f.contentOffsetY.indices.contains(index) ? f.contentOffsetY[index] : 0
+        if let guide {
+            opacity *= guide.contentOpacity.indices.contains(index) ? guide.contentOpacity[index] : 1
+            dy += guide.contentOffsetY.indices.contains(index) ? guide.contentOffsetY[index] : 0
+        }
         return content.opacity(opacity).offset(y: dy)
     }
 }
 
 extension View {
-    func tourFeedbackBlock(_ index: Int, _ feedback: TourCompletionFeedback) -> some View {
-        modifier(TourFeedbackBlock(index: index, feedback: feedback))
+    func tourFeedbackBlock(_ index: Int, _ feedback: TourCompletionFeedback, guide: TourGuidanceFrame? = nil) -> some View {
+        modifier(TourFeedbackBlock(index: index, feedback: feedback, guide: guide))
     }
 }
 

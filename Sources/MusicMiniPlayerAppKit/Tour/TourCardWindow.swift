@@ -10,6 +10,14 @@
 
 import AppKit
 
+extension NSWindow.Level {
+    /// One step above `.floating`, where the panel lives. The tour's windows
+    /// (card, ring overlay, FX) must stay above the panel even after the tour
+    /// raises the panel to the front (item 9: another app's floating window
+    /// was in front of the panel), so they never depend on ordering alone.
+    static let tourOverlay = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
+}
+
 /// The card: `canBecomeKey = false` so it never steals focus or activates
 /// the app (§4.1's "不成为 key window，不抢焦点"); `ignoresMouseEvents = false`
 /// because its buttons/links must be clickable.
@@ -30,11 +38,17 @@ final class TourCardWindow: NSPanel {
     /// possibly mid-animation). `refitToContent` compares against THIS, never
     /// against an in-flight animation frame.
     private(set) var targetFrame: NSRect = .zero
+    /// True when `TourGuidance` owns the frame every tick (position AND height):
+    /// the content-size refit must not fight the height spring.
+    var isDriven = false
+    /// Driven windows report a content-size change here instead of refitting
+    /// themselves: the controller re-measures and springs the height.
+    var onContentSizeChanged: (() -> Void)?
 
     init(store: TourCardStore) {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         isFloatingPanel = true
-        level = .floating
+        level = .tourOverlay
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         isOpaque = false
         backgroundColor = .clear
@@ -73,6 +87,7 @@ final class TourCardWindow: NSPanel {
     /// offset is measured from it). A no-op when the sizes already agree,
     /// which is every normal controller-driven change.
     func refitToContent() {
+        if isDriven { onContentSizeChanged?(); return }
         let need = contentFittingSize
         guard need.width > 0, need.height > 0 else { return }
         let basis = targetFrame.isEmpty ? frame : targetFrame
@@ -93,7 +108,7 @@ final class TourHaloWindow: NSPanel {
     init() {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         isFloatingPanel = true
-        level = .floating
+        level = .tourOverlay
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         isOpaque = false
         backgroundColor = .clear
@@ -113,7 +128,7 @@ final class TourCelebrationWindow: NSPanel {
     init() {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         isFloatingPanel = true
-        level = .floating
+        level = .tourOverlay
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         isOpaque = false
         backgroundColor = .clear
