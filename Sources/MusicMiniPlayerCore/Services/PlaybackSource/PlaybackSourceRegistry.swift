@@ -55,6 +55,12 @@ public final class PlaybackSourceRegistry: ObservableObject {
         sources[activeSourceID]
     }
 
+    /// The player app behind the active source (Apple Music when nothing else is registered),
+    /// for UI that names or draws "the music app".
+    public var activeAppIdentity: PlayerAppIdentity {
+        activeSource?.appIdentity ?? .appleMusic
+    }
+
     public func select(_ id: PlaybackSourceID) {
         preferredSourceID = id
         defaults.set(id.rawValue, forKey: Self.defaultsKey)

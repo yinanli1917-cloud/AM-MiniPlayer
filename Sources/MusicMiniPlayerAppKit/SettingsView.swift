@@ -165,6 +165,8 @@ struct SettingsWindowView: View {
     @ObservedObject var state: SettingsWindowState
     /// The page this view renders.
     let tab: SettingsTab
+    /// The music app this window configures: names it in copy and draws its real icon.
+    let playerApp: PlayerAppIdentity
     @StateObject private var lyricsService = LyricsService.shared
     /// Kept for its Automation/MusicKit authorization queries and the Automation
     /// grant request; its old onboarding bookkeeping is superseded by
@@ -193,9 +195,10 @@ struct SettingsWindowView: View {
     /// `hover` is a test seam: a screenshot can put the pointer on a row without
     /// synthesising mouse events.
     @MainActor
-    init(state: SettingsWindowState, tab: SettingsTab, hover: SettingsHoverIntentModel? = nil) {
+    init(state: SettingsWindowState, tab: SettingsTab, playerApp: PlayerAppIdentity = .appleMusic, hover: SettingsHoverIntentModel? = nil) {
         self.state = state
         self.tab = tab
+        self.playerApp = playerApp
         _hover = StateObject(wrappedValue: hover ?? SettingsHoverIntentModel())
     }
 
@@ -216,6 +219,7 @@ struct SettingsWindowView: View {
         .background(SettingsPalette.windowBackground)
         .background(DemoWindowVisibilityObserver { stage.settle() })
         .environmentObject(hover)
+        .environment(\.playerApp, playerApp)
         .onAppear {
             stage.reduceMotion = reduceMotion
             hover.resetStage()
@@ -355,8 +359,8 @@ struct SettingsWindowView: View {
         case .launchAtLogin: return L10n.localized("launchAtLogin")
         case .showInDock: return L10n.localized("showInDock")
         case .gettingToKnowNanoPod: return L10n.localized("tour.settings.title")
-        case .musicAutomation: return L10n.localized("automation")
-        case .appleMusicAccess: return L10n.localized("appleMusic")
+        case .musicAutomation: return L10n.localized("automation", player: playerApp)
+        case .appleMusicAccess: return L10n.localized("appleMusic", player: playerApp)
         case .playbackHistory: return L10n.localized("playbackHistory")
         case .playPauseShortcut: return GlobalShortcutAction.togglePlayPause.localizedTitle
         case .nextTrackShortcut: return GlobalShortcutAction.nextTrack.localizedTitle
@@ -480,7 +484,8 @@ struct SettingsWindowView: View {
                 tourButton
             }
             SettingsDivider()
-            SettingsRow(demo: .musicAutomation, title: L10n.localized("automation"), detail: L10n.localized("automationDesc")) {
+            SettingsRow(demo: .musicAutomation, title: L10n.localized("automation", player: playerApp),
+                        detail: L10n.localized("automationDesc", player: playerApp), playerApp: playerApp) {
                 permissionControl(
                     status: automationStatusProvider(),
                     grant: {
@@ -490,7 +495,7 @@ struct SettingsWindowView: View {
                     openSettings: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")
             }
             SettingsDivider()
-            SettingsRow(demo: .appleMusicAccess, title: L10n.localized("appleMusic")) {
+            SettingsRow(demo: .appleMusicAccess, title: L10n.localized("appleMusic", player: playerApp), playerApp: playerApp) {
                 permissionControl(
                     status: appleMusicStatusProvider(),
                     grant: {

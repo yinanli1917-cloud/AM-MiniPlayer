@@ -46,9 +46,11 @@ struct AboutHeaderView: View {
 
 /// `.about .tag` 13 secondary, `.links` 12pt in the accent colour.
 struct AboutLinksView: View {
+    @Environment(\.playerApp) private var playerApp
+
     var body: some View {
         VStack(spacing: 10) {
-            Text(L10n.localized("aboutTagline"))
+            Text(L10n.localized("aboutTagline", player: playerApp))
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
             HStack(spacing: 14) {

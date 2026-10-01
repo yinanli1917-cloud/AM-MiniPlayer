@@ -13,6 +13,7 @@ import Foundation
 public final class SpotifyPlaybackSource: PlaybackSource {
 
     public let id: PlaybackSourceID = .spotify
+    public let appIdentity: PlayerAppIdentity = .spotify
 
     public let capabilities: PlaybackCapabilities = [
         .play, .seek, .shuffle, .repeatMode, .volume

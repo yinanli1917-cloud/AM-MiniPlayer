@@ -35,6 +35,8 @@ enum SettingsMetrics {
     static let rowHeight: CGFloat = 44
     static let rowHeightWithDetail: CGFloat = 53
     static let rowHorizontalPadding: CGFloat = 14
+    /// The music app's icon at the head of a row (native System Settings rows use ~20pt glyphs).
+    static let rowIconSize: CGFloat = 20
     /// Gap under the last element of every page (native Settings look).
     static let pageBottomInset: CGFloat = 20
     /// The DEBUG-only Diagnostics page is a scrolling panel, so it gets a fixed height.

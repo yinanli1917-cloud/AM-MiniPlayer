@@ -14,6 +14,7 @@ import Foundation
 public final class AppleMusicPlaybackSource: PlaybackSource {
 
     public let id: PlaybackSourceID = .appleMusic
+    public let appIdentity: PlayerAppIdentity = .appleMusic
 
     public let capabilities: PlaybackCapabilities = [
         .play, .seek, .shuffle, .repeatMode, .volume, .favorite,

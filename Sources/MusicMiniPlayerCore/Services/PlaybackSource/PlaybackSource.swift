@@ -151,6 +151,8 @@ public enum PlaybackSourceAvailability: Equatable {
 
 public protocol PlaybackSource: AnyObject {
     var id: PlaybackSourceID { get }
+    /// The player app this source plays through (bundle id + names for UI).
+    var appIdentity: PlayerAppIdentity { get }
     var capabilities: PlaybackCapabilities { get }
     var events: AsyncStream<PlaybackSourceEvent> { get }
     func start()

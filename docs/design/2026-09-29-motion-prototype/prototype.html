@@ -15,11 +15,11 @@
   --seg-bg:#E7E7EA; --seg-fg:#1d1d1f; --win-shadow:0 18px 50px rgba(30,30,60,.22), 0 0 0 .5px rgba(0,0,0,.18);
   --sw-off:rgba(120,120,128,.25);
   /* 演示台 */
-  --w1:#cfdcff; --w2:#ffd6e2; --w3:#e2e8f7; --w4:#f3e4ee;
+  --w1:#fff3e0; --w2:#f8c9b4; --w3:#f4ece2; --w4:#efd9cf;
   --glass:rgba(255,255,255,.86); --glass-ink:#1d1d1f; --glass-line:rgba(0,0,0,.07);
   --menubar:rgba(255,255,255,.55); --bgwin:rgba(255,255,255,.55); --bgwin-line:rgba(0,0,0,.08);
   --strip:rgba(255,255,255,.75); --keyface:#ffffff; --keyedge:#c9c9cf; --keyink:#3a3a3f;
-  --cap-ink:rgba(30,30,50,.6);
+  --cap-ink:rgba(46,30,26,.6);
   /* 引导卡 */
   --tcard-bg:rgba(255,255,255,.78); --tcard-ink:#1d1d1f; --tcard-muted:#6e6e73; --tcard-line:rgba(0,0,0,.08);
   --tcard-shadow:0 14px 34px rgba(30,30,70,.22);
@@ -33,11 +33,11 @@
     --win:#262628; --card:#303033; --card-hover:#3B3B3F; --row-line:rgba(255,255,255,.08);
     --seg-bg:#3A3A3D; --seg-fg:#f5f5f7; --win-shadow:0 18px 50px rgba(0,0,0,.55), 0 0 0 .5px rgba(255,255,255,.14);
     --sw-off:rgba(120,120,128,.4);
-    --w1:#34427f; --w2:#5b2c4b; --w3:#1f2340; --w4:#2e2040;
+    --w1:#43302c; --w2:#7c3b2b; --w3:#211b19; --w4:#2f2320;
     --glass:rgba(48,48,54,.86); --glass-ink:#f5f5f7; --glass-line:rgba(255,255,255,.09);
-    --menubar:rgba(20,20,30,.45); --bgwin:rgba(40,40,52,.6); --bgwin-line:rgba(255,255,255,.08);
+    --menubar:rgba(26,20,18,.45); --bgwin:rgba(46,38,35,.6); --bgwin-line:rgba(255,255,255,.08);
     --strip:rgba(255,255,255,.55); --keyface:#48484e; --keyedge:#1b1b1e; --keyink:#f2f2f6;
-    --cap-ink:rgba(235,235,255,.62);
+    --cap-ink:rgba(255,241,234,.62);
     --tcard-bg:rgba(44,44,50,.78); --tcard-ink:#f2f2f6; --tcard-muted:#a9a9b6; --tcard-line:rgba(255,255,255,.1);
     --tcard-shadow:0 14px 34px rgba(0,0,0,.5);
     color-scheme:dark;
@@ -51,11 +51,11 @@
   --win:#262628; --card:#303033; --card-hover:#3B3B3F; --row-line:rgba(255,255,255,.08);
   --seg-bg:#3A3A3D; --seg-fg:#f5f5f7; --win-shadow:0 18px 50px rgba(0,0,0,.55), 0 0 0 .5px rgba(255,255,255,.14);
   --sw-off:rgba(120,120,128,.4);
-  --w1:#34427f; --w2:#5b2c4b; --w3:#1f2340; --w4:#2e2040;
+  --w1:#43302c; --w2:#7c3b2b; --w3:#211b19; --w4:#2f2320;
   --glass:rgba(48,48,54,.86); --glass-ink:#f5f5f7; --glass-line:rgba(255,255,255,.09);
-  --menubar:rgba(20,20,30,.45); --bgwin:rgba(40,40,52,.6); --bgwin-line:rgba(255,255,255,.08);
+  --menubar:rgba(26,20,18,.45); --bgwin:rgba(46,38,35,.6); --bgwin-line:rgba(255,255,255,.08);
   --strip:rgba(255,255,255,.55); --keyface:#48484e; --keyedge:#1b1b1e; --keyink:#f2f2f6;
-  --cap-ink:rgba(235,235,255,.62);
+  --cap-ink:rgba(255,241,234,.62);
   --tcard-bg:rgba(44,44,50,.78); --tcard-ink:#f2f2f6; --tcard-muted:#a9a9b6; --tcard-line:rgba(255,255,255,.1);
   --tcard-shadow:0 14px 34px rgba(0,0,0,.5);
   color-scheme:dark;
@@ -148,7 +148,7 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 /* 面板（em = 面板宽） */
 .pn{position:absolute;font-size:calc(var(--pw)*1px);width:1em;height:1.136em;border-radius:.07em;overflow:hidden;
   background:radial-gradient(110% 80% at 14% 6%,#ff9aa8 0,transparent 62%),radial-gradient(100% 80% at 92% 96%,#7d6cff 0,transparent 58%),#b9508f;
-  box-shadow:0 .09em .22em rgba(30,20,70,.3), inset 0 0 0 .004em rgba(255,255,255,.28)}
+  box-shadow:0 .09em .22em rgba(38,22,18,.3), inset 0 0 0 .004em rgba(255,255,255,.28)}
 .pn .art{position:absolute;left:.16em;top:.075em;width:.68em;height:.68em;border-radius:.04em;overflow:hidden;
   background:linear-gradient(170deg,#ffd58f 0%,#ff7f8f 46%,#6b5bd6 100%);box-shadow:0 .02em .06em rgba(0,0,0,.28)}
 .art .sun{position:absolute;left:27%;top:30%;width:46%;height:46%;border-radius:50%;background:#fff1d0;opacity:.95}
@@ -188,7 +188,7 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 .vcard .nx{position:absolute;left:38px;top:82px;width:12px;height:10px;fill:#fff}
 .keys{position:absolute;display:flex;gap:6px}
 .key{width:34px;height:34px;border-radius:9px;background:var(--keyface);color:var(--keyink);display:grid;place-items:center;font-size:15px;font-weight:500;
-  box-shadow:0 3px 0 var(--keyedge),0 5px 8px rgba(20,20,50,.16),inset 0 1px 0 rgba(255,255,255,.4);position:relative;will-change:transform}
+  box-shadow:0 3px 0 var(--keyedge),0 5px 8px rgba(38,22,18,.16),inset 0 1px 0 rgba(255,255,255,.4);position:relative;will-change:transform}
 .bgwin{position:absolute;border-radius:9px;background:var(--bgwin);box-shadow:0 0 0 .5px var(--bgwin-line);overflow:hidden}
 .bgwin::before{content:"";position:absolute;left:8px;top:8px;width:20px;height:5px;border-radius:3px;background:radial-gradient(circle at 2.5px 2.5px,#ff5f57 2.4px,transparent 2.6px),radial-gradient(circle at 10px 2.5px,#febc2e 2.4px,transparent 2.6px),radial-gradient(circle at 17.5px 2.5px,#28c840 2.4px,transparent 2.6px);opacity:.8}
 .bgwin b{position:absolute;left:10px;height:5px;border-radius:3px;background:var(--cap-ink);opacity:.22}
@@ -311,7 +311,7 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 .hp-play .ic-pause{display:none}.mp.playing .hp-play .ic-play{display:none}.mp.playing .hp-play .ic-pause{display:block}
 .rippl{position:absolute;inset:0;border-radius:inherit;background:radial-gradient(circle,rgba(255,255,255,.6),transparent 68%);animation:rp calc(.5s*var(--ts)) ease-out forwards;pointer-events:none}
 @keyframes rp{from{transform:scale(.6);opacity:.9}to{transform:scale(1.9);opacity:0}}
-.cpop{position:absolute;left:103px;top:50px;width:136px;padding:5px;border-radius:10px;background:var(--glass);color:var(--glass-ink);font-size:12px;box-shadow:0 8px 22px rgba(20,20,50,.25),0 0 0 .5px var(--glass-line);
+.cpop{position:absolute;left:103px;top:50px;width:136px;padding:5px;border-radius:10px;background:var(--glass);color:var(--glass-ink);font-size:12px;box-shadow:0 8px 22px rgba(38,22,18,.25),0 0 0 .5px var(--glass-line);
   opacity:0;transform:scale(.94);transform-origin:90% 0;transition:opacity calc(.16s*var(--ts)),transform calc(.16s*var(--ts)) cubic-bezier(.2,.8,.2,1);pointer-events:none;z-index:4}
 .cpop.on{opacity:1;transform:none}
 .cpop .r{display:flex;justify-content:space-between;padding:5px 8px;border-radius:6px}.cpop .r.on{background:var(--accent-soft-c)}
@@ -325,7 +325,7 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 .halo::after{content:"";position:absolute;inset:-1.5px;border:1.5px solid var(--accent);border-radius:inherit;opacity:var(--ro,0);transform:scale(var(--rs,1));pointer-events:none}
 .gcur{position:absolute;left:0;top:0;opacity:0;z-index:7;pointer-events:none;filter:drop-shadow(0 2px 4px rgba(0,0,0,.3))}
 .gcur .rip{position:absolute;left:-7px;top:-7px;width:26px;height:26px;border-radius:50%;border:2px solid var(--accent);opacity:0}
-.toast{position:absolute;left:50%;bottom:16px;transform:translate(-50%,8px);padding:8px 16px;border-radius:999px;background:var(--glass);color:var(--glass-ink);font-size:13px;box-shadow:0 8px 22px rgba(20,20,50,.22),0 0 0 .5px var(--glass-line);
+.toast{position:absolute;left:50%;bottom:16px;transform:translate(-50%,8px);padding:8px 16px;border-radius:999px;background:var(--glass);color:var(--glass-ink);font-size:13px;box-shadow:0 8px 22px rgba(38,22,18,.22),0 0 0 .5px var(--glass-line);
   opacity:0;transition:opacity calc(.2s*var(--ts)),transform calc(.2s*var(--ts));z-index:9;pointer-events:none;white-space:nowrap}
 .toast.on{opacity:1;transform:translate(-50%,0)}
 /* 卡内按钮、链接：悬停 / 按下 / 松开 */
@@ -658,7 +658,7 @@ const SCENES = {
         const press = Math.max(bump(t, 0.9, .34), bump(t, 3.4, .34));
         keys.forEach((k, i) => {
           const d = press; k.style.transform = `translateY(${d * 3}px) scale(${1 - d * .05})`;
-          k.style.boxShadow = `0 ${3 - d * 2.5}px 0 var(--keyedge), 0 ${5 - d * 3}px 8px rgba(20,20,50,${.16 - d * .08}), inset 0 1px 0 rgba(255,255,255,.4)` + (d > .05 ? `, 0 0 0 ${2 * d}px rgba(250,64,88,${d * .8})` : '');
+          k.style.boxShadow = `0 ${3 - d * 2.5}px 0 var(--keyedge), 0 ${5 - d * 3}px 8px rgba(38,22,18,${.16 - d * .08}), inset 0 1px 0 rgba(255,255,255,.4)` + (d > .05 ? `, 0 0 0 ${2 * d}px rgba(250,64,88,${d * .8})` : '');
         });
         const op = sv(t, 1, [[1.0, 0, 'out', .32], [3.5, 1, 'out', .42]]);
         p.style.opacity = op; p.style.transform = `scale(${lerp(.955, 1, op)})`;
@@ -677,7 +677,7 @@ const SCENES = {
       return t => {
         const press = Math.max(bump(t, 0.9, .34), bump(t, 3.9, .34));
         keys.forEach(k => { const d = press; k.style.transform = `translateY(${d * 3}px) scale(${1 - d * .05})`;
-          k.style.boxShadow = `0 ${3 - d * 2.5}px 0 var(--keyedge), 0 ${5 - d * 3}px 8px rgba(20,20,50,${.16 - d * .08}), inset 0 1px 0 rgba(255,255,255,.4)` + (d > .05 ? `, 0 0 0 ${2 * d}px rgba(250,64,88,${d * .8})` : ''); });
+          k.style.boxShadow = `0 ${3 - d * 2.5}px 0 var(--keyedge), 0 ${5 - d * 3}px 8px rgba(38,22,18,${.16 - d * .08}), inset 0 1px 0 rgba(255,255,255,.4)` + (d > .05 ? `, 0 0 0 ${2 * d}px rgba(250,64,88,${d * .8})` : ''); });
         const tuck = sv(t, 0, [[1.05, 1, 'io', .92], [4.05, 0, 'io', .92]]);
         p.style.transform = `translateX(${tuck * 170}px)`; p.style.opacity = 1 - E.io(clamp((tuck - .55) / .45));
         const sa = E.io(clamp((tuck - .5) / .5)); strip.style.opacity = sa; strip.style.transform = `translateX(${(1 - sa) * 5}px)`;

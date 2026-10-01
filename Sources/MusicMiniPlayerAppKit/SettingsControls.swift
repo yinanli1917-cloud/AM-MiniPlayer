@@ -13,6 +13,7 @@
  */
 
 import SwiftUI
+import MusicMiniPlayerCore
 
 // ──────────────────────────────────────────────
 // MARK: - Card, dividers, section chrome
@@ -86,6 +87,8 @@ struct SettingsRow<Trailing: View>: View {
     let demo: SettingsDemo
     let title: String
     var detail: String?
+    /// Rows that stand for the music app lead with its real icon (20pt, native System Settings style).
+    var playerApp: PlayerAppIdentity?
     @ViewBuilder var trailing: Trailing
     @EnvironmentObject private var hover: SettingsHoverIntentModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -98,6 +101,7 @@ struct SettingsRow<Trailing: View>: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            if let playerApp { PlayerAppIconView(identity: playerApp, size: SettingsMetrics.rowIconSize) }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 13))

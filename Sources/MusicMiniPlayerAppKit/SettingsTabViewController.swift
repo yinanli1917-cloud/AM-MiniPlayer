@@ -21,7 +21,8 @@ import MusicMiniPlayerCore
 // ──────────────────────────────────────────────
 
 extension SettingsTab {
-    /// SF Symbol for the toolbar tab.
+    /// SF Symbol for the toolbar tab. (The Player tab is the music app itself: when that app is
+    /// installed its real icon replaces the symbol, see `SettingsTabViewController.tabImage`.)
     var symbolName: String {
         switch self {
         case .player: return "music.note"
@@ -42,7 +43,12 @@ extension SettingsTab {
 @MainActor
 final class SettingsTabViewController: NSTabViewController {
 
+    /// Edge of the music app's icon in the toolbar (NSToolbarItem images are 24-32pt; the SF Symbol tabs
+    /// are drawn by AppKit at its own tab size).
+    static let appIconToolbarSize: CGFloat = 28
+
     let state: SettingsWindowState
+    private let playerApp: PlayerAppIdentity
     private var stateObservation: AnyCancellable?
     /// False until the requested tab has been applied to the loaded tab view:
     /// the load-time reset to the first item must not overwrite `state`.
@@ -50,15 +56,16 @@ final class SettingsTabViewController: NSTabViewController {
 
     /// `pageFactory` builds one page controller per tab (loaded lazily, when
     /// that tab is first selected).
-    init(state: SettingsWindowState, pageFactory: (SettingsTab) -> NSViewController) {
+    init(state: SettingsWindowState, playerApp: PlayerAppIdentity = .appleMusic, pageFactory: (SettingsTab) -> NSViewController) {
         self.state = state
+        self.playerApp = playerApp
         super.init(nibName: nil, bundle: nil)
         tabStyle = .toolbar
         for tab in SettingsTab.visibleCases {
             let item = NSTabViewItem(viewController: pageFactory(tab))
             item.identifier = tab.rawValue
             item.label = tab.title
-            item.image = NSImage(systemSymbolName: tab.symbolName, accessibilityDescription: tab.title)
+            item.image = Self.tabImage(for: tab, playerApp: playerApp)
             addTabViewItem(item)
         }
         title = state.selectedTab.title
@@ -81,6 +88,18 @@ final class SettingsTabViewController: NSTabViewController {
         if selectedTabViewItemIndex != target { selectedTabViewItemIndex = target }
         title = state.selectedTab.title
         isSettled = true
+    }
+
+    /// The toolbar image for `tab`: the Player tab shows the music app's real icon (explicit size,
+    /// never template-rendered, so it keeps its colours); every other tab, and the Player tab when the
+    /// app is not installed, shows its SF Symbol.
+    static func tabImage(for tab: SettingsTab, playerApp: PlayerAppIdentity, provider: PlayerAppIconProvider = .shared) -> NSImage? {
+        if tab == .player {
+            let icon = provider.icon(for: playerApp, size: appIconToolbarSize)
+            if !icon.isFallbackSymbol { return icon.image }
+            return NSImage(systemSymbolName: playerApp.fallbackSymbolName, accessibilityDescription: tab.title)
+        }
+        return NSImage(systemSymbolName: tab.symbolName, accessibilityDescription: tab.title)
     }
 
     private func index(of tab: SettingsTab) -> Int {
@@ -110,9 +129,10 @@ final class SettingsTabViewController: NSTabViewController {
     static func makeWindow(
         state: SettingsWindowState,
         autosaveName: String?,
+        playerApp: PlayerAppIdentity = .appleMusic,
         pageFactory: (SettingsTab) -> NSViewController
     ) -> NSWindow {
-        let controller = SettingsTabViewController(state: state, pageFactory: pageFactory)
+        let controller = SettingsTabViewController(state: state, playerApp: playerApp, pageFactory: pageFactory)
         let window = NSWindow(contentViewController: controller)
         window.styleMask = [.titled, .closable]
         if let autosaveName { window.setFrameAutosaveName(autosaveName) }

@@ -22,7 +22,7 @@ import AppKit
 // ──────────────────────────────────────────────
 
 struct DemoPalette {
-    let w1, w2, w3, w4: Color            // wallpaper: cool light, warm light, base A → B
+    let w1, w2, w3, w4: Color            // wallpaper: top-left glow, bottom-right glow, base A → B (StageWallpaper.active)
     let glassLine: Color
     let menubar: Color
     let bgwin: Color
@@ -42,20 +42,21 @@ struct DemoPalette {
                   blue: Double(hex & 0xFF) / 255, opacity: a)
         }
         let accent = DemoPalette.resolvedAccent(dark: dark)
+        let look = StageWallpaper.active.look(dark: dark)
         if dark {
             return DemoPalette(
-                w1: c(0x34427F), w2: c(0x5B2C4B), w3: c(0x1F2340), w4: c(0x2E2040),
-                glassLine: .white.opacity(0.09), menubar: c(0x14141E, 0.45),
-                bgwin: c(0x282834, 0.6), bgwinLine: .white.opacity(0.08), strip: .white.opacity(0.55),
+                w1: c(look.w1), w2: c(look.w2), w3: c(look.w3), w4: c(look.w4),
+                glassLine: .white.opacity(0.09), menubar: c(StageChrome.menubarDark.hex, StageChrome.menubarDark.alpha),
+                bgwin: c(StageChrome.bgwinDark.hex, StageChrome.bgwinDark.alpha), bgwinLine: .white.opacity(0.08), strip: .white.opacity(0.55),
                 keyFace: c(0x48484E), keyEdge: c(0x1B1B1E), keyInk: c(0xF2F2F6),
-                capInk: c(0xEBEBFF, 0.62), pageInk: c(0xF5F5F7), accent: accent, dark: true)
+                capInk: c(StageChrome.capInkDark.hex, StageChrome.capInkDark.alpha), pageInk: c(0xF5F5F7), accent: accent, dark: true)
         }
         return DemoPalette(
-            w1: c(0xCFDCFF), w2: c(0xFFD6E2), w3: c(0xE2E8F7), w4: c(0xF3E4EE),
-            glassLine: .black.opacity(0.07), menubar: .white.opacity(0.55),
-            bgwin: .white.opacity(0.55), bgwinLine: .black.opacity(0.08), strip: .white.opacity(0.75),
+            w1: c(look.w1), w2: c(look.w2), w3: c(look.w3), w4: c(look.w4),
+            glassLine: .black.opacity(0.07), menubar: c(StageChrome.menubarLight.hex, StageChrome.menubarLight.alpha),
+            bgwin: c(StageChrome.bgwinLight.hex, StageChrome.bgwinLight.alpha), bgwinLine: .black.opacity(0.08), strip: .white.opacity(0.75),
             keyFace: c(0xFFFFFF), keyEdge: c(0xC9C9CF), keyInk: c(0x3A3A3F),
-            capInk: c(0x1E1E32, 0.6), pageInk: c(0x1D1D1F), accent: accent, dark: false)
+            capInk: c(StageChrome.capInkLight.hex, StageChrome.capInkLight.alpha), pageInk: c(0x1D1D1F), accent: accent, dark: false)
     }
 
     /// The accent as a plain sRGB colour for this appearance (the demo highlights follow
@@ -86,7 +87,7 @@ enum DemoDrawing {
 
     // MARK: wallpaper
 
-    /// Prototype `.stage` background: cool glow top-left, warm glow bottom-right, 160° base.
+    /// Prototype `.stage` background: glow top-left (w1), glow bottom-right (w2), 160° base (w3 → w4); colours from `StageWallpaper`.
     static func drawWallpaper(_ ctx: inout GraphicsContext, size: CGSize, palette p: DemoPalette) {
         let rect = CGRect(origin: .zero, size: size)
         ctx.fill(Path(rect), with: cssLinear(160, in: rect, stops: [(p.w3, 0), (p.w4, 1)]))
@@ -374,7 +375,7 @@ enum DemoDrawing {
             c.clip(to: outside, style: FillStyle(eoFill: true))
             c.addFilter(.blur(radius: 0.11 * width))
             c.fill(Path(roundedRect: box.offsetBy(dx: 0, dy: 0.09 * width), cornerRadius: radius),
-                   with: .color(Color(.sRGB, red: 30 / 255, green: 20 / 255, blue: 70 / 255, opacity: 0.3)))
+                   with: .color(StageChrome.shadow(0.3)))
         }
         var c = ctx
         c.translateBy(x: x, y: y)
@@ -639,7 +640,7 @@ enum DemoDrawing {
             var s = c
             s.addFilter(.blur(radius: 4))
             s.fill(Path(roundedRect: rect.offsetBy(dx: 0, dy: CGFloat(5 - d * 3)), cornerRadius: r),
-                   with: .color(Color(.sRGB, red: 20 / 255, green: 20 / 255, blue: 50 / 255, opacity: 0.16 - d * 0.08)))
+                   with: .color(StageChrome.shadow(0.16 - d * 0.08)))
         }
         c.fill(Path(roundedRect: rect.offsetBy(dx: 0, dy: CGFloat(3 - d * 2.5)), cornerRadius: r), with: .color(p.keyEdge))
         let face = Path(roundedRect: rect, cornerRadius: r)
@@ -681,7 +682,7 @@ enum DemoDrawing {
         let shape = Path(roundedRect: rect, cornerRadius: radius)
         var s = ctx
         s.addFilter(.blur(radius: 7))
-        s.fill(Path(roundedRect: rect.offsetBy(dx: 0, dy: 6), cornerRadius: radius), with: .color(Color(.sRGB, red: 30 / 255, green: 30 / 255, blue: 70 / 255, opacity: p.dark ? 0.5 : 0.22)))
+        s.fill(Path(roundedRect: rect.offsetBy(dx: 0, dy: 6), cornerRadius: radius), with: .color(StageChrome.shadow(p.dark ? 0.5 : 0.22)))
         ctx.fill(shape, with: .color(p.dark ? Color(.sRGB, red: 44 / 255, green: 44 / 255, blue: 50 / 255, opacity: 0.86) : .white.opacity(0.86)))
         ctx.stroke(shape, with: .color(p.glassLine), lineWidth: 0.5)
     }
