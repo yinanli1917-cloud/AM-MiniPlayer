@@ -24,10 +24,16 @@ final class SettingsStageWallpaperScreenshotTests: XCTestCase {
 
     override func tearDown() {
         StageWallpaper.override = nil
+        StageArt.override = nil
         SettingsPalette.accentOverride = nil
         L10n.languageOverride = nil
         super.tearDown()
     }
+
+    func outputDirForArt() throws -> URL { try outputDir() }
+    func makeStateForArt(_ tab: SettingsTab) throws -> SettingsWindowState { try makeState(tab) }
+    func presentForArt(_ window: NSWindow) { present(window) }
+    func shootForArt(_ window: NSWindow, to url: URL) throws { try shoot(window, to: url) }
 
     private func outputDir() throws -> URL {
         guard let path = ProcessInfo.processInfo.environment["NANOPOD_STAGE_GRADIENT_SHOTS_DIR"] else {
@@ -100,6 +106,39 @@ final class SettingsStageWallpaperScreenshotTests: XCTestCase {
                     hover.pointerEntered(.gettingToKnowNanoPod, at: CGPoint(x: 100, y: 20))
                     spin(1.4)
                     try shoot(window, to: dir.appendingPathComponent("\(candidate.name)-general-\(dark ? "dark" : "light").png"))
+                    window.close()
+                }
+            }
+        }
+    }
+}
+
+extension SettingsStageWallpaperScreenshotTests {
+
+    /// Art candidates (teal / olive sea) on the shipped wallpaper: Player tab mid peek card, Show Translation
+    /// (lyrics page), Fullscreen Cover mid-fill, General tab. Files: art-<sea>-<scene>-<light|dark>.png.
+    /// `NANOPOD_STAGE_ART_ONLY` (comma list of sea names) narrows a re-run.
+    func test_shoot_artCandidates_scenes_lightAndDark() throws {
+        let dir = try outputDirForArt()
+        L10n.languageOverride = "en"
+        let only = ProcessInfo.processInfo.environment["NANOPOD_STAGE_ART_ONLY"].map { Set($0.split(separator: ",").map(String.init)) }
+        let scenes: [(name: String, tab: SettingsTab, demo: SettingsDemo, wait: Double)] = [
+            ("peek", .player, .edgeShowSongOnTrackChange, 4.6),
+            ("translation", .player, .showTranslation, 3.0),
+            ("cover", .player, .fullscreenCover, 2.9),
+            ("general", .general, .gettingToKnowNanoPod, 1.4),
+        ]
+        for art in StageArt.candidates where only?.contains(art.name) ?? true {
+            StageArt.override = art
+            for dark in [false, true] {
+                for scene in scenes {
+                    let hover = SettingsHoverIntentModel()
+                    let window = SettingsWindowRenderTests.makeSettingsWindow(state: try makeStateForArt(scene.tab), dark: dark, hover: hover)
+                    presentForArt(window)
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+                    hover.pointerEntered(scene.demo, at: CGPoint(x: 100, y: 20))
+                    RunLoop.main.run(until: Date().addingTimeInterval(scene.wait))
+                    try shootForArt(window, to: dir.appendingPathComponent("art-\(art.name)-\(scene.name)-\(dark ? "dark" : "light").png"))
                     window.close()
                 }
             }

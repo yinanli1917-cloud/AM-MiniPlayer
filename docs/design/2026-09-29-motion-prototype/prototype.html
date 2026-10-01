@@ -147,17 +147,17 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 
 /* 面板（em = 面板宽） */
 .pn{position:absolute;font-size:calc(var(--pw)*1px);width:1em;height:1.136em;border-radius:.07em;overflow:hidden;
-  background:radial-gradient(110% 80% at 14% 6%,#ff9aa8 0,transparent 62%),radial-gradient(100% 80% at 92% 96%,#7d6cff 0,transparent 58%),#b9508f;
+  background:radial-gradient(110% 80% at 14% 6%,#ff9a86 0,transparent 62%),radial-gradient(100% 80% at 92% 96%,#4a2626 0,transparent 58%),#8c4444;
   box-shadow:0 .09em .22em rgba(38,22,18,.3), inset 0 0 0 .004em rgba(255,255,255,.28)}
 .pn .art{position:absolute;left:.16em;top:.075em;width:.68em;height:.68em;border-radius:.04em;overflow:hidden;
-  background:linear-gradient(170deg,#ffd58f 0%,#ff7f8f 46%,#6b5bd6 100%);box-shadow:0 .02em .06em rgba(0,0,0,.28)}
+  background:linear-gradient(170deg,#ffd58f 0%,#ff7f8f 46%,#c9605f 100%);box-shadow:0 .02em .06em rgba(0,0,0,.28)}
 .art .sun{position:absolute;left:27%;top:30%;width:46%;height:46%;border-radius:50%;background:#fff1d0;opacity:.95}
-.art .wv1{position:absolute;left:0;top:60%;width:100%;height:42%;background:linear-gradient(to bottom,#5a4bc4,#2f2a85)}
+.art .wv1{position:absolute;left:0;top:60%;width:100%;height:42%;background:linear-gradient(to bottom,#3e6c70,#1c3438)}
 .art .wv2{display:none}
-.pn .bk{position:absolute;left:-.2em;top:-.12em;width:1.4em;height:1.4em;filter:blur(.17em) saturate(1.1);opacity:0;overflow:hidden;background:linear-gradient(170deg,#ffd58f 0%,#ff7f8f 46%,#6b5bd6 100%)}
+.pn .bk{position:absolute;left:-.2em;top:-.12em;width:1.4em;height:1.4em;filter:blur(.17em) saturate(1.1);opacity:0;overflow:hidden;background:linear-gradient(170deg,#ffd58f 0%,#ff7f8f 46%,#c9605f 100%)}
 .pn .bk .sun{position:absolute;left:27%;top:30%;width:46%;height:46%;border-radius:50%;background:#fff1d0}
-.pn .bk .sea{position:absolute;left:0;top:60%;width:100%;height:42%;background:linear-gradient(to bottom,#5a4bc4,#2f2a85)}
-.pn .t1,.pn .t2{text-shadow:0 0 .03em rgba(30,10,60,.4)}
+.pn .bk .sea{position:absolute;left:0;top:60%;width:100%;height:42%;background:linear-gradient(to bottom,#3e6c70,#1c3438)}
+.pn .t1,.pn .t2{text-shadow:0 0 .03em rgba(38,22,18,.4)}
 .pn .t1,.pn .t2{position:absolute;left:.16em;border-radius:.02em;display:block}
 .pn .t1{top:.885em;width:.42em;height:.027em;background:rgba(255,255,255,.94)}
 .pn .t2{top:.94em;width:.27em;height:.02em;background:rgba(255,255,255,.55)}
@@ -178,10 +178,10 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 .strip{position:absolute;right:0;top:70px;width:5px;height:40px;border-radius:3px 0 0 3px;background:var(--strip);overflow:hidden;box-shadow:0 0 0 .5px var(--glass-line)}
 .strip .fill{position:absolute;left:0;bottom:0;width:100%;background:var(--accent);border-radius:3px}
 .vcard{position:absolute;right:7px;top:39px;width:60px;height:102px;border-radius:13px;overflow:hidden;
-  background:linear-gradient(90deg,#9a63ab 0%,#6d4587 52%,#1e1228 100%);box-shadow:0 8px 20px rgba(20,10,40,.35),inset 0 0 0 .5px rgba(255,255,255,.14);will-change:transform,opacity}
-.vcard .th{position:absolute;left:6px;top:6px;width:48px;height:48px;border-radius:7px;overflow:hidden;background:linear-gradient(170deg,#ffd58f 0%,#ff7f8f 46%,#6b5bd6 100%)}
+  background:linear-gradient(90deg,#b8605a 0%,#7a3a3a 52%,#2a1c1a 100%);box-shadow:0 8px 20px rgba(38,22,18,.35),inset 0 0 0 .5px rgba(255,255,255,.14);will-change:transform,opacity}
+.vcard .th{position:absolute;left:6px;top:6px;width:48px;height:48px;border-radius:7px;overflow:hidden;background:linear-gradient(170deg,#ffd58f 0%,#ff7f8f 46%,#c9605f 100%)}
 .vcard .th::before{content:"";position:absolute;left:28%;top:24%;width:44%;height:44%;border-radius:50%;background:#fff1d0;opacity:.95}
-.vcard .th::after{content:"";position:absolute;left:0;top:58%;width:100%;height:50%;background:linear-gradient(to bottom,#5a4bc4,#2f2a85)}
+.vcard .th::after{content:"";position:absolute;left:0;top:58%;width:100%;height:50%;background:linear-gradient(to bottom,#3e6c70,#1c3438)}
 .vcard .ti{position:absolute;left:50%;top:60px;width:28px;height:4px;margin-left:-14px;border-radius:2px;background:#fff}
 .vcard .ar{position:absolute;left:50%;top:68px;width:18px;height:3px;margin-left:-9px;border-radius:2px;background:rgba(255,255,255,.55)}
 .vcard .pl{position:absolute;left:9px;top:77px;width:20px;height:20px}
@@ -691,7 +691,7 @@ const LANGS = [
 const CYCLE = ['我们去看海吧', '海を見に行こう', '바다 보러 가자', 'Allons voir la mer'];
 function buildLyrics(el, o, cycle) {
   const pw = 214;
-  el.innerHTML = `<div class="abs" style="left:${(320 - pw) / 2}px;top:10px"><div class="pn pg" style="--pw:${pw};height:2.2em;background:linear-gradient(170deg,#ff7f8f 0%,#6b5bd6 62%,#2f2a85 100%)">
+  el.innerHTML = `<div class="abs" style="left:${(320 - pw) / 2}px;top:10px"><div class="pn pg" style="--pw:${pw};height:2.2em;background:linear-gradient(170deg,#9a4a44 0%,#7a3a3a 62%,#2a1c1a 100%)">
     <div class="lyric" id="l0" style="top:6px;opacity:.42">Down by the water</div>
     <div class="lyric" id="l1" style="top:30px"><b style="font-weight:650">Let’s go see the sea</b><span class="tr"><span id="trA"></span><span id="trB"></span>&nbsp;</span></div>
     <div class="lyric" id="l2" style="top:66px;opacity:.42">Just you, just me</div>

@@ -357,9 +357,19 @@ enum DemoDrawing {
         let fadeAt: Double
     }
 
-    private static let albumPink = Color(.sRGB, red: 1, green: 0x9A / 255, blue: 0xA8 / 255, opacity: 1)
-    private static let albumViolet = Color(.sRGB, red: 0x7D / 255, green: 0x6C / 255, blue: 1, opacity: 1)
-    private static let albumBase = Color(.sRGB, red: 0xB9 / 255, green: 0x50 / 255, blue: 0x8F / 255, opacity: 1)
+    private static var albumGlowLight: Color { Color(stageHex: StageArt.panelGlowLight) }
+    private static var albumGlowDark: Color { Color(stageHex: StageArt.panelGlowDark) }
+    private static var albumBase: Color { Color(stageHex: StageArt.panelBase) }
+
+    /// Cover sky shading, 170 degrees.
+    private static func skyShading(_ rect: CGRect) -> GraphicsContext.Shading {
+        cssLinear(170, in: rect, stops: [(Color(stageHex: StageArt.skyTop), 0), (Color(stageHex: StageArt.skyMid), 0.46), (Color(stageHex: StageArt.skyLow), 1)])
+    }
+
+    private static func seaGradient() -> Gradient {
+        let art = StageArt.active
+        return Gradient(colors: [Color(stageHex: art.seaTop), Color(stageHex: art.seaBottom)])
+    }
 
     /// Panel shell: outside-only drop shadow, gradient body, hairline ring; `content` paints
     /// in panel-local points (origin = panel top-left) already clipped to the rounded body.
@@ -393,18 +403,14 @@ enum DemoDrawing {
     }
 
     /// Backdrop of the pages that show no cover (lyrics, history) in the fullscreen look: the cover's own
-    /// colours (coral sky → violet → deep sea) without the sun, so white text stays readable.
+    /// colours (dusk coral, rosewood, umber) without the sun, so white text stays readable (see `StageArt.pageStops`).
     private static func fullscreenPageBackground(_ rect: CGRect) -> GraphicsContext.Shading {
-        cssLinear(170, in: rect, stops: [
-            (Color(.sRGB, red: 1, green: 0x7F / 255, blue: 0x8F / 255, opacity: 1), 0),
-            (Color(.sRGB, red: 0x6B / 255, green: 0x5B / 255, blue: 0xD6 / 255, opacity: 1), 0.62),
-            (Color(.sRGB, red: 0x2F / 255, green: 0x2A / 255, blue: 0x85 / 255, opacity: 1), 1),
-        ])
+        cssLinear(170, in: rect, stops: StageArt.pageStops.map { (Color(stageHex: $0.hex), $0.at) })
     }
 
     private static func albumGlows() -> [Glow] {
-        [Glow(cx: 0.92, cy: 0.96, rx: 1.0, ry: 0.8, color: albumViolet, fadeAt: 0.58),
-         Glow(cx: 0.14, cy: 0.06, rx: 1.1, ry: 0.8, color: albumPink, fadeAt: 0.62)]
+        [Glow(cx: 0.92, cy: 0.96, rx: 1.0, ry: 0.8, color: albumGlowDark, fadeAt: 0.58),
+         Glow(cx: 0.14, cy: 0.06, rx: 1.1, ry: 0.8, color: albumGlowLight, fadeAt: 0.62)]
     }
 
     /// The 250:284 album panel (`.pn`), with the cover / title / controls at cover-fill state `cover.s`.
@@ -480,19 +486,12 @@ enum DemoDrawing {
 
     /// The prototype's sunset cover: 170° sky, sun, sea. `sunAlpha` .95 on the sharp cover, 1 in the underlay.
     private static func drawCoverPicture(_ ctx: inout GraphicsContext, rect: CGRect, sunAlpha: Double) {
-        ctx.fill(Path(rect), with: cssLinear(170, in: rect, stops: [
-            (Color(.sRGB, red: 1, green: 0xD5 / 255, blue: 0x8F / 255, opacity: 1), 0),
-            (Color(.sRGB, red: 1, green: 0x7F / 255, blue: 0x8F / 255, opacity: 1), 0.46),
-            (Color(.sRGB, red: 0x6B / 255, green: 0x5B / 255, blue: 0xD6 / 255, opacity: 1), 1),
-        ]))
+        ctx.fill(Path(rect), with: skyShading(rect))
         let sun = CGRect(x: rect.minX + rect.width * 0.27, y: rect.minY + rect.height * 0.30,
                          width: rect.width * 0.46, height: rect.height * 0.46)
-        ctx.fill(Path(ellipseIn: sun), with: .color(Color(.sRGB, red: 1, green: 0xF1 / 255, blue: 0xD0 / 255, opacity: sunAlpha)))
+        ctx.fill(Path(ellipseIn: sun), with: .color(Color(stageHex: StageArt.sun, opacity: sunAlpha)))
         let sea = CGRect(x: rect.minX, y: rect.minY + rect.height * 0.60, width: rect.width, height: rect.height * 0.42)
-        ctx.fill(Path(sea), with: .linearGradient(Gradient(colors: [
-            Color(.sRGB, red: 0x5A / 255, green: 0x4B / 255, blue: 0xC4 / 255, opacity: 1),
-            Color(.sRGB, red: 0x2F / 255, green: 0x2A / 255, blue: 0x85 / 255, opacity: 1),
-        ]), startPoint: CGPoint(x: 0, y: sea.minY), endPoint: CGPoint(x: 0, y: sea.maxY)))
+        ctx.fill(Path(sea), with: .linearGradient(seaGradient(), startPoint: CGPoint(x: 0, y: sea.minY), endPoint: CGPoint(x: 0, y: sea.maxY)))
     }
 
     private static func drawHistoryPanel(_ ctx: inout GraphicsContext, _ p: DemoPalette, x: CGFloat, y: CGFloat, pw: CGFloat) {
@@ -557,33 +556,22 @@ enum DemoDrawing {
             outside.addPath(shape)
             c.clip(to: outside, style: FillStyle(eoFill: true))
             c.addFilter(.blur(radius: 10))
-            c.fill(Path(roundedRect: box.offsetBy(dx: 0, dy: 8), cornerRadius: 13), with: .color(Color(.sRGB, red: 20 / 255, green: 10 / 255, blue: 40 / 255, opacity: 0.35)))
+            c.fill(Path(roundedRect: box.offsetBy(dx: 0, dy: 8), cornerRadius: 13), with: .color(StageChrome.shadow(0.35)))
         }
         var c = ctx
         c.clip(to: shape)
-        c.fill(shape, with: .linearGradient(Gradient(stops: [
-            .init(color: Color(.sRGB, red: 0x9A / 255, green: 0x63 / 255, blue: 0xAB / 255, opacity: 1), location: 0),
-            .init(color: Color(.sRGB, red: 0x6D / 255, green: 0x45 / 255, blue: 0x87 / 255, opacity: 1), location: 0.52),
-            .init(color: Color(.sRGB, red: 0x1E / 255, green: 0x12 / 255, blue: 0x28 / 255, opacity: 1), location: 1),
-        ]), startPoint: CGPoint(x: box.minX, y: 0), endPoint: CGPoint(x: box.maxX, y: 0)))
+        c.fill(shape, with: .linearGradient(Gradient(stops: StageArt.cardStops.map { .init(color: Color(stageHex: $0.hex), location: $0.at) }), startPoint: CGPoint(x: box.minX, y: 0), endPoint: CGPoint(x: box.maxX, y: 0)))
         c.stroke(shape, with: .color(.white.opacity(0.14)), lineWidth: 1)   // the clip keeps the inner half
         c.translateBy(x: box.minX, y: box.minY)
         // Cover thumbnail 48×48 at (6,6), radius 7; sun 44% at (28%,24%), sea from 58%.
         let th = CGRect(x: 6, y: 6, width: 48, height: 48)
         c.drawLayer { l in
             l.clip(to: Path(roundedRect: th, cornerRadius: 7))
-            l.fill(Path(th), with: cssLinear(170, in: th, stops: [
-                (Color(.sRGB, red: 1, green: 0xD5 / 255, blue: 0x8F / 255, opacity: 1), 0),
-                (Color(.sRGB, red: 1, green: 0x7F / 255, blue: 0x8F / 255, opacity: 1), 0.46),
-                (Color(.sRGB, red: 0x6B / 255, green: 0x5B / 255, blue: 0xD6 / 255, opacity: 1), 1),
-            ]))
+            l.fill(Path(th), with: skyShading(th))
             l.fill(Path(ellipseIn: CGRect(x: th.minX + th.width * 0.28, y: th.minY + th.height * 0.24, width: th.width * 0.44, height: th.height * 0.44)),
-                   with: .color(Color(.sRGB, red: 1, green: 0xF1 / 255, blue: 0xD0 / 255, opacity: 0.95)))
+                   with: .color(Color(stageHex: StageArt.sun, opacity: 0.95)))
             let sea = CGRect(x: th.minX, y: th.minY + th.height * 0.58, width: th.width, height: th.height * 0.5)
-            l.fill(Path(sea), with: .linearGradient(Gradient(colors: [
-                Color(.sRGB, red: 0x5A / 255, green: 0x4B / 255, blue: 0xC4 / 255, opacity: 1),
-                Color(.sRGB, red: 0x2F / 255, green: 0x2A / 255, blue: 0x85 / 255, opacity: 1),
-            ]), startPoint: CGPoint(x: 0, y: sea.minY), endPoint: CGPoint(x: 0, y: sea.maxY)))
+            l.fill(Path(sea), with: .linearGradient(seaGradient(), startPoint: CGPoint(x: 0, y: sea.minY), endPoint: CGPoint(x: 0, y: sea.maxY)))
         }
         c.fill(Path(roundedRect: CGRect(x: 16, y: 60, width: 28, height: 4), cornerRadius: 2), with: .color(.white))
         c.fill(Path(roundedRect: CGRect(x: 21, y: 68, width: 18, height: 3), cornerRadius: 1.5), with: .color(.white.opacity(0.55)))
