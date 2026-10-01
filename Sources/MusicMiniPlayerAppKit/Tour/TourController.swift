@@ -127,7 +127,8 @@ final class TourController: ObservableObject {
 
     init(panel: SnappablePanel, liquidEdge: LiquidEdgeController,
          musicController: MusicController = .shared, lyricsService: LyricsService = .shared,
-         defaults: UserDefaults = .standard, feedback: TourCompletionFeedback? = nil, guidance: TourGuidance? = nil) {
+         defaults: UserDefaults = .standard, feedback: TourCompletionFeedback? = nil, guidance: TourGuidance? = nil,
+         gestureLogWriter: TourGestureLogWriter? = nil) {
         self.defaults = defaults
         self.feedback = feedback ?? TourCompletionFeedback()
         self.guidance = guidance ?? TourGuidance()
@@ -136,6 +137,7 @@ final class TourController: ObservableObject {
         self.musicController = musicController
         self.lyricsService = lyricsService
         self.state = TourPersistence.load(from: defaults)
+        self.gestureLogWriter = gestureLogWriter
 
         panel.onSnappedToCorner = { [weak self] _, corner in self?.snappedCornerSubject.send(corner) }
         self.feedback.applyCardOffset = { [weak self] dy in self?.bounceCard(by: dy) }
@@ -450,48 +452,37 @@ final class TourController: ObservableObject {
         TourCompletionFeedback.performSystemHaptic(kind)
     }
 
-    // MARK: - Scroll trace (evidence for "the two-finger drag does nothing during the move step")
+    // MARK: - Gesture trace (evidence for "the two-finger drag stops working during the tour")
 
-    /// While the tour is on screen, and only when the opt-in diagnostic log is on (`defaults write com.yinanli.nanoPod
-    /// enableDebugFileLog -bool YES`, relaunch; the log is /tmp/nanopod_debug.log), one `TourScroll` line per scroll burst says
-    /// WHERE the burst went: the window our app handed it to (a local monitor sees every scroll event this app receives), the
-    /// window WindowServer says is topmost at the cursor, and — from a global monitor, which sees the bursts that went to
-    /// ANOTHER app — that the cursor was over the panel while somebody else got the scroll. Not being able to reproduce the
-    /// report in-process (2026-09-29: routing, ordering, yielding, edge ownership all checked) is what this is for.
-    private var scrollTraceMonitors: [Any] = []
-    private var lastScrollTraceAt: CFTimeInterval = 0
+    /// Always on while the tour is on screen, nothing standing outside it (`TourGestureTrace`): per two-finger gesture, where it
+    /// went, what the panel decided, what the tour was doing; a gesture that looks like a failure is written to
+    /// `~/Library/Logs/nanoPod/tour-gesture.log` (off the main thread). Started with the tour's windows, stopped when they go.
+    private let gestureLogWriter: TourGestureLogWriter?
+    private(set) lazy var gestureTrace = TourGestureTrace(
+        environment: TourGestureTrace.Environment(
+            page: { [weak self] in self.map { "\($0.musicController.currentPage)" } ?? "gone" },
+            tourState: { [weak self] in self.map { Self.traceDescription(of: $0.state.phase) } ?? "gone" },
+            cardYielded: { [weak self] in self?.cardYielded ?? false }
+        ),
+        writer: gestureLogWriter ?? TourGestureFileWriter()
+    )
 
-    private func installScrollTrace() {
-        guard scrollTraceMonitors.isEmpty else { return }
-        if let local = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel, handler: { [weak self] event in
-            self?.traceScroll(event, receivedByThisApp: true)
-            return event
-        }) { scrollTraceMonitors.append(local) }
-        if let global = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel, handler: { [weak self] event in
-            self?.traceScroll(event, receivedByThisApp: false)
-        }) { scrollTraceMonitors.append(global) }
+    private func installGestureTrace() {
+        guard let panel, !gestureTrace.isRunning else { return }
+        gestureTrace.start(panel: panel)
     }
 
-    private func removeScrollTrace() {
-        scrollTraceMonitors.forEach { NSEvent.removeMonitor($0) }
-        scrollTraceMonitors = []
-    }
+    private func removeGestureTrace() { gestureTrace.stop() }
 
-    private func traceScroll(_ event: NSEvent, receivedByThisApp: Bool) {
-        guard DebugLogger.isLoggingEnabled, let panel else { return }
-        let mouse = NSEvent.mouseLocation
-        let overPanel = panel.frame.contains(mouse)
-        // The global monitor reports every scroll on the machine: only the ones over the panel are evidence.
-        if !receivedByThisApp, !overPanel { return }
-        let now = CACurrentMediaTime()
-        guard event.phase == .began || event.phase == .mayBegin || now - lastScrollTraceAt > 0.6 else { return }
-        lastScrollTraceAt = now
-        let topmost = NSWindow.windowNumber(at: mouse, belowWindowWithWindowNumber: 0)
-        let topmostName = NSApp.window(withWindowNumber: topmost).map { String(describing: type(of: $0)) } ?? "another app's window"
-        let target = receivedByThisApp ? (event.window.map { String(describing: type(of: $0)) } ?? "no window") : "ANOTHER APP"
-        DebugLogger.log("TourScroll", "burst phase=\(event.phase.rawValue) mom=\(event.momentumPhase.rawValue) d=(\(event.scrollingDeltaX),\(event.scrollingDeltaY)) precise=\(event.hasPreciseScrollingDeltas) "
-            + "cursorOverPanel=\(overPanel) deliveredTo=\(target) topmostAtCursor=\(topmostName)#\(topmost) panel#\(panel.windowNumber) "
-            + "page=\(musicController.currentPage) tour=\(state.phase) yielded=\(cardYielded) card=\(cardWindow?.frame ?? .zero)")
+    private static func traceDescription(of phase: TourPhase) -> String {
+        switch phase {
+        case .idle(let armed): return "idle(deferredArmed:\(armed))"
+        case .welcome: return "welcome"
+        case .step(let step, let beats): return "step(\(step.rawValue) beats:\(beats.map { $0 ? "1" : "0" }.joined()))"
+        case .transitioning(let from, let to): return "transitioning(\(from?.rawValue ?? "-")->\(to?.rawValue ?? "-"))"
+        case .finale: return "finale"
+        case .deferredTip(let step): return "deferredTip(\(step.rawValue))"
+        }
     }
 
     // MARK: - Teardown (§11.2: zero standing cost afterward)
@@ -555,7 +546,7 @@ final class TourController: ObservableObject {
         haloWindow?.orderOut(nil)
         haloWindow = nil
         feedback.releaseOverlay()
-        removeScrollTrace()
+        removeGestureTrace()
         pendingHandoffPose = nil
         measured = nil
         measuringHost = nil
@@ -1059,6 +1050,7 @@ final class TourController: ObservableObject {
     /// and the two-finger gesture the step asks for (item 9). The tour's own
     /// windows live one level higher and are never re-ordered under it.
     private func raiseTourWindows() {
+        gestureTrace.noteRaise()
         if let panel, panel.isVisible, !liquidEdge.isActive { panel.orderFrontRegardless() }
         cardWindow?.orderFront(nil)
         // (The ring overlay orders itself in when it has something to draw, and out when it has not.)
@@ -1106,7 +1098,7 @@ final class TourController: ObservableObject {
         }
         guidance.attach(card: cardWindow, overlay: haloWindow)
         feedback.prewarmOverlay()
-        installScrollTrace()
+        installGestureTrace()
     }
 
     // MARK: - Ring, hints (prototype C.4)
@@ -1248,6 +1240,7 @@ final class TourController: ObservableObject {
         default: return
         }
         cardYielded = true
+        gestureTrace.noteYield(true)
         guidance.motion.dismissCard()
         guidance.motion.hideRing()
         guidance.motion.stopHint()
@@ -1264,6 +1257,7 @@ final class TourController: ObservableObject {
             self.resumeWork = nil
             guard self.cardYielded else { return }
             self.cardYielded = false
+            self.gestureTrace.noteYield(false)
             #if DEBUG
             TourPerfProbe.mark("resume after yield")
             #endif

@@ -23,6 +23,8 @@ final class TourRealPanelFixture {
     let liquidEdge: LiquidEdgeController
     let controller: TourController
     let defaults: UserDefaults
+    /// Everything the tour's gesture trace writes lands here, never in the founder's ~/Library/Logs.
+    let gestureWriter = TourRecordingGestureWriter()
     private let suiteName: String
     private let savedPage: PlayerPage
     private let savedPlaying: Bool
@@ -70,7 +72,7 @@ final class TourRealPanelFixture {
         liquidEdge = LiquidEdgeController(card: panel)
         panel.liquidEdgeHandler = { [weak liquidEdge] edge in liquidEdge?.collapse(to: edge) ?? false }
         let guidance = TourGuidance(reduceMotion: { reduceMotion })
-        controller = TourController(panel: panel, liquidEdge: liquidEdge, defaults: defaults, guidance: guidance)
+        controller = TourController(panel: panel, liquidEdge: liquidEdge, defaults: defaults, guidance: guidance, gestureLogWriter: gestureWriter)
         spin(0.6)
     }
 
