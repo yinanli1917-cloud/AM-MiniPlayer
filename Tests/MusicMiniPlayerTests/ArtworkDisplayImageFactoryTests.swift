@@ -93,6 +93,11 @@ final class ArtworkDisplayImageFactoryTests: XCTestCase {
         XCTAssertEqual(cg.colorSpace?.name as String?, CGColorSpace.displayP3 as String, "a P3 cover is not clipped to sRGB")
     }
 
+    func testDisplayArtworkDrawsAnUntaggedCoverIntoSRGB_notADeviceSpace() throws {
+        let cg = try XCTUnwrap(cgImage(ArtworkDisplayImageFactory.makeDisplayArtwork(from: jpegImage(width: 64, height: 64))))
+        XCTAssertNotNil(cg.colorSpace?.copyICCData(), "a device RGB space would be colour-converted on the main thread at every commit")
+    }
+
     private func makeBitmapImage(width: Int, height: Int) -> NSImage {
         let image = NSImage(size: NSSize(width: width, height: height))
         let rep = NSBitmapImageRep(

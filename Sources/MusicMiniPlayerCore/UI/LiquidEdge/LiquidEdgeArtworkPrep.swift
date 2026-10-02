@@ -43,7 +43,7 @@ enum LiquidEdgeArtworkPrep {
         NSColor.controlAccentColor.usingColorSpace(.sRGB) ?? NSColor(srgbRed: 0.04, green: 0.52, blue: 1, alpha: 1)
     }
 
-    /// Decoded RGBA8 copy of `image`, scaled to fit `maxPixels` (never up).
+    /// Decoded BGRA8 copy of `image`, scaled to fit `maxPixels` (never up).
     static func resized(_ image: CGImage, maxPixels: Int) -> CGImage? {
         let side = max(image.width, image.height)
         let scale = side > maxPixels ? Double(maxPixels) / Double(side) : 1
@@ -51,7 +51,7 @@ enum LiquidEdgeArtworkPrep {
         let h = max(1, Int((Double(image.height) * scale).rounded()))
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
               let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: space,
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return nil }
         ctx.interpolationQuality = .high
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
         return ctx.makeImage()
@@ -77,9 +77,10 @@ enum LiquidEdgeArtworkPrep {
                 let o = y * bpr + x * 4
                 let a = Double(base[o + 3]) / 255
                 // Premultiplied: undo it so a translucent pixel keeps its colour.
-                let r = a > 0 ? min(1, Double(base[o]) / 255 / a) : 0
+                // BGRA byte order.
+                let b = a > 0 ? min(1, Double(base[o]) / 255 / a) : 0
                 let g = a > 0 ? min(1, Double(base[o + 1]) / 255 / a) : 0
-                let b = a > 0 ? min(1, Double(base[o + 2]) / 255 / a) : 0
+                let r = a > 0 ? min(1, Double(base[o + 2]) / 255 / a) : 0
                 let (hue, sat, bri) = hsb(r, g, b)
                 if bri > 0.2 {
                     let wgt = sat * sat * bri

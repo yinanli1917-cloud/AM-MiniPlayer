@@ -313,20 +313,25 @@ public final class EdgeHitchTrace: @unchecked Sendable {
         return line
     }
 
-    /// The innermost frames (what the thread was doing) then the outermost
-    /// app frames (who asked for it). System frames in between are elided.
+    /// The innermost frames (what the thread was doing), then the outermost app frames
+    /// (who asked for it). With no app frame in the chain (SwiftUI / Core Animation
+    /// working on its own) the next system frames stand in for them.
     static func symbolicate(_ pcs: [UInt]) -> String {
         let frames: [(label: String, isApp: Bool)] = pcs.map { pc in
             var info = Dl_info()
             guard dladdr(UnsafeRawPointer(bitPattern: pc), &info) != 0 else { return (String(pc, radix: 16), false) }
             let image = info.dli_fname.map { String(cString: $0).split(separator: "/").last.map(String.init) ?? "?" } ?? "?"
-            let isApp = image.contains("MusicMiniPlayer") || image.contains("nanoPod")
-            guard let sym = info.dli_sname else { return ("\(image)+0x\(String(pc - UInt(bitPattern: info.dli_fbase), radix: 16))", isApp) }
-            return ("\(image)`\(String(cString: sym))", isApp)
+            guard let sym = info.dli_sname else { return ("\(image)+0x\(String(pc - UInt(bitPattern: info.dli_fbase), radix: 16))", false) }
+            let name = String(cString: sym)
+            // Swift mangles the module into the symbol; the app's Core is a library inside the app binary.
+            let isApp = name.contains("MusicMiniPlayerCore") || name.contains("MusicMiniPlayerAppKit")
+            return ("\(image)`\(name)", isApp)
         }
         let top = frames.prefix(4).map(\.label)
-        let app = frames.dropFirst(4).filter(\.isApp).prefix(10).map(\.label)
-        return (top + (app.isEmpty ? [] : ["..."] + app)).joined(separator: " < ")
+        let rest = frames.dropFirst(4)
+        let app = rest.filter(\.isApp).prefix(10).map(\.label)
+        let tail = app.isEmpty ? Array(rest.prefix(14).map(\.label)) : app
+        return (top + (tail.isEmpty ? [] : ["..."] + tail)).joined(separator: " < ")
     }
 }
 
@@ -413,17 +418,23 @@ final class MainThreadStallSampler: @unchecked Sendable {
     /// `scratch`, resumes it. Nothing here may allocate or lock.
     private func captureMainStack() -> Int {
         #if arch(arm64)
-        guard thread_suspend(mainThread) == KERN_SUCCESS else { return 0 }
+        // Everything the suspended window needs is a local first: no lazy static, no
+        // allocation, no lock between suspend and resume (the main thread may hold any of them).
+        let maxDepth = Self.maxDepth
+        let mask: UInt = 0x0000_7FFF_FFFF_FFFF
+        let task = mach_task_self_
+        let scratch = self.scratch
+        let thread = mainThread
+        guard thread_suspend(thread) == KERN_SUCCESS else { return 0 }
         var state = arm_thread_state64_t()
         var count = mach_msg_type_number_t(MemoryLayout<arm_thread_state64_t>.size / MemoryLayout<UInt32>.size)
         let kr = withUnsafeMutablePointer(to: &state) {
             $0.withMemoryRebound(to: natural_t.self, capacity: Int(count)) {
-                thread_get_state(mainThread, ARM_THREAD_STATE64, $0, &count)
+                thread_get_state(thread, ARM_THREAD_STATE64, $0, &count)
             }
         }
         var depth = 0
         if kr == KERN_SUCCESS {
-            let mask: UInt = 0x0000_000F_FFFF_FFFF
             scratch[0] = UInt(state.__pc) & mask
             depth = 1
             // A leaf function (vImage, memmove...) has no frame yet: its caller is in LR.
@@ -432,10 +443,10 @@ final class MainThreadStallSampler: @unchecked Sendable {
             var fp = UInt(state.__fp)
             var pair: (UInt, UInt) = (0, 0)
             var first = true
-            while depth < Self.maxDepth, fp != 0, fp & 0xF == 0 {
+            while depth < maxDepth, fp != 0, fp & 0xF == 0 {
                 var read: vm_size_t = 0
                 let ok = withUnsafeMutablePointer(to: &pair) {
-                    vm_read_overwrite(mach_task_self_, vm_address_t(fp), 16, vm_address_t(bitPattern: $0), &read)
+                    vm_read_overwrite(task, vm_address_t(fp), 16, vm_address_t(bitPattern: $0), &read)
                 }
                 guard ok == KERN_SUCCESS, read == 16, pair.1 != 0 else { break }
                 let ret = pair.1 & mask
@@ -446,7 +457,7 @@ final class MainThreadStallSampler: @unchecked Sendable {
                 fp = pair.0
             }
         }
-        thread_resume(mainThread)
+        thread_resume(thread)
         return depth
         #else
         return 0

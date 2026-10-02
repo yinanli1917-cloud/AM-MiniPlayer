@@ -31,9 +31,11 @@ enum ArtworkDisplayImageFactory {
         let scale = side > maxPixelDimension ? Double(maxPixelDimension) / Double(side) : 1
         let w = max(1, Int((Double(source.width) * scale).rounded()))
         let h = max(1, Int((Double(source.height) * scale).rounded()))
-        // The cover's own RGB space keeps wide-gamut art wide; anything else (grey, CMYK,
-        // indexed) draws into sRGB.
-        let own = source.colorSpace.flatMap { $0.model == .rgb ? $0 : nil }
+        // The cover's own RGB space keeps wide-gamut art wide. A device space (an untagged
+        // JPEG) has no ICC profile and would still cost a per-pixel colour conversion on the
+        // main thread at every commit, so it, and anything else (grey, CMYK, indexed), is
+        // drawn into sRGB, which is what an untagged cover means anyway.
+        let own = source.colorSpace.flatMap { $0.model == .rgb && $0.copyICCData() != nil ? $0 : nil }
         let spaces = [own, CGColorSpace(name: CGColorSpace.sRGB)].compactMap { $0 }
         for space in spaces {
             guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
@@ -84,7 +86,8 @@ enum ArtworkDisplayImageFactory {
                 bitsPerComponent: 8,
                 bytesPerRow: 0,
                 space: colorSpace,
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                // BGRA premultiplied: the layout Core Animation takes without a conversion pass.
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
               ) else {
             return image
         }

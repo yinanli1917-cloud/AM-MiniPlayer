@@ -16,6 +16,10 @@
  *   is a hosting view that never moves, clipped by a CAShapeLayer mask; the
  *   progress light is CAShapeLayers. All inside CATransaction with actions
  *   disabled. The left edge mirrors paths and rects; text is never flipped.
+ *   A cover change never decodes or samples on the main thread: the sink hands
+ *   the image to LiquidEdgeArtworkPrep.queue and applies the newest result
+ *   (hero CGImage + glow colour); the light's strokes restyle only when the
+ *   glow colour or hover boost changes, not every frame.
  */
 
 import AppKit
