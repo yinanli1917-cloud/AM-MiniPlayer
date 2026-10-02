@@ -145,3 +145,36 @@ extension SettingsStageWallpaperScreenshotTests {
         }
     }
 }
+
+extension SettingsStageWallpaperScreenshotTests {
+
+    /// General tab, real window, light and dark, with nanoPod's REAL icon (the repo's AppIcon.icns stands in for the
+    /// app bundle's icon): Launch at Login mid-story (panel arriving, ~1.9s into the loop), its lit rest, and
+    /// Show in Dock (icon seated). Files: gen-login-<light|dark>.png, gen-login-held-<...>.png, gen-dock-<...>.png.
+    func test_shoot_generalScenes_withTheRealIcon() throws {
+        let dir = try outputDirForArt()
+        L10n.languageOverride = "en"
+        let icon = try XCTUnwrap(SettingsDemoAppIconTests.repoIcon)
+        let saved = DemoAppIcon.source
+        DemoAppIcon.source = { icon }
+        DemoAppIcon.resetCache()
+        defer { DemoAppIcon.source = saved; DemoAppIcon.resetCache() }
+        let scenes: [(name: String, demo: SettingsDemo, wait: Double)] = [
+            ("login", .launchAtLogin, 1.35),
+            ("login-held", .launchAtLogin, 3.2),
+            ("dock", .showInDock, 2.9),
+        ]
+        for dark in [false, true] {
+            for scene in scenes {
+                let hover = SettingsHoverIntentModel()
+                let window = SettingsWindowRenderTests.makeSettingsWindow(state: try makeStateForArt(.general), dark: dark, hover: hover)
+                presentForArt(window)
+                RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+                hover.pointerEntered(scene.demo, at: CGPoint(x: 100, y: 20))
+                RunLoop.main.run(until: Date().addingTimeInterval(scene.wait))
+                try shootForArt(window, to: dir.appendingPathComponent("gen-\(scene.name)-\(dark ? "dark" : "light").png"))
+                window.close()
+            }
+        }
+    }
+}

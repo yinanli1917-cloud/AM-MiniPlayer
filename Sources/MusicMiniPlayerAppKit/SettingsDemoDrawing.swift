@@ -697,8 +697,10 @@ enum DemoDrawing {
         ctx.stroke(shape, with: .color(p.glassLine), lineWidth: 0.5)
     }
 
-    /// The nanoPod app icon stand-in: an accent-gradient rounded square with the note.
+    /// nanoPod's icon: the app's own (DemoAppIcon), or, when the process has none, an accent-gradient
+    /// rounded square with the note.
     private static func drawAppIcon(_ ctx: inout GraphicsContext, _ p: DemoPalette, rect: CGRect) {
+        if DemoAppIcon.draw(in: &ctx, rect: rect) { return }
         let shape = Path(roundedRect: rect, cornerRadius: rect.width * 0.26)
         ctx.fill(shape, with: .linearGradient(Gradient(colors: [p.accent.opacity(0.85), p.accent]),
                                               startPoint: CGPoint(x: rect.minX, y: rect.minY), endPoint: CGPoint(x: rect.maxX, y: rect.maxY)))
