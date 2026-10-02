@@ -42,6 +42,7 @@ Sources/
 │   │   ├── UpdateApplier.swift            - Spawn detached shell script on quit to swap bundle + relaunch
 │   │   ├── MetadataWarmupSweep.swift      - 启动元数据预热：每 schema 版本一次，后台串行解析队列/最近曲目缺失行（utility QoS + 让位前台抓取 + 可整体取消，仅元数据不抓歌词）
 │   │   ├── PlaybackHistoryStore.swift     - 真实播放记录环形缓冲（capacity 11，显示最近 10 首，NanoPodCacheLocation 版本化文件 + 旧文件一次性迁移种子）+ 防抖落盘 + patchPersistentID 原地补丁 + flush()（2026-09-25 History 完整性修复）
+│   │   ├── PlaybackSource/PlayerAppIdentity.swift - 播放器 app 身份（bundle id/产品名/回退符号；Apple Music、Spotify、网易云、QQ 预置）+ PlayerAppIconProvider 运行时向 NSWorkspace 取已装 app 图标，不打包商标图
 │   │   ├── PendingPlaybackAccumulator.swift - 「待定播放→达标入账」：实际播放时长（暂停不计）≥ minimumListenSecondsForHistory（默认 10s，0=旧行为）或播到自然结束才入 History；PID 晚到原地打补丁不重插行；同曲重复探测不重启计时；app 退出前 flush（同时解 H1 展示层过滤/H3 通知-快照竞态漏记/H4 SB 超时误判双记）
 │   │   └── Lyrics/
 │   │       ├── LyricsFetcher.swift              - GAMMA pipeline orchestration + fetchAllSources + AuthoritativeBackfillBudget (回填 9s 硬上限) + DrainExitFacts（排水循环退出闭包拆分：纯项每结果只算一次，事件项留在闭包内）

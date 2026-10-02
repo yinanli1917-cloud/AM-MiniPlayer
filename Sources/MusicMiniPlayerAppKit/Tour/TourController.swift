@@ -128,7 +128,8 @@ final class TourController: ObservableObject {
     init(panel: SnappablePanel, liquidEdge: LiquidEdgeController,
          musicController: MusicController = .shared, lyricsService: LyricsService = .shared,
          defaults: UserDefaults = .standard, feedback: TourCompletionFeedback? = nil, guidance: TourGuidance? = nil,
-         gestureLogWriter: TourGestureLogWriter? = nil) {
+         gestureLogWriter: TourGestureLogWriter? = nil, traceGesturesAlways: Bool = false) {
+        self.traceGesturesAlways = traceGesturesAlways
         self.defaults = defaults
         self.feedback = feedback ?? TourCompletionFeedback()
         self.guidance = guidance ?? TourGuidance()
@@ -144,6 +145,7 @@ final class TourController: ObservableObject {
         self.feedback.onHandoffStart = { [weak self] in self?.handoffDidStart() }
         wireDetectors()
         wireGuidanceTriggers()
+        if traceGesturesAlways { gestureTrace.start(panel: panel) }
     }
 
     // MARK: - Entry points
@@ -472,7 +474,15 @@ final class TourController: ObservableObject {
         gestureTrace.start(panel: panel)
     }
 
-    private func removeGestureTrace() { gestureTrace.stop() }
+    private func removeGestureTrace() {
+        guard !traceGesturesAlways else { return }
+        gestureTrace.stop()
+    }
+
+    /// 2026-10-01: the founder can't two-finger-drag the panel even with the tour closed, and nothing covers the panel —
+    /// so for now the same cheap trace (ring buffer; a failed-looking gesture is written off-main) runs for the whole app
+    /// session, not just the tour. Remove once the cause is pinned.
+    private let traceGesturesAlways: Bool
 
     private static func traceDescription(of phase: TourPhase) -> String {
         switch phase {
