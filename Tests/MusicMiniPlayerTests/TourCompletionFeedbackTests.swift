@@ -39,7 +39,10 @@ final class TourCompletionFeedbackTests: XCTestCase {
     }
 
     private func makeFeedback(reduceMotion: Bool = false, haptics: HapticBox? = nil) -> TourCompletionFeedback {
+        // (These tests are of B.2 / B.3 as specified: the small ring on the card. The celebration moment, which draws the big
+        // ring instead, has its own tests — TourFeedbackCelebrationTests, TourCelebrationRealWindowTests.)
         TourCompletionFeedback(clock: { [unowned self] in self.now }, reduceMotion: { reduceMotion }, autoTick: false,
+                               celebrationEnabled: false,
                                haptic: { kind in haptics?.log.append((self.now, kind)) }, random: TourSeededRandom(seed: 3))
     }
 

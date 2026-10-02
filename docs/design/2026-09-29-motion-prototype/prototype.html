@@ -200,6 +200,13 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 .lyric .tr{display:block;font-size:.88em;opacity:.78;font-weight:500;margin-top:.15em;position:relative}
 .lyric .tr span{position:absolute;left:0;top:0;white-space:nowrap}
 
+/* ---------- Section B.10：卡内庆祝时刻（内容虚化压暗，大环到卡中心） ---------- */
+.tcard .cring{position:absolute;left:0;top:0;width:28px;height:28px;pointer-events:none;visibility:hidden;z-index:3}
+.tcard .cring svg{width:28px;height:28px;display:block;overflow:visible}
+.tcard .cring .num{position:absolute;inset:0;display:grid;place-items:center;font-size:10px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.tcard.celeing .tin{will-change:transform,filter}
+.tcard.celeing{cursor:pointer}
+
 /* ---------- Section B ---------- */
 .b-grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:24px;margin-top:22px;align-items:start}
 @media (max-width:900px){.b-grid{grid-template-columns:minmax(0,1fr)}}
@@ -471,6 +478,8 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
       </div>
       <label class="small" style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="slowChk2" data-bind="slow" style="accent-color:var(--accent)"> 0.25× 慢放（与顶栏同步）</label>
       <label class="small" style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="bigChk" checked style="accent-color:var(--accent)"> 放大到 1.35×（关掉是真实尺寸）</label>
+      <label class="small" style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="celeChk" checked style="accent-color:var(--accent)"> 卡内庆祝（内容虚化压暗，环变大到卡中心，B.10）。点卡立刻收</label>
+      <label class="small" style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="rtChk" style="accent-color:var(--accent)"> 减少透明度（虚化换成压暗）</label>
       <div class="panel">
         <h3>状态机（当前状态高亮）</h3>
         <div class="pills" id="b-pills"></div>
@@ -527,7 +536,7 @@ const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
 const lerp = (a, b, t) => a + (b - a) * t;
 
 /* ------------------------------------------------------------ 全局状态与时钟 */
-const S = { slow: false, rm: matchMedia('(prefers-reduced-motion: reduce)').matches, manual: false };
+const S = { slow: false, rm: matchMedia('(prefers-reduced-motion: reduce)').matches, manual: false, cele: true, rt: false };   // cele = B.10 卡内庆祝时刻；rt = 减少透明度
 const users = [];               // 每个 user(dt, now)=>bool 仍在运行
 let raf = 0, lastTs = 0;
 function wake() { if (S.manual) return; if (!raf) { lastTs = performance.now(); raf = requestAnimationFrame(frame); } updateStatus(); }
@@ -990,7 +999,15 @@ function cardHTML(P, withBeak) {
       <path id="${P}rCheck" d="M8.6 14.3 L12.2 17.7 L19.2 10" pathLength="1" fill="none" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 1" stroke-dashoffset="1" opacity="0"/></svg>
       <div class="num" id="${P}rNum"></div></div>
     <div class="title"></div></div>
-    <div class="body"></div><ul class="beats"></ul><div class="acts"></div><div class="foot2"></div></div>`;
+    <div class="body"></div><ul class="beats"></ul><div class="acts"></div><div class="foot2"></div></div>
+    <div class="cring" id="${P}cring"><svg viewBox="0 0 28 28" aria-hidden="true"><g>
+      <circle id="${P}cTrack" cx="14" cy="14" r="11.25" fill="none" stroke="var(--ring-track)" stroke-width="5.5"/>
+      <circle id="${P}cDisc" cx="14" cy="14" r="0" fill="var(--accent)"/>
+      <circle id="${P}cFill" cx="14" cy="14" r="11.25" fill="none" stroke="var(--accent)" stroke-width="5.5" stroke-linecap="round" transform="rotate(-90 14 14)" stroke-dasharray="0 70.69" opacity="0"/>
+      <circle id="${P}cComet" cx="14" cy="14" r="11.25" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" transform="rotate(-90 14 14)" stroke-dasharray="0 70.69" opacity="0"/>
+      <circle id="${P}cSeal" cx="14" cy="14" r="11.25" fill="none" stroke="#fff" stroke-width="5.5" opacity="0"/></g>
+      <path id="${P}cCheck" d="M8.6 14.3 L12.2 17.7 L19.2 10" pathLength="1" fill="none" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 1" stroke-dashoffset="1" opacity="0"/></svg>
+      <div class="num" id="${P}cNum"></div></div>`;
 }
 const pickContent = root => ({ title: root.querySelector('.title'), body: root.querySelector('.body'), beats: root.querySelector('.beats'), acts: root.querySelector('.acts'), foot: root.querySelector('.foot2') });
 
@@ -1002,15 +1019,20 @@ function makeTour(P, cfg) {
   const mk = v => new Val(v, B);
   const V = {
     ring: mk(cfg.prefill || 0), ringScale: mk(1), ringW: mk(5.5), numOp: mk(1), numScale: mk(1), numY: mk(0),
-    chkDraw: mk(0), chkScale: mk(.6), disc: mk(0), seal: mk(0), cardY: mk(0), cardS: mk(1),
+    chkDraw: mk(0), chkScale: mk(.6), disc: mk(0), seal: mk(0), cardY: mk(0), cardS: mk(1), blur: mk(0), lift: mk(0),
     ci: [0, 1, 2, 3, 4].map(() => ({ op: mk(1), y: mk(0) }))
   };
   const extra = [];
   const track = v => { extra.push(v); return v; };
-  const ALLV = () => [V.ring, V.ringScale, V.ringW, V.numOp, V.numScale, V.numY, V.chkDraw, V.chkScale, V.disc, V.seal, V.cardY, V.cardS, ...V.ci.flatMap(c => [c.op, c.y]), ...extra, ...B.beats.flatMap(b => [b.fill, b.scale, b.draw])];
+  const ALLV = () => [V.ring, V.ringScale, V.ringW, V.numOp, V.numScale, V.numY, V.chkDraw, V.chkScale, V.disc, V.seal, V.cardY, V.cardS, V.blur, V.lift, ...V.ci.flatMap(c => [c.op, c.y]), ...extra, ...B.beats.flatMap(b => [b.fill, b.scale, b.draw])];
 
   const card = q('tcard'), content = pickContent(card);
   const elRing = { fill: q('rFill'), comet: q('rComet'), seal: q('rSeal'), disc: q('rDisc'), check: q('rCheck'), num: q('rNum'), svg: q('ringsvg') };
+  /* B.10 卡内庆祝时刻：大环是卡里的另一个元素（不在 .tin 里，不被虚化、缩放、裁剪），读的是同一组 V */
+  const elC = { fill: q('cFill'), comet: q('cComet'), seal: q('cSeal'), disc: q('cDisc'), check: q('cCheck'), num: q('cNum'), svg: q('cring').querySelector('svg'), box: q('cring') };
+  const CELE = { ring: 80, blurPx: 10, dim: .38, dimQuiet: .55, scale: .98, inD: .18, outD: .26, liftOut: .34, rmD: .12, rmOut: .16, early: .02, slot: [230, 30] };
+  const celeOn = () => S.cele && cfg.celebrate !== false;
+  const celeQuiet = () => S.rt || S.rm;           // 减少透明度 / 减少动态效果：不虚化，只压暗
   const items = [content.title, content.body, content.beats, content.acts, content.foot];
 
   /* ---- 日志 / 状态药丸 / 触觉标签 */
@@ -1034,7 +1056,7 @@ function makeTour(P, cfg) {
     const el = B.hapticFlip ? a : b; B.hapticFlip = !B.hapticFlip;
     el.textContent = '⌁ haptic ' + name; el.classList.add('on'); setTimeout(() => el.classList.remove('on'), 700 / (S.slow ? .25 : 1));
   }
-  function cue(at, fn, essential = true) { B.cues.push({ at: B.now + at, fn, essential }); }
+  function cue(at, fn, essential = true, tag = null) { B.cues.push({ at: B.now + at, fn, essential, tag }); }
 
   /* ---- 内容 ---- */
   function fillContent(els, i) {
@@ -1077,12 +1099,14 @@ function makeTour(P, cfg) {
   /* ---- 完成一步 ---- */
   function completeStep() {
     if (B.finished) return;
-    if (B.busy) interrupt();
+    if (B.busy) { B.keepCele = celeOn(); interrupt(); B.keepCele = false; }
     const flow = cfg.flowOf(B.cardStep); if (!flow) return;
     const last = flow.kind === 'last';
     B.busy = true; B.count++;
     const chain = B.now - B.lastAt < 4.0; B.combo = chain ? Math.min(B.combo + 1, 3) : 0; B.lastAt = B.now;
     B.seqStart = B.now; buildPills(last);
+    B.cele = celeOn();
+    if (B.cele) celeStart();
     const rem = B.beats.map((b, i) => b.done ? -1 : i).filter(i => i >= 0);
     if (!S.rm) V.cardS.set(1);
     const stag = .07;
@@ -1091,6 +1115,20 @@ function makeTour(P, cfg) {
     runRing(B.count, flow, T0, last);
     wake();
   }
+  /* B.10 卡内庆祝时刻：内容虚化 + 压暗 + 微缩，小环变大飞到卡中心（B.2 / B.3 的时间一概不动，交接 H 仍是 760 / 1050 ms；虚化在换内容之后才松开，所以松开时露出来的就是下一步） */
+  function celeStart() {
+    const quiet = celeQuiet();
+    V.blur.to(1, { dur: S.rm ? CELE.rmD : CELE.inD, ease: S.rm ? 'lin' : 'out' });
+    if (S.rm) V.lift.to(1, { dur: CELE.rmD, ease: 'lin' }); else V.lift.to(1, { spring: [.4, .18] });
+  }
+  /* 点卡：马上收尾（交接立刻开始，装饰类还没发生的火花 / 礼花丢弃） */
+  function endCeleEarly() {
+    if (!B.cele) return;
+    const ts = B.cues.filter(c => c.tag === 'h');
+    if (ts.length) { const d = (B.now + CELE.early) - Math.min(...ts.map(c => c.at)); if (d < 0) ts.forEach(c => { c.at += d; }); }
+    B.cues = B.cues.filter(c => c.essential || c.at <= B.now);
+  }
+  card.addEventListener('pointerdown', () => endCeleEarly());
   function runRing(target, flow, T0, last) {
     if (S.rm) return runRingRM(target, flow, T0, last);
     cue(T0, () => { enter('anticipate'); V.ringScale.to(.95, { dur: .06, ease: 'out' }); V.numOp.to(.6, { dur: .06 }); });
@@ -1107,8 +1145,8 @@ function makeTour(P, cfg) {
     if (!last) {
       cue(T0 + .38, () => { enter('sparks'); spawnSparks(16 + B.combo * 4, target); spawnHalo(); }, false);
       cue(T0 + .66, () => { enter('settle'); V.ringW.to(5.5, { dur: .2, ease: 'out' }); });
-      cue(T0 + .76, () => handoff(flow.next, false));
-      cue(T0 + 1.1, () => { B.busy = false; enter('idle'); idlePills(); });
+      cue(T0 + .76, () => handoff(flow.next, false), true, 'h');
+      cue(T0 + 1.1, () => { B.busy = false; B.cele = false; enter('idle'); idlePills(); }, true, 'h');
     } else {
       cue(T0 + .60, () => { enter('seal'); haptic('.alignment');
         V.ringScale.set(1.08); V.ringScale.to(1, { spring: [.5, .38] });
@@ -1116,16 +1154,16 @@ function makeTour(P, cfg) {
         V.seal.set(1); V.seal.to(0, { dur: .35, ease: 'out' }); });
       cue(T0 + .64, () => { V.disc.to(1, { spring: [.4, .25] }); });
       cue(T0 + .68, () => { enter('confetti'); spawnConfetti(72); spawnHalo(); spawnHalo(.12); V.cardY.set(-4); V.cardY.to(0, { spring: [.4, .3] }); }, false);
-      cue(T0 + 1.05, () => { enter('settle'); handoff(flow.next, false); });
-      cue(T0 + 1.5, () => { B.busy = false; B.finished = true; });
+      cue(T0 + 1.05, () => { enter('settle'); handoff(flow.next, false); }, true, 'h');
+      cue(T0 + 1.5, () => { B.busy = false; B.finished = true; B.cele = false; }, true, 'h');
     }
   }
   function runRingRM(target, flow, T0, last) {
     cue(T0, () => { enter('draw'); haptic(last ? '.alignment' : '.levelChange'); V.ring.to(target, { dur: .3, ease: 'lin' }); });
-    cue(T0, () => { V.numOp.to(0, { dur: .16, ease: 'lin' }); elRing.check.setAttribute('opacity', 1); V.chkScale.set(1); V.chkDraw.to(1, { dur: .16, ease: 'lin' }); });
+    cue(T0, () => { V.numOp.to(0, { dur: .16, ease: 'lin' }); elRing.check.setAttribute('opacity', 1); V.chkScale.set(1); if (B.cele) V.chkDraw.set(1); else V.chkDraw.to(1, { dur: .16, ease: 'lin' }); });   // 庆祝时勾直接就位（静态勾）
     if (last) cue(T0 + .3, () => { enter('seal'); V.seal.set(1); V.seal.to(0, { dur: .35, ease: 'lin' }); V.disc.to(1, { dur: .2, ease: 'lin' }); });
-    cue(T0 + (last ? .7 : .5), () => handoff(flow.next, false));
-    cue(T0 + (last ? .95 : .8), () => { B.busy = false; B.finished = last; enter('idle'); idlePills(); });
+    cue(T0 + (last ? .7 : .5), () => handoff(flow.next, false), true, 'h');
+    cue(T0 + (last ? .95 : .8), () => { B.busy = false; B.finished = last; B.cele = false; enter('idle'); idlePills(); }, true, 'h');
   }
   function idlePills() { const el = q('pills'); if (el) [...el.children].forEach(p => p.classList.remove('on')); }
   /* 只长环、不带勾和交接（S5 收边时卡片已隐去，环的填充与火花在下一张卡出现时补放） */
@@ -1150,6 +1188,7 @@ function makeTour(P, cfg) {
   /* 交接：卡内容淡出 → （C：卡位移）→ 换内容 → 错峰淡入；环内勾 → 下一步数字 */
   function handoff(next, ff) {
     enter('handoff');
+    if (!ff && !B.keepCele && (V.lift.v > .002 || V.lift.active)) { if (S.rm) V.lift.to(0, { dur: CELE.rmOut, ease: 'lin' }); else V.lift.to(0, { dur: CELE.liftOut, ease: 'io' }); }
     cfg.onHandoffStart && cfg.onHandoffStart(next, ff);
     const nx = steps[next], fin = !!nx.final;
     const swap = () => {
@@ -1163,6 +1202,8 @@ function makeTour(P, cfg) {
         if (S.rm || ff) { c.op.set(1); c.y.set(0); }
         else { c.op.set(0); c.y.set(6); c.op.to(1, { dur: .18, ease: 'out', delay: i * .04 }); c.y.to(0, { dur: .18, ease: 'out', delay: i * .04 }); }
       });
+      /* 庆祝收尾：新内容已经换进虚化里，这时松开虚化，露出来的就是下一步；大环在交接一开始就飞回右上角（见下） */
+      if (V.blur.v > .002 || V.blur.active) { if (B.keepCele) { /* 连点：新一轮庆祝接着用，不松开 */ } else if (S.rm || ff) V.blur.set(0), V.lift.set(0); else V.blur.to(0, { dur: CELE.outD, ease: 'io' }); }
       cfg.onSwap && cfg.onSwap(next, ff);
     };
     if (ff) { swap(); return; }
@@ -1193,7 +1234,13 @@ function makeTour(P, cfg) {
     const d = devicePixelRatio || 1, w = stageEl.offsetWidth, h = stageEl.offsetHeight;
     fxc.width = Math.round(w * d); fxc.height = Math.round(h * d); fxx.setTransform(d, 0, 0, d, 0, 0);
   }
-  function ringGeom() {
+  /* 庆祝时刻里火花围着大环：几何取大环当前外接框（含弹跳缩放）；礼花仍按小环的 1x（卡不变大） */
+  function celeGeom() {
+    const st = stageEl.getBoundingClientRect(), sc = st.width / stageEl.offsetWidth || 1, r = elC.svg.getBoundingClientRect(), g0 = ringGeom0();
+    return { cx: (r.left - st.left + r.width / 2) / sc, cy: (r.top - st.top + r.height / 2) / sc, z: r.width / 28 / sc, zc: g0.z, zh: g0.z * 2.0, cardTop: g0.cardTop, cardCx: g0.cardCx };
+  }
+  const ringGeom = () => (B.cele ? celeGeom() : ringGeom0());
+  function ringGeom0() {
     const st = stageEl.getBoundingClientRect(), r = elRing.svg.getBoundingClientRect(), sc = st.width / stageEl.offsetWidth || 1;
     const cr = card.getBoundingClientRect();
     return { cx: (r.left - st.left + r.width / 2) / sc, cy: (r.top - st.top + r.height / 2) / sc, z: r.width / 28 / sc, cardTop: (cr.top - st.top) / sc, cardCx: (cr.left - st.left + cr.width / 2) / sc };
@@ -1210,14 +1257,14 @@ function makeTour(P, cfg) {
     }
     wake();
   }
-  function spawnHalo(delay = 0) { if (S.rm) return; const g = ringGeom(); B.halos.push({ x: g.cx, y: g.cy, z: g.z, age: -delay, life: .5 }); wake(); }
+  function spawnHalo(delay = 0) { if (S.rm) return; const g = ringGeom(); B.halos.push({ x: g.cx, y: g.cy, z: g.zh || g.z, age: -delay, life: .5 }); wake(); }
   function spawnConfetti(n) {
     if (S.rm) return;
-    const g = ringGeom(), cols = [css('--accent'), css('--gold'), css('--violet'), '#7fd6c2', css('--accent-soft'), '#ffffff'];
+    const g = ringGeom(), zc = g.zc || g.z, cols = [css('--accent'), css('--gold'), css('--violet'), '#7fd6c2', css('--accent-soft'), '#ffffff'];
     for (let i = 0; i < n; i++) {
-      const a = -Math.PI / 2 + (Math.random() - .5) * (Math.PI / 3), sp = (220 + Math.random() * 100) * g.z * .8;
+      const a = -Math.PI / 2 + (Math.random() - .5) * (Math.PI / 3), sp = (220 + Math.random() * 100) * zc * .8;
       B.particles.push({ k: 'c', x: g.cardCx + (Math.random() - .5) * 120 * g.z, y: g.cardTop + 8, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1.8, age: 0,
-        w: (5 + Math.random() * 2) * g.z * .8, h: (7 + Math.random() * 4) * g.z * .8, shape: i % 3, rot: Math.random() * 6.28, vr: (Math.random() - .5) * 5, c: cols[i % cols.length], g: 360 * g.z * .8 });
+        w: (5 + Math.random() * 2) * zc * .8, h: (7 + Math.random() * 4) * zc * .8, shape: i % 3, rot: Math.random() * 6.28, vr: (Math.random() - .5) * 5, c: cols[i % cols.length], g: 360 * zc * .8 });
     }
     wake();
   }
@@ -1245,27 +1292,44 @@ function makeTour(P, cfg) {
   }
 
   /* ---- 每帧绘制 ---- */
-  function paint() {
+  function paintRing(el) {
     const p = V.ring.v, frac = clamp(p / NS, 0, 1), C = RC, full = frac >= .9995;
-    elRing.fill.setAttribute('opacity', frac > .003 ? 1 : 0);
-    elRing.fill.setAttribute('stroke-dasharray', full ? `${C.toFixed(2)} ${C.toFixed(2)}` : `${(C * frac).toFixed(2)} ${C.toFixed(2)}`);
-    elRing.fill.setAttribute('stroke-width', V.ringW.v.toFixed(2));
+    el.fill.setAttribute('opacity', frac > .003 ? 1 : 0);
+    el.fill.setAttribute('stroke-dasharray', full ? `${C.toFixed(2)} ${C.toFixed(2)}` : `${(C * frac).toFixed(2)} ${C.toFixed(2)}`);
+    el.fill.setAttribute('stroke-width', V.ringW.v.toFixed(2));
     const speed = Math.abs(V.ring.vel);
     const ca = clamp(speed * .32, 0, .55), cl = C / NS * .55 * clamp(speed / 2.4, 0, 1);
-    elRing.comet.setAttribute('opacity', full ? 0 : ca.toFixed(3));
-    elRing.comet.setAttribute('stroke-dasharray', `${Math.max(.01, cl).toFixed(2)} ${C.toFixed(2)}`);
-    elRing.comet.setAttribute('stroke-dashoffset', (-(C * frac - cl)).toFixed(2));
-    elRing.seal.setAttribute('opacity', V.seal.v.toFixed(3)); elRing.seal.setAttribute('stroke-width', V.ringW.v.toFixed(2));
-    elRing.disc.setAttribute('r', (11.25 * clamp(V.disc.v, 0, 1.05)).toFixed(2));
-    elRing.svg.style.transform = `scale(${V.ringScale.v.toFixed(4)})`;
-    elRing.num.style.opacity = clamp(V.numOp.v).toFixed(3);
-    elRing.num.style.transform = `translateY(${V.numY.v.toFixed(2)}px) scale(${V.numScale.v.toFixed(3)})`;
-    elRing.check.setAttribute('stroke-dashoffset', (1 - clamp(V.chkDraw.v)).toFixed(3));
-    elRing.check.style.transformOrigin = '14px 14px'; elRing.check.style.transform = `scale(${V.chkScale.v.toFixed(3)})`;
-    elRing.check.setAttribute('stroke', V.disc.v > .35 ? '#fff' : 'var(--accent)');
-    elRing.check.setAttribute('opacity', V.chkDraw.v > .001 ? 1 : 0);
+    el.comet.setAttribute('opacity', full ? 0 : ca.toFixed(3));
+    el.comet.setAttribute('stroke-dasharray', `${Math.max(.01, cl).toFixed(2)} ${C.toFixed(2)}`);
+    el.comet.setAttribute('stroke-dashoffset', (-(C * frac - cl)).toFixed(2));
+    el.seal.setAttribute('opacity', V.seal.v.toFixed(3)); el.seal.setAttribute('stroke-width', V.ringW.v.toFixed(2));
+    el.disc.setAttribute('r', (11.25 * clamp(V.disc.v, 0, 1.05)).toFixed(2));
+    el.svg.style.transform = `scale(${V.ringScale.v.toFixed(4)})`;
+    el.num.style.opacity = clamp(V.numOp.v).toFixed(3);
+    el.num.style.transform = `translateY(${V.numY.v.toFixed(2)}px) scale(${V.numScale.v.toFixed(3)})`;
+    el.check.setAttribute('stroke-dashoffset', (1 - clamp(V.chkDraw.v)).toFixed(3));
+    el.check.style.transformOrigin = '14px 14px'; el.check.style.transform = `scale(${V.chkScale.v.toFixed(3)})`;
+    el.check.setAttribute('stroke', V.disc.v > .35 ? '#fff' : 'var(--accent)');
+    el.check.setAttribute('opacity', V.chkDraw.v > .001 ? 1 : 0);
+  }
+  function paint() {
+    const b = clamp(V.blur.v), l = V.lift.v, on = b > .002 || Math.abs(l) > .002;
+    paintRing(elRing);
+    /* 庆祝：小环让位，大环（同一组值）从右上角飞到卡中心；内容虚化 + 压暗 + 微缩 */
+    if (on) {
+      const k = 1 + (CELE.ring / 28 - 1) * l, W = card.offsetWidth, H = card.offsetHeight;
+      const dx = (W / 2 - CELE.slot[0]) * l, dy = (H / 2 - CELE.slot[1]) * l;
+      elC.box.style.visibility = 'visible'; elC.box.style.transform = `translate(${(CELE.slot[0] - 14 + dx).toFixed(2)}px,${(CELE.slot[1] - 14 + dy).toFixed(2)}px) scale(${k.toFixed(4)})`;
+      elRing.svg.style.visibility = 'hidden'; elRing.num.style.visibility = 'hidden';
+      paintRing(elC); elC.num.textContent = elRing.num.textContent;
+      elC.num.style.fontSize = '10px';
+    } else { elC.box.style.visibility = 'hidden'; elRing.svg.style.visibility = ''; elRing.num.style.visibility = ''; }
+    card.classList.toggle('celeing', on && B.cele);
+    const tin = card.querySelector('.tin');
+    tin.style.transform = on && !S.rm ? `scale(${(1 - (1 - CELE.scale) * b).toFixed(4)})` : '';
     if (!cfg.ownTransform) card.style.transform = `translateY(${V.cardY.v.toFixed(2)}px) scale(${V.cardS.v})`;
-    V.ci.forEach((c, i) => { const it = items[i]; it.style.opacity = clamp(c.op.v).toFixed(3); it.style.transform = `translateY(${c.y.v.toFixed(2)}px)`; });
+    const dimAmt = (celeQuiet() ? CELE.dimQuiet : CELE.dim) * b, blurPx = celeQuiet() ? 0 : CELE.blurPx * b;
+    V.ci.forEach((c, i) => { const it = items[i]; it.style.opacity = (clamp(c.op.v) * (1 - dimAmt)).toFixed(3); it.style.transform = `translateY(${c.y.v.toFixed(2)}px)`; it.style.filter = blurPx > .05 ? `blur(${blurPx.toFixed(2)}px)` : ''; });
     B.beats.forEach(b => {
       b.bf.setAttribute('r', (6.9 * clamp(b.fill.v)).toFixed(2));
       b.ck.setAttribute('stroke-dashoffset', (1 - clamp(b.draw.v)).toFixed(3));
@@ -1289,7 +1353,7 @@ function makeTour(P, cfg) {
 
   function reset() {
     B.cues = []; B.particles = []; B.halos = []; B.count = cfg.prefill || 0; B.busy = false; B.finished = false; B.combo = 0;
-    [V.ring, V.ringScale, V.ringW, V.numOp, V.numScale, V.numY, V.chkDraw, V.chkScale, V.disc, V.seal, V.cardY, V.cardS].forEach(v => v.set(0));
+    [V.ring, V.ringScale, V.ringW, V.numOp, V.numScale, V.numY, V.chkDraw, V.chkScale, V.disc, V.seal, V.cardY, V.cardS, V.blur, V.lift].forEach(v => v.set(0)); B.cele = false;
     V.ring.set(cfg.prefill || 0); V.ringScale.set(1); V.ringW.set(5.5); V.numOp.set(1); V.numScale.set(1); V.chkScale.set(.6); V.cardS.set(1);
     V.ci.forEach(c => { c.op.set(1); c.y.set(0); });
     setContent(cfg.startStep || 0);
@@ -1333,6 +1397,8 @@ $('#btnRapid').addEventListener('click', () => {
 });
 $('#btnReset').addEventListener('click', () => TB.reset());
 $('#bigChk').addEventListener('change', e => { $('#cardbox').style.setProperty('--z', e.target.checked ? 1.35 : 1); TB.fitFx(); });
+$('#celeChk').addEventListener('change', e => { S.cele = e.target.checked; });
+$('#rtChk').addEventListener('change', e => { S.rt = e.target.checked; });
 
 
 /* ============================================================ C：引导的转场与微交互 */

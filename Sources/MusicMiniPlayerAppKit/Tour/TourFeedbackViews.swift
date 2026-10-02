@@ -5,8 +5,11 @@
  *          TourCardStyle's palette / metrics.
  * [OUTPUT]: Exports TourFeedbackRing, TourFeedbackBeatDot, TourFeedbackBeatRow,
  *           the `tourFeedbackBlock(_:_:)` content-fade modifier, TourFXCanvas
- *           (pure particle drawing), TourFXHost (live wrapper) and the
- *           palette additions the animation needs.
+ *           (pure particle drawing), TourFXHost (live wrapper), the
+ *           celebration moment's views (TourCelebrationRingLayer: the big ring,
+ *           TourCelebrationContent: blur / dim / click layer on the card's
+ *           content, TourCelebrationRingPose: where the ring is for a `lift`)
+ *           and the palette additions the animation needs.
  * [POS]: MusicMiniPlayerAppKit/Tour. Everything that DRAWS a feedback frame.
  *        The ring and the beat dot are drawn in a Canvas with the same
  *        operations, in the same order, as the prototype's SVG (track, disc,
@@ -169,6 +172,8 @@ struct TourFeedbackRing: View {
                                     disc: closed ? 1 : 0, checkDraw: closed ? 1 : 0, checkScale: 1)
         }
         let numberOpacity = engaged ? f.numberOpacity : (closed ? 0 : 1)
+        // While the card is the celebration canvas the big ring (TourCelebrationRingLayer) draws instead.
+        let celebrating = f.isCelebrating
         return ZStack {
             Canvas { ctx, size in
                 TourRingDrawing.draw(ctx, center: CGPoint(x: size.width / 2, y: size.height / 2), params: params, palette: palette)
@@ -187,9 +192,107 @@ struct TourFeedbackRing: View {
                 .scaleEffect(engaged ? f.numberScale : 1)
                 .offset(y: engaged ? f.numberOffsetY : 0)
         }
+        .opacity(celebrating ? 0 : 1)
         .frame(width: diameter, height: diameter)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(closed ? "已完成" : "第 \(stepLabel) 步，共 \(total) 步")
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Celebration moment (spec §B.10)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// The ring's position and scale for `lift` (0 = the card's own ring slot, 1 = the body's centre at 80 pt), body-local, y down.
+struct TourCelebrationRingPose: Equatable {
+    var center: CGPoint
+    var scale: Double
+
+    static func at(lift: Double, bodySize: CGSize) -> TourCelebrationRingPose {
+        let r = CGFloat(TourCelebrationTokens.ringRadius)
+        let slot = CGPoint(x: bodySize.width - TourCardMetrics.paddingSide - r, y: TourCardMetrics.paddingTop + r)
+        let middle = CGPoint(x: bodySize.width / 2, y: bodySize.height / 2)
+        let l = CGFloat(lift)
+        return TourCelebrationRingPose(
+            center: CGPoint(x: slot.x + (middle.x - slot.x) * l, y: slot.y + (middle.y - slot.y) * l),
+            scale: 1 + (TourCelebrationTokens.ringZoom - 1) * lift
+        )
+    }
+}
+
+/// The big ring: the card's own ring values (`feedback.frame`), drawn larger and moved by `lift`. A layer ABOVE the content
+/// (not part of it), so the blur, the dimming and the content's clip never touch it. Draws nothing unless celebrating.
+struct TourCelebrationRingLayer: View {
+    var beakSide: TourCardSide
+    var stepLabel: String
+    var closed: Bool
+    var completed: Int
+    var total: Int = 7
+    var palette: TourCardPalette
+    @ObservedObject var feedback: TourCompletionFeedback
+
+    var body: some View {
+        let f = feedback.frame
+        return GeometryReader { geo in
+            if f.isCelebrating {
+                let beak = TourCardMetrics.beakSize
+                let origin = CGPoint(x: beakSide == .left ? beak : 0, y: beakSide == .top ? beak : 0)
+                let body = CGSize(width: geo.size.width - (beakSide == .left || beakSide == .right ? beak : 0),
+                                  height: geo.size.height - (beakSide == .top || beakSide == .bottom ? beak : 0))
+                let pose = TourCelebrationRingPose.at(lift: f.lift, bodySize: body)
+                let totalD = Double(max(total, 1))
+                let params = TourRingParams(progressSteps: f.ringProgress ?? (closed ? totalD : Double(completed)), total: totalD,
+                                            lineWidth: f.ringLineWidth, scale: f.ringScale * pose.scale, velocity: f.ringVelocity,
+                                            disc: f.disc, seal: f.seal, checkDraw: f.checkDraw, checkScale: f.checkScale)
+                let at = CGPoint(x: origin.x + pose.center.x, y: origin.y + pose.center.y)
+                ZStack {
+                    Canvas { ctx, _ in TourRingDrawing.draw(ctx, center: at, params: params, palette: palette) }
+                    Text(stepLabel)
+                        .font(.system(size: 9.5 * pose.scale, weight: .bold))
+                        .monospacedDigit()
+                        .tracking(-0.2 * pose.scale)
+                        .foregroundStyle(palette.ink)
+                        .opacity(f.ringProgress == nil ? (closed ? 0 : 1) : f.numberOpacity)
+                        .scaleEffect(f.numberScale)
+                        .offset(y: f.numberOffsetY * pose.scale)
+                        .position(x: at.x, y: at.y)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// The card's content while it is the celebration canvas: blurred, dimmed, shrunk a hair (all by `blur`). The quiet variants
+/// (Reduce Transparency / Reduce Motion) dim harder and neither blur nor shrink. A click layer on top ends the moment early; it
+/// exists only while the moment does.
+///
+/// `.blur` is added ONLY while a radius is non-zero: even `.blur(radius: 0)` makes SwiftUI render the content through an
+/// offscreen filter layer, which painted the bubble's transparent corners opaque in the card window (measured by
+/// `TourCardWindowTests.test_pixelsOutsideTheBubbleAreTransparent_*`). The price is that the content's view state (a hovered beat
+/// row) is rebuilt when the moment starts and ends, which nobody can see under the blur.
+struct TourCelebrationContent: ViewModifier {
+    @ObservedObject var feedback: TourCompletionFeedback
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        let f = feedback.frame
+        let b = f.blur
+        let quiet = f.celebrationQuiet
+        let styled = content
+            .opacity(1 - (quiet ? TourCelebrationTokens.dimQuiet : TourCelebrationTokens.dim) * b)
+            .scaleEffect(quiet ? 1 : 1 - (1 - TourCelebrationTokens.contentScale) * b)
+        let clickLayer = Color.clear
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { _ in feedback.endCelebrationEarly() })
+        if !quiet, b > 0.002 {
+            styled.blur(radius: TourCelebrationTokens.blurRadius * b).overlay(clickLayer)
+        } else if f.isCelebrating {
+            styled.overlay(clickLayer)
+        } else {
+            styled
+        }
     }
 }
 

@@ -2185,6 +2185,7 @@ public final class DiagnosticsService: ObservableObject {
             encoding: .utf8
         )
         try writeDebugLogAttachment(to: reportDir)
+        attachTourGestureLogs(to: reportDir)
 
         lastExportURL = reportDir
         return reportDir
@@ -4108,6 +4109,14 @@ public final class DiagnosticsService: ObservableObject {
 
         let renderedBuckets = Set(samples.map { Int(($0.renderedMidY / 4).rounded()) })
         return renderedBuckets.count <= max(3, samples.count / 3)
+    }
+
+    /// The onboarding tour's gesture trace (`~/Library/Logs/nanoPod/tour-gesture.log`, plus its rotation backup), when the tour
+    /// has ever written one: evidence for "the two-finger drag stopped working during the tour".
+    private func attachTourGestureLogs(to reportDir: URL) {
+        for log in NanoPodLogLocation.tourGestureLogs() {
+            try? FileManager.default.copyItem(at: log, to: reportDir.appendingPathComponent(log.lastPathComponent))
+        }
     }
 
     private func writeDebugLogAttachment(to reportDir: URL) throws {

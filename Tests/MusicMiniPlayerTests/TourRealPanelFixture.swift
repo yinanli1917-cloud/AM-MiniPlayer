@@ -23,6 +23,8 @@ final class TourRealPanelFixture {
     let liquidEdge: LiquidEdgeController
     let controller: TourController
     let defaults: UserDefaults
+    /// Everything the tour's gesture trace writes lands here, never in the founder's ~/Library/Logs.
+    let gestureWriter = TourRecordingGestureWriter()
     private let suiteName: String
     private let savedPage: PlayerPage
     private let savedPlaying: Bool
@@ -31,7 +33,7 @@ final class TourRealPanelFixture {
 
     /// `corner`: where the panel starts (default the top-right of the main screen).
     init(corner: ScreenCorner = .topRight, dark: Bool = false, reduceMotion: Bool = false, page: PlayerPage = .album,
-         translationOn: Bool = false, canTranslate: Bool = false) {
+         translationOn: Bool = false, canTranslate: Bool = false, feedback: TourCompletionFeedback? = nil) {
         suiteName = "TourRealPanelFixture-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)!
         savedPage = music.currentPage
@@ -70,7 +72,7 @@ final class TourRealPanelFixture {
         liquidEdge = LiquidEdgeController(card: panel)
         panel.liquidEdgeHandler = { [weak liquidEdge] edge in liquidEdge?.collapse(to: edge) ?? false }
         let guidance = TourGuidance(reduceMotion: { reduceMotion })
-        controller = TourController(panel: panel, liquidEdge: liquidEdge, defaults: defaults, guidance: guidance)
+        controller = TourController(panel: panel, liquidEdge: liquidEdge, defaults: defaults, feedback: feedback, guidance: guidance, gestureLogWriter: gestureWriter)
         spin(0.6)
     }
 

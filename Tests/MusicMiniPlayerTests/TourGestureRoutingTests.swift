@@ -111,33 +111,6 @@ final class TourGestureRoutingTests: XCTestCase {
         XCTAssertTrue(bad.isEmpty, "\(bad.prefix(8))")
     }
 
-    /// The tour could not be made to swallow the drag in-process, so it leaves evidence for the real app (project rule: what
-    /// cannot be reproduced gets DEBUG instrumentation): with the diagnostic log on, one `TourScroll` line per scroll burst says
-    /// which window got it and which window is topmost at the cursor. Off (the default) it writes nothing.
-    func test_scrollTrace_leavesEvidenceInTheDiagnosticLog_onlyWhenTheLogIsOn() throws {
-        let logURL = FileManager.default.temporaryDirectory.appendingPathComponent("tf4-scroll-trace-\(UUID().uuidString).log")
-        defer { DebugLogger.resetLogURL(); try? FileManager.default.removeItem(at: logURL) }
-        DebugLogger.setLogURL(logURL)
-        f = TourRealPanelFixture(page: .album)
-        f.controller.send(.resume(completed: allButMoveAndBack))
-        XCTAssertTrue(f.wait { f.cardWindow != nil })
-        f.spin(0.5)
-
-        // Log off: a scroll burst leaves nothing.
-        if let e = f.gestureEvent(dx: -4, dy: 3, phase: .changed) { NSApp.sendEvent(e) }
-        DebugLogger.flush()
-        XCTAssertFalse((try? String(contentsOf: logURL, encoding: .utf8))?.contains("TourScroll") ?? false)
-
-        // Log on: the burst is on record, with where it went.
-        DebugLogger.setDiagnosticsFileLoggingEnabled(true)
-        if let e = f.gestureEvent(dx: 0, dy: 0, phase: .began) { NSApp.sendEvent(e) }
-        DebugLogger.flush()
-        let text = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
-        XCTAssertTrue(text.contains("[TourScroll] burst"), "no TourScroll line in: \(text.prefix(300))")
-        XCTAssertTrue(text.contains("topmostAtCursor="))
-        XCTAssertTrue(text.contains("tour=step(") || text.contains("tour=step"), "it names the tour's state")
-    }
-
     /// Candidate (e) — can "nudge it to a corner" from the corner the panel already sits in work? It does, with the panel
     /// following the fingers 1.5x and, on release, landing in the corner its projected centre is nearest (`calculateTargetCorner`):
     /// a tiny push settles straight back in the same corner (the beat still completes: any settle in a corner counts), a

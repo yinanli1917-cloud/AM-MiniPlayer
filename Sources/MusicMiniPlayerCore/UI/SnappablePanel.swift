@@ -107,85 +107,216 @@ public class SnappablePanel: NSPanel {
         case .mouseMoved:
             handleMouseMoved(event)
         case .scrollWheel:
-            if handleLiquidEdgeSwipe(event) { return }
-            if let provider = currentPageProvider {
-                let currentPage = provider()
+            routeScrollWheel(event)
+        default:
+            super.sendEvent(event)
+        }
+    }
 
-                if currentPage == .album {
-                    // ── 专辑页面：双指触控板手势用于贴边/隐藏（全方向）──
-                    if event.phase == .began || event.phase == .changed {
-                        handleScrollDrag(event)
-                    } else if event.phase == .ended {
-                        handleScrollEnd(event)
-                    } else {
-                        super.sendEvent(event)
-                    }
-                } else {
-                    // ── 歌词/歌单页面：横向 = 贴边隐藏，纵向 = 传递给内容 ──
-                    // 无需二次滑动，横向手势直接生效
+    // MARK: - Scroll routing
 
-                    // 抑制横向手势的残余动量（防止泄漏给 ScrollDetector 引发抽搐）
-                    if event.momentumPhase != [] {
-                        if suppressMomentum {
-                            if event.momentumPhase == .ended { suppressMomentum = false }
-                            return  // 吞掉
-                        }
-                        super.sendEvent(event)
-                        return
-                    }
+    /// What one scroll event did to the panel (see `scrollDecisionObserver`).
+    public enum ScrollRoute: String {
+        /// Next to an edge, the first couple of points of travel are held back until the swipe is decided (tuck or drag).
+        case liquidSwipeHeld
+        /// The liquid-edge swipe owns the gesture (swallowed, no tuck yet).
+        case liquidSwipeOwned
+        /// The liquid-edge swipe crossed its trigger distance and handed the panel to the edge.
+        case liquidSwipeFired
+        /// Momentum of an owned liquid swipe, swallowed.
+        case liquidSwipeMomentum
+        /// Album page: the panel followed the fingers.
+        case albumDragApplied
+        /// Album page: a began/changed event with no travel (passed on).
+        case albumDragZeroDelta
+        /// Album page: the first travel of a gesture restored a hidden panel instead.
+        case albumRestoredFromEdge
+        /// Album page, gesture ended: the panel sprang toward `projectedTarget`.
+        case albumEndSpring
+        /// Album page, gesture ended: the panel tucked into an edge.
+        case albumEndTucked
+        /// Album page, gesture ended with no drag in progress (nothing to settle).
+        case albumEndNoDrag
+        /// Album page, any other phase (mayBegin, cancelled, momentum, stationary): passed on to the content.
+        case albumPassedOn
+        /// Lyrics/playlist page: a horizontal gesture moved the panel.
+        case hideDragApplied
+        /// Lyrics/playlist page: a horizontal gesture ended (tucked or sprang back).
+        case hideDragEnded
+        /// Lyrics/playlist page: momentum of a horizontal gesture, swallowed.
+        case hideMomentumSwallowed
+        /// Lyrics/playlist page: everything else goes to the content.
+        case contentPassedOn
+        /// No page provider is installed: passed on.
+        case noPageProvider
+    }
 
-                    if event.phase == .began {
-                        scrollGestureDirection = .undecided
-                        horizontalGestureStartOrigin = frame.origin
-                        scrollVelocityX = 0
-                        suppressMomentum = false
-                        super.sendEvent(event)
-                    } else if event.phase == .changed {
-                        // 首次有效 delta 确定方向，一旦确定不再切换
-                        if scrollGestureDirection == .undecided {
-                            let absX = abs(event.scrollingDeltaX)
-                            let absY = abs(event.scrollingDeltaY)
-                            if absX > absY * 1.2 && absX > 2.0 {
-                                scrollGestureDirection = .horizontal
-                            } else if absY > 1.0 {
-                                scrollGestureDirection = .vertical
-                                horizontalGestureStartOrigin = nil
-                            }
-                        }
-                        if scrollGestureDirection == .horizontal {
-                            handleHorizontalHideGesture(event)
-                        } else {
-                            super.sendEvent(event)
-                        }
-                    } else if event.phase == .ended {
-                        if scrollGestureDirection == .horizontal {
-                            handleHorizontalHideGestureEnd(event)
-                            suppressMomentum = true
-                        } else {
-                            super.sendEvent(event)
-                        }
-                        scrollGestureDirection = .undecided
-                    } else {
-                        super.sendEvent(event)
+    /// One decision of the scroll router, with the panel state it saw. Built only while an observer is installed.
+    public struct ScrollDecision {
+        public let route: ScrollRoute
+        public let phase: NSEvent.Phase
+        public let momentumPhase: NSEvent.Phase
+        public let deltaX: CGFloat
+        public let deltaY: CGFloat
+        public let page: PlayerPage?
+        public let frameBefore: NSRect
+        public let frameAfter: NSRect
+        /// Where a spring started by this event is headed (end of an album drag / a horizontal hide gesture).
+        public let projectedTarget: NSPoint?
+        public let projectedCorner: ScreenCorner?
+        public let isAnimating: Bool
+        public let isEdgeHidden: Bool
+        public let isScrollDragging: Bool
+        public let liquidSwipeOwned: Bool
+    }
+
+    /// Diagnostic hook: called once per scroll event with what the panel decided. Nil (and free) unless something
+    /// installs it; the panel does not depend on who listens (the onboarding tour's gesture trace does).
+    public var scrollDecisionObserver: ((ScrollDecision) -> Void)?
+
+    private func routeScrollWheel(_ event: NSEvent) {
+        guard let observer = scrollDecisionObserver else { dispatchScrollWheel(event); return }
+        let before = frame
+        let firedBefore = liquidSwipeFired
+        scrollRouteScratch = .noPageProvider
+        scrollEndOutcome = .none
+        dispatchScrollWheel(event, liquidFiredBefore: firedBefore)
+        let route = scrollRouteScratch
+        var target: NSPoint?
+        if scrollEndOutcome == .snapped, route == .albumEndSpring || route == .hideDragEnded { target = animationTarget }
+        var corner: ScreenCorner?
+        if let target, let screen = screen ?? NSScreen.main {
+            corner = TourCornerMatch.corner(origin: target, frameSize: frame.size, visibleFrame: screen.visibleFrame, margin: cornerMargin)
+        }
+        observer(ScrollDecision(
+            route: route, phase: event.phase, momentumPhase: event.momentumPhase,
+            deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY, page: currentPageProvider?(),
+            frameBefore: before, frameAfter: frame, projectedTarget: target, projectedCorner: corner,
+            isAnimating: isAnimating, isEdgeHidden: isEdgeHidden, isScrollDragging: isScrollDragging,
+            liquidSwipeOwned: liquidSwipeOwned
+        ))
+    }
+
+    /// The router's verdict for the event in flight; only meaningful while an observer is installed.
+    private var scrollRouteScratch: ScrollRoute = .noPageProvider
+    /// How the last gesture end was settled (tucked into an edge, or sent to a corner / back to where it began).
+    private enum ScrollEndOutcome { case none, tucked, snapped }
+    private var scrollEndOutcome: ScrollEndOutcome = .none
+
+    private func dispatchScrollWheel(_ event: NSEvent, liquidFiredBefore: Bool = false) {
+        func note(_ r: ScrollRoute) { scrollRouteScratch = r }
+        if handleLiquidEdgeSwipe(event) {
+            if event.momentumPhase != [] { note(.liquidSwipeMomentum) }
+            else if event.phase == .changed && !liquidSwipeDecided { note(.liquidSwipeHeld) }
+            else { note(liquidSwipeFired && !liquidFiredBefore ? .liquidSwipeFired : .liquidSwipeOwned) }
+            return
+        }
+        guard let provider = currentPageProvider else {
+            note(.noPageProvider)
+            super.sendEvent(event)
+            return
+        }
+        let currentPage = provider()
+
+        if currentPage == .album {
+            // ── 专辑页面：双指触控板手势用于贴边/隐藏（全方向）──
+            if event.phase == .began || event.phase == .changed {
+                let wasDragging = isScrollDragging
+                let wasHidden = isEdgeHidden
+                let zeroDelta = !(abs(event.scrollingDeltaX) > 0 || abs(event.scrollingDeltaY) > 0)
+                handleScrollDrag(event)
+                note(zeroDelta ? .albumDragZeroDelta : (!wasDragging && wasHidden ? .albumRestoredFromEdge : .albumDragApplied))
+            } else if event.phase == .ended || event.phase == .cancelled {
+                // `.cancelled` (the system took the fingers away) ends the drag exactly like `.ended`: left to the content it
+                // used to leave `isScrollDragging` set, no corner spring, and `windowMovementBegan` without its `Ended`
+                // (the playback clock stayed paused), with the panel stranded wherever the fingers had been.
+                let wasDragging = isScrollDragging
+                handleScrollEnd(event)
+                note(!wasDragging ? .albumEndNoDrag : (scrollEndOutcome == .tucked ? .albumEndTucked : .albumEndSpring))
+            } else {
+                note(.albumPassedOn)
+                super.sendEvent(event)
+            }
+        } else {
+            // ── 歌词/歌单页面：横向 = 贴边隐藏，纵向 = 传递给内容 ──
+            // 无需二次滑动，横向手势直接生效
+
+            // 抑制横向手势的残余动量（防止泄漏给 ScrollDetector 引发抽搐）
+            if event.momentumPhase != [] {
+                if suppressMomentum {
+                    if event.momentumPhase == .ended { suppressMomentum = false }
+                    note(.hideMomentumSwallowed)
+                    return  // 吞掉
+                }
+                note(.contentPassedOn)
+                super.sendEvent(event)
+                return
+            }
+
+            note(.contentPassedOn)
+            if event.phase == .began {
+                scrollGestureDirection = .undecided
+                horizontalGestureStartOrigin = frame.origin
+                scrollVelocityX = 0
+                suppressMomentum = false
+                super.sendEvent(event)
+            } else if event.phase == .changed {
+                // 首次有效 delta 确定方向，一旦确定不再切换
+                if scrollGestureDirection == .undecided {
+                    let absX = abs(event.scrollingDeltaX)
+                    let absY = abs(event.scrollingDeltaY)
+                    if absX > absY * 1.2 && absX > 2.0 {
+                        scrollGestureDirection = .horizontal
+                    } else if absY > 1.0 {
+                        scrollGestureDirection = .vertical
+                        horizontalGestureStartOrigin = nil
                     }
                 }
+                if scrollGestureDirection == .horizontal {
+                    handleHorizontalHideGesture(event)
+                    note(.hideDragApplied)
+                } else {
+                    super.sendEvent(event)
+                }
+            } else if event.phase == .ended || event.phase == .cancelled {
+                if scrollGestureDirection == .horizontal {
+                    handleHorizontalHideGestureEnd(event)
+                    suppressMomentum = event.phase == .ended      // a cancelled gesture has no momentum behind it
+                    note(.hideDragEnded)
+                } else {
+                    super.sendEvent(event)
+                }
+                scrollGestureDirection = .undecided
             } else {
                 super.sendEvent(event)
             }
-        default:
-            super.sendEvent(event)
         }
     }
 
     // MARK: - Liquid edge swipe
 
     /// Two-finger swipe toward a screen edge the panel sits next to: taken over
-    /// from the first decided delta (so the window never starts dragging) and
+    /// from the first decided travel (so the window never starts dragging) and
     /// tucks at once past 10pt — founder 2026-09-22: a swipe must just do it.
+    ///
+    /// Two ways this used to leave a gesture that did NOTHING (2026-10, "the two-finger drag often stops working during the
+    /// tour", panel parked in a right corner = within reach of the right edge):
+    ///  - ownership was decided from ONE sample (>2pt, horizontal-dominant) and never revisited: a gentle nudge that opens
+    ///    with a small wind-up toward the edge and then goes left or down was swallowed whole (no drag, no tuck). The decision
+    ///    now uses the travel since the gesture began, and an owned swipe that has not fired is released the moment the
+    ///    fingers turn away from the edge (reversed, or clearly vertical) so the panel follows them from there.
+    ///  - the events before that first decided sample were let through, so a drag could start and the swipe then took the
+    ///    gesture over, leaving the drag open for good (`isScrollDragging` stuck, no `windowMovementEnded`). Events are now
+    ///    held back until the swipe is decided (a few milliseconds, at most ~2pt of travel), so a drag never starts under it.
     private var liquidSwipeAccum: CGFloat = 0
+    private var liquidSwipeAccumY: CGFloat = 0
+    private var liquidSwipeSign: CGFloat = 0
     private var liquidSwipeDecided = false
     private var liquidSwipeOwned = false
     private var liquidSwipeFired = false
+    /// Travel away from the edge (or sideways) after which an owned, not-yet-fired swipe is let go of.
+    private let liquidSwipeReleaseDistance: CGFloat = 6
+    private let liquidSwipeVerticalRelease: CGFloat = 12
 
     private func nearEdge(towardRight: Bool) -> Edge? {
         guard let screen = screen ?? NSScreen.main else { return nil }
@@ -199,7 +330,8 @@ public class SnappablePanel: NSPanel {
     private func handleLiquidEdgeSwipe(_ event: NSEvent) -> Bool {
         guard liquidEdgeHandler != nil else { return false }
         if event.phase == .began || event.phase == .mayBegin {
-            liquidSwipeAccum = 0; liquidSwipeDecided = false; liquidSwipeOwned = false; liquidSwipeFired = false
+            liquidSwipeAccum = 0; liquidSwipeAccumY = 0; liquidSwipeSign = 0
+            liquidSwipeDecided = false; liquidSwipeOwned = false; liquidSwipeFired = false
             return false
         }
         // Swallow the rest of a gesture we own, momentum included.
@@ -209,17 +341,32 @@ public class SnappablePanel: NSPanel {
             if event.phase == .ended || event.phase == .cancelled { liquidSwipeDecided = false }
             return owned
         }
-        let dx = event.scrollingDeltaX, dy = event.scrollingDeltaY
-        if !liquidSwipeDecided, abs(dx) + abs(dy) > 2 {
+        liquidSwipeAccum += event.scrollingDeltaX
+        liquidSwipeAccumY += event.scrollingDeltaY
+        if !liquidSwipeDecided {
+            // Away from both edges nothing can tuck: decided, nothing held back.
+            guard nearEdge(towardRight: true) != nil || nearEdge(towardRight: false) != nil else {
+                liquidSwipeDecided = true
+                return false
+            }
+            // Held back until the travel says what this is.
+            guard abs(liquidSwipeAccum) + abs(liquidSwipeAccumY) > 2 else { return true }
             liquidSwipeDecided = true
-            liquidSwipeOwned = abs(dx) > abs(dy) * 1.2 && nearEdge(towardRight: dx > 0) != nil
+            liquidSwipeSign = liquidSwipeAccum >= 0 ? 1 : -1
+            liquidSwipeOwned = abs(liquidSwipeAccum) > abs(liquidSwipeAccumY) * 1.2 && nearEdge(towardRight: liquidSwipeAccum > 0) != nil
         }
         guard liquidSwipeOwned else { return false }
-        liquidSwipeAccum += dx
-        if !liquidSwipeFired, abs(liquidSwipeAccum) > LiquidEdgeSwipe.triggerDistance,
-           let edge = nearEdge(towardRight: liquidSwipeAccum > 0) {
-            liquidSwipeFired = true
-            _ = liquidEdgeHandler?(edge)
+        if !liquidSwipeFired {
+            let turnedAway = liquidSwipeSign * liquidSwipeAccum < -liquidSwipeReleaseDistance
+            let turnedVertical = abs(liquidSwipeAccumY) > liquidSwipeVerticalRelease && abs(liquidSwipeAccumY) > abs(liquidSwipeAccum)
+            if turnedAway || turnedVertical {
+                liquidSwipeOwned = false          // not a tuck after all: the drag takes it from here
+                return false
+            }
+            if abs(liquidSwipeAccum) > LiquidEdgeSwipe.triggerDistance, let edge = nearEdge(towardRight: liquidSwipeAccum > 0) {
+                liquidSwipeFired = true
+                _ = liquidEdgeHandler?(edge)
+            }
         }
         return true
     }
@@ -358,11 +505,13 @@ public class SnappablePanel: NSPanel {
         springVelocityY = velocity.y
 
         if checkAndHideToEdgeWithVelocity(velocity) {
+            scrollEndOutcome = .tucked
             return
         }
 
         if snapToCorners {
             animationTarget = calculateTargetCorner(velocity: velocity)
+            scrollEndOutcome = .snapped
             startSpringAnimation()
         }
     }
@@ -384,6 +533,7 @@ public class SnappablePanel: NSPanel {
         springVelocityY = 0
 
         if checkAndHideToEdgeWithVelocity(velocity) {
+            scrollEndOutcome = .tucked
             horizontalGestureStartOrigin = nil
             return
         }
@@ -391,6 +541,7 @@ public class SnappablePanel: NSPanel {
         // 没有隐藏 → 弹回手势开始前的位置
         if let origin = horizontalGestureStartOrigin {
             animationTarget = origin
+            scrollEndOutcome = .snapped
             startSpringAnimation()
         }
         horizontalGestureStartOrigin = nil
