@@ -8,7 +8,7 @@ App 层：AppDelegate + 窗口管理 + 设置界面 + 本地化
 |------|------|
 | MusicMiniPlayerApp.swift | AppDelegate、浮窗/菜单栏/设置窗口创建、主菜单 |
 | SettingsView.swift | SettingsWindowView（每个标签一页）、设置窗口状态与调试面板；页面切换用原生工具栏标签页（SettingsTabViewController），已无自绘分段控件 |
-| SettingsTabViewController.swift | 设置窗口的原生工具栏标签页（NSTabViewController，tabStyle .toolbar）：每页图标 + 标题（Player 页用当前播放器 app 的真实图标，其余 SF Symbol），隐藏页离屏预热一次，选中态/强调色/窗口标题由 AppKit 负责，窗口高度随页面 preferredContentSize 变化（宽固定 480，底部 20pt），与 SettingsWindowState 双向同步 |
+| SettingsTabViewController.swift | 设置窗口的原生工具栏标签页（NSTabViewController，tabStyle .toolbar）：每页 SF Symbol 图标 + 标题（10-02 创始人定：Player 标签不用彩色 app 图标，真图标只留在通用页两行），隐藏页离屏预热一次，选中态/强调色/窗口标题由 AppKit 负责，窗口高度随页面 preferredContentSize 变化（宽固定 480，底部 20pt），与 SettingsWindowState 双向同步 |
 | LocalizedStrings.swift | L10n（统一本地化）、UserDefaultsBinding（绑定 helper） |
 | SettingsDemoStage.swift | 设置页演示台：SettingsDemo（行→演示）、DemoStageModel（谁在动，最多一个 run）、DemoTimelineSchedule（会结束的时钟）、DemoStage 视图（300×169，居中 16:9 圆角） |
 | SettingsDemoMotion.swift | 演示台动效层：缓动/sv/bump、各段 timing 表、`frame(at:t)` 纯函数、DemoRun（墙钟上的一次循环/一次回放）；数值逐条来自 docs/design/2026-09-29-motion-prototype |

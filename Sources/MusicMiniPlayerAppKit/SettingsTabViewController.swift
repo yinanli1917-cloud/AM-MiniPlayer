@@ -90,16 +90,11 @@ final class SettingsTabViewController: NSTabViewController {
         isSettled = true
     }
 
-    /// The toolbar image for `tab`: the Player tab shows the music app's real icon (explicit size,
-    /// never template-rendered, so it keeps its colours); every other tab, and the Player tab when the
-    /// app is not installed, shows its SF Symbol.
+    /// The toolbar image for `tab`: every tab, Player included, is a monochrome SF Symbol so the toolbar reads as one
+    /// family (founder 2026-10-02: the full-colour app icon on the Player tab broke the style). The real player-app
+    /// icon stays on the General rows that name the app.
     static func tabImage(for tab: SettingsTab, playerApp: PlayerAppIdentity, provider: PlayerAppIconProvider = .shared) -> NSImage? {
-        if tab == .player {
-            let icon = provider.icon(for: playerApp, size: appIconToolbarSize)
-            if !icon.isFallbackSymbol { return icon.image }
-            return NSImage(systemSymbolName: playerApp.fallbackSymbolName, accessibilityDescription: tab.title)
-        }
-        return NSImage(systemSymbolName: tab.symbolName, accessibilityDescription: tab.title)
+        NSImage(systemSymbolName: tab == .player ? playerApp.fallbackSymbolName : tab.symbolName, accessibilityDescription: tab.title)
     }
 
     /// Build the pages that are not on screen, once, while the window sits idle. A hidden page's SwiftUI tree

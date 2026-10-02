@@ -114,19 +114,15 @@ final class SettingsPlayerAppTests: XCTestCase {
 
     // MARK: toolbar tab
 
-    func test_playerTab_usesTheAppIcon_otherTabsKeepTheirSymbols() {
+    /// Founder 2026-10-02: the toolbar stays one monochrome family — the Player tab is an SF Symbol even when the
+    /// music app is installed (its real icon lives on the General rows).
+    func test_playerTab_isAMonochromeSymbol_evenWithTheAppInstalled() {
         let installed = PlayerAppIconProvider(locateApp: { _ in URL(fileURLWithPath: "/x.app") }, loadIcon: { _ in self.solidIcon() })
         let image = SettingsTabViewController.tabImage(for: .player, playerApp: .appleMusic, provider: installed)
-        XCTAssertEqual(image?.size, NSSize(width: SettingsTabViewController.appIconToolbarSize, height: SettingsTabViewController.appIconToolbarSize))
-        XCTAssertEqual(image?.isTemplate, false)
-        XCTAssertTrue((24...32).contains(SettingsTabViewController.appIconToolbarSize), "NSToolbarItem images are 24-32pt")
-
-        let general = SettingsTabViewController.tabImage(for: .general, playerApp: .appleMusic, provider: installed)
-        XCTAssertNotEqual(general?.size, image?.size, "the other tabs stay SF Symbols")
-
-        let missing = PlayerAppIconProvider(locateApp: { _ in nil }, loadIcon: { _ in NSImage() })
-        let fallback = SettingsTabViewController.tabImage(for: .player, playerApp: .appleMusic, provider: missing)
-        XCTAssertNotNil(fallback, "not installed: the music.note symbol")
+        let symbol = NSImage(systemSymbolName: PlayerAppIdentity.appleMusic.fallbackSymbolName, accessibilityDescription: nil)
+        XCTAssertNotNil(image)
+        XCTAssertEqual(image?.isTemplate, true, "SF Symbols are template images, tinted like the other tabs")
+        XCTAssertEqual(image?.size, symbol?.size)
     }
 
     // MARK: copy
