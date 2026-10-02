@@ -186,9 +186,9 @@ final class LiquidEdgeControllerTests: XCTestCase {
         var cursor = CGPoint(x: 100, y: 100)
         controller.mouseLocation = { cursor }
         controller.hoverEntered()
-        for _ in 0..<8 {                      // keeps moving ~20pt every 0.1s for 0.8s
-            spin(0.1)
-            cursor.y += 20
+        for _ in 0..<20 {                     // keeps moving ~10pt every 0.04s (faster than the 0.08s dwell) for 0.8s
+            cursor.y += 10
+            spin(0.04)
         }
         XCTAssertEqual(controller.state, .tucked, "a moving cursor must not pop the capsule out")
 
