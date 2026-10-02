@@ -32,7 +32,13 @@ final class LiquidEdgeControllerTests: XCTestCase {
         controller.drivesFrames = false
         controller.reduceMotionOverride = false
         controller.onPanelOccluded = { [unowned self] in self.occluded.append($0) }
+        controller.prewarmDwell = Self.dwell
+        controller.parkDelay = Self.dwell
     }
+
+    /// The controller's deferred wake / park delay in these tests, and how long to spin to let it run.
+    private static let dwell = 0.03
+    private func letPanelWorkRun() { spin(Self.dwell * 4) }
 
     override func tearDown() {
         controller?.reset()
@@ -73,6 +79,8 @@ final class LiquidEdgeControllerTests: XCTestCase {
 
         let rects = settle()
         XCTAssertEqual(controller.state, .tucked)
+        XCTAssertTrue(card.isVisible, "the last frame does not order the panel out: that waits for the turn after")
+        letPanelWorkRun()
         XCTAssertFalse(card.isVisible, "tucked: the panel window is ordered out so its per-frame work stops")
         XCTAssertEqual(occluded.last, true)
         XCTAssertTrue(controller.stageWindow?.isVisible == true, "the sliver stays on screen")
@@ -200,6 +208,8 @@ final class LiquidEdgeControllerTests: XCTestCase {
         spin(0.35)
         XCTAssertEqual(controller.state, .floating)
         settle()
+        XCTAssertFalse(card.isVisible, "a capsule that has only just come out has not earned the panel's wake-up")
+        letPanelWorkRun()
         XCTAssertTrue(card.isVisible, "capsule resting: the panel is back on-window, ready to expand")
         XCTAssertEqual(card.alphaValue, 0, accuracy: 0.001)
         XCTAssertTrue(card.ignoresMouseEvents, "the invisible panel must not catch clicks")
@@ -214,7 +224,92 @@ final class LiquidEdgeControllerTests: XCTestCase {
         controller.hoverExited()
         settle()
         XCTAssertEqual(controller.state, .tucked)
+        XCTAssertTrue(card.isVisible, "retracting does not order the panel out inside the motion")
+        letPanelWorkRun()
         XCTAssertFalse(card.isVisible)
+    }
+
+    /// Founder 2026-10-02 (edge-hitch.log): hover the sliver, leave at once. The panel must not be woken
+    /// and put back to sleep for that (25-250ms turns of WindowServer round trips + SwiftUI glass).
+    func test_glance_neverWakesOrParksThePanel() throws {
+        try makeCard(edge: .right)
+        controller.collapse(to: .right)
+        settle()
+        letPanelWorkRun()
+        XCTAssertFalse(card.isVisible)
+        let calls = occluded
+
+        controller.mouseLocation = { .zero }
+        controller.hoverEntered()
+        spin(0.35)
+        XCTAssertEqual(controller.state, .floating)
+        settle()
+        controller.hoverExited()   // before the capsule has rested for the wake-up dwell
+        settle()
+        letPanelWorkRun()
+        XCTAssertEqual(controller.state, .tucked)
+        XCTAssertFalse(card.isVisible, "the panel stayed asleep")
+        XCTAssertEqual(occluded, calls, "no occlusion toggling for a glance")
+    }
+
+    /// A new motion cancels the queued park: hover back in before the panel went to sleep and it is
+    /// not ordered out under the capsule that is coming out.
+    func test_newMotion_cancelsQueuedPark() throws {
+        try makeCard(edge: .right)
+        controller.parkDelay = 0.5
+        controller.collapse(to: .right)
+        settle()                       // panel awake (alpha 0), park queued
+        XCTAssertTrue(card.isVisible)
+        controller.mouseLocation = { .zero }
+        controller.hoverEntered()
+        spin(0.2)                      // dwell passes: the capsule starts out, which cancels the park
+        XCTAssertEqual(controller.state, .floating)
+        settle()
+        spin(0.6)                      // past the original park time
+        XCTAssertTrue(card.isVisible, "the queued park was cancelled by the new motion")
+    }
+
+    /// Whatever way the edge ends back at `.card`, the panel is fully there: opaque and clickable
+    /// (a stuck click-through panel was the "two-finger drag does nothing" symptom).
+    func test_everyPathToCard_leavesPanelOpaqueAndClickable() throws {
+        enum Path: CaseIterable { case tuckedExpand, glanceThenExpand, restedThenExpand, reduceMotionExpand, resetWhileExpanding, resetWhileRested, resetFromTucked }
+        for path in Path.allCases {
+            try makeCard(edge: .right)
+            occluded = []
+            controller.mouseLocation = { .zero }
+            controller.reduceMotionOverride = path == .reduceMotionExpand
+            controller.collapse(to: .right)
+            settle()
+            switch path {
+            case .tuckedExpand, .reduceMotionExpand:
+                controller.expand()
+            case .glanceThenExpand:
+                controller.hoverEntered(); spin(0.35); settle()
+                controller.expand()
+            case .restedThenExpand:
+                controller.hoverEntered(); spin(0.35); settle(); letPanelWorkRun()
+                XCTAssertTrue(card.ignoresMouseEvents, "\(path): precondition, the rested panel is click-through")
+                controller.expand()
+            case .resetWhileExpanding:
+                controller.hoverEntered(); spin(0.35); settle(); letPanelWorkRun()
+                controller.expand()
+                now += 0.1; controller.tick(at: now)
+                controller.reset()
+            case .resetWhileRested:
+                controller.hoverEntered(); spin(0.35); settle(); letPanelWorkRun()
+                controller.reset()
+            case .resetFromTucked:
+                controller.reset()
+            }
+            if controller.isAnimating { settle() }
+            letPanelWorkRun()
+            XCTAssertEqual(controller.state, .card, "\(path)")
+            XCTAssertEqual(card.alphaValue, 1, accuracy: 0.001, "\(path): panel must be opaque")
+            XCTAssertFalse(card.ignoresMouseEvents, "\(path): panel must not be click-through")
+            XCTAssertTrue(card.isVisible, "\(path)")
+            XCTAssertNil(card.contentView?.layer?.mask, "\(path)")
+            tearDown()
+        }
     }
 
     func test_expand_restoresThePanelExactly() throws {
@@ -226,6 +321,7 @@ final class LiquidEdgeControllerTests: XCTestCase {
         controller.hoverEntered()
         spin(0.35)
         settle()
+        letPanelWorkRun()
 
         controller.expand()
         XCTAssertEqual(controller.state, .expanding)

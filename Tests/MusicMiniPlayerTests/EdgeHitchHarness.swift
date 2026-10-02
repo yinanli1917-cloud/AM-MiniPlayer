@@ -56,6 +56,19 @@ struct EdgeHitchReport {
 
     static let hitchMs = 16.7
 
+    /// Wall time of every main-thread turn seen during a motion, ms.
+    var allTurnWall: [Double] { allTurns.map(\.turnMs) }
+    /// Time a turn spent not computing (turn wall minus main-thread CPU): WindowServer / render-server round trips.
+    var blockedMs: [Double] { allTurns.map { max(0, $0.turnMs - $0.turnCpuMs) } }
+
+    /// The numbers the quick-peek scenario is judged by.
+    var turnReport: String {
+        let w = allTurnWall, b = blockedMs
+        return String(format: "turns=%d worstTurn=%.1fms turns>16.7ms=%d | blocked (turn-cpu): total=%.0fms worst=%.1fms turns blocked>8ms=%d | dropped frames=%d",
+                      w.count, w.max() ?? 0, w.filter { $0 > Self.hitchMs }.count,
+                      b.reduce(0, +), b.max() ?? 0, b.filter { $0 > 8 }.count, droppedFrames)
+    }
+
     func byMotion() -> String {
         Dictionary(grouping: frames, by: \.motion).sorted { $0.key < $1.key }.map { kind, fs in
             let t = fs.map(\.turnMs)
@@ -185,6 +198,41 @@ final class EdgeHitchHarness {
         wait { self.controller.state == .card && !self.controller.isAnimating }
         spin(0.5)
         report.cycles += 1
+    }
+
+    /// The quick hover: the capsule floats out and the cursor leaves again after `stay` seconds, so the retract
+    /// begins while whatever the float-out started is still settling.
+    func quickPeekRound(stay: Double) {
+        guard controller.state == .tucked else {
+            XCTFail("quick peek round started in state \(controller.state)")
+            return
+        }
+        controller.hoverEntered()
+        wait(timeout: 3) { self.controller.state == .floating }
+        spin(stay)
+        controller.hoverExited()
+        settle()
+        spin(0.35)
+    }
+
+    /// floatOut -> leave after `stay` -> retract, `rounds` times, tucked and under the playback load.
+    func runQuickPeek(rounds: Int, stay: Double = 0.15) -> EdgeHitchReport {
+        report = EdgeHitchReport()
+        load = PlaybackLoad(music: music)
+        load?.start(trackTimer: false)
+        spin(1.0)
+        cycle(0) // warm-up
+        controller.hoverExited()
+        XCTAssertTrue(controller.collapse(to: .right))
+        settle()
+        XCTAssertEqual(controller.state, .tucked)
+        spin(0.5)
+        report = EdgeHitchReport()
+        for _ in 0..<rounds { quickPeekRound(stay: stay); report.cycles += 1 }
+        load?.stop()
+        spin(0.2)
+        trace.drainLogWrites()
+        return report
     }
 
     /// The track-change auto-peek on its own: tucked and idle, the track changes (cover and

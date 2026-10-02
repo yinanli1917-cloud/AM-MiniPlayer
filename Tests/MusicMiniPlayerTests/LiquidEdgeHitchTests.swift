@@ -60,6 +60,16 @@ final class LiquidEdgeHitchTests: XCTestCase {
         report("auto-peek on track change, album page", h.runAutoPeek(rounds: cycles))
     }
 
+    /// Hover the sliver, leave 0.15s later (the capsule retracts while it is still settling), 30 times.
+    func test_benchmark_quickPeekRetract_lyricsPage() {
+        let h = EdgeHitchHarness(page: .lyrics)
+        defer { h.tearDown() }
+        let stay = Double(ProcessInfo.processInfo.environment["NANOPOD_EDGE_HITCH_STAY"] ?? "") ?? 0.15
+        let r = h.runQuickPeek(rounds: Int(ProcessInfo.processInfo.environment["NANOPOD_EDGE_HITCH_CYCLES"] ?? "") ?? 30, stay: stay)
+        report("quick peek (floatOut, leave after 0.15s, retract), lyrics page", r)
+        print("quickPeek: \(r.turnReport)")
+    }
+
     /// Without playback load: the cost the animation carries by itself.
     func test_benchmark_lyricsPage_quiet() {
         let h = EdgeHitchHarness(page: .lyrics)

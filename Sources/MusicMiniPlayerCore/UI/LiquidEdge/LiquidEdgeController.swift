@@ -18,9 +18,16 @@
  *     prototype.
  *   - While tucked the panel window is ordered out and the panel is marked
  *     occluded (its per-frame work stops: the prototype measured 4-6ms per
- *     frame for a hidden live panel); while the capsule rests it is ordered
- *     back in at alpha 0 so a click to expand finds it ready (in the turn
- *     after the last frame, not inside it).
+ *     frame for a hidden live panel). Waking and parking it are WindowServer
+ *     round trips plus a SwiftUI glass/material re-resolve (measured 25-250ms
+ *     turns, 2026-10-02), so neither happens inside a motion's frames and
+ *     neither happens on a glance: the panel is ordered back in (alpha 0) only
+ *     once the capsule has rested for `prewarmDwell` (intent to expand; a click
+ *     sooner wakes it in the expand's first turn), and ordered out only
+ *     `parkDelay` after a motion has settled (a quick hover in and out never
+ *     wakes it, and never parks it). A new motion cancels either.
+ *   - Per-frame panel writes skip what has not changed and what nobody can
+ *     see (alpha unchanged; the content mask of an ordered-out or fully transparent panel).
  *   - A motion holds EdgeMotionGate from its first frame to its settle:
  *     main-thread work nobody can see meanwhile defers through it. Every
  *     frame's deadline is accounted by EdgeHitchTrace (zero cost at rest).
@@ -81,6 +88,8 @@ public final class LiquidEdgeController {
     private var motionStart: CFTimeInterval = 0
     private var pendingSettle: LiquidEdgeEvent?
     private var link: CADisplayLink?
+    /// The deferred wake (prewarm) or park of the panel window; at most one.
+    private var panelWork: DispatchWorkItem?
 
     private var swipe: LiquidEdgeSwipe?
     private var hovering = false
@@ -101,6 +110,10 @@ public final class LiquidEdgeController {
     /// While a motion runs, non-urgent main-thread work waits (EdgeMotionGate)
     /// and every frame's deadline is accounted (EdgeHitchTrace).
     var gate = EdgeMotionGate.shared
+    /// How long the capsule rests before the panel behind it is woken for a click.
+    var prewarmDwell: TimeInterval = 0.35
+    /// How long after a motion settles the tucked panel is ordered out.
+    var parkDelay: TimeInterval = 0.3
     var hitchTrace = EdgeHitchTrace.shared
 
     public init(card: SnappablePanel) {
@@ -175,6 +188,7 @@ public final class LiquidEdgeController {
         motion = nil
         pendingSettle = nil
         dwellWork?.cancel(); peekWork?.cancel()
+        cancelPanelWork()
         state = .card
         restorePanel()
         stageWindow?.orderOut(nil)
@@ -250,7 +264,10 @@ public final class LiquidEdgeController {
     private func applyPanel(_ p: LiquidEdgePose) {
         guard let card, let content = card.contentView else { return }
         let panel = CGFloat(min(max(p.panelOpacity, 0), 1))
-        card.alphaValue = panel
+        // Each of these is a WindowServer message; an ordered-out panel (tucked, capsule floating) has
+        // nothing to show, so its alpha and mask are left alone until it is woken.
+        if card.alphaValue != panel { card.alphaValue = panel }
+        guard card.isVisible, panel > 0 else { return }
         // The liquid's visible part, from canonical to stage to the panel's own
         // coordinates.
         let clip = LiquidEdgeStageView.largerPart(p)
@@ -264,7 +281,7 @@ public final class LiquidEdgeController {
     }
 
     private func restorePanel() {
-        prewarmPending = false
+        cancelPanelWork()
         guard let card else { return }
         card.contentView?.layer?.mask = nil
         card.alphaValue = 1
@@ -277,21 +294,40 @@ public final class LiquidEdgeController {
 
     /// Ordered out while tucked (its per-frame work stops).
     private func parkPanel() {
-        prewarmPending = false
-        guard let card else { return }
+        cancelPanelWork()
+        guard let card, card.isVisible else { return }
         card.orderOut(nil)
         onPanelOccluded?(true)
     }
 
     /// Back in, invisible and click-through, ready to be revealed.
     private func prewarmPanel() {
+        cancelPanelWork()
         guard let card else { return }
-        card.alphaValue = 0
-        card.ignoresMouseEvents = true
+        if card.alphaValue != 0 { card.alphaValue = 0 }
+        if !card.ignoresMouseEvents { card.ignoresMouseEvents = true }
         if !card.isVisible {
             card.orderFront(nil)
             onPanelOccluded?(false)
         }
+    }
+
+    private func cancelPanelWork() {
+        panelWork?.cancel()
+        panelWork = nil
+    }
+
+    /// Runs `body` in its own run-loop turn `delay` from now, unless a motion (or another wake / park) cancels it
+    /// first or the edge is no longer at rest in `rest`.
+    private func schedulePanelWork(after delay: TimeInterval, name: StaticString, only rest: LiquidEdgeState,
+                                   _ body: @escaping () -> Void) {
+        cancelPanelWork()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.state == rest, self.motion == nil else { return }
+            EdgeHitchTrace.measure(name) { body() }
+        }
+        panelWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     // MARK: - Input
@@ -369,12 +405,12 @@ public final class LiquidEdgeController {
         motionKind = "\(kind)"
         if drivesFrames, !reduceMotion { beginHitchTrace() }
 
-        // The panel window: on-window whenever it may be shown next.
-        switch next {
-        case .expanding: EdgeHitchTrace.measure("prewarmPanel") { prewarmPanel() }
-        case .tucked where from == .floating: EdgeHitchTrace.measure("parkPanel") { parkPanel() }
-        default: break
-        }
+        // A new motion owns the frame budget: no wake or park queued for the last rest may land in it.
+        cancelPanelWork()
+        // The panel must be on-window before it is revealed. Parking is NOT done here: a retract is the
+        // cursor leaving, the panel is usually still asleep, and if it is awake it sleeps after the
+        // motion (see `finishIfResting`).
+        if next == .expanding { EdgeHitchTrace.measure("prewarmPanel") { prewarmPanel() } }
 
         if reduceMotion {
             stopLink(); motion = nil
@@ -414,32 +450,25 @@ public final class LiquidEdgeController {
         CATransaction.commit()
     }
 
-    /// At rest: park or restore the panel window to match the state.
+    /// At rest: restore the panel window, or schedule it to sleep / wake, to match the state.
     private func finishIfResting() {
         switch state {
         case .card:
             EdgeHitchTrace.measure("restorePanel") { restorePanel() }
             stageWindow?.orderOut(nil)
-        case .tucked: EdgeHitchTrace.measure("parkPanel") { parkPanel() }
+        case .tucked:
+            // Nobody can see the panel, and ordering it out is a WindowServer round trip plus the
+            // panel's SwiftUI settling: not in the last frame of the motion, and not if it is already out.
+            guard card?.isVisible == true else { break }
+            if reduceMotion { parkPanel() }
+            else { schedulePanelWork(after: parkDelay, name: "parkPanel", only: .tucked) { [weak self] in self?.parkPanel() } }
         case .floating:
-            if drivesFrames {
-                // Ordering the panel in is 8-16ms (its SwiftUI catches up): do it in the turn
-                // after the last frame has been committed, not inside it.
-                prewarmPending = true
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, self.prewarmPending, self.state == .floating, self.motion == nil else { return }
-                    self.prewarmPending = false
-                    EdgeHitchTrace.measure("prewarmPanel") { self.prewarmPanel() }
-                }
-            } else {
-                EdgeHitchTrace.measure("prewarmPanel") { prewarmPanel() }
-            }
+            // A glance (the cursor leaves again) never wakes the panel: only a capsule that has stayed out.
+            if card?.isVisible == true && card?.alphaValue == 0 && card?.ignoresMouseEvents == true { break }
+            schedulePanelWork(after: prewarmDwell, name: "prewarmPanel", only: .floating) { [weak self] in self?.prewarmPanel() }
         default: break
         }
     }
-
-    /// A deferred `prewarmPanel` is waiting for the turn after the last frame.
-    private var prewarmPending = false
 
     // MARK: - Frame loop
 
