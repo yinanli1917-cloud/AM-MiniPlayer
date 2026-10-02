@@ -28,9 +28,9 @@ public enum LiquidEdgeTokens {
     /// Extra hover target around the sliver.
     public static let tuckedPadInward: CGFloat = 4
     public static let tuckedPadVertical: CGFloat = 6
-    /// The cursor must REST this long on the sliver before the capsule comes out (founder 2026-10-01: passing over
-    /// the tucked panel on the way somewhere else popped it out). 0.08s fired on any pass-through.
-    public static let hoverDwell: Double = 0.22
+    /// The cursor must rest this long on the sliver before the capsule comes out. Kept at the tuned 0.08s (founder
+    /// 2026-10-02: he hovers on purpose to peek; the stillness rule below is what stops pass-throughs).
+    public static let hoverDwell: Double = 0.08
     /// "Rest" = the cursor moved no more than this during the dwell; a moving cursor restarts the dwell.
     public static let hoverStillness: CGFloat = 4
 
