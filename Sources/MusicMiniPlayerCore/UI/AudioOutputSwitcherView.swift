@@ -21,6 +21,7 @@ struct AudioOutputSwitcherView: View {
         ZStack(alignment: .topTrailing) {
             if isPanelPresented {
                 routePanel
+                    .tourAnchor(.audioOutputMenu)   // the tour's ring and card stand by the open list
                     .padding(.top, 37)
                     .padding(.trailing, 0)
                     .transition(panelTransition)
@@ -48,15 +49,21 @@ struct AudioOutputSwitcherView: View {
         .onAppear {
             outputService.refresh()
         }
+        .onDisappear {
+            // The page changed under an open menu: no "closed" change will come, so the tour is told here.
+            if isPanelPresented { TourHookBus.shared.audioOutputMenuPresented.send(false) }
+        }
         .onChange(of: outputService.defaultDeviceID) { _, _ in
             failedDeviceID = nil
             if isPanelPresented {
+                TourHookBus.shared.audioOutputDeviceSwitched.send(())   // a real switch from the open menu (tour: soft acknowledgement)
                 DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.0 : 0.10)) {
                     dismissPanel()
                 }
             }
         }
         .onChange(of: isPanelPresented) { _, presented in
+            TourHookBus.shared.audioOutputMenuPresented.send(presented)   // BEFORE the host's "opened" signal: the card it builds already knows the menu is up
             onMenuPresentedChanged?(presented)
             if presented {
                 outputService.clearError()

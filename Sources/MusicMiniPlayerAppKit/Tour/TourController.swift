@@ -85,6 +85,28 @@ final class TourController: ObservableObject {
         .eraseToAnyPublisher()
     var ownBundleIdentifier: String? = Bundle.main.bundleIdentifier
 
+    // While the user is in the player app the card hops over to ITS window (founder 2026-10-02): "this is the full app,
+    // nanoPod is the little companion beside it". A short, cheap sampling loop runs only for this moment.
+    /// The player app's main window as an AppKit screen rect (test seam; default: the live window list for `playerApp`).
+    var musicWindowProvider: (() -> CGRect?)?
+    var musicWindowTiming = TourMusicWindowTracker.Timing()
+    private var musicWatcher: TourMusicWindowWatcher?
+    /// Where the card is standing by the player app's window; nil = beside the panel as usual.
+    private(set) var musicWindowFrame: CGRect?
+    /// The body says the "full app" line (set while the card stands by the window and through its hop back).
+    private var musicCardShown = false
+    /// The user is back and the card is hopping home; the machine hears the held tap when it lands.
+    private(set) var isReturningFromMusic = false
+    private var musicReturnWork: DispatchWorkItem?
+    var debugMusicWindowWatching: Bool { musicWatcher?.isRunning ?? false }
+    private var musicTripActive: Bool { isHoldingForMusicReturn || isReturningFromMusic }
+
+    // The output menu is open / the user switched a device in it (corners step): the card talks to them, no beat attached.
+    private var outputAckActive = false
+    private var outputAckWork: DispatchWorkItem?
+    /// How long the one-line "switched" acknowledgement stays before the step's normal text returns.
+    var outputAckDuration: TimeInterval = 2.4
+
     // Guidance bookkeeping
     /// The current step began with the panel on a page that lacks its control (corners on the
     /// queue, translate off the lyrics page, move off the cover): its first beat walks the user
@@ -124,6 +146,7 @@ final class TourController: ObservableObject {
     var debugHasPendingTimers: Bool {
         transitionWork != nil || finaleWork != nil || closingFlashWork != nil || finaleCardWork != nil
             || releaseWork != nil || skipWork != nil || stallWork != nil || resumeWork != nil
+            || outputAckWork != nil || musicReturnWork != nil
     }
     var debugIsDeferredWatcherArmed: Bool { deferredWatcher.isArmed }
     /// Geometry seams for TourCardPlacementIntegrationTests (screen coordinates).
@@ -254,7 +277,10 @@ final class TourController: ObservableObject {
         TourAnchorRegistry.shared.$anchors.dropFirst()
             .sink { [weak self] _ in
                 // @Published fires BEFORE the value lands: read it on the next turn.
-                DispatchQueue.main.async { self?.refreshGuidance() }
+                DispatchQueue.main.async {
+                    self?.refreshGuidance()
+                    self?.outputMenuRectDidLand()
+                }
             }.store(in: &cancellables)
         musicController.$currentPage.dropFirst().removeDuplicates()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.surfaceDidChange() } }.store(in: &cancellables)
@@ -262,6 +288,10 @@ final class TourController: ObservableObject {
             .sink { [weak self] _ in DispatchQueue.main.async { self?.surfaceDidChange() } }.store(in: &cancellables)
         liquidEdge.statePublisher.removeDuplicates()
             .sink { [weak self] edge in self?.edgeStateDidChange(edge) }.store(in: &cancellables)
+        TourHookBus.shared.audioOutputMenuPresented.dropFirst().removeDuplicates()
+            .sink { [weak self] open in self?.outputMenuDidChange(open) }.store(in: &cancellables)
+        TourHookBus.shared.audioOutputDeviceSwitched
+            .sink { [weak self] in self?.outputDeviceSwitched() }.store(in: &cancellables)
         NotificationCenter.default.publisher(for: NSWindow.didMoveNotification, object: panel)
             .sink { [weak self] _ in self?.panelDidMove() }.store(in: &cancellables)
         NotificationCenter.default.publisher(for: Notification.Name("windowMovementBegan"), object: panel)
@@ -300,7 +330,10 @@ final class TourController: ObservableObject {
         apply(effects, userCompletion: Self.isUserCompletion(event))
         scheduleTransitionIfNeeded()
         scheduleFinaleAutoDismissIfNeeded()
-        if isHoldingForMusicReturn, !Self.isCornersStep(state.phase) { endMusicHold() }   // skipped, stopped or moved on while away
+        if !Self.isCornersStep(state.phase) {
+            if musicTripActive { endMusicHold(); resetMusicTrip() }   // skipped, stopped or moved on while away
+            cancelOutputAck()
+        }
         refreshGuidance()
     }
 
@@ -328,6 +361,8 @@ final class TourController: ObservableObject {
             guard let self, TourMusicReturn.isReturn(activatedBundleID: id, player: self.playerApp, ownBundleID: self.ownBundleIdentifier) else { return }
             self.musicReturned()
         }.store(in: &musicReturnObservers)
+        cancelOutputAck()
+        startMusicWindowWatch()
         // The beat's check, alone: the body crossfades to the waiting line, the ring goes down.
         if let model = cardModel(for: state.phase, in: state) {
             lastPresentedModel = model
@@ -341,12 +376,120 @@ final class TourController: ObservableObject {
     private func musicReturned() {
         guard isHoldingForMusicReturn else { return }
         endMusicHold()
-        process(.signal(.musicButtonTapped))   // the tap, delivered now: the usual celebration and transition
+        guard musicWindowFrame != nil else {
+            resetMusicTrip()
+            process(.signal(.musicButtonTapped))   // the tap, delivered now: the usual celebration and transition
+            return
+        }
+        // The card was over at the player app's window: it springs back beside the panel FIRST, then the held tap is
+        // delivered (the celebration plays where the user is looking, not over there).
+        musicWindowFrame = nil
+        isReturningFromMusic = true
+        presentCurrentCard()
+        refreshGuidance()
+        guidance.syncReduceMotion()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.musicReturnWork = nil
+            guard self.isReturningFromMusic else { return }
+            self.resetMusicTrip()
+            guard case .step(.corners, let beats) = self.state.phase, beats.count == 2, !beats[1] else { return }
+            self.process(.signal(.musicButtonTapped))
+        }
+        musicReturnWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + (guidance.motion.reduceMotion ? 0.05 : Self.musicHopHomeDelay), execute: work)
     }
+
+    /// The card's spring back to the panel (a move is ~0.4 s) plus a beat of stillness before the celebration.
+    static let musicHopHomeDelay: Double = 0.55
 
     private func endMusicHold() {
         isHoldingForMusicReturn = false
         musicReturnObservers.removeAll()
+        musicWatcher?.stop()
+    }
+
+    /// Everything about the card's trip to the player app's window, back to rest.
+    private func resetMusicTrip() {
+        musicWatcher?.stop()
+        musicReturnWork?.cancel(); musicReturnWork = nil
+        musicWindowFrame = nil
+        musicCardShown = false
+        isReturningFromMusic = false
+    }
+
+    private func startMusicWindowWatch() {
+        let watcher = musicWatcher ?? TourMusicWindowWatcher(
+            timing: musicWindowTiming,
+            sample: { [weak self] in
+                guard let self else { return nil }
+                if let provider = self.musicWindowProvider { return provider() }
+                return TourMusicWindowSource.liveFrame(for: self.playerApp)
+            },
+            onEvent: { [weak self] event in self?.musicWindowEvent(event) }
+        )
+        musicWatcher = watcher
+        watcher.start()
+    }
+
+    private func musicWindowEvent(_ event: TourMusicWindowTracker.Event) {
+        guard isHoldingForMusicReturn, cardWindow != nil else { return }
+        switch event {
+        case .found(let frame), .moved(let frame):
+            musicWindowFrame = frame
+            musicCardShown = true
+        case .lost:
+            guard musicWindowFrame != nil else { return }
+            musicWindowFrame = nil          // the window closed: back to the panel's side, waiting as before
+            musicCardShown = false
+        case .gaveUp:
+            return                          // no window: the waiting card stays beside the panel
+        }
+        presentCurrentCard()
+        refreshGuidance()
+    }
+
+    // MARK: - Output menu: a light invitation while it is open, a soft acknowledgement when a device is picked
+
+    private func outputMenuDidChange(_ open: Bool) {
+        if open { cancelOutputAck() } else { TourAnchorRegistry.shared.remove(.audioOutputMenu) }   // never leave a stale list rect
+        guard cardWindow != nil, case .step(.corners, let beats) = state.phase, !musicTripActive, !skipping, !cardYielded else { return }
+        // First opening: the "opened" signal follows right behind, ticks the beat and builds the card with the menu line.
+        if open, !beats[0] { refreshGuidance(); return }
+        presentCurrentCard()
+        refreshGuidance()
+    }
+
+    /// The open menu's rect arrives (or changes) a beat after the menu is up: the card re-places beside it.
+    private func outputMenuRectDidLand() {
+        let rect = openOutputMenuRect(for: state.phase)
+        defer { lastMenuRect = rect }
+        guard let rect, rect != lastMenuRect, cardWindow != nil, !cardYielded, !skipping else { return }
+        presentCurrentCard()
+    }
+    private var lastMenuRect: CGRect?
+
+    private func outputDeviceSwitched() {
+        guard cardWindow != nil, case .step(.corners, let beats) = state.phase, !beats.allSatisfy({ $0 }),
+              !musicTripActive, !skipping, !cardYielded else { return }
+        outputAckActive = true
+        outputAckWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.outputAckWork = nil
+            self.outputAckActive = false
+            guard self.cardWindow != nil, !self.musicTripActive, Self.isCornersStep(self.state.phase) else { return }
+            self.presentCurrentCard()
+            self.refreshGuidance()
+        }
+        outputAckWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + outputAckDuration, execute: work)
+        presentCurrentCard()
+    }
+
+    private func cancelOutputAck() {
+        outputAckWork?.cancel(); outputAckWork = nil
+        outputAckActive = false
     }
 
     /// Per-step bookkeeping that is not part of the pure machine.
@@ -572,6 +715,8 @@ final class TourController: ObservableObject {
         cardYielded = false
         preface = nil
         endMusicHold()
+        resetMusicTrip()
+        cancelOutputAck()
         hideCard()
         TourAnchorRegistry.shared.reset()
     }
@@ -744,8 +889,13 @@ final class TourController: ObservableObject {
         case .step(.corners, let beats):
             var list: [TourBeatModel] = []
             var body = beats.allSatisfy { $0 } ? L("tour.corners.body") : awayOr(L("tour.corners.body"))
-            if isHoldingForMusicReturn {
-                body = L("tour.corners.bodyWaiting")                                       // away in the player app: wait for them
+            if musicTripActive {
+                // Away in the player app: standing by its window, the card says what that window is; otherwise it just waits.
+                body = musicCardShown ? L10n.localized("tour.corners.bodyMusicWindow", player: playerApp) : L("tour.corners.bodyWaiting")
+            } else if outputAckActive, !beats.allSatisfy({ $0 }) {
+                body = L("tour.corners.bodyOutputSwitched")                                // picked a device in the open menu
+            } else if surface.outputMenuOpen, !beats.allSatisfy({ $0 }) {
+                body = L("tour.corners.bodyOutputMenu")                                    // the menu is up: a light invitation
             } else if beats[0], !beats[1] {
                 body = awayOr(L10n.localized("tour.corners.bodyMusic", player: playerApp)) // the Music beat is current: say where the tap goes
             }
@@ -756,7 +906,7 @@ final class TourController: ObservableObject {
                 if !there { body = L("tour.corners.bodyQueue") }
             }
             list.append(TourBeatModel(id: 0, text: L("tour.corners.beat1"), checked: beats[0]))
-            list.append(TourBeatModel(id: 1, text: L("tour.corners.beat2"), checked: beats[1] || isHoldingForMusicReturn))
+            list.append(TourBeatModel(id: 1, text: L("tour.corners.beat2"), checked: beats[1] || musicTripActive))
             markSkipped(&list)
             return TourCardModel(
                 kind: .step(.corners), title: L("tour.corners.title"),
@@ -884,7 +1034,8 @@ final class TourController: ObservableObject {
 
     private func currentSurface() -> TourSurface {
         TourSurface(page: musicController.currentPage, controlsVisible: TourHookBus.shared.controlsVisible.value,
-                    edge: liquidEdge.state, isPlaying: musicController.isPlaying)
+                    edge: liquidEdge.state, isPlaying: musicController.isPlaying,
+                    outputMenuOpen: TourHookBus.shared.audioOutputMenuPresented.value)
     }
 
     private func isSliverAnchored(_ phase: TourPhase) -> Bool {
@@ -898,6 +1049,8 @@ final class TourController: ObservableObject {
     private func rect(for subject: TourRingSubject) -> CGRect? {
         guard let panel else { return nil }
         switch subject {
+        case .control(.audioOutputMenu):
+            return TourAnchorRegistry.shared.screenRect(for: .audioOutputMenu, in: panel)   // only while it is really up
         case .control(let id):
             return TourAnchorRegistry.shared.resolvedScreenRect(for: id, in: panel)
         case .sliver:
@@ -915,9 +1068,16 @@ final class TourController: ObservableObject {
     private func cardAnchorRect(for phase: TourPhase) -> CGRect {
         guard let panel else { return .zero }
         if case .step(.moveTuck, _) = phase { return panel.frame }
+        if let menu = openOutputMenuRect(for: phase) { return menu }
         if let target = TourGuidanceResolver.target(phase: phase, surface: currentSurface(), preface: preface),
            let r = rect(for: target.subject) { return r }
         return panel.frame
+    }
+
+    /// The open output menu's screen rect while the corners card is talking about it (nil: closed, or its rect has not landed yet).
+    private func openOutputMenuRect(for phase: TourPhase) -> CGRect? {
+        guard let panel, case .step(.corners, _) = phase, !musicTripActive, currentSurface().outputMenuOpen else { return nil }
+        return TourAnchorRegistry.shared.screenRect(for: .audioOutputMenu, in: panel)
     }
 
     // MARK: - Placement
@@ -932,7 +1092,14 @@ final class TourController: ObservableObject {
     private func computePlacement(model: TourCardModel, phase: TourPhase, gestureKind: TourGestureKind?, arm: TourCardMaterialArm, currentSide: TourCardSide) -> Placed? {
         guard let panel, let screen = panel.screen ?? NSScreen.main else { return nil }
         let visibleFrame = screen.visibleFrame
-        let anchor = cardAnchorRect(for: phase)
+        var anchor = cardAnchorRect(for: phase)
+        // By the player app's window (the user is over there): its screen's visible frame, not necessarily the panel's.
+        let musicWindow: CGRect? = {
+            guard musicTripActive, let win = musicWindowFrame, case .step(.corners, _) = phase else { return nil }
+            return win
+        }()
+        // With the output menu open the card stands on the side AWAY from it (the menu is at the panel's right).
+        let menuOpen = openOutputMenuRect(for: phase) != nil
 
         // Two passes: the beak's side (hence the window's width/height) is a
         // product of the placement, and the placement needs the size.
@@ -957,8 +1124,15 @@ final class TourController: ObservableObject {
                     floatingHitRegion: occupied,
                     sliverMidY: region.midY, visibleFrame: visibleFrame
                 )
+            } else if let win = musicWindow,
+                      let byWindow = TourPlacement.placeNearWindow(
+                        cardSize: cardSize, window: win, panelFrame: panel.frame,
+                        visibleFrame: (NSScreen.screens.first { $0.frame.contains(CGPoint(x: win.midX, y: win.midY)) } ?? screen).visibleFrame) {
+                placement = byWindow
+                anchor = win
             } else {
-                placement = TourPlacement.placeNearPanel(cardSize: cardSize, anchor: anchor, panelFrame: panel.frame, visibleFrame: visibleFrame)
+                placement = TourPlacement.placeNearPanel(cardSize: cardSize, anchor: anchor, panelFrame: panel.frame, visibleFrame: visibleFrame,
+                                                         preferring: menuOpen ? .left : nil)
             }
             if placement.beakSide == beakSide { break }
             beakSide = placement.beakSide
@@ -1197,7 +1371,11 @@ final class TourController: ObservableObject {
     }
 
     private func ringGeometry(for target: TourRingTarget, rect: CGRect) -> TourRingGeometry {
-        TourRingGeometry(cx: rect.midX, cy: rect.midY, w: target.size.width, h: target.size.height, corner: target.cornerRadius)
+        if case .control(.audioOutputMenu) = target.subject {
+            let shape = TourGuidanceResolver.menuRingShape(menuRect: rect)
+            return TourRingGeometry(cx: rect.midX, cy: rect.midY, w: shape.size.width, h: shape.size.height, corner: shape.cornerRadius)
+        }
+        return TourRingGeometry(cx: rect.midX, cy: rect.midY, w: target.size.width, h: target.size.height, corner: target.cornerRadius)
     }
 
     /// Re-derives the ring, the ghost cursor and the panel glow from live state.
@@ -1212,7 +1390,7 @@ final class TourController: ObservableObject {
         if case .transitioning(let from, _) = state.phase, from != .translate { return }
         if feedback.isActive, case .finale = state.phase { return }
         if cardYielded || skipping { return }
-        if isHoldingForMusicReturn {
+        if musicTripActive {
             // Away in the player app: the ring stops pulsing and goes down, nothing runs until they are back.
             if motion.ringVisible { motion.hideRing() }
             if motion.hintRunning { motion.stopHint() }
@@ -1259,7 +1437,7 @@ final class TourController: ObservableObject {
     /// A beat row was hovered: the ring temporarily points at that beat's
     /// control (C.4.1); leaving puts it back. A step with a single control just pulses.
     private func beatHovered(_ id: Int, inside: Bool) {
-        guard case .step(let step, _) = state.phase, guidance.motion.ringVisible, !isHoldingForMusicReturn else { return }
+        guard case .step(let step, _) = state.phase, guidance.motion.ringVisible, !musicTripActive else { return }
         if !inside { refreshGuidance(); return }
         let subjects = TourGuidanceResolver.beatSubjects(for: step)
         let subject: TourRingSubject?

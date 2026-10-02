@@ -35,6 +35,12 @@ public final class TourHookBus {
     public let audioOutputMenuOpened = PassthroughSubject<Void, Never>()
     /// `MusicButtonView`'s action firing (§6 "↖ Music 点击").
     public let musicButtonTapped = PassthroughSubject<Void, Never>()
+    /// Whether the in-panel output menu is open right now (sent by `AudioOutputSwitcherView` on every change,
+    /// BEFORE the host's `audioOutputMenuOpened` on open). The corners card talks about the menu while it is up.
+    public let audioOutputMenuPresented = CurrentValueSubject<Bool, Never>(false)
+    /// The system's default output really changed while the menu was open (the user picked a device there).
+    /// Optional for the tour: a soft acknowledgement, never a beat.
+    public let audioOutputDeviceSwitched = PassthroughSubject<Void, Never>()
     /// Whether the CURRENT page's controls are on screen (the mouse is over the
     /// panel). Sent by the page that is showing: `MiniPlayerView` for the cover
     /// and queue pages, `LyricsView` for the lyrics page. The tour needs this

@@ -32,6 +32,9 @@ public enum TourAnchorID: String, CaseIterable, Sendable {
     case lyricsNav
     case translate
     case artwork
+    /// The open output menu (its device list). Exists only while the menu is up: the controller removes it
+    /// from the registry on close, so nothing ever points at a stale rect.
+    case audioOutputMenu
 }
 
 public struct TourAnchorKey: PreferenceKey {
@@ -201,6 +204,11 @@ public final class TourAnchorRegistry: ObservableObject {
         screenRect(for: id, in: window) ?? TourPanelLayout.screenRect(for: id, panelFrame: window.frame)
     }
 
+    /// Forgets one anchor (a transient control that just went away).
+    public func remove(_ id: TourAnchorID) {
+        if anchors[id] != nil { anchors[id] = nil }
+    }
+
     /// Called once the tour tears down — a stale rect from a torn-down tour
     /// must never leak into the next run's first placement.
     public func reset() { anchors = [:] }
@@ -232,7 +240,7 @@ public enum TourPanelLayout {
         case .musicButton: return Spec(fromLeft: 45, fromTop: 25, size: CGSize(width: 66, height: 26))
         case .audioOutput: return Spec(fromRight: 32, fromTop: 26, size: CGSize(width: 39, height: 27))
         case .translate: return Spec(fromRight: 28, fromBottom: 108, size: CGSize(width: 32, height: 32))
-        case .artwork: return nil
+        case .artwork, .audioOutputMenu: return nil
         }
     }
 

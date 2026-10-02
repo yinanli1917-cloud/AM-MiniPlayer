@@ -45,6 +45,7 @@ final class TourRealPanelFixture {
         LyricsService.shared.debugSetCanTranslate(canTranslate)
         TourAnchorRegistry.shared.reset()
         TourHookBus.shared.controlsVisible.send(false)
+        TourHookBus.shared.audioOutputMenuPresented.send(false)
         // The lyrics page with no lyrics would otherwise fall back to the cover on its own.
         music.userManuallyOpenedLyrics = page == .lyrics
         music.currentPage = page
@@ -73,6 +74,7 @@ final class TourRealPanelFixture {
         panel.liquidEdgeHandler = { [weak liquidEdge] edge in liquidEdge?.collapse(to: edge) ?? false }
         let guidance = TourGuidance(reduceMotion: { reduceMotion })
         controller = TourController(panel: panel, liquidEdge: liquidEdge, defaults: defaults, feedback: feedback, guidance: guidance, gestureLogWriter: gestureWriter)
+        controller.musicWindowProvider = { nil }   // never ask the real window list (the founder's Music) unless a test injects a window
         spin(0.6)
     }
 
@@ -84,6 +86,7 @@ final class TourRealPanelFixture {
         panel.orderOut(nil)
         TourAnchorRegistry.shared.reset()
         TourHookBus.shared.controlsVisible.send(false)
+        TourHookBus.shared.audioOutputMenuPresented.send(false)
         music.isPlaying = savedPlaying
         music.userManuallyOpenedLyrics = false
         LyricsService.shared.debugSetCanTranslate(false)

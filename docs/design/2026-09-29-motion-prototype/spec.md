@@ -665,7 +665,7 @@ SwiftUI：一个 `ButtonStyle`：`configuration.isPressed` 控制 `scaleEffect`�
 | 段 | 时刻 | 反馈 |
 |---|---|---|
 | 准备 | 第二拍成为当前拍（输出钮那一拍已打勾，环落到 Music 胶囊；或一进步骤就只剩这一拍） | 正文交叉淡换成：**「点左上角会打开 Apple Music。去看一眼就好，我在这儿等你回来。」**（英：*Tapping the top left opens Apple Music. Just have a look; I'll wait here till you're back.*）。「Apple Music」取自播放器身份（`PlayerAppIdentity.displayName`，文案里写 `{player}`），网易云版换身份即换名字。鼠标不在面板上时仍是 C.5.3 的「鼠标再回到面板上。」 |
-| 等待 | 点 Music（`musicButtonTapped`） | 第二拍只打**小勾**（B.2 的 beat-only：圆点实心 + 一次 `.levelChange`），**不放**火花 / 礼花 / 庆祝虚化，**不交接**；环收起（`hideRing`，不再脉冲），提示与卡片计时器都停；正文交叉淡换成 **「回来就继续。」**（英：*Pick up when you're back.*）。等待中**零成本**：不挂计时器、不开逐帧（display link），只留两个订阅；不设超时，人还在 Music 里就一直等，不自动前进 |
+| 等待 | 点 Music（`musicButtonTapped`） | 第二拍只打**小勾**（B.2 的 beat-only：圆点实心 + 一次 `.levelChange`），**不放**火花 / 礼花 / 庆祝虚化，**不交接**；环收起（`hideRing`，不再脉冲），提示与卡片计时器都停；正文交叉淡换成 **「回来就继续。」**（英：*Pick up when you're back.*）。等待中**几乎零成本**：不开逐帧（display link），只留两个订阅；只有点 Music 后的找窗口采样（≤ 2 s 的 6 Hz，之后窗口在时 0.5 s 一次，见 C.5.7）；不设超时，人还在 Music 里就一直等，不自动前进 |
 | 回来 | 下面两件事，先到的算（鼠标要真的离开过再进来，点击当时的悬停不算；别的 app 不含 Apple Music 自己，也不含 nanoPod 自己，因为点击可能先激活 nanoPod 再激活 Music） | ① 鼠标再次进入面板（控件浮出）；② 别的 app 成为前台（`NSWorkspace.didActivateApplicationNotification`，bundle id 不是播放器的）。回来后把被拦下的那一下点击补发给状态机：两拍都齐则放平常的完成庆祝（B.2 / B.3 / B.10）并转场到 S3；若还差输出钮那一拍（先点的 Music），环回到输出钮、正文换回通用句，不庆祝 |
 
 等待中：「这一步先不做」「先到这里」、停止仍然有效，会结束等待；等待中再点输出钮只打勾，不触发完成，回来时一并完成。落地：`TourController.beginMusicHoldIfNeeded` / `musicReturned`，纯规则 `TourMusicReturn.isReturn`；测试 `TourMusicHoldTests`。
@@ -782,6 +782,34 @@ SwiftUI：一个 `ButtonStyle`：`configuration.isPressed` 控制 `scaleEffect`�
 - 原型：B、C 两个卡里各加一个大环元素（`.cring`，`.tin` 的兄弟，不被虚化 / 缩放 / 裁剪）与 `V.blur`、`V.lift` 两个值；`paint()` 把环的值同时画到小环和大环（`paintRing`），内容项加 `filter: blur()` 与压暗，`.tin` 微缩；交接 cue 打上 `h` 标签，点卡把它们前移到「此刻 + 20 ms」；虚化在 `swap` 里（新内容已换入）才松开，大环在 `handoff` 开头就起飞。连点（`B.keepCele`）不松开，新一轮从当前值接着走。
 - 应用侧：`TourFeedbackChoreographer` 加 `blur` / `lift` 两个值与 `celebrationEnabled`，逐 cue 对照原型（`TourFeedbackCelebrationTests` 用假时钟核对：B.2 / B.3 的相、时刻、触觉一概不变，虚化 0.18 s、大环到中心、H 处飞回、虚化在换内容后松开、点卡提前收、连点不松开、减少透明度 / 动态效果、只勾 beat / 关闭时不庆祝）；卡里的画法见 `TourCardView` / `TourFeedbackViews`（`TourCelebrationRingLayer`、`TourCelebrationContent`）；真窗口里的行为见 `TourCelebrationRealWindowTests`，定格帧见 `TourCelebrateShotTests`（`TOUR_CELEBRATE_SHOTS=1`）。
 - 手感（虚化半径、压暗量、大环尺寸、飞行弹簧）需要创始人亲自终验；自动检查不能代替。
+
+#### C.5.7 角上两拍的后续（2026-10-02 创始人）
+
+**A. 输出菜单开着时，卡片轻轻邀请。** 打开右上角输出菜单仍然完成「右上角」这一拍，没有新增必做拍。菜单开着：
+
+| 项 | 规则 |
+|---|---|
+| 正文 | 交叉淡换成 **「这些都是能出声的地方。想换就点一个，听听差别；换回来也一样简单。」**（英：*These are all the places that can play sound. Tap one to hear the difference; switching back is just as easy.*） |
+| 环 | 从输出钮移到菜单的设备列表（虚线 hint，不是必点；用菜单的真实 frame 外扩 5 pt，圆角 23）；菜单收起即从注册表删掉这块 frame，环回到下一拍（Music 胶囊），不会停在过期的矩形上 |
+| 卡片 | 站在面板**远离菜单的一侧**（菜单靠面板右边，所以优先面板左侧；放不下才换另一侧），以菜单 frame 为锚、箭头对着菜单中线，不压住菜单和面板 |
+| 换了设备 | 系统默认输出真的变了：正文一行 **「好，换过去了。」**（英：*Okay, switched over.*），2.4 s 后回到平常正文；菜单关得再快，这一行也留满；不是必做拍 |
+| 菜单收起 | 没换设备：立刻回到这一步的平常流程，Music 拍是下一拍就出 C.5.6 的 Music 提示 |
+
+落地：`AudioOutputSwitcherView` 发 `TourHookBus.audioOutputMenuPresented`（先于宿主的 opened 信号）与 `audioOutputDeviceSwitched`，并把列表 frame 登记为 `TourAnchorID.audioOutputMenu`；`TourController.outputMenuDidChange` / `outputDeviceSwitched`；`TourPlacement.placeNearPanel(preferring:)`。
+
+**B. 点 Music 后，卡片跳到 Music 的窗口旁。** C.5.6 的等待态里，卡片去 Apple Music 的窗口那边，说两件事：这是完整的 app；nanoPod 是它身边的小伙伴。
+
+| 项 | 规则 |
+|---|---|
+| 正文 | **「这是完整的 Apple Music，找歌、整理歌单都在这儿。nanoPod 是它身边的小伙伴，平时安静地陪你听。」**（英：*This is the full Apple Music: finding songs and building playlists happen here. nanoPod is the little companion beside it, quietly keeping you company while you listen.*）；「Apple Music」取自 `{player}`（`PlayerAppIdentity.displayName`），网易云版换身份即换名字 |
+| 找窗口 | 公开 API：`NSRunningApplication` 取播放器 bundle id 的 pid，`CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements])` 过滤该 pid、`layer == 0`、取面积最大的在屏窗口；只用 owner pid 与 bounds（不要 Screen Recording 权限），不依赖窗口标题。CG 坐标（左上原点、y 向下）换成 AppKit 屏幕坐标。纯函数 `TourMusicWindowLocator`，测试喂注入的窗口信息数组 |
+| 采样 | 点 Music 后约 6 Hz（0.16 s）找窗口，连续两帧（边差 ≤ 2 pt）一致算稳定；最多 2 s，到点还有窗口就用最后一帧，一个都没有就放弃，卡片留在面板旁的等待卡，采样停止。卡片到窗口后每 0.5 s 看一次：窗口移动（> 4 pt）卡片跟着走；连续两次没有窗口（关了、最小化、在别的 Space）卡片回面板侧、采样停止。空闲没有逐帧轮询 |
+| 位置 | 优先放窗口朝面板那条边的外侧（间距 16 pt）；放不下（屏幕不够宽，或会压到面板）就放窗口另一条边外侧；再不行放窗口里左上区域（距左缘 20 pt、距上缘 56 pt，避开标题栏），箭头朝左缘。始终在 `visibleFrame` 内、不压面板，箭头对准窗口（外侧：对着窗口边缘的垂直中点）。纯函数 `TourPlacement.placeNearWindow`。卡片窗口在 tour overlay 层，高于 Music |
+| 动效 | 沿用 C.2 的卡片位移弹簧与箭头换向（0.1 s 淡出、换边、0.16 s 淡入） |
+| 回来 | C.5.6 的回来条件不变。回来后卡片先弹回面板旁（约 0.55 s），再补发被拦下的那一下点击，庆祝与转场在人看着的地方放；回来的同一刻采样停止 |
+| 兜底 | 没有窗口（最小化、别的 Space、系统限制）：就是 C.5.6 的等待卡，不动 |
+
+原型 section C 的 S2：菜单弹出时正文、虚线环、卡片位置按 A 走（1.5 s 后菜单自动收起，一切回到平常）；点 Music 后 0.7 s，舞台左侧出现一个「Apple Music」示意窗口，卡片弹到窗口里左上区域（舞台只有 600 pt 宽，放不下窗口外侧，演示的是第三种位置），箭头朝窗口左缘；回来时窗口收起，卡片先弹回再庆祝。落地：`TourController.startMusicWindowWatch` / `musicWindowEvent` / `musicReturned`；`TourMusicWindowTracker`（纯采样策略）；`TourMusicWindowWatcher`（0.16 s → 0.5 s 的主队列采样，`stop()` 后什么都不留）。测试 `TourCornersFollowUpTests`。
 
 ### F.4 2026-10-02 补：点 Music 先等人回来（C.5.6）
 

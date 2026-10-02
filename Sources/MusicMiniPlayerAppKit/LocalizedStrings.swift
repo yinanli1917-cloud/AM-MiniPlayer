@@ -168,6 +168,12 @@ enum L10n {
         "tour.corners.bodyMusic":   ("Tapping the top left opens {player}. Just have a look; I'll wait here till you're back.", "点左上角会打开 {player}。去看一眼就好，我在这儿等你回来。"),
         // While the user is away in the player app: the card holds still (no celebration, no handoff) until they return.
         "tour.corners.bodyWaiting": ("Pick up when you're back.", "回来就继续。"),
+        // The output menu is open: a light invitation, nothing required (the beat was ticked by opening it).
+        "tour.corners.bodyOutputMenu":     ("These are all the places that can play sound. Tap one to hear the difference; switching back is just as easy.", "这些都是能出声的地方。想换就点一个，听听差别；换回来也一样简单。"),
+        // The user picked a device in the open menu: one soft line, then the step's normal flow again.
+        "tour.corners.bodyOutputSwitched":  ("Okay, switched over.", "好，换过去了。"),
+        // The card has hopped over to the player app's window: what that window is, and what nanoPod is next to it. {player} = the player app's product name.
+        "tour.corners.bodyMusicWindow":     ("This is the full {player}: finding songs and building playlists happen here. nanoPod is the little companion beside it, quietly keeping you company while you listen.", "这是完整的 {player}，找歌、整理歌单都在这儿。nanoPod 是它身边的小伙伴，平时安静地陪你听。"),
         "tour.corners.musicOpened": ("Music's open. Come back whenever you're ready.", "Music 打开了，回来接着来。"),
         "tour.corners.confirm":     ("Both corners, right there.", "两个角都在这儿。"),
 

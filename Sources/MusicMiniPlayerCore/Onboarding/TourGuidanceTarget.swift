@@ -64,8 +64,12 @@ public struct TourSurface {
     public var controlsVisible: Bool
     public var edge: LiquidEdgeState
     public var isPlaying: Bool
+    /// The in-panel output menu is open.
+    public var outputMenuOpen: Bool
 
-    public init(page: PlayerPage = .album, controlsVisible: Bool = false, edge: LiquidEdgeState = .card, isPlaying: Bool = false) {
+    public init(page: PlayerPage = .album, controlsVisible: Bool = false, edge: LiquidEdgeState = .card, isPlaying: Bool = false,
+                outputMenuOpen: Bool = false) {
+        self.outputMenuOpen = outputMenuOpen
         self.page = page
         self.controlsVisible = controlsVisible
         self.edge = edge
@@ -130,6 +134,13 @@ public enum TourGuidanceResolver {
     public static let sliverSize = CGSize(width: 18, height: 72)
     public static let peekSize = CGSize(width: 132, height: 216)
 
+    /// The open menu's ring hugs the menu: its rect grown by a few points, corner radius a little over the menu's own 18.
+    public static let menuRingOutset: CGFloat = 5
+    public static let menuRingCornerRadius: CGFloat = 23
+    public static func menuRingShape(menuRect: CGRect) -> (size: CGSize, cornerRadius: CGFloat) {
+        (CGSize(width: menuRect.width + 2 * menuRingOutset, height: menuRect.height + 2 * menuRingOutset), menuRingCornerRadius)
+    }
+
     /// The ring drawn around `subject` (prototype `haloGeo`): size and corner radius.
     public static func ringShape(for subject: TourRingSubject) -> (size: CGSize, cornerRadius: CGFloat) {
         switch subject {
@@ -167,6 +178,8 @@ public enum TourGuidanceResolver {
             return .circle(.control(.playPause), controlDiameter, mode)
 
         case .step(.corners, let beats):
+            // The output menu is up: the ring leaves the button for the device list (optional to use: a hint).
+            if surface.outputMenuOpen { return .circle(.control(.audioOutputMenu), controlDiameter, .hint) }
             // The next UNFINISHED beat's control (either order is fine).
             if beats.indices.contains(0), !beats[0] { return .circle(.control(.audioOutput), controlDiameter, mode) }
             if beats.indices.contains(1), !beats[1] {

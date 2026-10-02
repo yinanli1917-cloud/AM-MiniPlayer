@@ -325,6 +325,11 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 .cpop{position:absolute;left:103px;top:50px;width:136px;padding:5px;border-radius:10px;background:var(--glass);color:var(--glass-ink);font-size:12px;box-shadow:0 8px 22px rgba(38,22,18,.25),0 0 0 .5px var(--glass-line);
   opacity:0;transform:scale(.94);transform-origin:90% 0;transition:opacity calc(.16s*var(--ts)),transform calc(.16s*var(--ts)) cubic-bezier(.2,.8,.2,1);pointer-events:none;z-index:4}
 .cpop.on{opacity:1;transform:none}
+.cmw{position:absolute;left:14px;top:40px;width:300px;height:340px;border-radius:10px;background:var(--surface);box-shadow:0 14px 34px rgba(38,22,18,.28),0 0 0 .5px var(--hair2);opacity:0;transform:scale(.96);transform-origin:50% 40%;transition:opacity calc(.3s*var(--ts)),transform calc(.4s*var(--ts)) cubic-bezier(.2,.8,.2,1);pointer-events:none;z-index:1;overflow:hidden;font-size:11px;color:var(--fg)}
+.cmw.on{opacity:1;transform:none}
+.cmw .tb{height:30px;display:flex;align-items:center;gap:5px;padding:0 10px;background:rgba(0,0,0,.05);font-weight:600}.cmw .tb i{width:8px;height:8px;border-radius:50%;background:#ff5f57}.cmw .tb i:nth-child(2){background:#febc2e}.cmw .tb i:nth-child(3){background:#28c840;margin-right:auto}
+.cmw .sd{position:absolute;left:0;top:30px;bottom:0;width:70px;background:rgba(0,0,0,.04)}
+.cmw .tl{position:absolute;left:84px;top:44px;display:grid;grid-template-columns:repeat(3,58px);gap:10px 12px}.cmw .tl i{height:58px;border-radius:6px;background:var(--accent);opacity:.55}.cmw .tl i:nth-child(2n){background:#e3a46b}.cmw .tl i:nth-child(3n){background:#6bb8c4}
 .cpop .r{display:flex;justify-content:space-between;padding:5px 8px;border-radius:6px}.cpop .r.on{background:var(--accent-soft-c)}
 .cstrip{position:absolute;top:0;width:6px;height:56px;background:var(--strip);z-index:2;opacity:0;box-shadow:0 0 0 .5px var(--glass-line)}
 .cstrip::before{content:"";position:absolute;inset:-14px -18px}
@@ -1420,7 +1425,7 @@ const CSTEPS = [
     foot: `<div class="cnote">✓ Music 已经连上了　·　随时可以停下，设置里能接着来</div>` },
   { id: 'S1', title: '把鼠标挪过来', body: '面板平时只留封面，控件在你需要的时候才出来。', bodyArmed: '控件出来了，按一下播放。', bodyAway: '鼠标再回到面板上。', beats: ['移到面板上', '按一下播放'], num: 2, anchor: 'play', foot: LINKS },
   /* 10-02 创始人：点 Music 时 Apple Music 自己有窗口动画，我们的庆祝和转场同时来就应接不暇。第二拍成为当前拍时正文先说清「点了会打开 Apple Music，我在这儿等」；点下后卡只打小勾、环收起，安静等；人回来（鼠标再进面板，或别的 app 到了前台）才放庆祝并转场。 */
-  { id: 'S2', title: '专辑页的两个角', body: '右上角选声音从哪里出，左上角一步到 Music。', bodyMusic: '点左上角会打开 Apple Music。去看一眼就好，我在这儿等你回来。', bodyWait: '回来就继续。', bodyAway: '鼠标再回到面板上。', beats: ['右上角：声音从哪出', '左上角：去 Music'], num: 3, anchor: 'out', foot: LINKS },
+  { id: 'S2', title: '专辑页的两个角', body: '右上角选声音从哪里出，左上角一步到 Music。', bodyMusic: '点左上角会打开 Apple Music。去看一眼就好，我在这儿等你回来。', bodyWait: '回来就继续。', bodyMenu: '这些都是能出声的地方。想换就点一个，听听差别；换回来也一样简单。', bodyMwin: '这是完整的 Apple Music，找歌、整理歌单都在这儿。nanoPod 是它身边的小伙伴，平时安静地陪你听。', bodyAway: '鼠标再回到面板上。', beats: ['右上角：声音从哪出', '左上角：去 Music'], num: 3, anchor: 'out', foot: LINKS },
   { id: 'S3', title: '歌词在这儿', body: '左下角的小气泡，或者点一下封面。', bodyAway: '鼠标再回到面板上。', beats: [], num: 4, anchor: 'nav', foot: LINKS },
   /* 09-29 真机：翻译钮只在歌词页有。面板在封面页时进入这一步（例如跳过了歌词那一步），第一拍是「先到歌词页」，环在歌词气泡上；到了歌词页打勾，环弹到翻译钮，正文换回翻译那段。 */
   { id: 'S4', title: '翻译', _body: null, get body() { return this._body ?? (Q.s4first ? S4_BODY_COVER : S4_BODY); }, set body(v) { this._body = v; },
@@ -1470,6 +1475,7 @@ const CSTAGE_HTML = () => `
     <button class="hp hp-tr" data-ev="translate" aria-label="翻译">${TR_ICON}</button>
     <div class="cpop" id="c-pop"><div class="r on"><span>MacBook 扬声器</span><b>✓</b></div><div class="r"><span>AirPods</span></div></div>
   </div>
+  <div class="cmw" id="c-mw"><div class="tb"><i></i><i></i><i></i><span>Apple Music</span></div><div class="sd"></div><div class="tl"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
   <div class="vcard cap" id="c-cap"><div class="th"></div><b class="ti"></b><b class="ar"></b>
     <svg class="pl" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8.6" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="1.8"/><circle cx="10" cy="10" r="8.6" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="36 54" transform="rotate(-90 10 10)"/><path d="M8 6.3v7.4l6-3.7z" fill="#fff"/></svg>
     <svg class="nx" viewBox="0 0 14 12"><path d="M1 1V11L7 6Z M7 1V11L13 6Z"/></svg></div>
@@ -1481,7 +1487,7 @@ const CSTAGE_HTML = () => `
 
 $('#c-stage').innerHTML = CSTAGE_HTML();
 const cqs = id => document.getElementById('c-' + id);
-const cel = { stage: $('#c-stage'), mp: cqs('mp'), art: cqs('art'), t1: cqs('t1'), t2: cqs('t2'), ly: cqs('ly'), rim: cqs('rim'), play: cqs('play'), pop: cqs('pop'), strip: cqs('strip'), cap: cqs('cap'), halo: cqs('halo'), gcur: cqs('gcur'), toast: cqs('toast'), beak: cqs('beak') };
+const cel = { stage: $('#c-stage'), mp: cqs('mp'), art: cqs('art'), t1: cqs('t1'), t2: cqs('t2'), ly: cqs('ly'), rim: cqs('rim'), play: cqs('play'), pop: cqs('pop'), mw: cqs('mw'), strip: cqs('strip'), cap: cqs('cap'), halo: cqs('halo'), gcur: cqs('gcur'), toast: cqs('toast'), beak: cqs('beak') };
 
 /* ---- 状态与动画值 ---- */
 const Q = { corner: 'TR', tucked: false, playing: false, page: 0, trOn: false, realHover: false, simHover: false, auto: false, autoAt: null, stopped: false, done: false, lock: false,
@@ -1513,9 +1519,11 @@ function anchorPt(kind) {
     case 'nav': return { x: R.x + 25, y: R.y + 253 };
     case 'tr': return { x: R.x + 222, y: R.y + 192 };
     case 'strip': return { x: centerR ? CW : 0, y: R.y + PH / 2 };
+    case 'menu': return { x: R.x + 103 + 68, y: R.y + 50 + 30 };            // 打开的输出小菜单中心
   }
 }
 function placeCard(kind, h) {
+  if (kind === 'mwin') return { x: 34, y: 40 + 56, h, side: 'L', bOff: 36, ay: 40 + 56 + 36 };   // 播放器 app 的窗口里，左上区域；箭头朝窗口左缘（整屏很宽时落在窗口朝面板那条边外，见 spec C.5.7）
   const R = CORNER[Q.corner], panelRight = R.x + PW / 2 > CW / 2, a = anchorPt(kind);
   let x, side;
   if (kind === 'strip') { x = panelRight ? CW - 14 - CAP_W - 20 - CARD_W : 14 + CAP_W + 20; side = panelRight ? 'R' : 'L'; }
@@ -1529,6 +1537,7 @@ function haloGeo(kind) {
     case 'play': case 'out': case 'tr': return { cx: a.x, cy: a.y, w: 40, h: 40 };
     case 'nav': return { cx: a.x, cy: a.y, w: 36, h: 36 };
     case 'music': return { cx: a.x, cy: a.y, w: 82, h: 42 };
+    case 'menu': return { cx: a.x, cy: a.y, w: 150, h: 74 };                // 环跟到设备列表上，虚线（可选，不是必点）
     case 'strip': return { cx: a.x === 0 ? 5 : CW - 5, cy: a.y, w: 18, h: 72 };
     case 'cap': { const left = a.x === 0; return { cx: left ? 14 + CAP_W / 2 : CW - 14 - CAP_W / 2, cy: a.y, w: CAP_W + 12, h: CAP_H + 12 }; }
   }
@@ -1605,7 +1614,7 @@ function haloShow(kind, mode = 'wait') {
   }
   Q.breathT0 = TC.B.now;
   cel.halo.classList.toggle('hint', mode === 'hint');
-  cel.halo.style.borderRadius = (Math.min(g.w, g.h) / 2 + (kind === 'cap' ? 20 : 0)) + 'px';
+  cel.halo.style.borderRadius = (kind === 'menu' ? 16 : Math.min(g.w, g.h) / 2 + (kind === 'cap' ? 20 : 0)) + 'px';
   if (S.rm) Q.breathT0 = null; else Q.breathT0 = TC.B.now;
 }
 function haloHide() {
@@ -1622,7 +1631,7 @@ function haloPeek(kind) {                                      // beat 行悬停
   const g = haloGeo(kind); if (!g) return;
   if (S.rm) { CV.hx.set(g.cx - g.w / 2); CV.hy.set(g.cy - g.h / 2); CV.hw.set(g.w); CV.hh.set(g.h); return; }
   CV.hx.to(g.cx - g.w / 2, { spring: [.42, .15] }); CV.hy.to(g.cy - g.h / 2, { spring: [.42, .15] }); CV.hw.to(g.w, { spring: [.42, .15] }); CV.hh.to(g.h, { spring: [.42, .15] });
-  cel.halo.style.borderRadius = (Math.min(g.w, g.h) / 2 + (kind === 'cap' ? 20 : 0)) + 'px';
+  cel.halo.style.borderRadius = (kind === 'menu' ? 16 : Math.min(g.w, g.h) / 2 + (kind === 'cap' ? 20 : 0)) + 'px';
 }
 const BEAT_TARGET = { S2: ['out', 'music'], S6: ['strip', 'cap'] };
 
@@ -1683,13 +1692,27 @@ function musicHoldStart() {
   const d = cur(); Q.musicHold = true; Q.musicAway = !hovering(); Q.musicBack = false;
   TC.beatCheck(1, false); TC.haptic('.levelChange'); haloHide(); hintStop(); Q.breathT0 = null;
   setBody(d.bodyWait); Q.bodyMode = 'wait'; Q.stallT0 = 0;
+  TC.cue(.7, () => {                                              // Apple Music 的窗口出来了（轮询到稳定的窗口框）：卡片跳过去，箭头指向它；没有窗口就留在面板旁
+    if (!Q.musicHold) return;
+    cel.mw.classList.add('on'); Q.mwin = true; setBody(d.bodyMwin);
+    moveCard(placeCard('mwin', TC.measure(TC.B.cardStep)), .1); Q.anchorKind = 'mwin';
+  });
   toast('示意：Apple Music 打开了；鼠标回到面板上，或在别的 app 里点一下，就继续', 3.6); wake();
 }
 function musicReturn() {
   if (!Q.musicHold) return; Q.musicHold = false; Q.musicBack = false; Q.stallT0 = TC.B.now;
+  if (Q.mwin) {                                                   // 卡片先弹回面板旁，再补发那一下点击（庆祝在人看着的地方放）
+    Q.mwin = false; cel.mw.classList.remove('on'); Q.anchorKind = 'music';
+    moveCard(placeCard('music', TC.measure(TC.B.cardStep)), 0); Q.musicHome = true;
+    TC.cue(.55, () => { Q.musicHome = false; musicReturnDeliver(); }); return;
+  }
+  musicReturnDeliver();
+}
+function musicReturnDeliver() {
   const d = cur(), b = Bt().beats;
   if (b.every(x => x.done)) { haloHide(); TC.completeStep(); return; }                // 通常的庆祝与转场
-  setBody(d.body); Q.bodyMode = 'base'; haloShow('out', hovering() ? 'wait' : 'hint'); wake();     // 先点的 Music：回来后环去输出钮
+  setBody(d.body); Q.bodyMode = 'base'; Q.anchorKind = 'out'; moveCard(placeCard('out', TC.measure(TC.B.cardStep)), 0);
+  haloShow('out', hovering() ? 'wait' : 'hint'); wake();     // 先点的 Music：回来后环去输出钮
 }
 function setBody(text) {
   const el = TC.content.body, o = TC.V.ci[1].op;
@@ -1718,8 +1741,19 @@ function panelReturn() {
 function ripple(el) { const r = document.createElement('span'); r.className = 'rippl'; el.appendChild(r); setTimeout(() => r.remove(), 600 / (S.slow ? .25 : 1)); }
 function popShow() {
   cel.pop.classList.add('on'); Q.popT = TC.B.now + 1.5;
+  if (Q.stepId === 'S2' && !Q.musicHold) {                       // 菜单开着：正文轻轻邀请，环移到设备列表，卡片站到离菜单远的一侧（面板左边）
+    const d = cur(); setBody(d.bodyMenu); Q.bodyMode = 'menu'; Q.menuOpen = true;
+    haloShow('menu', 'hint'); moveCard(placeCard('menu', TC.measure(TC.B.cardStep)), 0); Q.anchorKind = 'menu';
+  }
 }
-function popHide() { cel.pop.classList.remove('on'); Q.popT = null; }
+function popHide() {
+  const was = Q.menuOpen; cel.pop.classList.remove('on'); Q.popT = null; Q.menuOpen = false;
+  if (was && Q.stepId === 'S2' && !Q.musicHold) {                // 菜单收起：回到这一步的平常正文；Music 拍是下一拍就出 Music 提示，环回到 Music 钮
+    const d = cur(), b = Bt().beats; Q.anchorKind = 'out'; Q.bodyMode = 'base'; setBody(s2Body(d));
+    if (!b.every(x => x.done)) haloShow(b[1].done ? 'out' : 'music', hovering() ? 'wait' : 'hint');
+    moveCard(placeCard('out', TC.measure(TC.B.cardStep)), 0);
+  }
+}
 function toast(text, dur = 2.6) {
   cel.toast.textContent = text; cel.toast.classList.add('on');
   const my = ++toast.n; TC.cue(dur, () => { if (toast.n === my) cel.toast.classList.remove('on'); }, false);
@@ -1802,7 +1836,7 @@ function doReturn() {
 
 /* ---- 结束与中断 ---- */
 function stopTour() {
-  if (Q.stopped) return; Q.stopped = true; Q.auto = false; Q.musicHold = false; syncAutoBtn();
+  if (Q.stopped) return; Q.stopped = true; Q.auto = false; Q.musicHold = false; Q.mwin = false; cel.mw.classList.remove('on'); syncAutoBtn();
   cardHide(); haloHide(); hintStop(); popHide();
   toast('已停在这里 · 设置 › 认识 nanoPod 里可以接着来'); wake();
 }
@@ -1811,7 +1845,7 @@ function finishTour(msg) {
   toast(msg === '自动收起' ? '8 秒无操作，自动收起' : (msg || '引导结束')); wake();
 }
 function skipStep() {
-  Q.musicHold = false;
+  Q.musicHold = false; Q.mwin = false; cel.mw.classList.remove('on');
   const d = cur(); if (d.final || d.id === 'S0' || Bt().busy || Q.lock || Q.stopped) return;
   Bt().beats.forEach(b => { if (!b.done) b.li.classList.add('skip'); b.li.classList.remove('pending'); });
   haloHide(); hintStop(); popHide();
@@ -1977,7 +2011,7 @@ TC.card.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === '
 function markStep() { $$('#cSteps span').forEach(s => s.classList.toggle('on', s.dataset.s === Q.stepId)); refreshNextLabel(); }
 function syncAutoBtn() { const b = $('#cAuto'); b.textContent = Q.auto ? '⏸ 暂停自动播放' : '▶ 自动播放'; }
 function resetC() {
-  Object.assign(Q, { corner: 'TR', tucked: false, playing: false, trOn: false, realHover: false, simHover: false, auto: Q.auto, autoAt: null, stopped: false, done: false, lock: false, musicHold: false, musicAway: false, musicBack: false, stepId: 'S0', haloKind: null, breathT0: null, dwell: null, bodyMode: 'base', capOut: false, popT: null });
+  cel.mw.classList.remove('on'); Object.assign(Q, { mwin: false, menuOpen: false, musicHome: false, corner: 'TR', tucked: false, playing: false, trOn: false, realHover: false, simHover: false, auto: Q.auto, autoAt: null, stopped: false, done: false, lock: false, musicHold: false, musicAway: false, musicBack: false, stepId: 'S0', haloKind: null, breathT0: null, dwell: null, bodyMode: 'base', capOut: false, popT: null });
   CSTEPS[CIDX.S4]._body = null; Q.s4first = false;
   CSTEPS[CIDX.S5]._body = null; CSTEPS[CIDX.S5].acts = S5_ACTS(); Q.s5first = false; Q.gl0 = null;
   TC.reset();
