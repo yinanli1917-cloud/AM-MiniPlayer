@@ -74,6 +74,12 @@ public enum PanelWindowMetrics {
         let container = NSView(frame: NSRect(origin: .zero, size: defaultSize))
         container.wantsLayer = true
         container.autoresizesSubviews = true
+        // 2026-10-01: WindowServer hit-tests this non-opaque window by the alpha it composites, and parts of the
+        // album page (the cover band) come through as alpha 0 — clicks and two-finger scrolls there fell through
+        // to the desktop (AX hit test at the panel's center answered Finder). A 1/255 floor under the rounded
+        // panel keeps every point of it ours without being visible.
+        container.layer?.backgroundColor = NSColor(white: 0, alpha: 1.0 / 255.0).cgColor
+        container.layer?.cornerRadius = cornerRadius
 
         let host = NSHostingView(rootView: root.safeAreaPadding(.top, tunedTopSafeArea))
         // The title bar's own safe area would add another 32pt on top of ours.
