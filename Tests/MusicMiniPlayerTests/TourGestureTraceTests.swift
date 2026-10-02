@@ -61,7 +61,8 @@ final class TourGestureTraceTests: XCTestCase {
             ),
             writer: writer
         )
-        trace.settleDelay = 0.05
+        // (Long, so a loaded machine cannot judge a gesture mid-way; every test finalizes explicitly through `settle()`.)
+        trace.settleDelay = 1.0
     }
 
     override func tearDown() {
@@ -284,6 +285,19 @@ final class TourGestureTraceTests: XCTestCase {
         XCTAssertLessThanOrEqual(size("tour-gesture.log"), 2_000 + 100)
         XCTAssertLessThanOrEqual(size("tour-gesture.log.1"), 2_000 + 100)
         XCTAssertFalse(fm.fileExists(atPath: dir.appendingPathComponent("tour-gesture.log.2").path))
+    }
+
+    /// The diagnostics report bundle attaches whichever of the log and its backup exist.
+    func test_logLocation_listsTheLogAndItsBackup() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("tg-loc-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        XCTAssertEqual(NanoPodLogLocation.tourGestureLogs(in: dir), [])
+        try "x".write(to: dir.appendingPathComponent("tour-gesture.log"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(NanoPodLogLocation.tourGestureLogs(in: dir).map(\.lastPathComponent), ["tour-gesture.log"])
+        try "y".write(to: dir.appendingPathComponent("tour-gesture.log.1"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(NanoPodLogLocation.tourGestureLogs(in: dir).map(\.lastPathComponent), ["tour-gesture.log", "tour-gesture.log.1"])
+        XCTAssertEqual(TourGestureFileWriter.fileName, NanoPodLogLocation.tourGestureLogName)
     }
 
     func test_defaultDirectory_underXCTest_isNotTheFoundersLogs() {

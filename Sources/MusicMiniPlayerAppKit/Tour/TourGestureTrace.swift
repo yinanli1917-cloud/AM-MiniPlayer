@@ -24,17 +24,12 @@ protocol TourGestureLogWriter: AnyObject {
 /// `tour-gesture.log` with one backup: when the file reaches `rotateAt` it becomes `tour-gesture.log.1` (replacing the old
 /// backup), so the pair never holds much more than 2 x `rotateAt` (256 KB with the default).
 final class TourGestureFileWriter: TourGestureLogWriter {
-    static let fileName = "tour-gesture.log"
+    static let fileName = NanoPodLogLocation.tourGestureLogName
     let directory: URL
     let rotateAt: Int
 
     /// `~/Library/Logs/nanoPod` for the app; a temp directory under XCTest, so no test can write the founder's log.
-    static func defaultDirectory() -> URL {
-        if NanoPodCacheLocation.ProcessIdentity.current.isXCTest {
-            return FileManager.default.temporaryDirectory.appendingPathComponent("nanoPod-test-logs-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
-        }
-        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/nanoPod", isDirectory: true)
-    }
+    static func defaultDirectory() -> URL { NanoPodLogLocation.directory() }
 
     init(directory: URL = TourGestureFileWriter.defaultDirectory(), rotateAt: Int = 128 * 1024) {
         self.directory = directory
