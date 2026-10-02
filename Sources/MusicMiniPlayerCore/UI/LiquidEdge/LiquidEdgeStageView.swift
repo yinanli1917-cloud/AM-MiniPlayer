@@ -16,6 +16,10 @@
  *   is a hosting view that never moves, clipped by a CAShapeLayer mask; the
  *   progress light is CAShapeLayers. All inside CATransaction with actions
  *   disabled. The left edge mirrors paths and rects; text is never flipped.
+ *   A cover change never decodes or samples on the main thread: the sink hands
+ *   the image to LiquidEdgeArtworkPrep.queue and applies the newest result
+ *   (hero CGImage + glow colour); the light's strokes restyle only when the
+ *   glow colour or hover boost changes, not every frame.
  */
 
 import AppKit
@@ -169,7 +173,19 @@ final class LiquidEdgeStageView: NSView {
     private let glowGroup = CALayer()
 
     private var lastPose: LiquidEdgePose?
-    private var glowColor = NSColor.controlAccentColor
+    /// The edge light's colour, already sRGB (see LiquidEdgeArtworkPrep). Until the
+    /// first cover is prepared it is a fixed blue; the system accent replaces it as
+    /// soon as the background queue has resolved it (a catalog colour resolves with a
+    /// synchronous XPC the first time, which must never run on the main thread).
+    private var glowColor = NSColor(srgbRed: 0.04, green: 0.52, blue: 1, alpha: 1) {
+        didSet {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            applyLightStyle()
+            CATransaction.commit()
+        }
+    }
+    private var artworkToken = 0
     private var hoverBoost: CGFloat = 0
     private var contentBlurApplied: CGFloat = -1
     private var cancellables = Set<AnyCancellable>()
@@ -235,14 +251,47 @@ final class LiquidEdgeStageView: NSView {
 
         let music = MusicController.shared
         music.$currentArtwork.receive(on: DispatchQueue.main).sink { [weak self] img in
-            guard let self else { return }
-            self.heroLayer.contents = img.flatMap { $0.cgImage(forProposedRect: nil, context: nil, hints: nil) }
-            self.glowColor = img.flatMap(liquidEdgeGlowColor) ?? .controlAccentColor
-            self.refreshLight()
+            self?.coverChanged(img)
         }.store(in: &cancellables)
         music.$isPlaying.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.refreshLight() }.store(in: &cancellables)
         progressTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshLight() }
+        }
+        applyLightStyle()
+        LiquidEdgeArtworkPrep.queue.async { [weak self] in
+            let accent = LiquidEdgeArtworkPrep.defaultGlow()
+            DispatchQueue.main.async { if let self, self.hasCoverColor == false { self.glowColor = accent } }
+        }
+    }
+
+    private var hasCoverColor = false
+
+    /// The cover changed: decode and colour-sample it off the main thread, then
+    /// apply the newest result (a stale one is dropped).
+    private func coverChanged(_ image: NSImage?) {
+        artworkToken &+= 1
+        let token = artworkToken
+        guard let image else {
+            heroLayer.contents = nil
+            hasCoverColor = false
+            LiquidEdgeArtworkPrep.queue.async { [weak self] in
+                let accent = LiquidEdgeArtworkPrep.defaultGlow()
+                DispatchQueue.main.async { if let self, self.artworkToken == token { self.glowColor = accent; self.refreshLight() } }
+            }
+            return
+        }
+        LiquidEdgeArtworkPrep.queue.async { [weak self] in
+            let prepared = LiquidEdgeArtworkPrep.prepare(image)
+            DispatchQueue.main.async {
+                guard let self, self.artworkToken == token else { return }
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                self.heroLayer.contents = prepared.hero
+                CATransaction.commit()
+                self.hasCoverColor = true
+                self.glowColor = prepared.glow
+                self.refreshLight()
+            }
         }
     }
 
@@ -374,7 +423,6 @@ final class LiquidEdgeStageView: NSView {
         }
         glowGroup.opacity = level
         glowGroup.isHidden = level < 0.01 || progress <= 0
-        applyLightStyle()
     }
 
     private func applyLightStyle() {
@@ -485,36 +533,4 @@ enum LiquidEdgeRim {
         d -= arc
         return CGPoint(x: cx + d, y: f.top - gap)
     }
-}
-
-/// One colour for the edge light: the most saturated, reasonably bright
-/// colour of the artwork, lifted to full brightness; grey artwork -> accent.
-func liquidEdgeGlowColor(_ image: NSImage) -> NSColor? {
-    guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
-    let w = rep.pixelsWide, h = rep.pixelsHigh
-    guard w > 0, h > 0 else { return nil }
-    let step = max(1, min(w, h) / 32)
-    var weight = [Double](repeating: 0, count: 12)
-    var hueSum = [Double](repeating: 0, count: 12)
-    var y = 0
-    while y < h {
-        var x = 0
-        while x < w {
-            if let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) {
-                var hue: CGFloat = 0, sat: CGFloat = 0, bri: CGFloat = 0, a: CGFloat = 0
-                c.getHue(&hue, saturation: &sat, brightness: &bri, alpha: &a)
-                if bri > 0.2 {
-                    let wgt = Double(sat * sat * bri)
-                    let b = min(Int(hue * 12), 11)
-                    weight[b] += wgt; hueSum[b] += Double(hue) * wgt
-                }
-            }
-            x += step
-        }
-        y += step
-    }
-    guard let best = weight.indices.max(by: { weight[$0] < weight[$1] }), weight[best] > 0.5 else {
-        return .controlAccentColor
-    }
-    return NSColor(hue: hueSum[best] / weight[best], saturation: 0.62, brightness: 1.0, alpha: 1)
 }

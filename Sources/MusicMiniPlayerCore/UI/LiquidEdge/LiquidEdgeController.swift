@@ -19,7 +19,13 @@
  *   - While tucked the panel window is ordered out and the panel is marked
  *     occluded (its per-frame work stops: the prototype measured 4-6ms per
  *     frame for a hidden live panel); while the capsule rests it is ordered
- *     back in at alpha 0 so a click to expand finds it ready.
+ *     back in at alpha 0 so a click to expand finds it ready (in the turn
+ *     after the last frame, not inside it).
+ *   - A motion holds EdgeMotionGate from its first frame to its settle:
+ *     main-thread work nobody can see meanwhile defers through it. Every
+ *     frame's deadline is accounted by EdgeHitchTrace (zero cost at rest).
+ *   - Per frame the stage's layers and the panel's mask commit together,
+ *     once.
  */
 
 import AppKit
@@ -60,7 +66,18 @@ public final class LiquidEdgeController {
     private var windowInStage = CGRect.zero
 
     private var pose = LiquidEdgePoses(.reference).pose(.card)
-    private var motion: LiquidEdgeMotion?
+    private var motion: LiquidEdgeMotion? {
+        didSet {
+            // One gate hold per motion, however many retargets it takes.
+            switch (oldValue == nil, motion == nil) {
+            case (true, false): gate.begin(); holdsGate = true
+            case (false, true): gate.end(); holdsGate = false
+            default: break
+            }
+        }
+    }
+    private var holdsGate = false
+    private var motionKind = "edge"
     private var motionStart: CFTimeInterval = 0
     private var pendingSettle: LiquidEdgeEvent?
     private var link: CADisplayLink?
@@ -81,6 +98,10 @@ public final class LiquidEdgeController {
     var clock: () -> CFTimeInterval = CACurrentMediaTime
     var drivesFrames = true
     var reduceMotionOverride: Bool?
+    /// While a motion runs, non-urgent main-thread work waits (EdgeMotionGate)
+    /// and every frame's deadline is accounted (EdgeHitchTrace).
+    var gate = EdgeMotionGate.shared
+    var hitchTrace = EdgeHitchTrace.shared
 
     public init(card: SnappablePanel) {
         self.card = card
@@ -97,6 +118,8 @@ public final class LiquidEdgeController {
             .sink { [weak self] _ in self?.reset() }
             .store(in: &cancellables)
     }
+
+    deinit { if holdsGate { EdgeMotionGate.shared.end() } }
 
     private var reduceMotion: Bool { reduceMotionOverride ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     private var poses: LiquidEdgePoses { LiquidEdgePoses(geometry) }
@@ -148,6 +171,7 @@ public final class LiquidEdgeController {
     public func reset() {
         guard state != .card else { return }
         stopLink()
+        hitchTrace.end()
         motion = nil
         pendingSettle = nil
         dwellWork?.cancel(); peekWork?.cancel()
@@ -240,6 +264,7 @@ public final class LiquidEdgeController {
     }
 
     private func restorePanel() {
+        prewarmPending = false
         guard let card else { return }
         card.contentView?.layer?.mask = nil
         card.alphaValue = 1
@@ -252,6 +277,7 @@ public final class LiquidEdgeController {
 
     /// Ordered out while tucked (its per-frame work stops).
     private func parkPanel() {
+        prewarmPending = false
         guard let card else { return }
         card.orderOut(nil)
         onPanelOccluded?(true)
@@ -326,11 +352,13 @@ public final class LiquidEdgeController {
         let next = LiquidEdgeReducer.reduce(from, event)
         guard next != from else { return }
         let now = clock()
+        motionKind = "\(kind)"
+        if drivesFrames, !reduceMotion { beginHitchTrace() }
 
         // The panel window: on-window whenever it may be shown next.
         switch next {
-        case .expanding: prewarmPanel()
-        case .tucked where from == .floating: parkPanel()
+        case .expanding: EdgeHitchTrace.measure("prewarmPanel") { prewarmPanel() }
+        case .tucked where from == .floating: EdgeHitchTrace.measure("parkPanel") { parkPanel() }
         default: break
         }
 
@@ -362,26 +390,48 @@ public final class LiquidEdgeController {
 
     private func apply(_ p: LiquidEdgePose) {
         pose = p
-        stage?.apply(p)
-        applyPanel(p)
+        // One commit per frame for the stage's layers and the panel's mask together
+        // (each used to flush on its own: two render-server round trips a frame, and
+        // the liquid and the mask could land a frame apart).
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        EdgeHitchTrace.measure("stage.apply") { stage?.apply(p) }
+        EdgeHitchTrace.measure("panel.apply") { applyPanel(p) }
+        CATransaction.commit()
     }
 
     /// At rest: park or restore the panel window to match the state.
     private func finishIfResting() {
         switch state {
         case .card:
-            restorePanel()
+            EdgeHitchTrace.measure("restorePanel") { restorePanel() }
             stageWindow?.orderOut(nil)
-        case .tucked: parkPanel()
-        case .floating: prewarmPanel()
+        case .tucked: EdgeHitchTrace.measure("parkPanel") { parkPanel() }
+        case .floating:
+            if drivesFrames {
+                // Ordering the panel in is 8-16ms (its SwiftUI catches up): do it in the turn
+                // after the last frame has been committed, not inside it.
+                prewarmPending = true
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.prewarmPending, self.state == .floating, self.motion == nil else { return }
+                    self.prewarmPending = false
+                    EdgeHitchTrace.measure("prewarmPanel") { self.prewarmPanel() }
+                }
+            } else {
+                EdgeHitchTrace.measure("prewarmPanel") { prewarmPanel() }
+            }
         default: break
         }
     }
+
+    /// A deferred `prewarmPanel` is waiting for the turn after the last frame.
+    private var prewarmPending = false
 
     // MARK: - Frame loop
 
     private func startLink() {
         guard drivesFrames else { return }
+        beginHitchTrace()
         if let link { link.isPaused = false; return }
         guard let screen = card?.screen ?? NSScreen.main else { return }
         let l = screen.displayLink(target: self, selector: #selector(frame(_:)))
@@ -391,12 +441,23 @@ public final class LiquidEdgeController {
         link = l
     }
 
+    /// Accounts the frames of this motion (a no-op when already tracing).
+    private func beginHitchTrace() {
+        let screen = card?.screen ?? NSScreen.main
+        hitchTrace.begin(motion: motionKind, nominalInterval: 1.0 / Double(max(screen?.maximumFramesPerSecond ?? 60, 1)))
+    }
+
     private func stopLink() { link?.isPaused = true }
 
-    @objc private func frame(_ l: CADisplayLink) { tick(at: l.targetTimestamp) }
+    @objc private func frame(_ l: CADisplayLink) {
+        hitchTrace.frameBegan(target: l.targetTimestamp, timestamp: l.timestamp)
+        let t0 = CACurrentMediaTime()
+        tick(at: l.targetTimestamp)
+        hitchTrace.frameTicked(cost: CACurrentMediaTime() - t0)
+    }
 
     func tick(at when: CFTimeInterval) {
-        guard let motion else { stopLink(); return }
+        guard let motion else { stopLink(); hitchTrace.end(); return }
         let t = when - motionStart
         apply(LiquidEdgePose(vector: motion.sample(at: t).value))
         if let settle = pendingSettle, t >= motion.nominalDuration {
@@ -410,6 +471,8 @@ public final class LiquidEdgeController {
             self.motion = nil
             stopLink()
             finishIfResting()
+            // After the resting work, so its cost is accounted to this motion.
+            hitchTrace.end()
         }
     }
 }

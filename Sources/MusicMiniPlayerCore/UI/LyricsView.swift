@@ -2865,26 +2865,32 @@ public struct LyricsView: View {
         let showTranslation = lyricsService.showTranslation
         let isTranslating = lyricsService.isTranslating
         DispatchQueue.main.async {
-            nativeHeightPrimingScheduled = false
-            guard currentPage == .lyrics else { return }
-            var changed = false
-            cache.nativeEstimatedRowWidth = roundedWidth
-            for row in rows {
-                let estimated = NativeLyricsRowMeasurement.estimatedHeight(
-                    for: row,
-                    rowWidth: roundedWidth,
-                    showTranslation: showTranslation,
-                    isTranslating: isTranslating,
-                    pendingTranslationLineIndices: pendingTranslationLineIndices
-                )
-                if abs((cache.lineHeights[row.index] ?? 0) - estimated) > 2.0 {
-                    cache.lineHeights[row.index] = estimated
-                    changed = true
+            guard currentPage == .lyrics else { nativeHeightPrimingScheduled = false; return }
+            // Measuring every row is tens of ms; while an edge animation owns the frame
+            // budget it waits for the motion to end (the layout is not on screen then).
+            // The scheduled flag stays set meanwhile, so re-renders do not queue copies.
+            EdgeMotionGate.shared.whenIdle {
+                nativeHeightPrimingScheduled = false
+                guard currentPage == .lyrics else { return }
+                var changed = false
+                cache.nativeEstimatedRowWidth = roundedWidth
+                for row in rows {
+                    let estimated = NativeLyricsRowMeasurement.estimatedHeight(
+                        for: row,
+                        rowWidth: roundedWidth,
+                        showTranslation: showTranslation,
+                        isTranslating: isTranslating,
+                        pendingTranslationLineIndices: pendingTranslationLineIndices
+                    )
+                    if abs((cache.lineHeights[row.index] ?? 0) - estimated) > 2.0 {
+                        cache.lineHeights[row.index] = estimated
+                        changed = true
+                    }
                 }
-            }
-            if changed {
-                cache.heightCacheInvalidated = true
-                updateHeightCache()
+                if changed {
+                    cache.heightCacheInvalidated = true
+                    updateHeightCache()
+                }
             }
         }
     }

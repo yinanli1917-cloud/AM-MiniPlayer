@@ -3,6 +3,50 @@ import AppKit
 enum ArtworkDisplayImageFactory {
     static let effectMaxPixelDimension = 768
 
+    /// The longest side a decoded display copy keeps (the panel shows a cover at most 500px wide).
+    static let displayMaxPixelDimension = 1600
+
+    /// A cover as Core Animation wants it: decoded, premultiplied BGRA8, in the cover's own
+    /// colour space. A freshly downloaded JPEG (or an NSImage from Music.app) is none of
+    /// that, so every view that shows it, and every sampler that reads it, paid the decode
+    /// and a Planar16/vImage colour conversion on the MAIN thread, one per consumer: 15-20ms
+    /// each, five or six in a row at a track change, landing inside the edge animation that
+    /// a track change starts (measured, EdgeHitchHarness). Call this where the image is
+    /// produced, off the main thread; later `cgImage` reads and layer commits are plain copies.
+    /// Idempotent; returns the input when it cannot be redrawn.
+    static func makeDisplayArtwork(
+        from image: NSImage,
+        maxPixelDimension: Int = displayMaxPixelDimension
+    ) -> NSImage {
+        var rect = NSRect(origin: .zero, size: image.size)
+        guard let source = image.cgImage(forProposedRect: &rect, context: nil, hints: nil),
+              source.width > 0, source.height > 0 else { return image }
+
+        let bgra = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        let side = max(source.width, source.height)
+        let alreadyNative = source.bitsPerComponent == 8
+            && source.bitmapInfo.rawValue & (CGBitmapInfo.alphaInfoMask.rawValue | CGBitmapInfo.byteOrderMask.rawValue) == bgra
+        if alreadyNative, side <= maxPixelDimension { return image }
+
+        let scale = side > maxPixelDimension ? Double(maxPixelDimension) / Double(side) : 1
+        let w = max(1, Int((Double(source.width) * scale).rounded()))
+        let h = max(1, Int((Double(source.height) * scale).rounded()))
+        // The cover's own RGB space keeps wide-gamut art wide. A device space (an untagged
+        // JPEG) has no ICC profile and would still cost a per-pixel colour conversion on the
+        // main thread at every commit, so it, and anything else (grey, CMYK, indexed), is
+        // drawn into sRGB, which is what an untagged cover means anyway.
+        let own = source.colorSpace.flatMap { $0.model == .rgb && $0.copyICCData() != nil ? $0 : nil }
+        let spaces = [own, CGColorSpace(name: CGColorSpace.sRGB)].compactMap { $0 }
+        for space in spaces {
+            guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: space, bitmapInfo: bgra) else { continue }
+            ctx.interpolationQuality = .high
+            ctx.draw(source, in: CGRect(x: 0, y: 0, width: w, height: h))
+            if let out = ctx.makeImage() { return NSImage(cgImage: out, size: image.size) }
+        }
+        return image
+    }
+
     static func signature(
         for image: NSImage?,
         trackID: String?,
@@ -42,7 +86,8 @@ enum ArtworkDisplayImageFactory {
                 bitsPerComponent: 8,
                 bytesPerRow: 0,
                 space: colorSpace,
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                // BGRA premultiplied: the layout Core Animation takes without a conversion pass.
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
               ) else {
             return image
         }

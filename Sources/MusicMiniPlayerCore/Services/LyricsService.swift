@@ -415,12 +415,54 @@ public class LyricsService: ObservableObject {
     func debugSetCanTranslate(_ value: Bool) { canTranslate = value }
     #endif
 
+    private var translationAvailabilityGeneration = 0
+    /// language-detection verdicts by lyrics fingerprint ("lyrics are in the target language")
+    private var languageDetectionMemo: [Int: Bool] = [:]
+    private static let languageDetectionQueue = DispatchQueue(label: "nanoPod.lyrics-language-detection", qos: .utility)
+
+    private static func languageDetectionKey(lyrics: [LyricLine], translationLanguage: String) -> Int {
+        var hasher = Hasher()
+        hasher.combine(translationLanguage)
+        hasher.combine(lyrics.count)
+        for line in lyrics { hasher.combine(line.text) }
+        return hasher.finalize()
+    }
+
+    private func rememberLanguageDetection(key: Int, inTarget: Bool) {
+        if languageDetectionMemo.count > 8 { languageDetectionMemo.removeAll() }
+        languageDetectionMemo[key] = inTarget
+    }
+
+    /// Whether the translate button applies. The cheap cases are answered at once;
+    /// language detection over every line is ~40ms of Core ML on the main thread
+    /// (measured: it was the largest single main-thread cost of a track change, and
+    /// landed inside the edge animation that a track change itself starts), so it runs
+    /// on a utility queue, is remembered per lyrics fingerprint, and `canTranslate`
+    /// keeps its previous value until the answer lands. A newer refresh supersedes it.
     private func refreshTranslationAvailability() {
-        canTranslate = Self.translationAvailability(
-            lyrics: lyrics,
-            translationLanguage: translationLanguage,
-            translationsAreFromLyricsSource: translationsAreFromLyricsSource
-        )
+        translationAvailabilityGeneration &+= 1
+        let generation = translationAvailabilityGeneration
+        let lyrics = self.lyrics
+        let language = translationLanguage
+        switch Self.translationAvailabilityPrecheck(
+            lyrics: lyrics, translationLanguage: language, translationsAreFromLyricsSource: translationsAreFromLyricsSource
+        ) {
+        case .known(let available): canTranslate = available; return
+        case .needsLanguageDetection: break
+        }
+
+        let key = Self.languageDetectionKey(lyrics: lyrics, translationLanguage: language)
+        if let inTarget = languageDetectionMemo[key] { canTranslate = !inTarget; return }
+
+        Self.languageDetectionQueue.async { [weak self] in
+            let inTarget = Self.lyricsAreInTargetLanguage(lyrics, translationLanguage: language)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.rememberLanguageDetection(key: key, inTarget: inTarget)
+                guard self.translationAvailabilityGeneration == generation else { return }
+                self.canTranslate = !inTarget
+            }
+        }
     }
 
     private func diagnosticsWorkloadDescription() -> String {
@@ -1970,7 +2012,7 @@ public class LyricsService: ObservableObject {
     }
 
     @MainActor
-    private func applyLyrics(_ newLyrics: [LyricLine],
+    func applyLyrics(_ newLyrics: [LyricLine],
                              firstRealLyricIndex: Int,
                              hasSourceTranslation: Bool,
                              isUnsynced: Bool,
@@ -2893,24 +2935,51 @@ public class LyricsService: ObservableObject {
     // MARK: - Language Detection
     // ========================================================================
 
+    /// Answered from the memo `refreshTranslationAvailability` fills when it can (the same
+    /// lyrics were just checked off the main thread); otherwise detected here, and remembered.
     private func lyricsAreInTargetLanguage() -> Bool {
-        Self.lyricsAreInTargetLanguage(lyrics, translationLanguage: translationLanguage)
+        let key = Self.languageDetectionKey(lyrics: lyrics, translationLanguage: translationLanguage)
+        if let known = languageDetectionMemo[key] { return known }
+        let inTarget = Self.lyricsAreInTargetLanguage(lyrics, translationLanguage: translationLanguage)
+        rememberLanguageDetection(key: key, inTarget: inTarget)
+        return inTarget
     }
 
     private func lyricsArePredominantlyChinese() -> Bool {
         Self.lyricsArePredominantlyChinese(lyrics)
     }
 
+    enum TranslationAvailabilityPrecheck: Equatable {
+        case known(Bool)
+        /// Only the (slow) language detection can tell.
+        case needsLanguageDetection
+    }
+
+    /// Everything about `canTranslate` that needs no language detection.
+    static func translationAvailabilityPrecheck(
+        lyrics: [LyricLine],
+        translationLanguage: String,
+        translationsAreFromLyricsSource: Bool
+    ) -> TranslationAvailabilityPrecheck {
+        guard !lyrics.isEmpty else { return .known(false) }
+        if translationsAreFromLyricsSource { return .known(true) }
+        let isTargetChinese = translationLanguage.hasPrefix("zh")
+        if isTargetChinese && lyricsArePredominantlyChinese(lyrics) { return .known(false) }
+        return .needsLanguageDetection
+    }
+
+    /// The synchronous answer (runs language detection inline when it must).
     static func translationAvailability(
         lyrics: [LyricLine],
         translationLanguage: String,
         translationsAreFromLyricsSource: Bool
     ) -> Bool {
-        guard !lyrics.isEmpty else { return false }
-        if translationsAreFromLyricsSource { return true }
-        let isTargetChinese = translationLanguage.hasPrefix("zh")
-        if isTargetChinese && lyricsArePredominantlyChinese(lyrics) { return false }
-        return !lyricsAreInTargetLanguage(lyrics, translationLanguage: translationLanguage)
+        switch translationAvailabilityPrecheck(
+            lyrics: lyrics, translationLanguage: translationLanguage, translationsAreFromLyricsSource: translationsAreFromLyricsSource
+        ) {
+        case .known(let available): return available
+        case .needsLanguageDetection: return !lyricsAreInTargetLanguage(lyrics, translationLanguage: translationLanguage)
+        }
     }
 
     static func hasMissingEligibleTranslations(_ lyrics: [LyricLine]) -> Bool {

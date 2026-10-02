@@ -36,6 +36,8 @@ public struct FluidGradientBackground: View {
     // "Resident CIGaussianBlur"), so an always-present wrapper modifier would cost
     // WindowServer time even at 0. Zero when no lift is needed (in-band or ceiling case).
     @State private var legibilityInnerBrightnessDelta: Double = 0
+    /// Bumped per updateTone(); an off-main metrics result applies only if it is still the latest.
+    @State private var toneGeneration = 0
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     private static let crossfade = Animation.easeInOut(duration: 0.6)
@@ -163,6 +165,8 @@ public struct FluidGradientBackground: View {
     }
 
     private func updateTone() {
+        toneGeneration &+= 1
+        let generation = toneGeneration
         guard let artwork else {
             tone = .neutral
             contrastResolution = ArtworkContrastPolicy.resolve(
@@ -184,7 +188,24 @@ public struct FluidGradientBackground: View {
             )
             return
         }
-        let metrics = artwork.artworkVisualMetrics()
+        // The 24x24 sample draws the whole cover (decode + colour conversion, 15ms and more
+        // for a large one): off the main thread, where it landed inside whatever edge
+        // animation a track change starts. The previous tone stands until it arrives, then
+        // changes with the same crossfade the artwork itself uses.
+        if let known = ArtworkVisualMetricsMemo.cached(for: artwork) {
+            applyTone(metrics: known)
+            return
+        }
+        Task.detached(priority: .userInitiated) {
+            let metrics = ArtworkVisualMetricsMemo.metrics(for: artwork)
+            await MainActor.run {
+                guard toneGeneration == generation else { return }
+                withAnimation(Self.crossfade) { applyTone(metrics: metrics) }
+            }
+        }
+    }
+
+    private func applyTone(metrics: ArtworkVisualMetrics) {
         tone = ArtworkBackgroundToneMap.forMetrics(metrics)
         contrastResolution = ArtworkContrastPolicy.resolve(
             brightness: metrics.averageLuminance,

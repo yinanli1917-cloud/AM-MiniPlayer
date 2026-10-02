@@ -252,18 +252,19 @@ public struct MiniPlayerView: View {
         // Artwork changes update luminance and the smaller effect-only render image.
         .onChange(of: musicController.currentArtwork) { _, newArtwork in
             refreshEffectArtwork()
-            if newArtwork != nil {
+            if let artwork = newArtwork {
                 syncArtworkLuminance()
-                if let artwork = newArtwork {
-                    artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
-                }
+                // Decoding + sampling the cover is tens of ms: not on the main thread
+                // (it landed inside whatever edge animation was running). The previous
+                // tone stays until the new one is ready; the icon tones follow it.
+                refreshArtworkTone(for: artwork)
             } else {
                 artworkBrightness = 0.5
                 topLeftLuminance = 0.5
                 topRightLuminance = 0.5
                 artworkTone = .neutral
+                refreshButtonIconTones()
             }
-            refreshButtonIconTones()
         }
         .onChange(of: musicController.artworkLuminance) { _, _ in
             syncArtworkLuminance()
@@ -297,7 +298,7 @@ public struct MiniPlayerView: View {
             refreshEffectArtwork()
             syncArtworkLuminance()
             if let artwork = musicController.currentArtwork {
-                artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
+                artworkTone = ArtworkBackgroundToneMap.forMetrics(ArtworkVisualMetricsMemo.metrics(for: artwork))
             }
             refreshButtonIconTones()
         }
@@ -458,7 +459,28 @@ public struct MiniPlayerView: View {
             return
         }
 
-        effectArtwork = ArtworkDisplayImageFactory.makeEffectArtwork(from: artwork)
+        // Decode + resample is tens of ms: off the main thread. Until the resized copy
+        // lands, `effectArtwork` keeps the previous one (or is nil, and every user of
+        // it falls back to the full cover).
+        Task.detached(priority: .userInitiated) {
+            let effect = ArtworkDisplayImageFactory.makeEffectArtwork(from: artwork)
+            await MainActor.run {
+                guard effectArtworkSignature == signature else { return }
+                effectArtwork = effect
+            }
+        }
+    }
+
+    /// Off-main tone derivation for `artwork`; applies only while it is still the current cover.
+    private func refreshArtworkTone(for artwork: NSImage) {
+        Task.detached(priority: .userInitiated) {
+            let tone = ArtworkBackgroundToneMap.forMetrics(ArtworkVisualMetricsMemo.metrics(for: artwork))
+            await MainActor.run {
+                guard musicController.currentArtwork === artwork else { return }
+                artworkTone = tone
+                refreshButtonIconTones()
+            }
+        }
     }
 }
 
