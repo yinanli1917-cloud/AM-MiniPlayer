@@ -164,6 +164,10 @@ enum L10n {
         // Begun on the queue page, where neither corner button exists: a leading beat walks the user out.
         "tour.corners.beat0":       ("Step out of the queue first", "先离开播放列表"),
         "tour.corners.bodyQueue":   ("The two corner buttons aren't on the queue page. The speech bubble at the bottom left takes you out of it.", "播放列表里没有这两个角上的按钮。点左下角的小气泡，先从这里出来。"),
+        // The Music beat is current: say plainly where the tap goes, and that the tour waits. {player} = the player app's product name.
+        "tour.corners.bodyMusic":   ("Tapping the top left opens {player}. Just have a look; I'll wait here till you're back.", "点左上角会打开 {player}。去看一眼就好，我在这儿等你回来。"),
+        // While the user is away in the player app: the card holds still (no celebration, no handoff) until they return.
+        "tour.corners.bodyWaiting": ("Pick up when you're back.", "回来就继续。"),
         "tour.corners.musicOpened": ("Music's open. Come back whenever you're ready.", "Music 打开了，回来接着来。"),
         "tour.corners.confirm":     ("Both corners, right there.", "两个角都在这儿。"),
 

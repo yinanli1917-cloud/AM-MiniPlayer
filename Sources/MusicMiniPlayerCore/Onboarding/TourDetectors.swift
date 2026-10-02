@@ -3,7 +3,8 @@
  * [OUTPUT]: Exports TourHookBus (the 3 new SwiftUI-side completion hooks),
  *           TourDetectors (merges every raw publisher into one `TourEvent`
  *           stream), TourTranslateReadiness, TourCornerMatch — pure helpers
- *           the detector and `SnappablePanel` both use.
+ *           the detector and `SnappablePanel` both use; TourMusicReturn (does
+ *           an app activation mean the user is back from the player app?).
  * [POS]: MusicMiniPlayerCore/Onboarding. Every publisher `TourDetectors`
  *        consumes is passed in by the caller (`TourController`, AppKit) —
  *        this file never reaches into `MusicController.shared` itself, so
@@ -152,5 +153,23 @@ public struct TourDetectors {
             corner.eraseToAnyPublisher(),
             liquidEdge.eraseToAnyPublisher()
         ).eraseToAnyPublisher()
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - TourMusicReturn
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// The corners step's Music beat opens the player app, which animates in on its own. The tour holds its
+/// celebration until the user is back; this is the "back" half that comes from app activation (the other
+/// half is the cursor re-entering the panel).
+public enum TourMusicReturn {
+    /// Another app took the front. Not a return: the player app itself (it is the trip), and nanoPod's own
+    /// activation (pressing the panel's capsule can activate us a beat BEFORE the player app comes up).
+    public static func isReturn(activatedBundleID: String?, player: PlayerAppIdentity, ownBundleID: String?) -> Bool {
+        guard let id = activatedBundleID, !id.isEmpty else { return false }
+        if id == player.bundleIdentifier { return false }
+        if let own = ownBundleID, id == own { return false }
+        return true
     }
 }

@@ -510,7 +510,7 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
       <h3>怎么玩</h3>
       <div class="notes"><ul>
         <li><b>S1</b>：控件藏着，卡上的环虚线呼吸，一个幽灵光标从卡的箭头飘向面板。你把鼠标移到面板上，控件浮出，环变实线，beat 2 亮起「待按」。移开，回到提示态。</li>
-        <li><b>S2</b>：点右上角输出（弹出输出设备小菜单），环跳到左上角 Music；点 Music 完成。可以先点 Music。</li>
+        <li><b>S2</b>：点右上角输出（弹出输出设备小菜单），环跳到左上角 Music，正文先说清「点了会打开 Apple Music，我在这儿等」；点 Music 后卡只打小勾、环收起、安静等着（示意 Apple Music 已打开），鼠标离开面板再回来才放庆祝并转场。可以先点 Music，回来后环去输出钮。</li>
         <li><b>S3</b>：点左下气泡，面板翻到歌词页。<b>S5</b>：点手势示意（代替双指），面板落到左下角，卡片从面板<em>右侧</em>长出；再点一次，面板收进左边缘。</li>
         <li><b>S6</b>：鼠标停到左边缘的小条上，竖卡探出，环从小条跳到竖卡；点竖卡，面板回来。<b>S7</b>：礼花 + 结尾卡。</li>
         <li>任何一张卡上：「这一步先不做」（灰掉、不长环、往下走）和「先到这里」（卡收走）。停 6 秒后前者变强调色。把鼠标停在 beat 行上，环会指过去。</li>
@@ -1419,7 +1419,8 @@ const CSTEPS = [
     acts: `<div class="cbtns"><button class="cbtn pri" data-act="start">开始</button><button class="cbtn sec" data-act="later">以后再说</button></div>`,
     foot: `<div class="cnote">✓ Music 已经连上了　·　随时可以停下，设置里能接着来</div>` },
   { id: 'S1', title: '把鼠标挪过来', body: '面板平时只留封面，控件在你需要的时候才出来。', bodyArmed: '控件出来了，按一下播放。', bodyAway: '鼠标再回到面板上。', beats: ['移到面板上', '按一下播放'], num: 2, anchor: 'play', foot: LINKS },
-  { id: 'S2', title: '专辑页的两个角', body: '右上角选声音从哪里出，左上角一步到 Music。', bodyAway: '鼠标再回到面板上。', beats: ['右上角：声音从哪出', '左上角：去 Music'], num: 3, anchor: 'out', foot: LINKS },
+  /* 10-02 创始人：点 Music 时 Apple Music 自己有窗口动画，我们的庆祝和转场同时来就应接不暇。第二拍成为当前拍时正文先说清「点了会打开 Apple Music，我在这儿等」；点下后卡只打小勾、环收起，安静等；人回来（鼠标再进面板，或别的 app 到了前台）才放庆祝并转场。 */
+  { id: 'S2', title: '专辑页的两个角', body: '右上角选声音从哪里出，左上角一步到 Music。', bodyMusic: '点左上角会打开 Apple Music。去看一眼就好，我在这儿等你回来。', bodyWait: '回来就继续。', bodyAway: '鼠标再回到面板上。', beats: ['右上角：声音从哪出', '左上角：去 Music'], num: 3, anchor: 'out', foot: LINKS },
   { id: 'S3', title: '歌词在这儿', body: '左下角的小气泡，或者点一下封面。', bodyAway: '鼠标再回到面板上。', beats: [], num: 4, anchor: 'nav', foot: LINKS },
   /* 09-29 真机：翻译钮只在歌词页有。面板在封面页时进入这一步（例如跳过了歌词那一步），第一拍是「先到歌词页」，环在歌词气泡上；到了歌词页打勾，环弹到翻译钮，正文换回翻译那段。 */
   { id: 'S4', title: '翻译', _body: null, get body() { return this._body ?? (Q.s4first ? S4_BODY_COVER : S4_BODY); }, set body(v) { this._body = v; },
@@ -1654,6 +1655,7 @@ function updateHover() {
   spr(CV.hov, h ? 1 : 0, .4, .15);
   if (h) { if (Q.gc.t0 != null) { Q.gc.t0 = null; cel.gcur.style.opacity = 0; } if (Q.stepId === 'S1' && !Bt().beats[0]?.done && !Q.dwell) Q.dwell = TC.B.now + .08; }
   else Q.dwell = null;
+  if (Q.musicHold) { if (!h) Q.musicAway = true; else if (Q.musicAway) { musicReturn(); return; } }   // 鼠标离开过、又进来 = 回来了
   refreshArmed(); wake();
 }
 function refreshArmed() {
@@ -1667,8 +1669,27 @@ function refreshArmed() {
     return;
   }
   const done = b.length && b.every(x => x.done); if (done) return;
-  if (h) { if (Q.bodyMode === 'away') { setBody(d.body); Q.bodyMode = 'base'; haloMode('wait'); } }
+  if (Q.musicHold) return;                                       // 等待中：正文、环都不动
+  if (h) { if (Q.bodyMode === 'away') { setBody(d.id === 'S2' ? s2Body(d) : d.body); Q.bodyMode = 'base'; haloMode('wait'); } }
   else if (Q.bodyMode !== 'away') { setBody(d.bodyAway); Q.bodyMode = 'away'; haloMode('hint'); }
+}
+/* S2 的正文随第二拍走：第一拍已完成（Music 拍成为当前拍）→ 说清去向；等待中 → 一句话；其余 → 通用句 */
+function s2Body(d) {
+  if (Q.musicHold) return d.bodyWait;
+  const b = Bt().beats; return (b[0]?.done && !b[1]?.done) ? d.bodyMusic : d.body;
+}
+/* 点 Music 后进入等待：只打第二拍的小勾，环收起，不庆祝、不转场；回来才继续（鼠标再进面板，或别的 app 到前台）。零成本：没有计时器，没有逐帧 */
+function musicHoldStart() {
+  const d = cur(); Q.musicHold = true; Q.musicAway = !hovering(); Q.musicBack = false;
+  TC.beatCheck(1, false); TC.haptic('.levelChange'); haloHide(); hintStop(); Q.breathT0 = null;
+  setBody(d.bodyWait); Q.bodyMode = 'wait'; Q.stallT0 = 0;
+  toast('示意：Apple Music 打开了；鼠标回到面板上，或在别的 app 里点一下，就继续', 3.6); wake();
+}
+function musicReturn() {
+  if (!Q.musicHold) return; Q.musicHold = false; Q.musicBack = false; Q.stallT0 = TC.B.now;
+  const d = cur(), b = Bt().beats;
+  if (b.every(x => x.done)) { haloHide(); TC.completeStep(); return; }                // 通常的庆祝与转场
+  setBody(d.body); Q.bodyMode = 'base'; haloShow('out', hovering() ? 'wait' : 'hint'); wake();     // 先点的 Music：回来后环去输出钮
 }
 function setBody(text) {
   const el = TC.content.body, o = TC.V.ci[1].op;
@@ -1724,7 +1745,7 @@ function enterStep(id) {
 function beatDone(i) {
   const b = Bt().beats[i]; if (!b || b.done) return false;
   TC.beatCheck(i, false); TC.haptic('.levelChange'); hintStop(); Q.breathT0 = null; wake();
-  if (Bt().beats.every(x => x.done)) { haloHide(); TC.completeStep(); return true; }
+  if (Bt().beats.every(x => x.done)) { if (Q.musicHold) return false; haloHide(); TC.completeStep(); return true; }   // 等待中点了输出：先不完成
   return false;
 }
 function userDid(ev) {
@@ -1737,8 +1758,8 @@ function userDid(ev) {
     case 'S0:start': TC.advanceQuiet(CIDX.S1); break;
     case 'S1:hover': if (!b[0].done) { beatDone(0); refreshArmed(); } break;
     case 'S1:play': if (b[0].done && !b[1].done) beatDone(1); break;
-    case 'S2:out': if (!b[0].done) { popShow(); beatDone(0) || (b[1].done || haloShow('music', 'wait')); } break;
-    case 'S2:music': if (!b[1].done) { beatDone(1) || (b[0].done || haloShow('out', 'wait')); } break;
+    case 'S2:out': if (!b[0].done) { popShow(); beatDone(0) || (b[1].done || (haloShow('music', 'wait'), setBody(cur().bodyMusic), Q.bodyMode = 'base')); } break;
+    case 'S2:music': if (!b[1].done && !Q.musicHold) musicHoldStart(); break;
     case 'S3:nav': haloHide(); TC.completeStep(); break;
     case 'S4:nav': if (Q.s4first && !b[0].done) { TC.beatCheck(0, false); TC.haptic('.levelChange'); CSTEPS[CIDX.S4]._body = S4_BODY; setBody(S4_BODY); Q.bodyMode = 'base'; haloShow('tr', hovering() ? 'wait' : 'hint'); } break;
     case 'S4:translate': haloHide(); TC.completeStep(); break;
@@ -1781,7 +1802,7 @@ function doReturn() {
 
 /* ---- 结束与中断 ---- */
 function stopTour() {
-  if (Q.stopped) return; Q.stopped = true; Q.auto = false; syncAutoBtn();
+  if (Q.stopped) return; Q.stopped = true; Q.auto = false; Q.musicHold = false; syncAutoBtn();
   cardHide(); haloHide(); hintStop(); popHide();
   toast('已停在这里 · 设置 › 认识 nanoPod 里可以接着来'); wake();
 }
@@ -1790,6 +1811,7 @@ function finishTour(msg) {
   toast(msg === '自动收起' ? '8 秒无操作，自动收起' : (msg || '引导结束')); wake();
 }
 function skipStep() {
+  Q.musicHold = false;
   const d = cur(); if (d.final || d.id === 'S0' || Bt().busy || Q.lock || Q.stopped) return;
   Bt().beats.forEach(b => { if (!b.done) b.li.classList.add('skip'); b.li.classList.remove('pending'); });
   haloHide(); hintStop(); popHide();
@@ -1836,7 +1858,7 @@ function cFrame(dt) {
 }
 function autoDelay() {
   const id = Q.stepId, b = Bt().beats, d0 = b[0]?.done;
-  const t = { S0: 2.6, S1: d0 ? 1.7 : 3.6, S2: d0 ? 1.6 : 2.4, S3: 2.4, S4: 2.4, S5: d0 ? 3.0 : 3.2, S6: d0 ? 1.8 : 2.4, S7: 3.5 }[id];
+  const t = { S0: 2.6, S1: d0 ? 1.7 : 3.6, S2: Q.musicHold ? 2.4 : d0 ? 1.6 : 2.4, S3: 2.4, S4: 2.4, S5: d0 ? 3.0 : 3.2, S6: d0 ? 1.8 : 2.4, S7: 3.5 }[id];
   return S.rm ? Math.min(t, 1.5) : t;
 }
 function nextAction() {
@@ -1846,7 +1868,12 @@ function nextAction() {
   switch (id) {
     case 'S0': userDid('start'); break;
     case 'S1': if (!d0) { Q.simHover = true; updateHover(); } else { sim(); press('play', cel.play); } break;
-    case 'S2': sim(); press(d0 ? 'music' : 'out', $(d0 ? '.hp-music' : '.hp-out', cel.mp)); break;
+    case 'S2':
+      if (Q.musicHold) {                                          // 自动播放里的「回来」：鼠标离开面板一会儿，再进来
+        if (Q.musicBack) break; Q.musicBack = true; Q.simHover = false; Q.realHover = false; updateHover();
+        TC.cue(S.rm ? .3 : .9, () => { Q.simHover = true; updateHover(); }); break;
+      }
+      sim(); press(d0 ? 'music' : 'out', $(d0 ? '.hp-music' : '.hp-out', cel.mp)); break;
     case 'S3': sim(); press('nav', $('.hp-nav', cel.mp)); break;
     case 'S4': sim(); if (Q.s4first && !d0) press('nav', $('.hp-nav', cel.mp)); else press('translate', $('.hp-tr', cel.mp)); break;
     case 'S5': if (Q.s5first && !d0) { sim(); press('nav', $('.hp-nav', cel.mp)); } else userDid(Bt().beats[Q.s5first ? 1 : 0].done ? 'tuck' : 'corner'); break;
@@ -1858,7 +1885,7 @@ function nextAction() {
 function nextLabel() {
   if (Q.stopped) return '已停下（点「重来」）'; if (Q.done) return '已结束（点「重来」）';
   const id = Q.stepId, d0 = Bt().beats[0]?.done;
-  return { S0: '点「开始」', S1: d0 ? '按一下播放' : '鼠标移到面板上', S2: d0 ? '点左上角 Music' : '点右上角输出', S3: '点左下角歌词气泡', S4: Q.s4first && !d0 ? '点左下角歌词气泡，到歌词页' : '点右下角翻译', S5: Q.s5first && !d0 ? '点左下角歌词气泡，回到封面页' : (Bt().beats[Q.s5first ? 1 : 0]?.done ? '往边上再推一下' : '双指推到一个角'), S6: d0 ? '点一下小卡，回来' : '鼠标停到小条上', S7: '点「好」' }[id];
+  return { S0: '点「开始」', S1: d0 ? '按一下播放' : '鼠标移到面板上', S2: Q.musicHold ? '（等待中）鼠标回到面板上' : d0 ? '点左上角 Music' : '点右上角输出', S3: '点左下角歌词气泡', S4: Q.s4first && !d0 ? '点左下角歌词气泡，到歌词页' : '点右下角翻译', S5: Q.s5first && !d0 ? '点左下角歌词气泡，回到封面页' : (Bt().beats[Q.s5first ? 1 : 0]?.done ? '往边上再推一下' : '双指推到一个角'), S6: d0 ? '点一下小卡，回来' : '鼠标停到小条上', S7: '点「好」' }[id];
 }
 function refreshNextLabel() { $('#cNextLbl').textContent = nextLabel(); }
 
@@ -1950,7 +1977,7 @@ TC.card.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === '
 function markStep() { $$('#cSteps span').forEach(s => s.classList.toggle('on', s.dataset.s === Q.stepId)); refreshNextLabel(); }
 function syncAutoBtn() { const b = $('#cAuto'); b.textContent = Q.auto ? '⏸ 暂停自动播放' : '▶ 自动播放'; }
 function resetC() {
-  Object.assign(Q, { corner: 'TR', tucked: false, playing: false, trOn: false, realHover: false, simHover: false, auto: Q.auto, autoAt: null, stopped: false, done: false, lock: false, stepId: 'S0', haloKind: null, breathT0: null, dwell: null, bodyMode: 'base', capOut: false, popT: null });
+  Object.assign(Q, { corner: 'TR', tucked: false, playing: false, trOn: false, realHover: false, simHover: false, auto: Q.auto, autoAt: null, stopped: false, done: false, lock: false, musicHold: false, musicAway: false, musicBack: false, stepId: 'S0', haloKind: null, breathT0: null, dwell: null, bodyMode: 'base', capOut: false, popT: null });
   CSTEPS[CIDX.S4]._body = null; Q.s4first = false;
   CSTEPS[CIDX.S5]._body = null; CSTEPS[CIDX.S5].acts = S5_ACTS(); Q.s5first = false; Q.gl0 = null;
   TC.reset();

@@ -71,6 +71,20 @@ final class TourController: ObservableObject {
     /// S4L closing flash: hide the card once the feedback has had its second.
     private var closingFlashPending = false
 
+    // The Music beat's trip to the player app (founder 2026-10-02: Music's own window animation plus our celebration at once is too much)
+    /// The user tapped the Music capsule: the player app is opening. The beat shows its small check, nothing else happens
+    /// (no ring, no celebration, no handoff) until the user is back. Costs nothing while it lasts: two subscriptions, no timer, no display link.
+    private(set) var isHoldingForMusicReturn = false
+    private var musicReturnObservers = Set<AnyCancellable>()
+    /// Who the card names where the copy says "{player}" (the edition's player app).
+    var playerApp: PlayerAppIdentity = .appleMusic
+    /// App activations as bundle identifiers (test seam; default: NSWorkspace's didActivateApplicationNotification).
+    var appActivations: AnyPublisher<String?, Never> = NSWorkspace.shared.notificationCenter
+        .publisher(for: NSWorkspace.didActivateApplicationNotification)
+        .map { ($0.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier }
+        .eraseToAnyPublisher()
+    var ownBundleIdentifier: String? = Bundle.main.bundleIdentifier
+
     // Guidance bookkeeping
     /// The current step began with the panel on a page that lacks its control (corners on the
     /// queue, translate off the lyrics page, move off the cover): its first beat walks the user
@@ -274,6 +288,11 @@ final class TourController: ObservableObject {
     /// Internal (not `private`) so tests can drive the machine directly via
     /// `@testable import` without hosting real button clicks.
     func send(_ event: TourEvent) {
+        if case .signal(.musicButtonTapped) = event, beginMusicHoldIfNeeded() { return }
+        process(event)
+    }
+
+    private func process(_ event: TourEvent) {
         let (next, effects) = TourMachine.reduce(state, event, snapshot: makeSnapshot(for: event))
         let previous = state
         state = next
@@ -281,7 +300,53 @@ final class TourController: ObservableObject {
         apply(effects, userCompletion: Self.isUserCompletion(event))
         scheduleTransitionIfNeeded()
         scheduleFinaleAutoDismissIfNeeded()
+        if isHoldingForMusicReturn, !Self.isCornersStep(state.phase) { endMusicHold() }   // skipped, stopped or moved on while away
         refreshGuidance()
+    }
+
+    // MARK: - Music beat: hold while the user is in the player app
+
+    private static func isCornersStep(_ phase: TourPhase) -> Bool {
+        if case .step(.corners, _) = phase { return true }
+        return false
+    }
+
+    /// The Music capsule was tapped on the corners step with that beat still open: tick only its small check, say
+    /// "pick up when you're back", and wait. Returns false when this tap is not that moment (the machine takes it as usual).
+    private func beginMusicHoldIfNeeded() -> Bool {
+        guard !isHoldingForMusicReturn, case .step(.corners, let beats) = state.phase, beats.count == 2, !beats[1] else { return false }
+        isHoldingForMusicReturn = true
+        stallWork?.cancel(); stallWork = nil
+        cardStore?.stalled = false
+        // Back = the cursor enters the panel again (a real false -> true, not the hover the tap itself came from),
+        // or another app takes the front. Whichever first. No timeout: while the user is still in the player app, we wait.
+        var sawAway = !TourHookBus.shared.controlsVisible.value
+        TourHookBus.shared.controlsVisible.removeDuplicates().sink { [weak self] visible in
+            if !visible { sawAway = true } else if sawAway { self?.musicReturned() }
+        }.store(in: &musicReturnObservers)
+        appActivations.sink { [weak self] id in
+            guard let self, TourMusicReturn.isReturn(activatedBundleID: id, player: self.playerApp, ownBundleID: self.ownBundleIdentifier) else { return }
+            self.musicReturned()
+        }.store(in: &musicReturnObservers)
+        // The beat's check, alone: the body crossfades to the waiting line, the ring goes down.
+        if let model = cardModel(for: state.phase, in: state) {
+            lastPresentedModel = model
+            presentCard(model: model, gestureKind: nil)
+            if let store = cardStore { beginFeedback(store: store, pops: [1], ringTo: nil, spark: false, closes: false, confetti: false, holdForFinale: false) }
+        }
+        refreshGuidance()
+        return true
+    }
+
+    private func musicReturned() {
+        guard isHoldingForMusicReturn else { return }
+        endMusicHold()
+        process(.signal(.musicButtonTapped))   // the tap, delivered now: the usual celebration and transition
+    }
+
+    private func endMusicHold() {
+        isHoldingForMusicReturn = false
+        musicReturnObservers.removeAll()
     }
 
     /// Per-step bookkeeping that is not part of the pure machine.
@@ -506,6 +571,7 @@ final class TourController: ObservableObject {
         skipping = false
         cardYielded = false
         preface = nil
+        endMusicHold()
         hideCard()
         TourAnchorRegistry.shared.reset()
     }
@@ -678,6 +744,11 @@ final class TourController: ObservableObject {
         case .step(.corners, let beats):
             var list: [TourBeatModel] = []
             var body = beats.allSatisfy { $0 } ? L("tour.corners.body") : awayOr(L("tour.corners.body"))
+            if isHoldingForMusicReturn {
+                body = L("tour.corners.bodyWaiting")                                       // away in the player app: wait for them
+            } else if beats[0], !beats[1] {
+                body = awayOr(L10n.localized("tour.corners.bodyMusic", player: playerApp)) // the Music beat is current: say where the tap goes
+            }
             if preface == .leaveQueue {
                 // Not a machine beat: the corner buttons are not on the queue page.
                 let there = TourPreface.leaveQueue.isDone(on: surface.page)
@@ -685,7 +756,7 @@ final class TourController: ObservableObject {
                 if !there { body = L("tour.corners.bodyQueue") }
             }
             list.append(TourBeatModel(id: 0, text: L("tour.corners.beat1"), checked: beats[0]))
-            list.append(TourBeatModel(id: 1, text: L("tour.corners.beat2"), checked: beats[1]))
+            list.append(TourBeatModel(id: 1, text: L("tour.corners.beat2"), checked: beats[1] || isHoldingForMusicReturn))
             markSkipped(&list)
             return TourCardModel(
                 kind: .step(.corners), title: L("tour.corners.title"),
@@ -1141,6 +1212,14 @@ final class TourController: ObservableObject {
         if case .transitioning(let from, _) = state.phase, from != .translate { return }
         if feedback.isActive, case .finale = state.phase { return }
         if cardYielded || skipping { return }
+        if isHoldingForMusicReturn {
+            // Away in the player app: the ring stops pulsing and goes down, nothing runs until they are back.
+            if motion.ringVisible { motion.hideRing() }
+            if motion.hintRunning { motion.stopHint() }
+            lastRingSubject = nil
+            guidance.kick()
+            return
+        }
         if ringHeld { return }
 
         let surface = currentSurface()
@@ -1180,7 +1259,7 @@ final class TourController: ObservableObject {
     /// A beat row was hovered: the ring temporarily points at that beat's
     /// control (C.4.1); leaving puts it back. A step with a single control just pulses.
     private func beatHovered(_ id: Int, inside: Bool) {
-        guard case .step(let step, _) = state.phase, guidance.motion.ringVisible else { return }
+        guard case .step(let step, _) = state.phase, guidance.motion.ringVisible, !isHoldingForMusicReturn else { return }
         if !inside { refreshGuidance(); return }
         let subjects = TourGuidanceResolver.beatSubjects(for: step)
         let subject: TourRingSubject?

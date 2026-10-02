@@ -658,13 +658,25 @@ SwiftUI：一个 `ButtonStyle`：`configuration.isPressed` 控制 `scaleEffect`�
 | 翻译钮 | 译文行 `opacity 0 → 1`、上移 4 pt 落下、模糊 1.5 → 0（0.35 s） |
 | 贴边条 | 悬停时探出小卡；离开（非 S6 时）0.4 s 弹回 |
 
+#### C.5.6 点 Music：先说清，再等人回来（2026-10-02 创始人）
+
+点 Music 会打开 Apple Music，它自带窗口动画；这时我们的庆祝和转场同时来，应接不暇。所以 S2 的第二拍多出一小步，分三段：
+
+| 段 | 时刻 | 反馈 |
+|---|---|---|
+| 准备 | 第二拍成为当前拍（输出钮那一拍已打勾，环落到 Music 胶囊；或一进步骤就只剩这一拍） | 正文交叉淡换成：**「点左上角会打开 Apple Music。去看一眼就好，我在这儿等你回来。」**（英：*Tapping the top left opens Apple Music. Just have a look; I'll wait here till you're back.*）。「Apple Music」取自播放器身份（`PlayerAppIdentity.displayName`，文案里写 `{player}`），网易云版换身份即换名字。鼠标不在面板上时仍是 C.5.3 的「鼠标再回到面板上。」 |
+| 等待 | 点 Music（`musicButtonTapped`） | 第二拍只打**小勾**（B.2 的 beat-only：圆点实心 + 一次 `.levelChange`），**不放**火花 / 礼花 / 庆祝虚化，**不交接**；环收起（`hideRing`，不再脉冲），提示与卡片计时器都停；正文交叉淡换成 **「回来就继续。」**（英：*Pick up when you're back.*）。等待中**零成本**：不挂计时器、不开逐帧（display link），只留两个订阅；不设超时，人还在 Music 里就一直等，不自动前进 |
+| 回来 | 下面两件事，先到的算（鼠标要真的离开过再进来，点击当时的悬停不算；别的 app 不含 Apple Music 自己，也不含 nanoPod 自己，因为点击可能先激活 nanoPod 再激活 Music） | ① 鼠标再次进入面板（控件浮出）；② 别的 app 成为前台（`NSWorkspace.didActivateApplicationNotification`，bundle id 不是播放器的）。回来后把被拦下的那一下点击补发给状态机：两拍都齐则放平常的完成庆祝（B.2 / B.3 / B.10）并转场到 S3；若还差输出钮那一拍（先点的 Music），环回到输出钮、正文换回通用句，不庆祝 |
+
+等待中：「这一步先不做」「先到这里」、停止仍然有效，会结束等待；等待中再点输出钮只打勾，不触发完成，回来时一并完成。落地：`TourController.beginMusicHoldIfNeeded` / `musicReturned`，纯规则 `TourMusicReturn.isReturn`；测试 `TourMusicHoldTests`。
+
 ### C.6 各步骤数据
 
 | 步 | 锚点 / 环 | 用户动作（beat） | 完成事件 | 特别 |
 |---|---|---|---|---|
 | S0 | 面板朝内边；无环；环内已是勾（Music 已连上，预填 1/7） | 「开始」/「以后再说」 | 点击 | 安静转场；无 beat |
 | S1 | 播放键，圆 40，提示态 + 幽灵光标 | ① 移到面板上 ② 按一下播放 | 悬停停留 80 ms；点播放 | 待按态（C.5.3）；正文随动三种 |
-| S2 | 输出钮（圆 40）→ Music 胶囊（82 × 42） | ① 右上角：声音从哪出 ② 左上角：去 Music（任意顺序） | 点输出；点 Music | 环在两个控件间跳；输出小菜单 |
+| S2 | 输出钮（圆 40）→ Music 胶囊（82 × 42） | ① 右上角：声音从哪出 ② 左上角：去 Music（任意顺序） | 点输出；点 Music（点 Music 后先等人回来，见 C.5.6） | 环在两个控件间跳；输出小菜单；Music 拍成为当前拍时正文先说去向；点 Music 后安静等待 |
 | S3 | 歌词气泡，圆 36 | 无 beat | 点气泡 | 面板翻页 |
 | S4（可选） | 翻译钮，圆 40；进入时不在歌词页则先落在歌词气泡上（C.4.5） | （进入时不在歌词页才有）先到歌词页 | 到歌词页；点翻译钮 | 译文落下；默认延后 |
 | S5 | 面板朝内边；卡内手势示意；封面页上面板边缘一圈 3 周期的柔光（C.4.4）；进入时面板在歌词页则环在歌词气泡上 | （进入时面板在歌词页才有）0 先回到封面页 ① 推到一个角落 ② 再往屏幕边上推一下 | 回到封面页；面板落角；面板收边 | 卡让路 → 新侧长出；备用「替我收起来」；补放环；文案见 C.4.4 |
@@ -771,3 +783,8 @@ SwiftUI：一个 `ButtonStyle`：`configuration.isPressed` 控制 `scaleEffect`�
 - 应用侧：`TourFeedbackChoreographer` 加 `blur` / `lift` 两个值与 `celebrationEnabled`，逐 cue 对照原型（`TourFeedbackCelebrationTests` 用假时钟核对：B.2 / B.3 的相、时刻、触觉一概不变，虚化 0.18 s、大环到中心、H 处飞回、虚化在换内容后松开、点卡提前收、连点不松开、减少透明度 / 动态效果、只勾 beat / 关闭时不庆祝）；卡里的画法见 `TourCardView` / `TourFeedbackViews`（`TourCelebrationRingLayer`、`TourCelebrationContent`）；真窗口里的行为见 `TourCelebrationRealWindowTests`，定格帧见 `TourCelebrateShotTests`（`TOUR_CELEBRATE_SHOTS=1`）。
 - 手感（虚化半径、压暗量、大环尺寸、飞行弹簧）需要创始人亲自终验；自动检查不能代替。
 
+### F.4 2026-10-02 补：点 Music 先等人回来（C.5.6）
+
+- 原型：S2 加 `bodyMusic` / `bodyWait` 与 `Q.musicHold`；`musicHoldStart` 只打第二拍小勾并收环，`updateHover` 里「离开过再进来」触发 `musicReturn`，自动播放里的「回来」用鼠标离开再进入来模拟。用假时钟脚本核对：先点输出 → 正文换成去向句；点 Music → 小勾、环收起、正文「回来就继续。」、10 s 后仍等；回来 → 计数 +1 并转场到 S3；先点 Music → 回来后环回输出钮、通用句。
+- 应用侧：`TourMusicHoldTests` 覆盖提示文案（中英，不含「甩」，换播放器身份即换名）、点 Music 后不庆祝不交接不挂 display link、鼠标回面板即继续、别的 app 到前台即继续、先点 Music 的顺序、跳过 / 停止结束等待。
+- 手感（小勾的节奏、正文淡换、回来时庆祝的起点）需要创始人亲自终验；自动检查不能代替。
