@@ -41,6 +41,7 @@ public final class EdgeHitchTrace: @unchecked Sendable {
     static let longTurnMs: Double = 8
     static let ringCapacity = 96
     static let maxLogBytes = 256 * 1024
+    static let maxLoggedEntries = 40
     /// Start taking stack samples once a turn has run this long.
     nonisolated(unsafe) static var stallSampleAfter: Double = 0.012
 
@@ -276,9 +277,10 @@ public final class EdgeHitchTrace: @unchecked Sendable {
         let fm = FileManager.default
         try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         var text = "== \(ISO8601DateFormatter().string(from: Date())) motion=\(motion) worst=\(fmt(worstMs))ms frames=\(entries.count)\n"
-        for e in entries where e.kind == .turn || e.missMs > 0 || !e.stacks.isEmpty || e.turnMs > longTurnMs {
-            text += format(e)
-        }
+        // The cause and the damage, not every near-miss: long turns, real misses, anything
+        // sampled; the newest few dozen, so a handful of bad motions fit the cap.
+        let worthy = entries.filter { $0.kind == .turn || $0.missMs > 8 || !$0.stacks.isEmpty }
+        for e in worthy.suffix(maxLoggedEntries) { text += format(e) }
         guard let data = text.data(using: .utf8) else { return }
         if let size = (try? fm.attributesOfItem(atPath: url.path))?[.size] as? Int, size + data.count > maxLogBytes,
            let old = try? Data(contentsOf: url) {
@@ -309,7 +311,7 @@ public final class EdgeHitchTrace: @unchecked Sendable {
             line += " | " + e.notes.map { "\($0.name) \(fmt($0.ms))ms@+\(fmt($0.atMs))" }.joined(separator: "; ")
         }
         line += "\n"
-        for s in e.stacks { line += "    stack: " + symbolicate(s) + "\n" }
+        for s in e.stacks.prefix(2) { line += "    stack: " + String(symbolicate(s).prefix(900)) + "\n" }
         return line
     }
 
