@@ -488,7 +488,7 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
                 MainActor.assumeIsolated { liquidEdge?.collapse(to: edge) ?? false }
             }
             self.liquidEdge = liquidEdge
-            self.tourController = TourController(panel: snappableWindow, liquidEdge: liquidEdge, traceGesturesAlways: true)
+            self.tourController = TourController(panel: snappableWindow, liquidEdge: liquidEdge)
         }
 
         debugPrint("[AppMain] Floating window created\n")

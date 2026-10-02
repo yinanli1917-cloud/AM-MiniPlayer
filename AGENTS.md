@@ -64,8 +64,8 @@ Sources/
 │   │   ├── HoverableButtons.swift - Button components + Tab Bar + corner radius utilities
 │   │   ├── PlaylistView.swift     - Playlist queue + artwork loading
 │   │   ├── SnappablePanel.swift   - Snappable floating panel + gestures
-│   │   ├── PanelWindowMetrics.swift - 面板窗口=面板本身（默认 250×284，比例锁/min/max 按比例）；托管视图比窗口高 32pt 伸出上沿 + SwiftUI 补 32pt 顶部安全区，各页排版与旧 250×316 窗口逐像素一致（09-23）
-│   │   ├── LiquidEdge/            - 液态贴边：Model/Choreography/Outline(纯逻辑) + StageView(面板下方透明舞台窗口) + Controller(状态机+逐帧弹簧+面板窗口透明度/遮罩) + Gestures
+│   │   ├── PanelWindowMetrics.swift - 面板窗口=面板本身（默认 250×284，比例锁/min/max 按比例）；托管视图比窗口高 32pt 伸出上沿 + SwiftUI 补 32pt 顶部安全区，各页排版与旧 250×316 窗口逐像素一致（09-23）；容器层铺 1/255 圆角底色，否则封面段被 WindowServer 当透明、点击与双指手势穿到桌面（10-01）
+│   │   ├── LiquidEdge/            - 液态贴边：Model/Choreography/Outline(纯逻辑) + StageView(面板下方透明舞台窗口) + Controller(状态机+逐帧弹簧+面板窗口透明度/遮罩；小卡停留 0.35s 才唤醒面板、动画结束 0.3s 后才收起) + Gestures + EdgeMotionGate(动画进行中闸门，换歌重活延后) + EdgeHitchTrace(仅动画期，>25ms 卡帧写 ~/Library/Logs/nanoPod/edge-hitch.log) + LiquidEdgeArtworkPrep(封面后台解码)
 │   │   ├── Components/           - Reusable UI components
 │   │   │   ├── SharedControls.swift   - Bottom controls
 │   │   │   ├── WindowResizeHandler.swift
