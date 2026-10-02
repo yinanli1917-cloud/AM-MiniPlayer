@@ -40,6 +40,8 @@ final class TourShotStudio {
     }
 
     let dark: Bool
+    /// Where `shoot` writes (default: the fix-4 folder; a test may point it elsewhere).
+    var outDir = TourShotStudio.outDir
     let backdrop: NSWindow
     private let savedAppearance: NSAppearance?
     private(set) var skipped: [String] = []
@@ -112,7 +114,7 @@ final class TourShotStudio {
         }
         guard let image = TourWindowCapture.composite(through: top, in: TourWindowCapture.cgRect(rect)) else { return nil }
         let scheme = dark ? "dark" : "light"
-        TourWindowCapture.writePNG(image, to: "\(Self.outDir)/\(name)-\(scheme).png")
+        TourWindowCapture.writePNG(image, to: "\(outDir)/\(name)-\(scheme).png")
         return image
     }
 }

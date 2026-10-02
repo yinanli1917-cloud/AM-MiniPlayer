@@ -17,6 +17,10 @@
  *        the tour only calls `begin(_:)` and embeds `TourFeedbackRing` /
  *        `TourFeedbackBeatDot` / `TourFeedbackBeatRow`.
  *
+ * The celebration moment (spec §B.10): the shell turns the choreographer's `celebrationEnabled` on, hands it the
+ * Reduce Transparency flag, and puts the sparks around the card's CENTRE (where the big ring is) instead of the corner ring.
+ * `endCelebrationEarly()` is what a click on the card calls.
+ *
  * Coordinates (fix of 2026-09-29, kept): the FX field is built in WINDOW-LOCAL,
  * y-down coordinates from the ring / card rectangles the controller passes in
  * screen space; particles are never given screen coordinates.
@@ -50,6 +54,12 @@ final class TourCompletionFeedback: ObservableObject {
     let choreographer: TourFeedbackChoreographer
     private let clock: () -> TimeInterval
     private let reduceMotion: () -> Bool
+    private let reduceTransparency: () -> Bool
+    /// Spec §B.10 on / off (on in the app).
+    var celebrationEnabled: Bool {
+        get { choreographer.celebrationEnabled }
+        set { choreographer.celebrationEnabled = newValue }
+    }
     private let autoTick: Bool
     private var lastClock: TimeInterval = 0
     private var lastCardOffset: CGFloat = 0
@@ -63,15 +73,19 @@ final class TourCompletionFeedback: ObservableObject {
     init(clock: @escaping () -> TimeInterval = { CACurrentMediaTime() },
          reduceMotion: @escaping () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion },
          autoTick: Bool = true,
+         celebrationEnabled: Bool = true,
+         reduceTransparency: @escaping () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency },
          sparks: TourSparkOverlay? = nil,
          haptic: @escaping (TourHaptic) -> Void = TourCompletionFeedback.performSystemHaptic,
          random: TourFeedbackRandom = TourSystemRandom()) {
         self.clock = clock
         self.reduceMotion = reduceMotion
+        self.reduceTransparency = reduceTransparency
         self.autoTick = autoTick
         self.sparks = sparks ?? TourSparkOverlay()
         self.choreographer = TourFeedbackChoreographer(reduceMotion: reduceMotion(), random: random, haptic: haptic)
         self.choreographer.ownsSwap = true
+        self.choreographer.celebrationEnabled = celebrationEnabled
         ticker.onTick = { [weak self] in
             guard let self else { return }
             #if DEBUG
@@ -115,12 +129,17 @@ final class TourCompletionFeedback: ObservableObject {
         lastEvent = event
         lastClock = clock()
         choreographer.onSwapDue = onSwapDue
+        choreographer.reduceTransparency = reduceTransparency()
         guard choreographer.begin(event, wallNow: lastClock) else { return }
         // (particles spawn at their cues, later: the geometry only has to be there by then)
         if !rm, event.growsRing, let ring = event.ringCenterOnScreen {
+            // Celebrating: the big ring is at the card's centre, so the sparks fly from there (spec §B.10); the confetti keeps 1x.
+            let celebrates = choreographer.celebrating, body = event.cardFrameOnScreen
+            let center = celebrates ? body.map { CGPoint(x: $0.midX, y: $0.midY) } ?? ring : ring
             choreographer.geometry = sparks.prepare(
-                ringCenter: ring, cardBody: event.cardFrameOnScreen,
-                wantsConfetti: event.confetti, feedback: self)
+                ringCenter: center, cardBody: body,
+                wantsConfetti: event.confetti, feedback: self,
+                celebration: celebrates && body != nil)
         } else {
             choreographer.geometry = nil
         }
@@ -147,6 +166,13 @@ final class TourCompletionFeedback: ObservableObject {
         } else {
             publish()
         }
+    }
+
+    /// A click on the card during the celebration moment: the handoff starts now (spec §B.10).
+    func endCelebrationEarly() {
+        guard isActive else { return }
+        advance(to: clock())
+        choreographer.endCelebrationEarly()
     }
 
     /// The controller swapped the card content under the running sequence.
@@ -212,6 +238,8 @@ final class TourCompletionFeedback: ObservableObject {
 @MainActor
 final class TourSparkOverlay {
     static let sparkRadius: CGFloat = 64
+    /// Celebration: the sparks fly from a 2.86x ring (spec §B.10), so the window around it is wider.
+    static let celebrationSparkRadius: CGFloat = 128
 
     /// The FX window lives (parked, ordered out) for the whole tour: building a window and its hosting view on the
     /// frame the check lands cost ~30 ms right there. `window` is the OPEN one (nil while parked).
@@ -238,13 +266,14 @@ final class TourSparkOverlay {
     }
 
     /// Positions the window and returns the FX geometry in its local space.
-    func prepare(ringCenter: CGPoint, cardBody: CGRect?, wantsConfetti: Bool, feedback: TourCompletionFeedback) -> TourFXGeometry {
+    func prepare(ringCenter: CGPoint, cardBody: CGRect?, wantsConfetti: Bool, feedback: TourCompletionFeedback,
+                 celebration: Bool = false) -> TourFXGeometry {
         let rect: CGRect
+        let radius = celebration ? Self.celebrationSparkRadius : Self.sparkRadius
         if wantsConfetti, let body = cardBody {
             rect = CGRect(x: body.minX - 260, y: body.minY - 460, width: body.width + 520, height: body.height + 460 + 220)
         } else {
-            rect = CGRect(x: ringCenter.x - Self.sparkRadius, y: ringCenter.y - Self.sparkRadius,
-                          width: Self.sparkRadius * 2, height: Self.sparkRadius * 2)
+            rect = CGRect(x: ringCenter.x - radius, y: ringCenter.y - radius, width: radius * 2, height: radius * 2)
         }
         let local = CGPoint(x: ringCenter.x - rect.minX, y: rect.maxY - ringCenter.y)
         let window = ensureWindow(feedback: feedback)
@@ -257,7 +286,9 @@ final class TourSparkOverlay {
         originInWindow = local
         let cardTop = cardBody.map { Double(rect.maxY - $0.maxY) } ?? Double(local.y)
         let cardCenterX = cardBody.map { Double($0.midX - rect.minX) } ?? Double(local.x)
-        return TourFXGeometry(ringCenter: local, cardTop: cardTop, cardCenterX: cardCenterX, zoom: 1)
+        return TourFXGeometry(ringCenter: local, cardTop: cardTop, cardCenterX: cardCenterX,
+                              zoom: celebration ? TourCelebrationTokens.ringZoom : 1, confettiZoom: celebration ? 1 : nil,
+                              haloZoom: celebration ? TourCelebrationTokens.haloZoom : nil)
     }
 
     func raise() { window?.orderFront(nil) }

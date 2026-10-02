@@ -1200,7 +1200,7 @@ function makeTour(P, cfg) {
   /* 庆祝时刻里火花围着大环：几何取大环当前外接框（含弹跳缩放）；礼花仍按小环的 1x（卡不变大） */
   function celeGeom() {
     const st = stageEl.getBoundingClientRect(), sc = st.width / stageEl.offsetWidth || 1, r = elC.svg.getBoundingClientRect(), g0 = ringGeom0();
-    return { cx: (r.left - st.left + r.width / 2) / sc, cy: (r.top - st.top + r.height / 2) / sc, z: r.width / 28 / sc, zc: g0.z, cardTop: g0.cardTop, cardCx: g0.cardCx };
+    return { cx: (r.left - st.left + r.width / 2) / sc, cy: (r.top - st.top + r.height / 2) / sc, z: r.width / 28 / sc, zc: g0.z, zh: g0.z * 2.0, cardTop: g0.cardTop, cardCx: g0.cardCx };
   }
   const ringGeom = () => (B.cele ? celeGeom() : ringGeom0());
   function ringGeom0() {
@@ -1220,7 +1220,7 @@ function makeTour(P, cfg) {
     }
     wake();
   }
-  function spawnHalo(delay = 0) { if (S.rm) return; const g = ringGeom(); B.halos.push({ x: g.cx, y: g.cy, z: g.z, age: -delay, life: .5 }); wake(); }
+  function spawnHalo(delay = 0) { if (S.rm) return; const g = ringGeom(); B.halos.push({ x: g.cx, y: g.cy, z: g.zh || g.z, age: -delay, life: .5 }); wake(); }
   function spawnConfetti(n) {
     if (S.rm) return;
     const g = ringGeom(), zc = g.zc || g.z, cols = [css('--accent'), css('--gold'), css('--violet'), '#7fd6c2', css('--accent-soft'), '#ffffff'];

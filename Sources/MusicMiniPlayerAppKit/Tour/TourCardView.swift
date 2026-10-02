@@ -173,6 +173,9 @@ struct TourCardView: View {
             .fixedSize(horizontal: false, vertical: true)
         return heightDriven(laidOut)
             .tourCardMaterial(arm, shape: shape, dark: colorScheme == .dark)
+            // The big ring of the celebration moment (spec §B.10): above the content, never blurred or clipped by it.
+            .overlay(TourCelebrationRingLayer(beakSide: side, stepLabel: model.stepLabel, closed: model.ringClosed,
+                                               completed: model.ringCompleted, palette: palette, feedback: feedback))
             .overlay(shape.stroke(palette.hairline, lineWidth: 0.5))
             .modifier(TourCardScale(guide: guide))
             // The card window is never key. Controls and materials that dim
@@ -228,6 +231,7 @@ struct TourCardView: View {
         .padding(.top, M.paddingTop)
         .padding(.horizontal, M.paddingSide)
         .padding(.bottom, M.paddingBottom)
+        .modifier(TourCelebrationContent(feedback: feedback))
         .id(contentKey)
         .transition(.opacity)
     }

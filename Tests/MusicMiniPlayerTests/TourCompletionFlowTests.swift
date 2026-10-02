@@ -45,7 +45,8 @@ final class TourCompletionFlowTests: XCTestCase {
         panel.orderFront(nil)
         spin(0.5)
         liquidEdge = LiquidEdgeController(card: panel)
-        controller = TourController(panel: panel, liquidEdge: liquidEdge, defaults: defaults)
+        // (B.2 as specified: the small ring grows on the card. The celebration moment has its own real-window tests.)
+        controller = TourController(panel: panel, liquidEdge: liquidEdge, defaults: defaults, feedback: TourCompletionFeedback(celebrationEnabled: false))
     }
 
     override func tearDown() {

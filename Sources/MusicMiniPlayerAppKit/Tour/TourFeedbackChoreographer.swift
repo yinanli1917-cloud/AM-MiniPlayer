@@ -17,6 +17,12 @@
  *        prototype's `__proto.advance()` reproduces the prototype frame for
  *        frame (that is how the comparison sheets were made).
  *
+ * The celebration moment (spec §B.10, founder 2026-10-01): with `celebrationEnabled` a ring-growing completion turns the
+ * CARD into the celebration canvas. Two more values (`blur`: the content blurs, dims and shrinks a hair; `lift`: the ring
+ * grows from its corner to the card's centre) ride on B.2 / B.3 exactly as they are: the same cues, the same numbers, the
+ * same handoff `H` (760 / 1050 ms). The ring flies back as the handoff starts and the blur lets go AFTER the next content
+ * has swapped in, so what the unblur reveals is the next step.
+ *
  * The choreographer never draws. Views read `makeFrame()` / `makeFXSnapshot()`.
  */
 
@@ -52,6 +58,39 @@ enum TourFeedbackEase {
         }
         return 3 * pow(1 - u, 2) * u * y1 + 3 * (1 - u) * u * u * y2 + u * u * u
     }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Celebration tokens (spec §B.10)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+enum TourCelebrationTokens {
+    /// The big ring's outer diameter, points (the card's ring is 28).
+    static let ringDiameter = 80.0
+    static var ringZoom: Double { ringDiameter / 28 }
+    /// The shock-wave halos stay inside a short card: 2x, not the ring's 2.86x.
+    static let haloZoom = 2.0
+    /// Content blur radius, points, at `blur == 1`.
+    static let blurRadius = 10.0
+    /// Content opacity is `1 - dim * blur`; the quiet variants (Reduce Transparency / Reduce Motion) dim harder instead of blurring.
+    static let dim = 0.38
+    static let dimQuiet = 0.55
+    /// Content scale is `1 - (1 - contentScale) * blur`.
+    static let contentScale = 0.98
+    static let fadeIn = 0.18
+    /// The ring's take-off spring.
+    static let liftSpringDuration = 0.4
+    static let liftSpringBounce = 0.18
+    /// After the content swap the blur lets go over this long; the ring flies home over `liftOut` from the handoff.
+    static let release = 0.26
+    static let liftOut = 0.34
+    static let reducedIn = 0.12
+    static let reducedOut = 0.16
+    /// A click on the card starts the handoff this soon.
+    static let earlyHandoff = 0.02
+    /// The card's own ring sits at (body width - `slotInsetX`, `slotInsetY`): padding + the ring's radius (TourCardMetrics:
+    /// the app's padding is 14, the prototype's CSS 16).
+    static let ringRadius = 14.0
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -192,6 +231,10 @@ struct TourFXGeometry: Equatable {
     /// The prototype sizes everything by the stage zoom (card is shown 1.55x);
     /// in the app the card is 1x.
     var zoom: Double = 1
+    /// Confetti's own scale (celebration: the ring is 2.86x, the confetti stays 1x); nil = `zoom` with the ring's live pop.
+    var confettiZoom: Double?
+    /// The shock-wave halo's own scale (celebration: 2x, so the circle stays inside the card's height); nil = `zoom`.
+    var haloZoom: Double?
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -232,6 +275,14 @@ struct TourFeedbackFrame: Equatable {
     /// Title / body / everything-below opacity + offset (handoff).
     var contentOpacity: [Double] = [1, 1, 1]
     var contentOffsetY: [Double] = [0, 0, 0]
+    /// Celebration moment (spec §B.10): 0...1, how far the card's content is blurred / dimmed / shrunk, and how far the ring
+    /// has flown from its corner to the card's centre (and grown to 80 pt).
+    var blur = 0.0
+    var lift = 0.0
+    /// Reduce Transparency / Reduce Motion: dim instead of blur, no scale.
+    var celebrationQuiet = false
+    /// True while the card is the celebration canvas (blur or lift not yet back at 0).
+    var isCelebrating: Bool { blur > 0.002 || lift > 0.002 }
     var beats: [Int: TourFeedbackBeatFrame] = [:]
     /// Bumps each time the card content was swapped under the sequence.
     var swapGeneration = 0
@@ -309,6 +360,15 @@ final class TourFeedbackChoreographer {
     /// timer being the fallback). false = the comparison harness, which swaps at once.
     var ownsSwap = false
     var haptic: (TourHaptic) -> Void
+    /// Spec §B.10: ring-growing completions turn the card into the celebration canvas (the shell turns this on; the comparison
+    /// harness leaves it off and keeps the prototype's B.2 / B.3 frames).
+    var celebrationEnabled = false
+    /// Reduce Transparency: dim instead of blur (read by the shell at each `begin`).
+    var reduceTransparency = false
+    /// This sequence celebrates (decided at `begin`).
+    private(set) var celebrating = false
+    /// A new celebration is about to follow the one being interrupted: the interrupted one must not let go.
+    private var keepCelebration = false
     private let random: TourFeedbackRandom
 
     // Clock / cues --------------------------------------------------------
@@ -340,6 +400,7 @@ final class TourFeedbackChoreographer {
     private let numOp: TourFeedbackValue, numScale: TourFeedbackValue, numY: TourFeedbackValue
     private let chkDraw: TourFeedbackValue, chkScale: TourFeedbackValue
     private let disc: TourFeedbackValue, seal: TourFeedbackValue, cardY: TourFeedbackValue
+    private let blur: TourFeedbackValue, lift: TourFeedbackValue
     private let contentOp: [TourFeedbackValue], contentY: [TourFeedbackValue]
     private var beats: [Int: BeatValues] = [:]
 
@@ -366,6 +427,8 @@ final class TourFeedbackChoreographer {
         disc = TourFeedbackValue(0, clock: c)
         seal = TourFeedbackValue(0, clock: c)
         cardY = TourFeedbackValue(0, clock: c)
+        blur = TourFeedbackValue(0, clock: c)
+        lift = TourFeedbackValue(0, clock: c)
         contentOp = (0..<3).map { _ in TourFeedbackValue(1, clock: c) }
         contentY = (0..<3).map { _ in TourFeedbackValue(0, clock: c) }
     }
@@ -384,7 +447,7 @@ final class TourFeedbackChoreographer {
     var isClosing: Bool { busy && closingRunning }
 
     private var allValues: [TourFeedbackValue] {
-        [ring, ringScale, ringW, numOp, numScale, numY, chkDraw, chkScale, disc, seal, cardY]
+        [ring, ringScale, ringW, numOp, numScale, numY, chkDraw, chkScale, disc, seal, cardY, blur, lift]
             + contentOp + contentY + beats.values.flatMap(\.all)
     }
 
@@ -415,7 +478,9 @@ final class TourFeedbackChoreographer {
     func begin(_ event: TourFeedbackEvent, wallNow: Double) -> Bool {
         if finished { return false }
         if busy && closingRunning { return false }          // §B.4-4
+        keepCelebration = celebrationEnabled && event.growsRing
         if busy { interrupt() }
+        keepCelebration = false
 
         self.event = event
         phaseLog = []
@@ -445,6 +510,8 @@ final class TourFeedbackChoreographer {
 
         busy = true
         closingRunning = event.closesRing
+        celebrating = celebrationEnabled
+        if celebrating { startCelebration() }
         let wasEngaged = ringEngaged
         ringEngaged = true
         // A fresh burst starts the ring where the card says it is; an
@@ -520,10 +587,10 @@ final class TourFeedbackChoreographer {
             if event.handsOff {
                 swapPending = true; swapFin = false
                 cue(t0 + 0.76, tag: "handoff") { [unowned self] ff in self.handoff(fin: false, ff: ff) }
-                cue(t0 + 1.1) { [unowned self] _ in self.finishBusy() }
+                cue(t0 + 1.1, tag: "finish") { [unowned self] _ in self.finishBusy() }
             } else {
-                cue(t0 + 0.86) { [unowned self] _ in self.revertCheckToNumber() }
-                cue(t0 + 1.1) { [unowned self] _ in self.finishBusy() }
+                cue(t0 + 0.86, tag: "settleOut") { [unowned self] _ in self.revertCheckToNumber(); self.releaseCelebration() }
+                cue(t0 + 1.1, tag: "finish") { [unowned self] _ in self.finishBusy() }
             }
         } else {
             cue(t0 + 0.60) { [unowned self] _ in
@@ -552,10 +619,10 @@ final class TourFeedbackChoreographer {
             if event.handsOff {
                 swapPending = true; swapFin = true
                 cue(t0 + 1.05, tag: "handoff") { [unowned self] ff in self.enter(.settle); self.handoff(fin: true, ff: ff) }
-                cue(t0 + 1.5) { [unowned self] _ in self.finishBusy(finished: true) }
+                cue(t0 + 1.5, tag: "finish") { [unowned self] _ in self.finishBusy(finished: true) }
             } else {
-                cue(t0 + 1.05) { [unowned self] _ in self.enter(.settle) }
-                cue(t0 + 1.1) { [unowned self] _ in self.finishBusy(finished: true) }
+                cue(t0 + 1.05, tag: "settleOut") { [unowned self] _ in self.enter(.settle); self.releaseCelebration() }
+                cue(t0 + 1.1, tag: "finish") { [unowned self] _ in self.finishBusy(finished: true) }
             }
         }
     }
@@ -571,7 +638,8 @@ final class TourFeedbackChoreographer {
             self.ring.to(target, dur: 0.3, ease: .lin)
             self.numOp.to(0, dur: 0.16, ease: .lin)
             self.chkScale.set(1)
-            self.chkDraw.to(1, dur: 0.16, ease: .lin)
+            // On the big ring the check is simply there (a static check, spec §B.10), not drawn.
+            if self.celebrating { self.chkDraw.set(1) } else { self.chkDraw.to(1, dur: 0.16, ease: .lin) }
         }
         if last {
             cue(t0 + 0.3) { [unowned self] _ in
@@ -586,14 +654,15 @@ final class TourFeedbackChoreographer {
             swapPending = true; swapFin = last
             cue(swapAt, tag: "handoff") { [unowned self] ff in self.handoff(fin: last, ff: ff) }
         } else {
-            cue(swapAt) { [unowned self] _ in self.revertCheckToNumber() }
+            cue(swapAt, tag: "settleOut") { [unowned self] _ in self.revertCheckToNumber(); self.releaseCelebration() }
         }
-        cue(t0 + (last ? 0.95 : 0.8)) { [unowned self] _ in self.finishBusy(finished: last) }
+        cue(t0 + (last ? 0.95 : 0.8), tag: "finish") { [unowned self] _ in self.finishBusy(finished: last) }
     }
 
     private func finishBusy(finished done: Bool = false) {
         busy = false
         closingRunning = false
+        celebrating = false
         if done { finished = true }
         enter(.idle)
     }
@@ -611,6 +680,8 @@ final class TourFeedbackChoreographer {
 
     private func handoff(fin: Bool, ff: Bool) {
         enter(.handoff)
+        // The ring flies back to its corner as the old content fades; the blur waits for the swap (`swapBody`).
+        if !keepCelebration, !ff, lift.v > 0.002 || lift.isActive { lift.to(0, dur: reduceMotion ? TourCelebrationTokens.reducedOut : TourCelebrationTokens.liftOut, ease: reduceMotion ? .lin : .io) }
         onHandoffStart?()
         // Fast-forwarded while a controller owns the swap: its own timer
         // delivers the swap and the old content stays visible until then.
@@ -646,6 +717,11 @@ final class TourFeedbackChoreographer {
     /// card), the three content blocks stagger in.
     private func swapBody(fin: Bool) {
         swapGeneration += 1
+        // The next content is in, still under the blur: let the blur go, so what it reveals is the next step.
+        if !keepCelebration, blur.v > 0.002 || blur.isActive {
+            blur.to(0, dur: reduceMotion ? TourCelebrationTokens.reducedOut : TourCelebrationTokens.release, ease: reduceMotion ? .lin : .io)
+            if lift.v > 0.002 || lift.isActive, !lift.isActive { lift.to(0, dur: reduceMotion ? TourCelebrationTokens.reducedOut : TourCelebrationTokens.liftOut, ease: reduceMotion ? .lin : .io) }
+        }
         // The dots animated so far belong to the card that just left.
         beats.removeAll()
         let quick = reduceMotion
@@ -705,6 +781,36 @@ final class TourFeedbackChoreographer {
         for k in Self.ordered(kids) where k.essential { runCueFF(k) }
     }
 
+    // MARK: Celebration (spec §B.10)
+
+    private func startCelebration() {
+        let rm = reduceMotion
+        blur.to(1, dur: rm ? TourCelebrationTokens.reducedIn : TourCelebrationTokens.fadeIn, ease: rm ? .lin : .out)
+        if rm { lift.to(1, dur: TourCelebrationTokens.reducedIn, ease: .lin) }
+        else { lift.to(1, springDuration: TourCelebrationTokens.liftSpringDuration, bounce: TourCelebrationTokens.liftSpringBounce) }
+    }
+
+    /// A sequence with no card swap to wait for (a step finished out of order): ring and blur let go together.
+    private func releaseCelebration() {
+        guard blur.v > 0.002 || blur.isActive || lift.v > 0.002 || lift.isActive else { return }
+        let rm = reduceMotion
+        blur.to(0, dur: rm ? TourCelebrationTokens.reducedOut : TourCelebrationTokens.release, ease: rm ? .lin : .io)
+        lift.to(0, dur: rm ? TourCelebrationTokens.reducedOut : TourCelebrationTokens.liftOut, ease: rm ? .lin : .io)
+    }
+
+    /// A click on the card ends the moment early (spec §B.10): the handoff starts right away instead of at its planned time and
+    /// the decoration that has not happened yet (sparks, confetti) is dropped. The ring flying home, the blur letting go and
+    /// the next content fading in follow as usual.
+    func endCelebrationEarly() {
+        guard celebrating, busy else { return }
+        let moved: Set<String> = ["handoff", "settleOut", "finish"]
+        if let planned = cues.filter({ moved.contains($0.tag ?? "") }).map(\.at).min() {
+            let delta = (now + TourCelebrationTokens.earlyHandoff) - planned
+            if delta < 0 { for i in cues.indices where moved.contains(cues[i].tag ?? "") { cues[i].at += delta } }
+        }
+        cues.removeAll { !$0.essential && $0.at > now }
+    }
+
     func reduceMotionChanged(to value: Bool) {
         guard value != reduceMotion else { return }
         if busy { interrupt() }
@@ -733,13 +839,14 @@ final class TourFeedbackChoreographer {
 
     private func spawnHalo(delay: Double = 0) {
         guard !reduceMotion, let g = geometry else { return }
-        let z = g.zoom * ringScale.v   // the prototype measures the LIVE ring, pop scale included
+        let z = (g.haloZoom ?? g.zoom) * ringScale.v   // the prototype measures the LIVE ring, pop scale included
         halos.append(TourFXHalo(x: Double(g.ringCenter.x), y: Double(g.ringCenter.y), z: z, age: -delay, life: 0.5))
     }
 
     private func spawnConfetti(_ n: Int) {
         guard !reduceMotion, let g = geometry else { return }
-        let z = g.zoom * ringScale.v   // the prototype measures the LIVE ring, pop scale included
+        // (celebration: the card did not grow, the confetti keeps its 1x scale while the sparks follow the big ring)
+        let z = g.confettiZoom ?? (g.zoom * ringScale.v)   // the prototype measures the LIVE ring, pop scale included
         let cols: [TourFXColor] = [.accent, .gold, .violet, .mint, .soft, .white]
         for i in 0..<n {
             let a = -Double.pi / 2 + (random.next() - 0.5) * (Double.pi / 3)
@@ -827,7 +934,8 @@ final class TourFeedbackChoreographer {
         swapPending = false; awaitingSwap = false; combo = 0; lastCompletionWall = -99
         ring.set(0); ringScale.set(1); ringW.set(Self.restLineWidth)
         numOp.set(1); numScale.set(1); numY.set(0)
-        chkDraw.set(0); chkScale.set(0.6); disc.set(0); seal.set(0); cardY.set(0)
+        chkDraw.set(0); chkScale.set(0.6); disc.set(0); seal.set(0); cardY.set(0); blur.set(0); lift.set(0)
+        celebrating = false
         contentOp.forEach { $0.set(1) }; contentY.forEach { $0.set(0) }
         phase = .idle
         event = nil
@@ -852,6 +960,9 @@ final class TourFeedbackChoreographer {
             f.disc = min(max(disc.v, 0), 1.05)
             f.seal = seal.v
             f.cardOffsetY = cardY.v
+            f.blur = min(max(blur.v, 0), 1)
+            f.lift = lift.v
+            f.celebrationQuiet = reduceMotion || reduceTransparency
             f.contentOpacity = contentOp.map { min(max($0.v, 0), 1) }
             f.contentOffsetY = contentY.map(\.v)
         }
