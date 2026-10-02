@@ -176,8 +176,13 @@ struct SettingsWindowView: View {
     @StateObject private var stage = DemoStageModel()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var confirmingClearHistory = false
-    /// Bumped after a permission request so the status rows re-query.
+    /// Bumped after a permission request so the status rows rebuild.
     @State private var permissionRefresh = 0
+    /// Last known permission statuses (queried off the main thread; see SettingsPermissionStatusStore).
+    @StateObject private var permissions = SettingsPermissionStatusStore()
+    /// Launch-at-login status, read once per appearance / change instead of in `body`
+    /// (`SMAppService.status` is a ~2.5 ms system call and `body` read it several times per evaluation).
+    @State private var loginStatus: SMAppService.Status
 
     /// Read fresh on every body evaluation — the tour isn't expected to be
     /// running while its own "keep going / again" button is on screen.
@@ -189,8 +194,8 @@ struct SettingsWindowView: View {
     /// first); false resumes from wherever it left off.
     var onRequestTour: (_ fromStart: Bool) -> Void = { AppMain.shared?.showTour(fromStart: $0) }
     /// Test seams: deterministic permission state for renders.
-    var automationStatusProvider: () -> OnboardingAuthorizationStatus = { OnboardingState.shared.automationStatus }
-    var appleMusicStatusProvider: () -> OnboardingAuthorizationStatus = { OnboardingState.shared.musicKitStatus }
+    var automationStatusProvider: @Sendable () -> OnboardingAuthorizationStatus = { OnboardingState.queryAutomationStatus() }
+    var appleMusicStatusProvider: @Sendable () -> OnboardingAuthorizationStatus = { OnboardingState.queryMusicKitStatus() }
 
     /// `hover` is a test seam: a screenshot can put the pointer on a row without
     /// synthesising mouse events.
@@ -199,6 +204,7 @@ struct SettingsWindowView: View {
         self.state = state
         self.tab = tab
         self.playerApp = playerApp
+        _loginStatus = State(initialValue: tab == .general ? LaunchAtLoginBridge.status : .notRegistered)
         _hover = StateObject(wrappedValue: hover ?? SettingsHoverIntentModel())
     }
 
@@ -224,6 +230,11 @@ struct SettingsWindowView: View {
             stage.reduceMotion = reduceMotion
             hover.resetStage()
             if let demo = tab.defaultDemo { stage.show(demo) }
+            refreshPermissions()
+        }
+        // The user may have changed a permission or the login item in System Settings.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if state.selectedTab == tab { refreshPermissions() }
         }
         .onChange(of: reduceMotion) { _, value in
             stage.reduceMotion = value
@@ -234,6 +245,7 @@ struct SettingsWindowView: View {
             guard selected == tab else { return }
             hover.resetStage()
             if let demo = tab.defaultDemo { stage.show(demo) }
+            refreshPermissions()
         }
         // The pointer rested on a row (dwell gate passed): that row's scene starts.
         .onChange(of: hover.commitCount) { _, _ in
@@ -310,7 +322,7 @@ struct SettingsWindowView: View {
             .fullscreenCover: UserDefaults.standard.bool(forKey: "fullscreenAlbumCover"),
             .edgeShowSongOnTrackChange: edgeShowSongBinding.wrappedValue,
             .showTranslation: lyricsService.showTranslation,
-            .launchAtLogin: LaunchAtLoginBridge.status == .enabled,
+            .launchAtLogin: loginStatus == .enabled,
             .showInDock: AppMain.shared?.showInDock ?? true,
         ]
         for demo in SettingsDemo.allCases {
@@ -449,7 +461,6 @@ struct SettingsWindowView: View {
 
     @ViewBuilder
     private var generalPage: some View {
-        let loginStatus = LaunchAtLoginBridge.status
         SettingsCard {
             SettingsRow(
                 demo: .launchAtLogin,
@@ -466,8 +477,13 @@ struct SettingsWindowView: View {
                         .buttonStyle(SettingsPushButtonStyle())
                     }
                     Toggle(isOn: Binding(
-                        get: { LaunchAtLoginBridge.status == .enabled },
-                        set: { LaunchAtLoginBridge.setEnabled($0); permissionRefresh += 1; stage.replay(.launchAtLogin, isOn: $0) }
+                        get: { loginStatus == .enabled },
+                        set: {
+                            LaunchAtLoginBridge.setEnabled($0)
+                            loginStatus = LaunchAtLoginBridge.status
+                            permissionRefresh += 1
+                            stage.replay(.launchAtLogin, isOn: $0)
+                        }
                     )) { Text(L10n.localized("launchAtLogin")) }
                         .toggleStyle(SettingsSwitchStyle())
                         .accessibilityLabel(L10n.localized("launchAtLogin"))
@@ -487,21 +503,23 @@ struct SettingsWindowView: View {
             SettingsRow(demo: .musicAutomation, title: L10n.localized("automation", player: playerApp),
                         detail: L10n.localized("automationDesc", player: playerApp), playerApp: playerApp) {
                 permissionControl(
-                    status: automationStatusProvider(),
+                    status: permissions.automation,
                     grant: {
                         onboardingState.requestAutomationAccess()
                         permissionRefresh += 1
+                        refreshPermissions()
                     },
                     openSettings: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")
             }
             SettingsDivider()
             SettingsRow(demo: .appleMusicAccess, title: L10n.localized("appleMusic", player: playerApp), playerApp: playerApp) {
                 permissionControl(
-                    status: appleMusicStatusProvider(),
+                    status: permissions.appleMusic,
                     grant: {
                         Task {
                             await musicController.requestMusicKitAccess()
                             permissionRefresh += 1
+                            refreshPermissions()
                         }
                     },
                     openSettings: "x-apple.systempreferences:com.apple.preference.security?Privacy_Media")
@@ -535,15 +553,17 @@ struct SettingsWindowView: View {
     }
 
     @ViewBuilder
-    private func permissionControl(status: OnboardingAuthorizationStatus, grant: @escaping () -> Void, openSettings: String) -> some View {
+    private func permissionControl(status: OnboardingAuthorizationStatus?, grant: @escaping () -> Void, openSettings: String) -> some View {
         HStack(spacing: 10) {
-            Text(permissionLabel(status))
+            // Not asked yet: reserve the label's room and show nothing rather than a wrong status.
+            Text(permissionLabel(status ?? .authorized))
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .fixedSize()
+                .opacity(status == nil ? 0 : 1)
             switch status {
-            case .authorized:
+            case .none, .authorized:
                 EmptyView()
             case .notDetermined:
                 Button(L10n.localized("automationGrant"), action: grant)
@@ -556,6 +576,13 @@ struct SettingsWindowView: View {
             }
         }
         .id(permissionRefresh)
+    }
+
+    /// Re-read the permission statuses (background) and the login status (one cheap read), for the General page.
+    private func refreshPermissions() {
+        guard tab == .general else { return }
+        loginStatus = LaunchAtLoginBridge.status
+        permissions.refresh(automation: automationStatusProvider, appleMusic: appleMusicStatusProvider)
     }
 
     private func permissionLabel(_ status: OnboardingAuthorizationStatus) -> String {

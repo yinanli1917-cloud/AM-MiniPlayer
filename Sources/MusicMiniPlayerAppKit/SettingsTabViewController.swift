@@ -102,6 +102,31 @@ final class SettingsTabViewController: NSTabViewController {
         return NSImage(systemSymbolName: tab.symbolName, accessibilityDescription: tab.title)
     }
 
+    /// Build the pages that are not on screen, once, while the window sits idle. A hidden page's SwiftUI tree
+    /// (first body, first layout, the KeyboardShortcuts recorders on Shortcuts, ...) is only instantiated when
+    /// its view first reaches a window, which otherwise happens inside the click that switches to it: that is
+    /// the tab-switch hitch. Each page is briefly parked in a throwaway off-screen window (never shown), laid
+    /// out, and handed back. One page per run-loop turn, spaced out, so no single idle slice is long.
+    func prewarmHiddenPages(initialDelay: TimeInterval = 0.6, spacing: TimeInterval = 0.15) {
+        let hidden = tabViewItems.enumerated().filter { $0.offset != selectedTabViewItemIndex }.compactMap(\.element.viewController)
+        for (i, page) in hidden.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + initialDelay + spacing * Double(i)) { [weak self, weak page] in
+                guard let self, let page, page.view.window == nil, self.tabView.selectedTabViewItem?.viewController !== page else { return }
+                let size = page.preferredContentSize.height > 0 ? page.preferredContentSize : NSSize(width: SettingsMetrics.windowWidth, height: 400)
+                let parking = NSWindow(contentRect: NSRect(origin: NSPoint(x: -30000, y: -30000), size: size),
+                                       styleMask: [.borderless], backing: .buffered, defer: true)
+                parking.isReleasedWhenClosed = false
+                parking.appearance = self.view.window?.appearance
+                let originalFrame = page.view.frame
+                parking.contentView = page.view
+                page.view.layoutSubtreeIfNeeded()
+                page.view.displayIfNeeded()
+                parking.contentView = NSView()
+                page.view.frame = originalFrame
+            }
+        }
+    }
+
     private func index(of tab: SettingsTab) -> Int {
         SettingsTab.visibleCases.firstIndex(of: tab) ?? 0
     }
@@ -130,6 +155,7 @@ final class SettingsTabViewController: NSTabViewController {
         state: SettingsWindowState,
         autosaveName: String?,
         playerApp: PlayerAppIdentity = .appleMusic,
+        prewarmHiddenPages: Bool = false,
         pageFactory: (SettingsTab) -> NSViewController
     ) -> NSWindow {
         let controller = SettingsTabViewController(state: state, playerApp: playerApp, pageFactory: pageFactory)
@@ -144,6 +170,7 @@ final class SettingsTabViewController: NSTabViewController {
            page.preferredContentSize.height > 0 {
             window.setContentSize(page.preferredContentSize)
         }
+        if prewarmHiddenPages { controller.prewarmHiddenPages() }
         return window
     }
 }

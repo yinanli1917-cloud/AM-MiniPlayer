@@ -51,7 +51,11 @@ public final class OnboardingState: ObservableObject {
 
     /// MusicKit 当前授权状态——与 `MusicController.musicKitAuthorized` 同一数据源
     /// (`MusicAuthorization.currentStatus`)，只读查询本身不弹窗。
-    public var musicKitStatus: OnboardingAuthorizationStatus {
+    public var musicKitStatus: OnboardingAuthorizationStatus { Self.queryMusicKitStatus() }
+
+    /// The same read as `musicKitStatus`, callable from any thread (a synchronous system query, ~10 ms:
+    /// UI code that must not block the main thread calls this from a background queue).
+    public nonisolated static func queryMusicKitStatus() -> OnboardingAuthorizationStatus {
         switch MusicAuthorization.currentStatus {
         case .authorized: return .authorized
         case .denied, .restricted: return .denied
@@ -67,7 +71,12 @@ public final class OnboardingState: ObservableObject {
         Self.queryAutomationStatus(askUserIfNeeded: false)
     }
 
-    static func queryAutomationStatus(askUserIfNeeded: Bool) -> OnboardingAuthorizationStatus {
+    /// Callable from any thread (a synchronous TCC query, ~10 ms; never prompts).
+    public nonisolated static func queryAutomationStatus() -> OnboardingAuthorizationStatus {
+        queryAutomationStatus(askUserIfNeeded: false)
+    }
+
+    nonisolated static func queryAutomationStatus(askUserIfNeeded: Bool) -> OnboardingAuthorizationStatus {
         var target = AEAddressDesc()
         let bundleID = "com.apple.Music"
         let status = bundleID.withCString { cString -> OSErr in

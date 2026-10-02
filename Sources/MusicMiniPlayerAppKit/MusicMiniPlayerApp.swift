@@ -766,12 +766,14 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
         guard settingsWindow == nil else { return }
         let state = settingsWindowState
         let musicController = self.musicController
+        // Answers for the General page's permission rows, fetched off the main thread before the first visit.
+        MainActor.assumeIsolated { SettingsPermissionStatusStore.warm() }
         // v3.2 + native toolbar tabs: one hosted page per tab; the strip, the
         // selection tint and the window title (= page name) are AppKit's.
         // Fixed size, no minimize (HIG Settings windows); each page's content
         // is 480 wide, its height follows the selected tab.
         let window = MainActor.assumeIsolated {
-            SettingsTabViewController.makeWindow(state: state, autosaveName: "Settings") { tab in
+            SettingsTabViewController.makeWindow(state: state, autosaveName: "Settings", prewarmHiddenPages: true) { tab in
                 SettingsTabViewController.hostPage(
                     SettingsWindowView(state: state, tab: tab)
                         .environmentObject(musicController))
