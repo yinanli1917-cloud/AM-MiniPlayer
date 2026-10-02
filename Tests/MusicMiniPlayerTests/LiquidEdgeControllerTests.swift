@@ -168,14 +168,36 @@ final class LiquidEdgeControllerTests: XCTestCase {
         XCTAssertLessThanOrEqual(stage.frame.minX, card.frame.minX, "the stage reaches the left screen edge")
     }
 
+    /// Founder 2026-10-01: a cursor passing over the tucked sliver (on its way somewhere else) popped the capsule out.
+    /// While the cursor keeps moving the dwell restarts; once it rests, the capsule comes out.
+    func test_hover_passingCursorDoesNotFloat_restingCursorDoes() throws {
+        try makeCard(edge: .right)
+        controller.collapse(to: .right)
+        settle()
+
+        var cursor = CGPoint(x: 100, y: 100)
+        controller.mouseLocation = { cursor }
+        controller.hoverEntered()
+        for _ in 0..<8 {                      // keeps moving ~20pt every 0.1s for 0.8s
+            spin(0.1)
+            cursor.y += 20
+        }
+        XCTAssertEqual(controller.state, .tucked, "a moving cursor must not pop the capsule out")
+
+        spin(0.6)                              // now it rests
+        XCTAssertEqual(controller.state, .floating, "a resting cursor brings the capsule out")
+    }
+
     func test_hover_floatsCapsule_prewarmsPanel_thenRetractsAndParks() throws {
         try makeCard(edge: .right)
         controller.collapse(to: .right)
         settle()
 
+        controller.mouseLocation = { .zero }
+
         controller.hoverEntered()
         XCTAssertEqual(controller.state, .tucked, "hover must dwell before floating out")
-        spin(0.2)
+        spin(0.35)
         XCTAssertEqual(controller.state, .floating)
         settle()
         XCTAssertTrue(card.isVisible, "capsule resting: the panel is back on-window, ready to expand")
@@ -183,8 +205,9 @@ final class LiquidEdgeControllerTests: XCTestCase {
         XCTAssertTrue(card.ignoresMouseEvents, "the invisible panel must not catch clicks")
 
         // Resting on the capsule keeps the capsule (founder 2026-09-23).
+        controller.mouseLocation = { .zero }
         controller.hoverEntered()
-        spin(0.3)
+        spin(0.45)
         XCTAssertEqual(controller.state, .floating, "hovering the capsule must not expand it")
         XCTAssertFalse(controller.isAnimating)
 
@@ -199,8 +222,9 @@ final class LiquidEdgeControllerTests: XCTestCase {
         let frame = card.frame
         controller.collapse(to: .right)
         settle()
+        controller.mouseLocation = { .zero }
         controller.hoverEntered()
-        spin(0.2)
+        spin(0.35)
         settle()
 
         controller.expand()

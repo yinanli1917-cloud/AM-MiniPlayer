@@ -78,8 +78,10 @@ final class LiquidEdgeControllerTourHooksTests: XCTestCase {
         XCTAssertTrue(settle())
         XCTAssertEqual(received, [.card, .collapsing, .tucked])
 
+        controller.mouseLocation = { .zero }
+
         controller.hoverEntered()
-        spin(0.2)
+        spin(0.35)
         XCTAssertTrue(settle())
         XCTAssertEqual(received, [.card, .collapsing, .tucked, .floating])
 
@@ -121,8 +123,10 @@ final class LiquidEdgeControllerTourHooksTests: XCTestCase {
         XCTAssertTrue(settle())
         let tuckedRegion = controller.tuckedRegionInScreen
 
+        controller.mouseLocation = { .zero }
+
         controller.hoverEntered()
-        spin(0.2)
+        spin(0.35)
         XCTAssertTrue(settle())
         let floatingRegion = controller.floatingHitRegionInScreen
         XCTAssertGreaterThanOrEqual(floatingRegion.height, tuckedRegion.height, "the floating hit region must cover at least the sliver's own span")

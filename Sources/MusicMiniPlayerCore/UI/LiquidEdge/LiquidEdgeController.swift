@@ -302,14 +302,28 @@ public final class LiquidEdgeController {
         peekWork?.cancel()
         guard state == .tucked else { return }
         stage?.setHoverBoost(true)
+        scheduleDwell(from: mouseLocation())
+    }
+
+    /// Hover intent: the capsule comes out only once the cursor has stayed (nearly) still on the sliver for the whole
+    /// dwell — a cursor passing over the tucked panel keeps restarting the dwell and exits before it fires.
+    private func scheduleDwell(from anchor: CGPoint) {
         dwellWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.state == .tucked, self.hovering else { return }
+            let now = self.mouseLocation()
+            if hypot(now.x - anchor.x, now.y - anchor.y) > LiquidEdgeTokens.hoverStillness {
+                self.scheduleDwell(from: now)
+                return
+            }
             self.transition(.hoverEntered, settle: nil, kind: .floatOut)
         }
         dwellWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + LiquidEdgeTokens.hoverDwell, execute: work)
     }
+
+    /// Cursor position for the hover-intent check; a seam so tests can hold the cursor still or move it.
+    var mouseLocation: () -> CGPoint = { NSEvent.mouseLocation }
 
     func hoverExited() {
         hovering = false

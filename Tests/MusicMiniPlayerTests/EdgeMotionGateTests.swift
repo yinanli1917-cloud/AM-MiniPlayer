@@ -146,8 +146,10 @@ final class EdgeMotionGateTests: XCTestCase {
         settle()
         XCTAssertFalse(gate.isActive, "tucked at rest: the frame budget is free again")
 
+        controller.mouseLocation = { .zero }
+
         controller.hoverEntered()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3)) // dwell
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4)) // dwell
         XCTAssertTrue(gate.isActive, "the peek is a motion too")
         settle()
         XCTAssertFalse(gate.isActive)
@@ -158,8 +160,9 @@ final class EdgeMotionGateTests: XCTestCase {
         try makeController(gate: gate)
         XCTAssertTrue(controller.collapse(to: .right))
         settle()
+        controller.mouseLocation = { .zero }
         controller.hoverEntered()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
         now += 0.05
         controller.tick(at: now)
         controller.expand() // retargets the running motion
