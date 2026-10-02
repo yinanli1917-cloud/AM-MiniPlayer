@@ -337,6 +337,8 @@ public class MusicController: ObservableObject {
     /// True when the current artwork is only a placeholder. Placeholders must not count as
     /// successful artwork for the current generation, otherwise fetch failures are hidden.
     var currentArtworkIsPlaceholder = false
+    /// Supersedes in-flight luminance sampling when a newer cover is set (setArtwork).
+    var artworkMetricsGeneration = 0
     /// Last artworkQueue heartbeat. More than 5s without a heartbeat is treated as a stall.
     var lastArtworkQueueHeartbeat = Date()
     /// Last scriptingBridgeQueue heartbeat. Radio URL track SB IPC may hang indefinitely and block later polls.

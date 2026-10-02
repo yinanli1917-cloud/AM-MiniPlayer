@@ -30,9 +30,31 @@ public final class AudioOutputDeviceService: ObservableObject {
     }
 
     public func refresh() {
+        refreshGeneration &+= 1
         let defaultID = Self.readDefaultOutputDeviceID()
         defaultDeviceID = defaultID
         devices = Self.readOutputDevices(defaultDeviceID: defaultID)
+    }
+
+    private var refreshGeneration = 0
+
+    /// The same refresh with the Core Audio reads off the main thread. Each read is a
+    /// synchronous XPC to coreaudiod, a handful per output device; a device-list change
+    /// (Bluetooth connect, a monitor waking, a virtual display) used to block the main
+    /// thread for that whole round trip, landing wherever the panel was animating.
+    /// A newer refresh (or a user-initiated `refresh()`) supersedes one in flight.
+    private func refreshInBackground() {
+        refreshGeneration &+= 1
+        let generation = refreshGeneration
+        Task.detached(priority: .utility) {
+            let defaultID = Self.readDefaultOutputDeviceID()
+            let devices = Self.readOutputDevices(defaultDeviceID: defaultID)
+            await MainActor.run { [weak self] in
+                guard let self, self.refreshGeneration == generation else { return }
+                self.defaultDeviceID = defaultID
+                self.devices = devices
+            }
+        }
     }
 
     @discardableResult
@@ -77,7 +99,7 @@ public final class AudioOutputDeviceService: ObservableObject {
     private func installListeners() {
         let refreshBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             Task { @MainActor in
-                self?.refresh()
+                self?.refreshInBackground()
             }
         }
 
@@ -93,7 +115,7 @@ public final class AudioOutputDeviceService: ObservableObject {
 
         let defaultBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             Task { @MainActor in
-                self?.refresh()
+                self?.refreshInBackground()
             }
         }
 

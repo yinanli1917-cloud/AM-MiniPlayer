@@ -119,17 +119,31 @@ extension MusicController {
     func setArtwork(_ image: NSImage?, isPlaceholder: Bool = false) {
         self.currentArtwork = image
         self.currentArtworkIsPlaceholder = image == nil ? false : isPlaceholder
-        if let img = image {
-            let metrics = img.artworkBrightnessRegions()
-            self.artworkLuminance = metrics.overall
-            self.topLeftArtworkLuminance = metrics.topLeft
-            self.topRightArtworkLuminance = metrics.topRight
-        } else {
+        artworkMetricsGeneration &+= 1
+        guard let img = image else {
             self.artworkLuminance = 0.5
             self.topLeftArtworkLuminance = 0.5
             self.topRightArtworkLuminance = 0.5
+            return
+        }
+        // Sampling the luminance draws the whole cover (decode + colour conversion, 15ms
+        // and more for a large one): off the main thread, where it landed inside whatever
+        // edge animation a track change starts. Consumers already follow the published
+        // values (`onChange(of: artworkLuminance)`); the previous cover's values stand
+        // for the few ms until these arrive, and a newer cover supersedes them.
+        let generation = artworkMetricsGeneration
+        Self.artworkMetricsQueue.async { [weak self] in
+            let metrics = img.artworkBrightnessRegions()
+            DispatchQueue.main.async {
+                guard let self, self.artworkMetricsGeneration == generation else { return }
+                self.artworkLuminance = metrics.overall
+                self.topLeftArtworkLuminance = metrics.topLeft
+                self.topRightArtworkLuminance = metrics.topRight
+            }
         }
     }
+
+    private static let artworkMetricsQueue = DispatchQueue(label: "nanoPod.artwork-metrics", qos: .userInitiated)
 
     /// 统一缓存键 — 仅为非空 persistentID 返回 key。
     /// 🔑 Radio/URL tracks deliberately return nil (uncached):
@@ -372,9 +386,11 @@ extension MusicController {
         if !isPreview {
             Task { [weak self] in
                 guard let self else { return }
-                guard let image = await self.withArtworkTimeout(seconds: 1.6, operation: {
+                guard let fetched = await self.withArtworkTimeout(seconds: 1.6, operation: {
                     await PlaybackSessionArtworkFetcher.fetchArtwork(title: title, artist: artist, album: album)
                 }) else { return }
+                // Decoded here, off the main thread (see makeDisplayArtwork).
+                let image = ArtworkDisplayImageFactory.makeDisplayArtwork(from: fetched)
                 await MainActor.run {
                     self.applyArtworkIfCurrent(
                         image,
@@ -397,8 +413,10 @@ extension MusicController {
             guard let self else { return }
             if let result = await self.fetchArtworkResult(title: title, artist: artist, album: album, priority: .nowPlaying) {
                 self.logToFile("🎨 [API] SUCCESS! Got \(result.source) image \(result.image.size)")
+                // Decoded here, off the main thread (see makeDisplayArtwork).
+                let displayImage = ArtworkDisplayImageFactory.makeDisplayArtwork(from: result.image)
                 await MainActor.run {
-                    self.applyArtworkIfCurrent(result.image, persistentID: persistentID, title: title, artist: artist, album: album, generation: generation, source: result.source)
+                    self.applyArtworkIfCurrent(displayImage, persistentID: persistentID, title: title, artist: artist, album: album, generation: generation, source: result.source)
                 }
             } else {
                 guard !Task.isCancelled else { return }
@@ -485,8 +503,10 @@ extension MusicController {
                 }
 
                 self.logToFile("🎨 [SB] Starting ScriptingBridge fetch...")
-                if let image = self.getArtworkImageFromApp(app) {
-                    self.logToFile("🎨 [SB] SUCCESS! Got image \(image.size)")
+                if let fetched = self.getArtworkImageFromApp(app) {
+                    self.logToFile("🎨 [SB] SUCCESS! Got image \(fetched.size)")
+                    // Decoded here, off the main thread (see makeDisplayArtwork).
+                    let image = ArtworkDisplayImageFactory.makeDisplayArtwork(from: fetched)
                     DispatchQueue.main.async {
                         self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title, artist: artist, album: album, generation: generation, source: .sb)
                     }
@@ -1977,7 +1997,8 @@ extension MusicController {
         debugPrint("🔄 [retryArtworkFetch] Retrying API for \(title)...\n")
 
         if let result = await fetchArtworkResult(title: title, artist: artist, album: album, priority: .nowPlaying) {
-            await applyArtworkIfCurrent(result.image, persistentID: persistentID, title: title, artist: artist, album: album, generation: generation, source: result.source)
+            let displayImage = ArtworkDisplayImageFactory.makeDisplayArtwork(from: result.image)
+            await applyArtworkIfCurrent(displayImage, persistentID: persistentID, title: title, artist: artist, album: album, generation: generation, source: result.source)
             debugPrint("✅ [retryArtworkFetch] API retry success\n")
         } else {
             debugPrint("⚠️ [retryArtworkFetch] API retry failed for \(title)\n")

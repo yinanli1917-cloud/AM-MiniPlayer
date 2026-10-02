@@ -1,5 +1,28 @@
 import AppKit
 
+/// `artworkVisualMetrics()` remembered per image instance. Several views derive their tone
+/// from the same cover; the first one to ask (off the main thread when it can) pays the
+/// decode, the others and every later re-created view read the result.
+enum ArtworkVisualMetricsMemo {
+    private final class Box { let metrics: ArtworkVisualMetrics; init(_ m: ArtworkVisualMetrics) { metrics = m } }
+    private static let lock = NSLock()
+    private static let table = NSMapTable<NSImage, Box>(keyOptions: .weakMemory, valueOptions: .strongMemory)
+
+    static func cached(for image: NSImage) -> ArtworkVisualMetrics? {
+        lock.lock(); defer { lock.unlock() }
+        return table.object(forKey: image)?.metrics
+    }
+
+    /// The metrics, computed on the calling thread when not remembered yet.
+    static func metrics(for image: NSImage) -> ArtworkVisualMetrics {
+        if let hit = cached(for: image) { return hit }
+        let computed = image.artworkVisualMetrics()
+        lock.lock(); defer { lock.unlock() }
+        table.setObject(Box(computed), forKey: image)
+        return computed
+    }
+}
+
 extension NSImage {
     // 🔑 共享 CIContext，避免重复创建（性能优化）
     private static let sharedCIContext = CIContext(options: [.useSoftwareRenderer: false])
