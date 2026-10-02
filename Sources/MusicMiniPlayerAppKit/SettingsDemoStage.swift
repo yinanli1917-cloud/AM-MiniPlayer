@@ -65,6 +65,12 @@ enum SettingsDemo: String, CaseIterable {
     }
 }
 
+extension SettingsDemo {
+    /// The page's first scene plays once when its page appears (instead of sitting as a still until a
+    /// row is hovered): the Launch at Login scene, which as a still read as a frozen, dimmed picture.
+    var playsIntroOnAppear: Bool { self == .launchAtLogin }
+}
+
 extension SettingsTab {
     /// The scene the stage shows before any row has been rested on.
     var defaultDemo: SettingsDemo? {
@@ -161,6 +167,15 @@ final class DemoStageModel: ObservableObject {
     func show(_ demo: SettingsDemo) {
         if let f = frontSlot, f.demo == demo, f.playback == .rest { return }
         present(demo, .rest)
+    }
+
+    /// Play `demo`'s switched-ON story once from its first frame to its on-rest frame, then hold there. Only
+    /// when `demo` is the scene on stage at rest, so it never cuts across something the user already started.
+    /// One run, a schedule that ends at the last frame: no clock keeps ticking afterwards.
+    func playIntro(_ demo: SettingsDemo) {
+        guard demo.timing.isAnimated, !reduceMotion, let front = frontSlot, front.demo == demo, front.playback == .rest else { return }
+        let end = demo.timing.restTime(on: true)
+        slots[self.front]?.playback = .run(DemoRun(kind: .once(from: 0, to: end), start: now(), isOn: true, stopAt: nil))
     }
 
     /// The pointer rested on `demo`'s row: loop its scene (a still scene just fades in).

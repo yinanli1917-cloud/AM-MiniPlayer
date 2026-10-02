@@ -27,8 +27,8 @@ final class SettingsDemoFrameRenderTests: XCTestCase {
         ("transTo", .translateTo, [0.3, 1.2, 1.85, 2.5, 5.2, 6.7]),
         ("showhide", .showHidePlayerShortcut, [0.3, 1.07, 1.16, 1.6, 3.57, 3.8, 5.0]),
         ("hideEdge", .hideToEdgeShortcut, [0.3, 1.07, 1.5, 2.2, 4.5, 5.0]),
-        // General-page scenes from spec A.9 (no prototype counterpart: written for the eye, not compared).
-        ("login", .launchAtLogin, [0.3, 0.9, 1.25, 2.6, 3.6]),
+        // Launch at Login has a prototype counterpart (spec A.9); Show in Dock does not (written for the eye, not compared).
+        ("login", .launchAtLogin, [0.3, 0.9, 1.4, 1.8, 2.2, 3.0, 3.6, 4.2]),
         ("dock", .showInDock, [0.3, 1.25, 2.6, 3.85]),
         // Stills (no prototype counterpart either): the fullscreen-look album panel / history page.
         ("tour", .gettingToKnowNanoPod, [0]),
@@ -132,7 +132,7 @@ final class SettingsDemoFrameRenderTests: XCTestCase {
                 (.edgeShowSongOnTrackChange, 0.3, (170, 24, 104)),
                 (.showHidePlayerShortcut, 0.3, (184, 26, 92)),
                 (.hideToEdgeShortcut, 0.3, (170, 24, 104)),
-                (.launchAtLogin, 2.6, (108, 34, 104)),
+                (.launchAtLogin, 3.0, (176, 26, 100)),
                 (.appleMusicAccess, 0, (108, 26, 104)),
             ]
             for (demo, t, g) in cases {

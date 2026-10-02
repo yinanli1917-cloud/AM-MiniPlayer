@@ -202,11 +202,31 @@ enum DemoDrawing {
         drawKeycaps(&ctx, p, labels: f.keys, press: f.press)
     }
 
+    /// Where the menu-bar nanoPod note sits (scene units): the panel grows out of this point.
+    private static let noteAnchor = CGPoint(x: 238.5, y: 6)
+
     private static func drawLogin(_ f: LoginFrame, _ panel: CoverFrame, _ ctx: inout GraphicsContext, _ p: DemoPalette) {
-        drawMenuBar(&ctx, p, noteScale: f.noteScale, noteOpacity: f.noteOpacity)
-        drawAlbumPanel(&ctx, p, x: 108, y: 34, pw: 104, cover: panel)
-        ctx.fill(Path(CGRect(origin: .zero, size: CGSize(width: sceneWidth, height: sceneSize.height + 1))),
-                 with: .color(.black.opacity(f.dim)))
+        drawMenuBar(&ctx, p, noteScale: f.noteScale, noteOpacity: f.noteOpacity, clockAlt: f.clockAlt, clockDip: f.clockDip)
+        if f.panel > 0.001 {
+            var c = ctx
+            c.fadeGroup(f.panel)
+            c.translateBy(x: noteAnchor.x, y: noteAnchor.y)
+            c.scaleBy(x: CGFloat(demoLerp(0.9, 1, f.panel)), y: CGFloat(demoLerp(0.9, 1, f.panel)))
+            c.translateBy(x: -noteAnchor.x, y: -noteAnchor.y)
+            c.drawLayer { l in drawAlbumPanel(&l, p, x: 176, y: 26, pw: 100, cover: panel) }
+        }
+        let full = CGRect(origin: .zero, size: CGSize(width: sceneWidth, height: sceneSize.height + 1))
+        ctx.fill(Path(full), with: .color(.black.opacity(f.dim * LoginFrame.veil)))
+        if f.sweepAlpha > 0.001 {
+            let band: CGFloat = 120
+            let x = CGFloat(demoLerp(-Double(band), Double(sceneWidth), f.sweep))
+            let glow = StageChrome.sweep(dark: p.dark)
+            ctx.fill(Path(CGRect(x: x, y: 0, width: band, height: full.height)), with: .linearGradient(
+                Gradient(stops: [.init(color: glow.opacity(0), location: 0),
+                                 .init(color: glow.opacity(f.sweepAlpha), location: 0.5),
+                                 .init(color: glow.opacity(0), location: 1)]),
+                startPoint: CGPoint(x: x, y: 0), endPoint: CGPoint(x: x + band, y: 0)))
+        }
     }
 
     private static func drawDock(_ f: DockFrame, _ ctx: inout GraphicsContext, _ p: DemoPalette) {
@@ -275,7 +295,8 @@ enum DemoDrawing {
 
     /// Prototype `.menubar`: 12pt, translucent, hairline below; Apple mark, five menu blocks,
     /// then (right to left) time, control centre, battery, Wi-Fi, the accent-coloured nanoPod note.
-    static func drawMenuBar(_ ctx: inout GraphicsContext, _ p: DemoPalette, noteScale: Double = 1, noteOpacity: Double = 1) {
+    static func drawMenuBar(_ ctx: inout GraphicsContext, _ p: DemoPalette, noteScale: Double = 1, noteOpacity: Double = 1,
+                            clockAlt: Double = 0, clockDip: Double = 0) {
         let barRect = CGRect(x: 0, y: 0, width: sceneWidth, height: 12)
         ctx.fill(Path(barRect), with: .color(p.menubar))
         ctx.fill(Path(CGRect(x: 0, y: 12, width: sceneWidth, height: 0.5)), with: .color(p.glassLine))
@@ -298,11 +319,12 @@ enum DemoDrawing {
             c.fill(Path(roundedRect: r, cornerRadius: 1.5), with: .color(ink))
             x += CGFloat(w) + 5
         }
-        // Clock.
+        // Clock (a reading that can tick: it narrows a little and dips while it swaps).
         do {
             var c = ctx
-            c.opacity = 0.55
-            c.fill(Path(roundedRect: CGRect(x: 296, y: 4.5, width: 16, height: 3), cornerRadius: 1.5), with: .color(ink))
+            c.opacity = 0.55 * (1 - 0.65 * clockDip)
+            let width = demoLerp(16, 13, clockAlt)
+            c.fill(Path(roundedRect: CGRect(x: 312 - width, y: 4.5, width: width, height: 3), cornerRadius: 1.5), with: .color(ink))
         }
         // Control centre (viewBox 10×8 in 8×6.5, meet → scale 0.8).
         do {

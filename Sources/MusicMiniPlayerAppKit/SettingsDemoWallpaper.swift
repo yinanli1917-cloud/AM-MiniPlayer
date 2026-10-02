@@ -99,6 +99,13 @@ enum StageChrome {
     /// RGB of every soft shadow on the stage (panel, glass card, keycap): a warm brown-black.
     static let shadowRGB: (r: Double, g: Double, b: Double) = (38 / 255, 22 / 255, 18 / 255)
 
+    /// The power-on glow that sweeps the stage in the Launch at Login scene: soft white by day, a warm
+    /// peach at low strength by night.
+    static func sweep(dark: Bool) -> Color {
+        dark ? Color(.sRGB, red: 1, green: 214 / 255, blue: 184 / 255, opacity: 0.22)
+             : Color(.sRGB, red: 1, green: 1, blue: 1, opacity: 0.55)
+    }
+
     static func shadow(_ opacity: Double) -> Color {
         Color(.sRGB, red: shadowRGB.r, green: shadowRGB.g, blue: shadowRGB.b, opacity: opacity)
     }

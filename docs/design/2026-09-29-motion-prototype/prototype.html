@@ -19,7 +19,7 @@
   --glass:rgba(255,255,255,.86); --glass-ink:#1d1d1f; --glass-line:rgba(0,0,0,.07);
   --menubar:rgba(255,255,255,.55); --bgwin:rgba(255,255,255,.55); --bgwin-line:rgba(0,0,0,.08);
   --strip:rgba(255,255,255,.75); --keyface:#ffffff; --keyedge:#c9c9cf; --keyink:#3a3a3f;
-  --cap-ink:rgba(46,30,26,.6);
+  --cap-ink:rgba(46,30,26,.6); --sweep:rgba(255,255,255,.55);
   /* 引导卡 */
   --tcard-bg:rgba(255,255,255,.78); --tcard-ink:#1d1d1f; --tcard-muted:#6e6e73; --tcard-line:rgba(0,0,0,.08);
   --tcard-shadow:0 14px 34px rgba(30,30,70,.22);
@@ -37,7 +37,7 @@
     --glass:rgba(48,48,54,.86); --glass-ink:#f5f5f7; --glass-line:rgba(255,255,255,.09);
     --menubar:rgba(26,20,18,.45); --bgwin:rgba(46,38,35,.6); --bgwin-line:rgba(255,255,255,.08);
     --strip:rgba(255,255,255,.55); --keyface:#48484e; --keyedge:#1b1b1e; --keyink:#f2f2f6;
-    --cap-ink:rgba(255,241,234,.62);
+    --cap-ink:rgba(255,241,234,.62); --sweep:rgba(255,214,184,.22);
     --tcard-bg:rgba(44,44,50,.78); --tcard-ink:#f2f2f6; --tcard-muted:#a9a9b6; --tcard-line:rgba(255,255,255,.1);
     --tcard-shadow:0 14px 34px rgba(0,0,0,.5);
     color-scheme:dark;
@@ -55,7 +55,7 @@
   --glass:rgba(48,48,54,.86); --glass-ink:#f5f5f7; --glass-line:rgba(255,255,255,.09);
   --menubar:rgba(26,20,18,.45); --bgwin:rgba(46,38,35,.6); --bgwin-line:rgba(255,255,255,.08);
   --strip:rgba(255,255,255,.55); --keyface:#48484e; --keyedge:#1b1b1e; --keyink:#f2f2f6;
-  --cap-ink:rgba(255,241,234,.62);
+  --cap-ink:rgba(255,241,234,.62); --sweep:rgba(255,214,184,.22);
   --tcard-bg:rgba(44,44,50,.78); --tcard-ink:#f2f2f6; --tcard-muted:#a9a9b6; --tcard-line:rgba(255,255,255,.1);
   --tcard-shadow:0 14px 34px rgba(0,0,0,.5);
   color-scheme:dark;
@@ -175,6 +175,10 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 .menubar .st .np{fill:var(--accent);opacity:1;width:5px;height:6.5px}
 .menubar .st .tm{display:block;width:16px;height:3px;border-radius:2px;background:currentColor;opacity:.55;margin-left:1px}
 .abs{position:absolute}
+/* 登录时启动：台面薄纱 + 通电光带 */
+.dimmer{position:absolute;inset:0;background:#000;opacity:0;pointer-events:none;z-index:5}
+.sweep{position:absolute;top:0;bottom:0;left:0;width:120px;background:linear-gradient(90deg,transparent,var(--sweep),transparent);opacity:0;pointer-events:none;z-index:6;will-change:transform,opacity}
+.menubar .st .tm{transform-origin:100% 50%}
 .strip{position:absolute;right:0;top:70px;width:5px;height:40px;border-radius:3px 0 0 3px;background:var(--strip);overflow:hidden;box-shadow:0 0 0 .5px var(--glass-line)}
 .strip .fill{position:absolute;left:0;bottom:0;width:100%;background:var(--accent);border-radius:3px}
 .vcard{position:absolute;right:7px;top:39px;width:60px;height:102px;border-radius:13px;overflow:hidden;
@@ -406,7 +410,10 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
             <div class="grp" id="grpPlayer"></div>
             <div class="foot">译文来自系统翻译，只在本机处理。</div>
           </div>
-          <div class="pane" data-pane="general"><div class="ph">本原型不含这一段。通用段沿用同一个演示台：登录时启动 / 在 Dock 显示两行各配一段小动画，规格见 spec.md §A.9。</div></div>
+          <div class="pane" data-pane="general">
+            <div class="grp" id="grpGeneral"></div>
+            <div class="foot">本原型只画了通用段的第一行；在 Dock 显示见 spec.md §A.9。</div>
+          </div>
           <div class="pane" data-pane="shortcuts">
             <div class="grp" id="grpShortcuts"></div>
             <div class="foot">快捷键全局生效；默认未设置。</div>
@@ -665,6 +672,29 @@ const SCENES = {
       };
     }
   },
+  login: {
+    name: '登录时启动', loop: 5.4, once: { on: [0.45, 3.0], off: [3.3, 4.4] }, rest: sw => sw ? 3.0 : 0.3,
+    build(el) {
+      /* 安静的、略带薄纱的桌面 → 薄纱褪去、光带扫过 → 菜单栏时钟走一分、♪ 弹出 → nanoPod 面板从 ♪ 处淡入并放大到位 → 停住 → 反向收回。幅度很低。 */
+      el.innerHTML = `${MENUBAR}<div class="abs" id="p" style="left:176px;top:26px;transform-origin:62.5px -20px">${panelHTML(100)}</div>
+        <div class="dimmer" id="dim"></div><div class="sweep" id="sweep"></div>`;
+      fullscreenLook(el);
+      const p = el.querySelector('#p'), dim = el.querySelector('#dim'), sweep = el.querySelector('#sweep'),
+            np = el.querySelector('.np'), tm = el.querySelector('.tm');
+      return t => {
+        const d = sv(t, 1, [[0.55, 0, 'io', .7], [3.7, 1, 'io', .6]]);
+        const sw = sv(t, 0, [[0.55, 1, 'io', 1.2]]);
+        const pop = sv(t, 0, [[1.1, 1, 'io', .5], [3.5, 0, 'io', .3]]);
+        const clk = sv(t, 0, [[1.9, 1, 'io', .25], [3.8, 0, 'io', .25]]);
+        const pan = sv(t, 0, [[1.5, 1, 'out', .65], [3.4, 0, 'out', .4]]);
+        dim.style.opacity = d * .22;
+        sweep.style.transform = `translateX(${lerp(-120, 320, sw)}px)`; sweep.style.opacity = bump(t, 0.55, 1.2);
+        np.style.opacity = pop; np.style.transform = `scale(${lerp(.6, 1, pop)})`;
+        tm.style.transform = `scaleX(${lerp(1, 13 / 16, clk)})`; tm.style.opacity = .55 * (1 - .65 * Math.max(bump(t, 1.9, .25), bump(t, 3.8, .25)));
+        p.style.opacity = pan; p.style.transform = `scale(${lerp(.9, 1, pan)})`;
+      };
+    }
+  },
   hideEdge: {
     name: '贴边隐藏', loop: 7.0, once: { on: [0.6, 2.6], off: [0.6, 2.6] }, rest: () => 0.3,
     build(el) {
@@ -729,6 +759,9 @@ const ROWS = {
     { id: 'trans', scene: 'trans', title: '显示翻译', desc: '译文显示在原文下方。', ctl: 'sw' },
     { id: 'transTo', scene: 'transTo', title: '翻译为', desc: '', ctl: 'pop' }
   ],
+  general: [
+    { id: 'login', scene: 'login', title: '登录时启动', desc: '', ctl: 'sw' }
+  ],
   shortcuts: [
     { id: 'showhide', scene: 'showhide', title: '显示 / 隐藏面板', desc: '', ctl: 'rec', rec: '⌥⌘P' },
     { id: 'hideEdge', scene: 'hideEdge', title: '贴边隐藏', desc: '', ctl: 'rec', rec: '⌥⌘E' }
@@ -736,7 +769,7 @@ const ROWS = {
 };
 const rowEls = {};
 for (const tab of Object.keys(ROWS)) {
-  const grp = $(tab === 'player' ? '#grpPlayer' : '#grpShortcuts');
+  const grp = $({ player: '#grpPlayer', general: '#grpGeneral', shortcuts: '#grpShortcuts' }[tab]);
   for (const r of ROWS[tab]) {
     A.sw[r.id] = true;
     const el = document.createElement('div'); el.className = 'row' + (r.desc ? '' : ' one'); el.dataset.row = r.id;
@@ -748,7 +781,7 @@ for (const tab of Object.keys(ROWS)) {
     grp.appendChild(el); rowEls[r.id] = el; r.el = el; r.tab = tab;
   }
 }
-const ROWLIST = [...ROWS.player, ...ROWS.shortcuts];
+const ROWLIST = [...ROWS.player, ...ROWS.general, ...ROWS.shortcuts];
 const rowById = id => ROWLIST.find(r => r.id === id);
 
 const capEl = $('#stagecap');
@@ -865,6 +898,10 @@ $('#seg').addEventListener('click', e => {
   $$('.pane').forEach(p => p.classList.toggle('on', p.dataset.pane === b.dataset.tab));
   A.tab = b.dataset.tab;
   if (ROWS[A.tab]) show(ROWS[A.tab][0], 'still');
+  /* 通用段第一幕：页面出现后等 0.45 s（让开窗口尺寸动画），把「登录时启动」的开启过程放一遍然后停住（Reduce Motion 不放）。 */
+  if (A.tab === 'general' && !S.rm) setTimeout(() => {
+    if (A.tab === 'general' && A.still && A.still.r.id === 'login' && !A.run) show(ROWS.general[0], 'once');
+  }, 450);
 });
 
 /* ------ 演示区尺寸候选 */

@@ -39,6 +39,8 @@ enum SettingsMetrics {
     static let rowIconSize: CGFloat = 20
     /// Gap under the last element of every page (native Settings look).
     static let pageBottomInset: CGFloat = 20
+    /// How long a page waits after appearing before its first scene's intro starts (past the window-resize animation).
+    static let introDelayNanoseconds: UInt64 = 450_000_000
     /// The DEBUG-only Diagnostics page is a scrolling panel, so it gets a fixed height.
     static let diagnosticsPageHeight: CGFloat = 309
 }

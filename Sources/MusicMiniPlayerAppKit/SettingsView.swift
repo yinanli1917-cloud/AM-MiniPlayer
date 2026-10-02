@@ -183,6 +183,9 @@ struct SettingsWindowView: View {
     /// Launch-at-login status, read once per appearance / change instead of in `body`
     /// (`SMAppService.status` is a ~2.5 ms system call and `body` read it several times per evaluation).
     @State private var loginStatus: SMAppService.Status
+    /// The pending first-scene intro (waits a beat after the page appears so it never starts in the same
+    /// frames as the window-resize animation).
+    @State private var introTask: Task<Void, Never>?
 
     /// Read fresh on every body evaluation — the tour isn't expected to be
     /// running while its own "keep going / again" button is on screen.
@@ -229,9 +232,10 @@ struct SettingsWindowView: View {
         .onAppear {
             stage.reduceMotion = reduceMotion
             hover.resetStage()
-            if let demo = tab.defaultDemo { stage.show(demo) }
+            if let demo = tab.defaultDemo { stage.show(demo); scheduleIntro(demo) }
             refreshPermissions()
         }
+        .onDisappear { introTask?.cancel() }
         // The user may have changed a permission or the login item in System Settings.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             if state.selectedTab == tab { refreshPermissions() }
@@ -244,12 +248,13 @@ struct SettingsWindowView: View {
         .onChange(of: state.selectedTab) { _, selected in
             guard selected == tab else { return }
             hover.resetStage()
-            if let demo = tab.defaultDemo { stage.show(demo) }
+            if let demo = tab.defaultDemo { stage.show(demo); scheduleIntro(demo) }
             refreshPermissions()
         }
         // The pointer rested on a row (dwell gate passed): that row's scene starts.
         .onChange(of: hover.commitCount) { _, _ in
             if let demo = hover.stageDemo, demo.tab == tab {
+                introTask?.cancel()
                 stage.begin(demo, isOn: demoContext.isOn(demo))
             }
         }
@@ -576,6 +581,17 @@ struct SettingsWindowView: View {
             }
         }
         .id(permissionRefresh)
+    }
+
+    /// Start the page's first-scene intro after a short delay (see `SettingsDemo.playsIntroOnAppear`).
+    private func scheduleIntro(_ demo: SettingsDemo) {
+        introTask?.cancel()
+        guard demo.playsIntroOnAppear else { return }
+        introTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: SettingsMetrics.introDelayNanoseconds)
+            guard !Task.isCancelled else { return }
+            stage.playIntro(demo)
+        }
     }
 
     /// Re-read the permission statuses (background) and the login status (one cheap read), for the General page.

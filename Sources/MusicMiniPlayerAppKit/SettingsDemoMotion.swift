@@ -234,10 +234,23 @@ struct HideEdgeFrame: Equatable {
 }
 
 struct LoginFrame: Equatable {
-    /// 0 = lit, 1 = the screen fully dark.
+    /// 0 = lit, 1 = the quiet pre-login dim (a soft veil, never a blackout; see `LoginFrame.veil`).
     var dim: Double
     var noteScale: Double
     var noteOpacity: Double
+    /// The power-on glow: a soft vertical band sweeping left to right. `sweep` is its travel 0...1,
+    /// `sweepAlpha` its strength 0...1 (a bump: it fades in and out while it travels).
+    var sweep: Double = 0
+    var sweepAlpha: Double = 0
+    /// The menu-bar clock ticks to the next minute: `clockAlt` 0 = first reading, 1 = next; `clockDip` is
+    /// the brief fade at the swap.
+    var clockAlt: Double = 0
+    var clockDip: Double = 0
+    /// nanoPod's panel: 0 = not launched yet, 1 = seated at the corner (fades and scales in from the menu-bar note).
+    var panel: Double = 0
+
+    /// Peak opacity of the black veil over the stage in the "not launched yet" state.
+    static let veil = 0.22
 }
 
 struct DockFrame: Equatable {
@@ -289,7 +302,9 @@ extension SettingsDemo {
         case .hideToEdgeShortcut:
             return DemoTiming(loop: 7.0, restOn: 0.3, restOff: 0.3)
         case .launchAtLogin:
-            return DemoTiming(loop: 4.6, on: 0.5...2.3, off: 3.1...4.3, restOn: 2.6, restOff: 0.3)
+            // The scene opens on a quiet, slightly veiled desktop; the 0.45...3.0 range is also the one-shot
+            // intro the General page plays when it appears (see DemoStageModel.playIntro).
+            return DemoTiming(loop: 5.4, on: 0.45...3.0, off: 3.3...4.4, restOn: 3.0, restOff: 0.3)
         case .showInDock:
             return DemoTiming(loop: 5.0, on: 0.6...2.5, off: 3.1...4.6, restOn: 2.6, restOff: 0.3)
         case .gettingToKnowNanoPod, .musicAutomation, .appleMusicAccess, .playbackHistory,
@@ -337,10 +352,21 @@ extension SettingsDemo {
             return .hideEdge(HideEdgeFrame(press: press, tuck: tuck, keys: o.keyLabels))
 
         case .launchAtLogin:
-            // Screen dark → lit over 0.4s, then the menu-bar note pops in (0.6 → 1 scale, 0.5s).
-            let dim = demoStateValue(t, initial: 1, [DemoStep(0.7, 0, .io, 0.4), DemoStep(3.4, 1, .io, 0.4)])
-            let pop = demoStateValue(t, initial: 0, [DemoStep(1.0, 1, .io, 0.5), DemoStep(3.3, 0, .io, 0.3)])
-            return .login(LoginFrame(dim: dim * 0.62, noteScale: demoLerp(0.6, 1, pop), noteOpacity: pop))
+            // Low-amplitude power-on: the veil lifts while a soft glow sweeps across (0.55...1.75), the
+            // menu-bar clock ticks to the next minute (1.9), the note pops in (1.1, scale 0.6 -> 1, io 0.5s),
+            // and nanoPod's panel fades and scales in from the note (1.5...2.15). Then it holds; the
+            // reverse plays from 3.4. Everything is back at its start by 4.4, so the loop is seamless.
+            let dim = demoStateValue(t, initial: 1, [DemoStep(0.55, 0, .io, 0.7), DemoStep(3.7, 1, .io, 0.6)])
+            // The glow's travel is only defined while it is on stage (0.55...1.75); outside that window it is parked at 0.
+            let sweep = t < 1.75 ? demoStateValue(t, initial: 0, [DemoStep(0.55, 1, .io, 1.2)]) : 0
+            let pop = demoStateValue(t, initial: 0, [DemoStep(1.1, 1, .io, 0.5), DemoStep(3.5, 0, .io, 0.3)])
+            let clock = demoStateValue(t, initial: 0, [DemoStep(1.9, 1, .io, 0.25), DemoStep(3.8, 0, .io, 0.25)])
+            let panel = demoStateValue(t, initial: 0, [DemoStep(1.5, 1, .out, 0.65), DemoStep(3.4, 0, .out, 0.4)])
+            return .login(LoginFrame(
+                dim: dim, noteScale: demoLerp(0.6, 1, pop), noteOpacity: pop,
+                sweep: sweep, sweepAlpha: demoBump(t, 0.55, 1.2),
+                clockAlt: clock, clockDip: max(demoBump(t, 1.9, 0.25), demoBump(t, 3.8, 0.25)),
+                panel: panel))
 
         case .showInDock:
             // nanoPod's block drops into the dock and pushes its neighbours aside (0.9s), reverse when off.
