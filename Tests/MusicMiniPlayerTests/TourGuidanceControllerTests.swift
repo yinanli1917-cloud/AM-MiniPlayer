@@ -325,7 +325,7 @@ final class TourGuidanceControllerTests: XCTestCase {
         f.spin(0.8)
         let model = try XCTUnwrap(f.controller.debugCardStore?.model)
         XCTAssertEqual(model.kind, .step(.moveTuck))
-        XCTAssertEqual(model.beats.map(\.id), [0, 1], "on the cover: corner, then edge")
+        XCTAssertEqual(model.beats.map(\.id), [0, 1], "on the cover: a corner, then the edge")
         XCTAssertEqual(model.body, L("tour.move.body"))
         let card = try XCTUnwrap(f.cardWindow).frame
         let visible = try XCTUnwrap(NSScreen.main).visibleFrame

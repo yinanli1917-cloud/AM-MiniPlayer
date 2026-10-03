@@ -900,17 +900,8 @@ public class SnappablePanel: NSPanel {
         let isRight = centerX > visible.midX
         let isTop = centerY > visible.midY
 
-        let margin = cornerMargin
-
-        if isTop && isRight {
-            return NSPoint(x: visible.maxX - frame.width - margin, y: visible.maxY - frame.height - margin)
-        } else if isTop {
-            return NSPoint(x: visible.minX + margin, y: visible.maxY - frame.height - margin)
-        } else if isRight {
-            return NSPoint(x: visible.maxX - frame.width - margin, y: visible.minY + margin)
-        } else {
-            return NSPoint(x: visible.minX + margin, y: visible.minY + margin)
-        }
+        let corner: ScreenCorner = isTop ? (isRight ? .topRight : .topLeft) : (isRight ? .bottomRight : .bottomLeft)
+        return TourCornerMatch.landingOrigin(for: corner, frameSize: frame.size, visibleFrame: visible, margin: cornerMargin)
     }
 
     // MARK: - Interactive View Check
@@ -946,6 +937,14 @@ public class SnappablePanel: NSPanel {
     public func currentCorner() -> ScreenCorner? {
         guard let screen = screen ?? NSScreen.main else { return nil }
         return TourCornerMatch.corner(origin: frame.origin, frameSize: frame.size, visibleFrame: screen.visibleFrame, margin: cornerMargin)
+    }
+
+    /// The four frames the panel snaps to at its current size on its screen's visible frame (screen space, y up).
+    /// Same math as the release projection (`calculateTargetCorner`), so the tour's snap-target marks sit exactly
+    /// where the panel lands.
+    public func cornerLandingFrames() -> [ScreenCorner: CGRect] {
+        guard let screen = screen ?? NSScreen.main else { return [:] }
+        return TourCornerMatch.landingFrames(frameSize: frame.size, visibleFrame: screen.visibleFrame, margin: cornerMargin)
     }
 
     public func snapToNearestCorner() {
@@ -991,6 +990,6 @@ public class SnappablePanel: NSPanel {
     }
 }
 
-public enum ScreenCorner {
+public enum ScreenCorner: CaseIterable, Sendable {
     case topLeft, topRight, bottomLeft, bottomRight
 }

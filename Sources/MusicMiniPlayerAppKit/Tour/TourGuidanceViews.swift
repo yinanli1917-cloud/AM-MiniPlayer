@@ -54,6 +54,7 @@ final class TourGuidanceStore {
     let cardStore = TourCardVisualStore()
     let glyphClock = TourGlyphClock()
     let overlayStore = TourOverlayStore()
+    let marksStore = TourMarksStore()
 
     var card: TourCardVisual {
         get { cardStore.visual }
@@ -89,6 +90,8 @@ enum TourOverlayRegion {
     /// The ring's largest scale: appear pulse 1.14 x breath 1.035 x sonar 1.35.
     static let maxRingScale: CGFloat = 1.14 * 1.035 * 1.35
     static let ghostReach: CGFloat = 64
+    /// Room past a snap-target mark for its pulse swell and soft outline.
+    static let markReach: CGFloat = 10
 
     static func needed(for f: TourOverlayVisual, panel: CGRect) -> CGRect? {
         var region: CGRect?
@@ -141,6 +144,48 @@ enum TourGuidanceDrawing {
         if f.panelGlow > 0.003 { drawPanelGlow(ctx, g: f.panelGlow, overlay: overlay, panel: panel, palette: palette) }
         if f.ringVisible, f.ringOpacity > 0.003 { drawRing(ctx, f: f, overlay: overlay, palette: palette) }
         if f.ghostVisible, f.ghostOpacity > 0.003 { drawGhost(ctx, f: f, overlay: overlay, palette: palette) }
+    }
+
+    /// Snap-target marks (prototype C.4.5): a soft rounded outline the size of the panel at each landing spot, very low
+    /// opacity (stroke ~0.18, a light fill). The corner the panel sits in is "here" (a touch firmer, with a dot); a corner
+    /// the user has landed in carries a small check; the one that just received the panel pulses (fill + check).
+    static func drawSnapMarks(_ ctx: GraphicsContext, marks: TourSnapMarksVisual, overlay: CGRect, palette: TourCardPalette, only: Int? = nil) {
+        for (i, screenRect) in marks.rects.enumerated() where only == nil || only == i {
+            let c0 = local(CGPoint(x: screenRect.minX, y: screenRect.maxY), in: overlay)
+            let pulse = marks.pulses.indices.contains(i) ? marks.pulses[i] : 0
+            // pulse: fill swells fast, eases out; a hair of scale rides with it.
+            let hit = pulse > 0 && pulse < 1 ? TourFeedbackEase.out.value(min(pulse / 0.2, 1)) * (1 - TourFeedbackEase.out.value(max((pulse - 0.2) / 0.8, 0))) : 0
+            let grow = 1 + 0.025 * hit + 0.012 * marks.breath
+            let w = screenRect.width * grow, h = screenRect.height * grow
+            let rect = CGRect(x: c0.x - (w - screenRect.width) / 2, y: c0.y - (h - screenRect.height) / 2, width: w, height: h)
+            let shape = Path(roundedRect: rect, cornerRadius: 16 * grow, style: .continuous)
+            let isHere = marks.here == i
+            let isTarget = marks.target == i && !isHere
+            let landed = marks.landed.indices.contains(i) && marks.landed[i]
+            var layer = ctx
+            layer.opacity = marks.opacity
+            let breathLift = 0.06 * marks.breath
+            let fillAlpha = (isHere ? 0.10 : isTarget ? 0.12 : 0.07) + breathLift * 0.5 + 0.20 * hit
+            let strokeAlpha = (isHere ? 0.30 : isTarget ? 0.34 : 0.18) + breathLift + 0.30 * hit
+            layer.fill(shape, with: .color(palette.accent.opacity(fillAlpha)))
+            layer.stroke(shape, with: .color(palette.accent.opacity(strokeAlpha)), style: StrokeStyle(lineWidth: isTarget ? 2 : 1.5))
+            let mid = CGPoint(x: rect.midX, y: rect.midY)
+            if landed || hit > 0 {
+                // The tick: drawn in with the pulse, then a quiet resting check on a corner already used.
+                let rest = landed ? 0.5 : 0
+                var tick = layer
+                tick.opacity = marks.opacity * max(rest, min(1, 0.5 + hit))
+                var p = Path()
+                p.move(to: CGPoint(x: mid.x - 9, y: mid.y + 0.5))
+                p.addLine(to: CGPoint(x: mid.x - 3, y: mid.y + 7))
+                p.addLine(to: CGPoint(x: mid.x + 10, y: mid.y - 7))
+                let drawn = pulse > 0 && pulse < 1 ? min(pulse / 0.3, 1) : 1
+                tick.stroke(p.trimmedPath(from: 0, to: drawn), with: .color(palette.accent),
+                            style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round))
+            } else if isHere {
+                layer.fill(Path(ellipseIn: CGRect(x: mid.x - 3.5, y: mid.y - 3.5, width: 7, height: 7)), with: .color(palette.accent.opacity(0.55)))
+            }
+        }
     }
 
     /// `inset 0 0 0 1.5px rgba(accent, .55 g), 0 0 (6 + 22 g)px rgba(accent, .35 g)`
@@ -222,6 +267,40 @@ enum TourGuidanceDrawing {
         shadowed.addFilter(.shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 2))
         shadowed.fill(placed, with: .color(.white))
         g.stroke(placed, with: .color(Color(hex: 0x111111)), style: StrokeStyle(lineWidth: 1.3, lineJoin: .round))
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Snap-target marks (one small window each)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// The four marks sit at the far corners of the screen: ONE overlay window spanning them would be the 2560x1440 transparent
+/// backing store the ring overlay was cut down from. Each mark gets its own window, exactly its size plus room for the pulse.
+@MainActor
+final class TourMarksStore: ObservableObject {
+    @Published var visual: TourSnapMarksVisual = .hidden
+}
+
+enum TourMarkWindowRegion {
+    /// Room past a mark for its pulse swell and its soft outline.
+    static let reach: CGFloat = TourOverlayRegion.markReach
+    static func frame(for markRect: CGRect) -> CGRect { markRect.insetBy(dx: -reach, dy: -reach) }
+}
+
+struct TourSnapMarkView: View {
+    @ObservedObject var store: TourMarksStore
+    var index: Int
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let palette = TourCardPalette.resolve(dark: colorScheme == .dark)
+        let marks = store.visual
+        return Canvas { ctx, _ in
+            guard marks.rects.indices.contains(index) else { return }
+            TourGuidanceDrawing.drawSnapMarks(ctx, marks: marks, overlay: TourMarkWindowRegion.frame(for: marks.rects[index]), palette: palette, only: index)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 

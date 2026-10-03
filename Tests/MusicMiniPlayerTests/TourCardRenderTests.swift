@@ -64,7 +64,7 @@ final class TourCardRenderTests: XCTestCase {
             save("S1-reveal-beat1done-en", model: F.reveal(.en), wall: wall, dark: dark)
             save("S1-reveal-beat1done-zh", model: F.reveal(.zh), wall: wall, dark: dark)
             save("S3-lyrics-en", model: F.lyrics(.en), wall: wall, dark: dark)
-            save("S5-move-en", model: F.move(.en), wall: wall, dark: dark, gesture: .nudgeToCorner)
+            save("S5-move-en", model: F.move(.en), wall: wall, dark: dark, gesture: .nudgeToCorner())
             save("S7-finale-en", model: F.finale(.en), wall: wall, dark: dark)
             save("S7-finale-zh", model: F.finale(.zh), wall: wall, dark: dark)
         }

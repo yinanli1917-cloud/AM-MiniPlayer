@@ -111,8 +111,13 @@ public struct TourSnapshot: Equatable, Sendable {
     /// there is nothing to open, so the step completes quietly (2026-09-29:
     /// the card asked the founder to go lyrics -> cover -> lyrics to finish it).
     public var onLyricsPage: Bool
+    /// The corner the panel is parked in right now (nil = between corners). The move step reads it when it
+    /// begins: landing back where the panel started does not count as another corner.
+    public var panelCorner: ScreenCorner?
 
-    public init(automationAuthorized: Bool = false, canTranslate: Bool = false, showTranslation: Bool = false, onLyricsPage: Bool = false) {
+    public init(automationAuthorized: Bool = false, canTranslate: Bool = false, showTranslation: Bool = false, onLyricsPage: Bool = false,
+                panelCorner: ScreenCorner? = nil) {
+        self.panelCorner = panelCorner
         self.automationAuthorized = automationAuthorized
         self.canTranslate = canTranslate
         self.showTranslation = showTranslation
@@ -212,6 +217,12 @@ public struct TourState: Equatable, Sendable {
     /// Auto-resume count (§5.4, capped at 3) — how many times `.start` has
     /// silently resumed an `inProgress` tour across app launches.
     public var resumeCount: Int
+    /// The move step: the corner the panel was in when the step began (nil = it was between corners).
+    public var moveStartCorner: ScreenCorner?
+    /// The move step: the corners the panel has landed in since, in order, each counted once. The first ticks the corner
+    /// beat; later ones are optional (a light acknowledgement on their mark, nothing blocks). A landing in the start corner
+    /// or in one already used counts for nothing (2026-10-03: the user should feel that there are four corners).
+    public var cornersLanded: [ScreenCorner]
 
     public init(
         status: TourRunStatus = .notStarted,
@@ -221,8 +232,12 @@ public struct TourState: Equatable, Sendable {
         deferredAttempts: Int = 0,
         deferredLaunches: Int = 0,
         deferredShownThisLaunch: Bool = false,
-        resumeCount: Int = 0
+        resumeCount: Int = 0,
+        moveStartCorner: ScreenCorner? = nil,
+        cornersLanded: [ScreenCorner] = []
     ) {
+        self.moveStartCorner = moveStartCorner
+        self.cornersLanded = cornersLanded
         self.status = status
         self.phase = phase
         self.stepStates = stepStates

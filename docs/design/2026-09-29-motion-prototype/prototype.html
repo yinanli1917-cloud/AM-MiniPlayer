@@ -272,10 +272,10 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
   /* 时间轴（3.55s = 100%）：0–.45s 淡入 → 停 .35s → .95s 位移 cubic-bezier(.42,0,.58,1) → 停 .35s → .3s 到 .31 → 平台 .58s → .42s 到 0 → 隐 .15s */
   @keyframes tpSwipe{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(36px,0)}59.2%{opacity:1;transform:translate(36px,0)}67.6%{opacity:.31;transform:translate(36px,0)}83.9%{opacity:.31;transform:translate(36px,0)}95.8%,100%{opacity:0;transform:translate(36px,0)}}
   @keyframes tpSwipeL{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(-36px,0)}59.2%{opacity:1;transform:translate(-36px,0)}67.6%{opacity:.31;transform:translate(-36px,0)}83.9%{opacity:.31;transform:translate(-36px,0)}95.8%,100%{opacity:0;transform:translate(-36px,0)}}
-  @keyframes tpNudge{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(30px,18px)}59.2%{opacity:1;transform:translate(30px,18px)}67.6%{opacity:.31;transform:translate(30px,18px)}83.9%{opacity:.31;transform:translate(30px,18px)}95.8%,100%{opacity:0;transform:translate(30px,18px)}}
+  @keyframes tpNudge{0%{opacity:0;transform:translate(0,0)}12.7%{opacity:1;transform:translate(0,0)}22.5%{opacity:1;transform:translate(0,0);animation-timing-function:cubic-bezier(.42,0,.58,1)}49.3%{opacity:1;transform:translate(var(--gx,30px),var(--gy,18px))}59.2%{opacity:1;transform:translate(var(--gx,30px),var(--gy,18px))}67.6%{opacity:.31;transform:translate(var(--gx,30px),var(--gy,18px))}83.9%{opacity:.31;transform:translate(var(--gx,30px),var(--gy,18px))}95.8%,100%{opacity:0;transform:translate(var(--gx,30px),var(--gy,18px))}}
   @keyframes tpTrailH{0%,22.5%{opacity:0;transform:scaleX(1)}36%{opacity:.45;transform:translateX(-4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:scaleX(1)}}
   @keyframes tpTrailHL{0%,22.5%{opacity:0;transform:scaleX(1)}36%{opacity:.45;transform:translateX(4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:scaleX(1)}}
-  @keyframes tpTrailN{0%,22.5%{opacity:0;transform:rotate(31deg) scaleX(1)}36%{opacity:.45;transform:rotate(31deg) translateX(-4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:rotate(31deg) scaleX(1)}}
+  @keyframes tpTrailN{0%,22.5%{opacity:0;transform:rotate(var(--ga,31deg)) scaleX(1)}36%{opacity:.45;transform:rotate(var(--ga,31deg)) translateX(-4px) scaleX(1.8)}49.3%,100%{opacity:0;transform:rotate(var(--ga,31deg)) scaleX(1)}}
 
   .tcard .tp .f{position:absolute;width:11px;height:11px;border-radius:50%;background:#6B9CFD;opacity:.31}
   .tcard .tp .f::after{content:"";position:absolute;inset:0;border-radius:50%;background:#6B9CFD;opacity:0;filter:blur(1.5px);transform-origin:50% 50%}
@@ -283,8 +283,8 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
   .tcard .tp .pad.swipe .f.b{left:40px;top:30px}
   .tcard .tp .pad.swipeL .f.a{left:44px;top:30px}
   .tcard .tp .pad.swipeL .f.b{left:60px;top:30px}
-  .tcard .tp .pad.nudge .f.a{left:20px;top:22px}
-  .tcard .tp .pad.nudge .f.b{left:36px;top:22px}
+  .tcard .tp .pad.nudge .f.a{left:var(--ax,20px);top:var(--ay,22px)}
+  .tcard .tp .pad.nudge .f.b{left:calc(var(--ax,20px) + 16px);top:var(--ay,22px)}
   .tcard .tp .pad.swipe .f{animation:tpSwipe calc(3.55s*var(--ts)) linear 2 both}
   .tcard .tp .pad.swipe .f::after{animation:tpTrailH calc(3.55s*var(--ts)) linear 2 both}
 /* ---------- Section C ---------- */
@@ -306,6 +306,17 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 .mp{position:absolute;left:0;top:0;width:250px;height:284px;z-index:2;--hov:0;--tr:0}
 .mp .pn{--pw:250;left:0;top:0}
 .mp .rim{position:absolute;inset:0;border-radius:inherit;pointer-events:none}
+/* C.4.5 四个落点的淡轮廓：面板落下时的真实位置；描边约 .18、浅填充；目标角稍强；所在角带圆点；落过的角带小勾 */
+.snapmark{--fa:.07;--sa:.18;--hit:0;--grow:1;position:absolute;left:0;top:0;width:250px;height:284px;box-sizing:border-box;border-radius:16px;
+  border:1.5px solid rgba(250,64,88,calc(var(--sa) + .3*var(--hit)));background:rgba(250,64,88,calc(var(--fa) + .2*var(--hit)));
+  transform:scale(var(--grow));opacity:0;z-index:2;cursor:pointer}
+.snapmark.target{--fa:.12;--sa:.34;border-width:2px}
+.snapmark.here{--fa:.10;--sa:.30;cursor:default}
+.snapmark i{position:absolute;left:50%;top:50%;width:7px;height:7px;margin:-3.5px;border-radius:50%;background:rgba(250,64,88,.55);display:none}
+.snapmark.here i{display:block}
+.snapmark svg{position:absolute;left:50%;top:50%;width:22px;height:20px;margin:-10px 0 0 -11px;stroke:#FA4058;stroke-width:2.4;fill:none;stroke-linecap:round;stroke-linejoin:round;opacity:0}
+.snapmark.landed svg{opacity:.5}
+.snapmark.landed i{display:none}
 .mp .ly{position:absolute;left:0;top:0;width:100%;height:100%;opacity:0;padding:108px 26px 0;color:#fff;pointer-events:none;font-size:15px;line-height:1.3}
 .mp .ly p{margin:0 0 12px}.mp .ly .dim{opacity:.42}.mp .ly .act{font-weight:650;font-size:16px}
 .mp .ly .trl{display:block;font-size:13px;font-weight:500;opacity:var(--tr);margin-top:3px;transform:translateY(calc((1 - var(--tr))*-4px));filter:blur(calc((1 - var(--tr))*1.5px))}
@@ -506,6 +517,7 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
     <button class="btn" id="cNext">下一拍（模拟用户做这一拍）</button>
     <button class="btn" id="cReset">重来</button>
     <label><input type="checkbox" id="cDefer" checked> 翻译那一步延后（跳过 S4，环停在 6/7）</label>
+    <label><input type="checkbox" id="natChk" checked> 自然滚动（关掉后，示意里的手指方向相反）</label>
     <label><input type="checkbox" id="slowChk3" data-bind="slow"> 0.25× 慢放</label>
   </div>
   <div class="cstatus"><span class="csteps" id="cSteps"></span><span class="small">现在该：<b id="cNextLbl"></b></span></div>
@@ -516,7 +528,7 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
       <div class="notes"><ul>
         <li><b>S1</b>：控件藏着，卡上的环虚线呼吸，一个幽灵光标从卡的箭头飘向面板。你把鼠标移到面板上，控件浮出，环变实线，beat 2 亮起「待按」。移开，回到提示态。</li>
         <li><b>S2</b>：点右上角输出（弹出输出设备小菜单），环跳到左上角 Music，正文先说清「点了会打开 Apple Music，我在这儿等」；点 Music 后卡只打小勾、环收起、安静等着（示意 Apple Music 已打开），鼠标离开面板再回来才放庆祝并转场。可以先点 Music，回来后环去输出钮。</li>
-        <li><b>S3</b>：点左下气泡，面板翻到歌词页。<b>S5</b>：点手势示意（代替双指），面板落到左下角，卡片从面板<em>右侧</em>长出；再点一次，面板收进左边缘。</li>
+        <li><b>S3</b>：点左下气泡，面板翻到歌词页。<b>S5</b>：舞台上四个角有淡淡的落点轮廓，离面板最近、还没去过的那个稍深，示意里的手指朝它滑（面板在右上，目标是右下就朝下滑）。点手势示意（代替双指）或点任一落点，面板落进那个角，那一块脉冲 + 打勾，卡片从面板<em>另一侧</em>长出，示意改成朝最近的边；想的话再点另一个落点换角（只给那一块打勾，不挡路）；再点示意，面板收进最近的边缘。「自然滚动」关掉后示意里的手指方向相反。</li>
         <li><b>S6</b>：鼠标停到左边缘的小条上，竖卡探出，环从小条跳到竖卡；点竖卡，面板回来。<b>S7</b>：礼花 + 结尾卡。</li>
         <li>任何一张卡上：「这一步先不做」（灰掉、不长环、往下走）和「先到这里」（卡收走）。停 6 秒后前者变强调色。把鼠标停在 beat 行上，环会指过去。</li>
       </ul></div>
@@ -1378,7 +1390,7 @@ const STEPS = [
   ['专辑页的两个角', '右上角选声音从哪出，左上角一步到 Music。', ['右上角：声音从哪出', '左上角：去 Music']],
   ['点开歌词', '翻到歌词页，看当前这一行。', ['翻到歌词页', '等一行走完']],
   ['翻译一句', '有外文歌的时候，点右下角的翻译按钮。', ['点翻译按钮', '看到译文']],
-  ['放到你喜欢的角落', '双指按住面板，轻轻往一个角推过去。', ['推到一个角落', '再往边上推一下']],
+  ['放到你喜欢的角落', '双指按住面板，轻轻往一个角推过去，四个角都能停。', ['推到一个角', '再往边上推一下']],
   ['它就在这条边上', '鼠标停上去，它会探出来。', ['停上去，它探出来', '点一下，回来']]
 ];
 const FINALE = ['都认识了', '有事按 设置 › 认识 nanoPod，随时回来。'];
@@ -1408,17 +1420,42 @@ $('#rtChk').addEventListener('change', e => { S.rt = e.target.checked; });
 
 /* ============================================================ C：引导的转场与微交互 */
 const CW = 600, CH = 440, MB = 20, PW = 250, PH = 284, CARD_W = 260, GAP = 16, CAP_W = 120, CAP_H = 204;
-const CORNER = { TR: { x: CW - 16 - PW, y: MB + 16 }, BL: { x: 16, y: CH - 16 - PH } };
+const CORNER = { TL: { x: 16, y: MB + 16 }, TR: { x: CW - 16 - PW, y: MB + 16 }, BL: { x: 16, y: CH - 16 - PH }, BR: { x: CW - 16 - PW, y: CH - 16 - PH } };
+const CORNER_KEYS = ['TL', 'TR', 'BL', 'BR'];
+const cornerCenter = k => ({ x: CORNER[k].x + PW / 2, y: CORNER[k].y + PH / 2 });
 const Cd = { defer: true };                       // 翻译那一步是否延后（S4 跳过）
-const glyphHTML = v => `<div class="tp" data-act="glyph" title="点一下，代替双指手势"><div class="pad ${v}"><i class="f a"></i><i class="f b"></i></div></div><div class="tpcap">点这里，代替双指手势</div>`;
+/* 手指方向是数据：nudge 的 heading 是舞台坐标（y 向下）里的单位向量；位移 35pt、轨迹沿同一方向，路径总以板中心为中心（原型的 30×18 斜线是 heading = (.857,.514)） */
+const NUDGE_REF = { x: 30 / Math.hypot(30, 18), y: 18 / Math.hypot(30, 18) }, NUDGE_TRAVEL = Math.hypot(30, 18);
+function glyphStyle(h) {
+  if (!h) return '';
+  const ax = 20 + (NUDGE_REF.x - h.x) * NUDGE_TRAVEL / 2, ay = 22 + (NUDGE_REF.y - h.y) * NUDGE_TRAVEL / 2, ga = Math.atan2(h.y, h.x) * 180 / Math.PI;
+  return ` style="--gx:${(h.x * NUDGE_TRAVEL).toFixed(2)}px;--gy:${(h.y * NUDGE_TRAVEL).toFixed(2)}px;--ga:${ga.toFixed(2)}deg;--ax:${ax.toFixed(2)}px;--ay:${ay.toFixed(2)}px"`;
+}
+const glyphHTML = (v, h) => `<div class="tp" data-act="glyph" title="点一下，代替双指手势"><div class="pad ${v}"${glyphStyle(h)}><i class="f a"></i><i class="f b"></i></div></div><div class="tpcap">点这里，代替双指手势</div>`;
+/* 建议的角 = 离面板现在所在角最近、还没去过的那个；手指方向 = 面板→目标的方向（自然滚动下手指与面板同向；关掉则相反） */
+const natural = () => $('#natChk').checked;
+function suggestTarget() {
+  const visited = new Set([Q.startCorner, ...Q.landed]), c0 = cornerCenter(Q.corner);
+  const options = CORNER_KEYS.filter(k => !visited.has(k) && k !== Q.corner);
+  options.sort((a, b) => Math.hypot(cornerCenter(a).x - c0.x, cornerCenter(a).y - c0.y) - Math.hypot(cornerCenter(b).x - c0.x, cornerCenter(b).y - c0.y));
+  return options[0] || null;
+}
+function nudgeHeading() {
+  const t = suggestTarget(); if (!t) return null;
+  const a = cornerCenter(Q.corner), b = cornerCenter(t), l = Math.hypot(b.x - a.x, b.y - a.y), sg = natural() ? 1 : -1;
+  return { x: sg * (b.x - a.x) / l, y: sg * (b.y - a.y) / l };
+}
+const edgeIsRight = () => CORNER[Q.corner].x + PW / 2 > CW / 2;
+function edgeGlyph() { const fingerRight = natural() ? edgeIsRight() : !edgeIsRight(); return glyphHTML(fingerRight ? 'swipe' : 'swipeL'); }
 const LINKS = `<div class="cfoot"><a class="clink" data-act="skip" tabindex="0" role="button">这一步先不做</a><a class="clink" data-act="stop" tabindex="0" role="button">先到这里</a></div>`;
 const S4_BODY = '右下角的按钮。译文会跟在每一句下面。', S4_BODY_COVER = '翻译按钮在歌词页里。鼠标移到面板上，点左下角的小气泡就过去了。';
 const S4_BEAT0 = '先到歌词页', S4_BEAT1 = '点一下翻译按钮';
-const S5_BODY = '在封面页，双指按住面板往一个角轻推，它会自己落好。歌词页不能随意挪，只能往屏幕边上推，让它藏进去。', S5_TUCK = '落好了。往左边再推一下，它会藏进屏幕边。';
+const S5_BODY = '在封面页，双指按住面板往一个角轻推，它会落进四个角中的任意一个，正好落在淡淡的轮廓上。歌词页只能往屏幕边上推，让它藏进去。', S5_TUCK_BASE = '落好了。想的话再换一个角试试，四个角都能停。准备好了，往';
+const S5_TUCK = () => S5_TUCK_BASE + (edgeIsRight() ? '右' : '左') + '边推一下，它会藏进屏幕边。';
 /* 09-29 创始人定：落角只在封面页有效，歌词页只能推向屏幕边。面板在歌词页时进入这一步，第一拍是「先回到封面页」，环在歌词气泡上。 */
 const S5_BODY_LYR = '落角只在封面页能用，我们先回到封面页。（歌词页只能往屏幕边上推，不能挪到角落。）';
-const S5_BEATS = ['推到一个角落', '再往屏幕边上推一下'], S5_BEAT0 = '先回到封面页';
-const S5_ACTS = () => glyphHTML('nudge') + `<div class="cbtns" style="margin-top:8px"><button class="cbtn sec sm" data-act="tuckForMe">替我收起来</button></div>`;
+const S5_BEATS = ['推到一个角', '再往屏幕边上推一下'], S5_BEAT0 = '先回到封面页';
+const S5_ACTS = () => glyphHTML('nudge', nudgeHeading()) + `<div class="cbtns" style="margin-top:8px"><button class="cbtn sec sm" data-act="tuckForMe">替我收起来</button></div>`;
 const CSTEPS = [
   { id: 'S0', title: '你好，很高兴见到你', body: '接下来几分钟，我陪你把 nanoPod 走一遍。都是些顺手的小事，不着急。', num: 1, ringMode: 'check', anchor: 'edge',
     acts: `<div class="cbtns"><button class="cbtn pri" data-act="start">开始</button><button class="cbtn sec" data-act="later">以后再说</button></div>`,
@@ -1431,7 +1468,7 @@ const CSTEPS = [
   { id: 'S4', title: '翻译', _body: null, get body() { return this._body ?? (Q.s4first ? S4_BODY_COVER : S4_BODY); }, set body(v) { this._body = v; },
     bodyAway: '鼠标再回到面板上。', get beats() { return Q.s4first ? [S4_BEAT0, S4_BEAT1] : []; }, num: 5, anchor: 'tr', foot: LINKS },
   { id: 'S5', title: '放到你喜欢的角落', _body: null, get body() { return this._body ?? (Q.s5first ? S5_BODY_LYR : S5_BODY); }, set body(v) { this._body = v; },
-    get beats() { return Q.s5first ? [S5_BEAT0, ...S5_BEATS] : S5_BEATS; }, num: 6, anchor: 'edge', acts: S5_ACTS(), foot: LINKS },
+    get beats() { return Q.s5first ? [S5_BEAT0, ...S5_BEATS] : S5_BEATS; }, num: 6, anchor: 'edge', get acts() { return this._acts ?? S5_ACTS(); }, set acts(v) { this._acts = v; }, foot: LINKS },
   { id: 'S6', title: '它就在这条边上', body: '', beats: ['鼠标停上去，它会探出来', '点一下，回来'], num: 7, anchor: 'strip', foot: LINKS },
   { id: 'S7', title: '就这些了', final: true, anchor: 'edge',
     get body() { return '往后它就安静地待在一边，想听的时候就在。' + (Cd.defer ? '翻译那一步，等有外文歌的时候我再来。' : '') + '愿有音乐陪着的时候，都是好时光。'; },
@@ -1475,6 +1512,7 @@ const CSTAGE_HTML = () => `
     <button class="hp hp-tr" data-ev="translate" aria-label="翻译">${TR_ICON}</button>
     <div class="cpop" id="c-pop"><div class="r on"><span>MacBook 扬声器</span><b>✓</b></div><div class="r"><span>AirPods</span></div></div>
   </div>
+  ${CORNER_KEYS.map(k => `<div class="snapmark" data-k="${k}" aria-label="落点"><i></i><svg viewBox="0 0 22 20"><path d="M2 10.5l6 6.5L20 3"/></svg></div>`).join('')}
   <div class="cmw" id="c-mw"><div class="tb"><i></i><i></i><i></i><span>Apple Music</span></div><div class="sd"></div><div class="tl"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
   <div class="vcard cap" id="c-cap"><div class="th"></div><b class="ti"></b><b class="ar"></b>
     <svg class="pl" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8.6" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="1.8"/><circle cx="10" cy="10" r="8.6" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="36 54" transform="rotate(-90 10 10)"/><path d="M8 6.3v7.4l6-3.7z" fill="#fff"/></svg>
@@ -1491,7 +1529,7 @@ const cel = { stage: $('#c-stage'), mp: cqs('mp'), art: cqs('art'), t1: cqs('t1'
 
 /* ---- 状态与动画值 ---- */
 const Q = { corner: 'TR', tucked: false, playing: false, page: 0, trOn: false, realHover: false, simHover: false, auto: false, autoAt: null, stopped: false, done: false, lock: false,
-  stepId: 'S0', s4first: false, s5first: false, gl0: null, rs: 1, ro: 0, beakSide: 'R', haloKind: null, haloMode: 'hint', peekKind: null, breathT0: null, gc: { t0: null }, dwell: null, stallT0: 0, bodyMode: 'base', cardShown: false, capOut: false, popT: null };
+  stepId: 'S0', s4first: false, s5first: false, gl0: null, startCorner: 'TR', landed: [], mkOn: false, mk0: null, mkP: {}, rs: 1, ro: 0, beakSide: 'R', haloKind: null, haloMode: 'hint', peekKind: null, breathT0: null, gc: { t0: null }, dwell: null, stallT0: 0, bodyMode: 'base', cardShown: false, capOut: false, popT: null };
 const TC = makeTour('c-', {
   steps: CSTEPS, prefill: 1, ownTransform: true, logLines: 10, flowOf: cflow,
   onHandoffStart: (n, ff) => cHandoffStart(n, ff), onSwap: (n, ff) => cSwap(n, ff), onFrame: dt => cFrame(dt), onContent: () => { Q.bodyMode = 'base'; }
@@ -1500,7 +1538,7 @@ const tv = v => TC.track(TC.mk(v));
 const CV = {
   px: tv(CORNER.TR.x), py: tv(CORNER.TR.y), pOp: tv(1), hov: tv(0), page: tv(0), tr: tv(0), stripOp: tv(0), cap: tv(0),
   cx: tv(0), cy: tv(0), ch: tv(0), cop: tv(0), csc: tv(1), capp: tv(0), bOff: tv(30), bOp: tv(1),
-  hx: tv(0), hy: tv(0), hw: tv(40), hh: tv(40), hop: tv(0), hsc: tv(1), playPop: tv(1), pulse: tv(1)
+  hx: tv(0), hy: tv(0), hw: tv(40), hh: tv(40), hop: tv(0), hsc: tv(1), playPop: tv(1), pulse: tv(1), mk: tv(0)
 };
 const cur = () => CSTEPS[TC.B.cardStep];
 const Bt = () => TC.B;
@@ -1769,7 +1807,7 @@ function enterStep(id) {
     case 'S2': haloShow('out', hovering() ? 'wait' : 'hint'); break;
     case 'S3': haloShow('nav', hovering() ? 'wait' : 'hint'); break;
     case 'S4': haloShow(Q.s4first ? 'nav' : 'tr', hovering() ? 'wait' : 'hint'); break;
-    case 'S5': if (Q.s5first) haloShow('nav', hovering() ? 'wait' : 'hint'); else if (!S.rm) Q.gl0 = TC.B.now; break;
+    case 'S5': Q.startCorner = Q.corner; Q.landed = []; if (Q.s5first) haloShow('nav', hovering() ? 'wait' : 'hint'); else if (!S.rm) Q.gl0 = TC.B.now; break;
     case 'S6': haloShow('strip', 'wait'); break;
   }
   if (id === 'S2' || id === 'S3' || (id === 'S4' && !Q.s4first)) { if (!hovering()) { setBody(cur().bodyAway); Q.bodyMode = 'away'; } }
@@ -1798,19 +1836,24 @@ function userDid(ev) {
     case 'S4:nav': if (Q.s4first && !b[0].done) { TC.beatCheck(0, false); TC.haptic('.levelChange'); CSTEPS[CIDX.S4]._body = S4_BODY; setBody(S4_BODY); Q.bodyMode = 'base'; haloShow('tr', hovering() ? 'wait' : 'hint'); } break;
     case 'S4:translate': haloHide(); TC.completeStep(); break;
     case 'S5:nav': if (o && !b[0].done) { TC.beatCheck(0, false); TC.haptic('.levelChange'); haloHide(); CSTEPS[CIDX.S5]._body = S5_BODY; setBody(S5_BODY); if (!S.rm) Q.gl0 = TC.B.now; } break;
-    case 'S5:corner': if (!b[o].done) doCorner(); break;
-    case 'S5:tuck': if (b[o].done && !b[o + 1].done) doTuck(); else if (!b[o].done) { doCorner(); TC.cue(1.6, () => doTuck()); } break;
+    case 'S5:corner': if (!b[o].done) doCorner(suggestTarget()); else if (!b[o + 1].done) { const t = suggestTarget(); t && doCorner(t); } break;
+    case 'S5:tuck': if (b[o].done && !b[o + 1].done) doTuck(); else if (!b[o].done) { doCorner(suggestTarget()); TC.cue(1.6, () => doTuck()); } break;
     case 'S6:peek': if (!b[0].done) doPeek(); break;
     case 'S6:return': if (!b[0].done) { doPeek(); TC.cue(.7, () => doReturn()); } else if (!b[1].done) doReturn(); break;
   }
 }
-function doCorner() {
+/* 落到任意一个还没去过的角（相邻或对角都算）。第一次勾掉「推到一个角」；之后再换角只给那个落点打勾，不挡路 */
+function doCorner(key) {
+  if (!key || Q.lock) return;
+  const o = Q.s5first ? 1 : 0, first = !Bt().beats[o].done;
   Q.lock = true; Q.simHover = false; updateHover();
-  TC.beatCheck(Bt().beats.length - 2, false); TC.haptic('.levelChange'); cardHide(); haloHide(); Q.gl0 = null;
-  Q.corner = 'BL'; panelMoveTo(CORNER.BL);
+  if (first) { TC.beatCheck(o, false); TC.haptic('.levelChange'); }
+  cardHide(); haloHide(); Q.gl0 = null;
+  if (key !== Q.startCorner && !Q.landed.includes(key)) { Q.landed.push(key); mkPulse(key); }
+  Q.corner = key; panelMoveTo(CORNER[key]);
   TC.cue(S.rm ? .3 : .75, () => {
-    CSTEPS[CIDX.S5].body = S5_TUCK; CSTEPS[CIDX.S5].acts = glyphHTML('swipeL') + `<div class="cbtns" style="margin-top:8px"><button class="cbtn sec sm" data-act="tuckForMe">替我收起来</button></div>`;
-    TC.content.body.textContent = S5_TUCK; TC.content.acts.innerHTML = CSTEPS[CIDX.S5].acts;
+    CSTEPS[CIDX.S5].body = S5_TUCK(); CSTEPS[CIDX.S5].acts = edgeGlyph() + `<div class="cbtns" style="margin-top:8px"><button class="cbtn sec sm" data-act="tuckForMe">替我收起来</button></div>`;
+    TC.content.body.textContent = S5_TUCK(); TC.content.acts.innerHTML = CSTEPS[CIDX.S5].acts;
     cardAppear('edge'); Q.lock = false;
   });
   wake();
@@ -1887,7 +1930,30 @@ function cFrame(dt) {
     if (Q.autoAt != null && (!ready)) Q.autoAt = null;
     if (Q.autoAt != null && B.now >= Q.autoAt) { Q.autoAt = null; nextAction(); }
   }
+  if (marksFrame(B.now)) active = true;
   paintC(g, rg);
+  return active;
+}
+/* C.4.5 落点：整个 S5 在封面页上都在（收边那拍也在，四个角一直看得见）；缓入 .6 s，轻轻鼓一次（不循环）；新角落下时那一块短促填充 + 打勾；减少动态效果：静态，无鼓动无脉冲 */
+function mkPulse(k) { if (!S.rm) Q.mkP[k] = TC.B.now; }
+function marksFrame(now) {
+  const bs = Bt().beats, want = cur().id === 'S5' && CV.page.v < .5 && !Q.tucked && !bs.every(x => x.done);
+  if (want !== Q.mkOn) { Q.mkOn = want; fade(CV.mk, want ? 1 : 0, want ? .6 : .2, want ? 'out' : 'in'); Q.mk0 = want && !S.rm ? now : null; }
+  let active = Q.mkOn && Q.mk0 != null, breath = 0;
+  if (Q.mk0 != null) { const u = now - Q.mk0 - .5; if (u >= 2.4) Q.mk0 = null; else if (u >= 0) breath = .5 - .5 * Math.cos(2 * Math.PI * u / 2.4); }
+  const o = Q.s5first ? 1 : 0, cornerBeat = bs[o] && !bs[o].done, tgt = cornerBeat ? suggestTarget() : null;
+  for (const el of document.querySelectorAll('.snapmark')) {
+    const k = el.dataset.k, here = Math.abs(CV.px.v - CORNER[k].x) < 2 && Math.abs(CV.py.v - CORNER[k].y) < 2;
+    let hit = 0, p = Q.mkP[k] != null ? (now - Q.mkP[k]) / .75 : -1;
+    if (p >= 1) { delete Q.mkP[k]; p = -1; }
+    if (p >= 0) { hit = E.out(Math.min(p / .2, 1)) * (1 - E.out(Math.max((p - .2) / .8, 0))); active = true; }
+    el.style.left = CORNER[k].x + 'px'; el.style.top = CORNER[k].y + 'px';
+    el.style.opacity = clamp(CV.mk.v).toFixed(3);
+    el.style.setProperty('--hit', hit.toFixed(3)); el.style.setProperty('--grow', (1 + .025 * hit + .012 * breath).toFixed(4));
+    el.classList.toggle('here', here); el.classList.toggle('target', k === tgt && !here); el.classList.toggle('landed', Q.landed.includes(k));
+    el.style.pointerEvents = Q.mkOn && !here && !Q.lock ? 'auto' : 'none';
+    const tick = el.querySelector('svg'); tick.style.opacity = hit > 0 ? Math.max(Q.landed.includes(k) ? .5 : 0, Math.min(1, .5 + hit)).toFixed(3) : '';
+  }
   return active;
 }
 function autoDelay() {
@@ -1919,7 +1985,7 @@ function nextAction() {
 function nextLabel() {
   if (Q.stopped) return '已停下（点「重来」）'; if (Q.done) return '已结束（点「重来」）';
   const id = Q.stepId, d0 = Bt().beats[0]?.done;
-  return { S0: '点「开始」', S1: d0 ? '按一下播放' : '鼠标移到面板上', S2: Q.musicHold ? '（等待中）鼠标回到面板上' : d0 ? '点左上角 Music' : '点右上角输出', S3: '点左下角歌词气泡', S4: Q.s4first && !d0 ? '点左下角歌词气泡，到歌词页' : '点右下角翻译', S5: Q.s5first && !d0 ? '点左下角歌词气泡，回到封面页' : (Bt().beats[Q.s5first ? 1 : 0]?.done ? '往边上再推一下' : '双指推到一个角'), S6: d0 ? '点一下小卡，回来' : '鼠标停到小条上', S7: '点「好」' }[id];
+  return { S0: '点「开始」', S1: d0 ? '按一下播放' : '鼠标移到面板上', S2: Q.musicHold ? '（等待中）鼠标回到面板上' : d0 ? '点左上角 Music' : '点右上角输出', S3: '点左下角歌词气泡', S4: Q.s4first && !d0 ? '点左下角歌词气泡，到歌词页' : '点右下角翻译', S5: Q.s5first && !d0 ? '点左下角歌词气泡，回到封面页' : (Bt().beats[Q.s5first ? 1 : 0]?.done ? '往边上再推一下（或点另一个落点，换个角）' : '双指推到淡轮廓标出的角（也可点任一落点）'), S6: d0 ? '点一下小卡，回来' : '鼠标停到小条上', S7: '点「好」' }[id];
 }
 function refreshNextLabel() { $('#cNextLbl').textContent = nextLabel(); }
 
@@ -2013,6 +2079,7 @@ function syncAutoBtn() { const b = $('#cAuto'); b.textContent = Q.auto ? '⏸ �
 function resetC() {
   cel.mw.classList.remove('on'); Object.assign(Q, { mwin: false, menuOpen: false, musicHome: false, corner: 'TR', tucked: false, playing: false, trOn: false, realHover: false, simHover: false, auto: Q.auto, autoAt: null, stopped: false, done: false, lock: false, musicHold: false, musicAway: false, musicBack: false, stepId: 'S0', haloKind: null, breathT0: null, dwell: null, bodyMode: 'base', capOut: false, popT: null });
   CSTEPS[CIDX.S4]._body = null; Q.s4first = false;
+  Q.startCorner = 'TR'; Q.landed = []; Q.mkOn = false; Q.mk0 = null; Q.mkP = {}; CV.mk.set(0);
   CSTEPS[CIDX.S5]._body = null; CSTEPS[CIDX.S5].acts = S5_ACTS(); Q.s5first = false; Q.gl0 = null;
   TC.reset();
   [CV.pOp, CV.stripOp, CV.hov, CV.page, CV.tr, CV.cap, CV.hop, CV.cop, CV.capp].forEach(v => v.set(0)); CV.pOp.set(1);
@@ -2023,6 +2090,8 @@ function resetC() {
   Q.stallT0 = 0;
   paintC(0); wake(); refreshNextLabel();
 }
+$('#c-stage').addEventListener('click', e => { const m = e.target.closest?.('.snapmark'); if (m && Q.mkOn && !Q.lock && !Q.stopped && !Q.done) { doCorner(m.dataset.k); } });
+$('#natChk').addEventListener('change', () => { if (Q.stepId === 'S5') { CSTEPS[CIDX.S5].acts = Bt().beats[Q.s5first ? 1 : 0]?.done ? edgeGlyph() + `<div class="cbtns" style="margin-top:8px"><button class="cbtn sec sm" data-act="tuckForMe">替我收起来</button></div>` : S5_ACTS(); TC.content.acts.innerHTML = CSTEPS[CIDX.S5].acts; } });
 $('#cAuto').addEventListener('click', () => { Q.auto = !Q.auto; if (Q.auto && (Q.stopped || Q.done)) resetC(); syncAutoBtn(); Q.autoAt = null; wake(); });
 $('#cNext').addEventListener('click', () => { nextAction(); wake(); });
 $('#cReset').addEventListener('click', () => resetC());

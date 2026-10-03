@@ -226,6 +226,14 @@ public enum TourGuidanceResolver {
         }
     }
 
+    /// The four snap-target marks (the places the panel lands) are drawn while the move step is current and the panel is
+    /// on the cover page (corners only work there). They stay up through the edge beat so the four corners stay obvious.
+    /// Not on the lyrics page, not once the panel is at the edge, not on any other step.
+    public static func snapMarksVisible(phase: TourPhase, surface: TourSurface) -> Bool {
+        guard case .step(.moveTuck, let beats) = phase, surface.page == .album, surface.edge == .card else { return false }
+        return beats.contains(false)
+    }
+
     /// The panel-level hint for `phase` (ghost cursor + edge glow, or the
     /// gesture glow), independent of the ring.
     public static func panelHint(phase: TourPhase, surface: TourSurface) -> TourPanelHint {

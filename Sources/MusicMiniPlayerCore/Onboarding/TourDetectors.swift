@@ -77,14 +77,29 @@ public enum TourTranslateReadiness {
 /// when a spring animation settles, factored out so it's testable without a
 /// live `NSWindow`/`NSScreen`.
 public enum TourCornerMatch {
+    /// Where a panel of `frameSize` lands in `corner`: the ONE place the snap math lives. `SnappablePanel`'s
+    /// release projection, its settle test and the tour's snap-target marks all read it, so what the marks
+    /// show is exactly where the panel goes.
+    public static func landingOrigin(for corner: ScreenCorner, frameSize: CGSize, visibleFrame: CGRect, margin: CGFloat) -> CGPoint {
+        switch corner {
+        case .topRight: return CGPoint(x: visibleFrame.maxX - frameSize.width - margin, y: visibleFrame.maxY - frameSize.height - margin)
+        case .topLeft: return CGPoint(x: visibleFrame.minX + margin, y: visibleFrame.maxY - frameSize.height - margin)
+        case .bottomRight: return CGPoint(x: visibleFrame.maxX - frameSize.width - margin, y: visibleFrame.minY + margin)
+        case .bottomLeft: return CGPoint(x: visibleFrame.minX + margin, y: visibleFrame.minY + margin)
+        }
+    }
+
+    /// The four frames the panel snaps to (screen space, y up), in `ScreenCorner.allCases` order.
+    public static func landingFrames(frameSize: CGSize, visibleFrame: CGRect, margin: CGFloat) -> [ScreenCorner: CGRect] {
+        Dictionary(uniqueKeysWithValues: ScreenCorner.allCases.map { corner in
+            (corner, CGRect(origin: landingOrigin(for: corner, frameSize: frameSize, visibleFrame: visibleFrame, margin: margin), size: frameSize))
+        })
+    }
+
     public static func corner(origin: CGPoint, frameSize: CGSize, visibleFrame: CGRect, margin: CGFloat, tolerance: CGFloat = 1) -> ScreenCorner? {
-        let candidates: [(ScreenCorner, CGPoint)] = [
-            (.topRight, CGPoint(x: visibleFrame.maxX - frameSize.width - margin, y: visibleFrame.maxY - frameSize.height - margin)),
-            (.topLeft, CGPoint(x: visibleFrame.minX + margin, y: visibleFrame.maxY - frameSize.height - margin)),
-            (.bottomRight, CGPoint(x: visibleFrame.maxX - frameSize.width - margin, y: visibleFrame.minY + margin)),
-            (.bottomLeft, CGPoint(x: visibleFrame.minX + margin, y: visibleFrame.minY + margin))
-        ]
-        for (corner, point) in candidates {
+        // Order matters only when two landings coincide (a panel as big as the screen): topRight wins, as before.
+        for corner in [ScreenCorner.topRight, .topLeft, .bottomRight, .bottomLeft] {
+            let point = landingOrigin(for: corner, frameSize: frameSize, visibleFrame: visibleFrame, margin: margin)
             if abs(point.x - origin.x) <= tolerance, abs(point.y - origin.y) <= tolerance { return corner }
         }
         return nil

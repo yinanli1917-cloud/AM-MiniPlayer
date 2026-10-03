@@ -18,10 +18,31 @@
 
 import SwiftUI
 
+/// Which way the fingers move in the nudge demo: a unit vector in VIEW space (y down). The prototype's fixed
+/// 30x18 diagonal is the default; the move step aims it at the corner the screen suggests (`TourCornerGuide`).
+struct TourGestureHeading: Equatable {
+    var dx: Double
+    var dy: Double
+
+    /// Rounded so two headings for the same pair of corners compare equal.
+    init(dx: Double, dy: Double) {
+        let len = max((dx * dx + dy * dy).squareRoot(), 1e-9)
+        self.dx = (dx / len * 10_000).rounded() / 10_000
+        self.dy = (dy / len * 10_000).rounded() / 10_000
+    }
+
+    init(_ v: CGVector) { self.init(dx: Double(v.dx), dy: Double(v.dy)) }
+
+    static let prototype = TourGestureHeading(dx: 30, dy: 18)
+    /// Pad points the fingers travel (the prototype's `hypot(30, 18)`).
+    static let travel = (30.0 * 30.0 + 18.0 * 18.0).squareRoot()
+    var degrees: Double { atan2(dy, dx) * 180 / .pi }
+}
+
 enum TourGestureKind: Equatable {
-    /// Push toward a corner (S5 beat ①) — 30×18pt diagonal.
-    case nudgeToCorner
-    /// Push into the edge (S5 beat ②) — 36pt horizontal.
+    /// Push toward a corner (S5 beats 1 and 2): the fingers travel 35pt along the heading (default: the prototype's diagonal).
+    case nudgeToCorner(TourGestureHeading = .prototype)
+    /// Push into the edge (S5 beat 3): 36pt horizontal; `rightward` is the FINGERS' direction.
     case swipeToEdge(rightward: Bool)
 }
 
@@ -66,7 +87,10 @@ enum TourGestureMotion {
         let r = dotDiameter / 2
         let (left, top): (CGFloat, CGFloat)
         switch kind {
-        case .nudgeToCorner: (left, top) = (20, 22)
+        case .nudgeToCorner(let h):
+            // The path is centred on the same point whatever its direction (the prototype's diagonal is the reference).
+            let ref = TourGestureHeading.prototype, half = TourGestureHeading.travel / 2
+            (left, top) = (20 + CGFloat((ref.dx - h.dx) * half), 22 + CGFloat((ref.dy - h.dy) * half))
         case .swipeToEdge(let rightward): (left, top) = (rightward ? 24 : 44, 30)
         }
         return (CGPoint(x: left + r, y: top + r), CGPoint(x: left + 16 + r, y: top + r))
@@ -74,7 +98,9 @@ enum TourGestureMotion {
 
     static func displacement(_ kind: TourGestureKind) -> (dx: CGFloat, dy: CGFloat) {
         switch kind {
-        case .nudgeToCorner: return (30 * scale, 18 * scale)
+        case .nudgeToCorner(let h):
+            if h == .prototype { return (30 * scale, 18 * scale) }
+            return (CGFloat(h.dx * TourGestureHeading.travel) * scale, CGFloat(h.dy * TourGestureHeading.travel) * scale)
         case .swipeToEdge(let rightward): return ((rightward ? 36 : -36) * scale, 0)
         }
     }
@@ -121,7 +147,7 @@ enum TourGestureMotion {
         let behind: CGFloat
         let angle: Double
         switch kind {
-        case .nudgeToCorner: (behind, angle) = (-trailShift, nudgeAngle)
+        case .nudgeToCorner(let h): (behind, angle) = (-trailShift, h == .prototype ? nudgeAngle : h.degrees)
         case .swipeToEdge(let rightward): (behind, angle) = (rightward ? -trailShift : trailShift, 0)
         }
         return Trail(opacity: trailPeakOpacity * k, stretch: 1 + (trailStretch - 1) * CGFloat(k), shift: behind * CGFloat(k), angleDegrees: angle)
@@ -158,6 +184,8 @@ struct TourGestureGlyphFace: View {
             dot(at: CGPoint(x: centers.b.x * s + f.dx, y: centers.b.y * s + f.dy), opacity: f.opacity, trail: trail)
         }
         .frame(width: Self.size.width, height: Self.size.height, alignment: .topLeading)
+        // The demo re-aims (a new corner is suggested, or the edge beat begins) with a short ease, not a jump.
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: kind)
         .accessibilityHidden(true)
     }
 

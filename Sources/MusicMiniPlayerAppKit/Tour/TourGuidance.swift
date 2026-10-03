@@ -30,6 +30,8 @@ final class TourGuidance {
     private var lastClock: TimeInterval = 0
     private(set) weak var cardWindow: TourCardWindow?
     private(set) weak var overlayWindow: TourHaloWindow?
+    /// One small click-through window per snap-target mark (created on first use, parked when the marks are not drawn).
+    private(set) var markWindows: [TourHaloWindow] = []
     private(set) var lastFrame: TourGuidanceFrame = .idle
     /// The screen the overlay may cover (the panel's screen).
     var screenFrame: () -> CGRect = { NSScreen.main?.frame ?? .zero }
@@ -103,6 +105,8 @@ final class TourGuidance {
         store.card = .hidden
         store.glyphClock.elapsed = nil
         store.overlay = .hidden
+        store.marksStore.visual = .hidden
+        for w in markWindows where w.isVisible { w.orderOut(nil) }
         store.overlayFrame = .zero
         store.panelFrame = .zero
         lastFrame = .idle
@@ -124,6 +128,33 @@ final class TourGuidance {
         if overlayVisual != store.overlay { store.overlay = overlayVisual }
         if let window = cardWindow { applyCard(f, to: window) }
         if let overlay = overlayWindow { applyOverlay(overlayVisual, to: overlay) }
+        if f.marks != store.marksStore.visual { store.marksStore.visual = f.marks }
+        applyMarks(f.marks)
+    }
+
+    private func applyMarks(_ marks: TourSnapMarksVisual) {
+        guard marks.isDrawn, marks.rects.count == 4 else {
+            for w in markWindows where w.isVisible { w.orderOut(nil) }
+            return
+        }
+        if markWindows.isEmpty {
+            markWindows = (0..<4).map { i in
+                let w = TourHaloWindow()
+                w.contentView = TourHostingView(rootView: TourSnapMarkView(store: store.marksStore, index: i))
+                return w
+            }
+        }
+        for (i, w) in markWindows.enumerated() {
+            let target = TourMarkWindowRegion.frame(for: marks.rects[i])
+            if w.frame != target { w.setFrame(target, display: false) }
+            if !w.isVisible { w.orderFront(nil) }
+        }
+    }
+
+    /// The tour ended: the mark windows go away with it.
+    func releaseMarkWindows() {
+        for w in markWindows { w.contentView = nil; w.orderOut(nil) }
+        markWindows = []
     }
 
     private func applyCard(_ f: TourGuidanceFrame, to window: TourCardWindow) {

@@ -157,7 +157,13 @@ final class TourController: ObservableObject {
         return f.ringVisible && f.ringOpacity > 0.05 ? f.ring.rect : nil
     }
     var debugRingIsDashed: Bool { guidance.motion.makeFrame().ringDashed }
+    /// The four snap-target marks as they would be drawn this instant (hidden = opacity 0).
+    var debugSnapMarks: TourSnapMarksVisual { guidance.motion.makeFrame().marks }
+    /// Re-derives the card (its demo included) and the guidance from live state, as the controller does after a landing.
+    func debugRefreshCard() { presentCurrentCard(); refreshGuidance() }
     var debugOverlayWindow: NSWindow? { haloWindow }
+    /// The four snap-target mark windows (empty until the marks have been drawn once).
+    var debugMarkWindows: [NSWindow] { guidance.markWindows }
     var debugCardWindow: TourCardWindow? { cardWindow }
     private(set) var debugLastPlacement: TourCardPlacement?
     private(set) var debugLastAnchorRect: CGRect?
@@ -311,7 +317,8 @@ final class TourController: ObservableObject {
             automationAuthorized: needsAutomation && automationStatusProvider() == .authorized,
             canTranslate: lyricsService.canTranslate,
             showTranslation: lyricsService.showTranslation,
-            onLyricsPage: musicController.currentPage == .lyrics
+            onLyricsPage: musicController.currentPage == .lyrics,
+            panelCorner: panel?.currentCorner()
         )
     }
 
@@ -330,11 +337,17 @@ final class TourController: ObservableObject {
         apply(effects, userCompletion: Self.isUserCompletion(event))
         scheduleTransitionIfNeeded()
         scheduleFinaleAutoDismissIfNeeded()
+        let newCorner = next.cornersLanded.count > previous.cornersLanded.count ? next.cornersLanded.last : nil
         if !Self.isCornersStep(state.phase) {
             if musicTripActive { endMusicHold(); resetMusicTrip() }   // skipped, stopped or moved on while away
             cancelOutputAck()
         }
         refreshGuidance()
+        // The mark of a corner the panel just landed in (a new one) gives its brief fill and tick.
+        if let newCorner, let index = ScreenCorner.allCases.firstIndex(of: newCorner) {
+            guidance.motion.pulseMark(index)
+            guidance.kick()
+        }
     }
 
     // MARK: - Music beat: hold while the user is in the player app
@@ -766,6 +779,7 @@ final class TourController: ObservableObject {
         haloWindow?.contentView = nil
         haloWindow?.orderOut(nil)
         haloWindow = nil
+        guidance.releaseMarkWindows()
         feedback.releaseOverlay()
         removeGestureTrace()
         pendingHandoffPose = nil
@@ -939,17 +953,18 @@ final class TourController: ObservableObject {
             )
 
         case .step(.moveTuck, let beats):
-            let tucked = beats[0]
+            // Beats: 0 = a corner, 1 = the edge. A second corner is an invitation inside the edge beat's text, not a beat.
+            let cornersDone = beats[0]
             let onAlbum = surface.page == .album
-            let rightward = (panel?.currentCorner() == .topRight || panel?.currentCorner() == .bottomRight) || liquidEdge.side != .left
+            let rightward = TourCornerGuide.nearestEdgeIsRight(panelMidX: panel?.frame.midX ?? 0, visibleMidX: ((panel?.screen ?? NSScreen.main)?.visibleFrame ?? .zero).midX)
             let body: String
-            if tucked { body = L(rightward ? "tour.move.bodyTuckRight" : "tour.move.bodyTuckLeft") }
+            if cornersDone { body = L(rightward ? "tour.move.bodyTuckRight" : "tour.move.bodyTuckLeft") }
             else if !onAlbum { body = L("tour.move.bodyLyrics") }
             else { body = L("tour.move.body") }
             var list: [TourBeatModel] = []
             if preface == .backToCover {
                 // Not a machine beat: a precondition the card walks the user through.
-                list.append(TourBeatModel(id: 2, text: L("tour.move.beat0"), checked: onAlbum || tucked))
+                list.append(TourBeatModel(id: Self.moveTuckPrefaceBeatID, text: L("tour.move.beat0"), checked: onAlbum || cornersDone))
             }
             list.append(TourBeatModel(id: 0, text: L("tour.move.beat1"), checked: beats[0]))
             list.append(TourBeatModel(id: 1, text: L("tour.move.beat2"), checked: beats[1]))
@@ -1018,19 +1033,46 @@ final class TourController: ObservableObject {
 
     /// The two-finger demo the CURRENT beat asks for, nil when the current beat has nothing to demonstrate.
     /// The move step's beats, in order: (leading, only off the cover) go back to the cover page -> nudge it to a
-    /// corner -> push it into the edge. The demo belongs to the last two: on the leading beat the user is being
-    /// walked to another page and a trackpad picture would be teaching a gesture that does not work there
-    /// (founder 2026-09-29: it showed on "Back to the cover page").
+    /// corner -> nudge it to another corner -> push it into the edge. The demo belongs to the last three: on the
+    /// leading beat the user is being walked to another page and a trackpad picture would be teaching a gesture that
+    /// does not work there (founder 2026-09-29: it showed on "Back to the cover page"). Both corner beats show the
+    /// same nudge (2026-10-03).
     private func gestureKind(for phase: TourPhase) -> TourGestureKind? {
         guard case .step(.moveTuck, let beats) = phase, beats.count >= 2 else { return nil }
         if !beats[0] {
-            return musicController.currentPage == .album ? .nudgeToCorner : nil
+            guard musicController.currentPage == .album else { return nil }
+            guard let guide = cornerGuide() else { return .nudgeToCorner() }
+            return .nudgeToCorner(TourGestureHeading(TourCornerGuide.fingerHeading(panelHeading: guide.panelHeading, naturalScrolling: naturalScrollingProvider())))
         }
-        let rightward = (panel?.currentCorner() == .topRight || panel?.currentCorner() == .bottomRight) || liquidEdge.side != .left
-        return .swipeToEdge(rightward: rightward)
+        // The edge beat: the fingers go toward the edge the panel is nearest to.
+        let visible = (panel?.screen ?? NSScreen.main)?.visibleFrame ?? .zero
+        let panelRight = TourCornerGuide.nearestEdgeIsRight(panelMidX: panel?.frame.midX ?? 0, visibleMidX: visible.midX)
+        return .swipeToEdge(rightward: TourCornerGuide.fingerRightward(panelRightward: panelRight, naturalScrolling: naturalScrollingProvider()))
+    }
+
+    /// Whether the system's scroll direction is "natural" (the content, and here the panel, follows the fingers). Read from the
+    /// global preference; a test seam.
+    var naturalScrollingProvider: () -> Bool = { (UserDefaults.standard.object(forKey: "com.apple.swipescrolldirection") as? Bool) ?? true }
+
+    /// The corner beat's suggestion: the nearest corner to where the panel is that it has not been in yet, and the way the panel
+    /// travels to get there (screen space, y up). The card's demo and the emphasised mark both read this.
+    func cornerGuide() -> (target: ScreenCorner, panelHeading: CGVector)? {
+        guard let panel else { return nil }
+        let frames = panel.cornerLandingFrames()
+        guard frames.count == ScreenCorner.allCases.count else { return nil }
+        let center = CGPoint(x: panel.frame.midX, y: panel.frame.midY)
+        guard let from = panel.currentCorner() ?? TourCornerGuide.nearestCorner(to: center, frames: frames) else { return nil }
+        var visited = Set(state.cornersLanded)
+        if let start = state.moveStartCorner { visited.insert(start) }
+        guard let target = TourCornerGuide.target(from: from, visited: visited, frames: frames), let rect = frames[target],
+              let heading = TourCornerGuide.heading(from: center, to: CGPoint(x: rect.midX, y: rect.midY)) else { return nil }
+        return (target, heading)
     }
 
     // MARK: - Surface, anchors, targets
+
+    /// The move step's leading beat ("Back to the cover page") is not a machine beat; its row id sits after the three real ones.
+    static let moveTuckPrefaceBeatID = 2
 
     private func currentSurface() -> TourSurface {
         TourSurface(page: musicController.currentPage, controlsVisible: TourHookBus.shared.controlsVisible.value,
@@ -1386,6 +1428,7 @@ final class TourController: ObservableObject {
         guidance.syncReduceMotion()
         let motion = guidance.motion
         guidance.store.panelFrame = panel.frame
+        syncSnapMarks(panel: panel)
         // Between a completion and the next card the ring belongs to the handoff.
         if case .transitioning(let from, _) = state.phase, from != .translate { return }
         if feedback.isActive, case .finale = state.phase { return }
@@ -1434,6 +1477,29 @@ final class TourController: ObservableObject {
         guidance.kick()
     }
 
+    /// The four snap-target marks follow the move step's corner beats on the cover page. They stay up while the card
+    /// steps aside for a drag (that is when the user needs them), and are re-derived from the panel's real landing math.
+    /// The corner beat is the current one (the edge beat has no suggested corner).
+    private var stateIsCornerBeat: Bool {
+        if case .step(.moveTuck, let beats) = state.phase { return beats.first == false }
+        return false
+    }
+
+    private func syncSnapMarks(panel: SnappablePanel) {
+        let motion = guidance.motion
+        let wanted = !skipping && !musicTripActive
+            && TourGuidanceResolver.snapMarksVisible(phase: state.phase, surface: currentSurface())
+        let landings = wanted ? panel.cornerLandingFrames() : [:]
+        guard wanted, landings.count == ScreenCorner.allCases.count else {
+            motion.hideMarks()
+            return
+        }
+        let here = panel.currentCorner().flatMap { ScreenCorner.allCases.firstIndex(of: $0) }
+        motion.showMarks(rects: ScreenCorner.allCases.map { landings[$0] ?? .zero }, here: here,
+                         landed: ScreenCorner.allCases.map { state.cornersLanded.contains($0) },
+                         target: stateIsCornerBeat ? cornerGuide().flatMap { ScreenCorner.allCases.firstIndex(of: $0.target) } : nil)
+    }
+
     /// A beat row was hovered: the ring temporarily points at that beat's
     /// control (C.4.1); leaving puts it back. A step with a single control just pulses.
     private func beatHovered(_ id: Int, inside: Bool) {
@@ -1441,7 +1507,7 @@ final class TourController: ObservableObject {
         if !inside { refreshGuidance(); return }
         let subjects = TourGuidanceResolver.beatSubjects(for: step)
         let subject: TourRingSubject?
-        if id == 2 { subject = preface == nil ? nil : .control(.lyricsNav) }   // the leading beat: the bubble
+        if id == (step == .moveTuck ? Self.moveTuckPrefaceBeatID : 2) { subject = preface == nil ? nil : .control(.lyricsNav) }   // the leading beat: the bubble
         else if step == .moveTuck { subject = nil }
         else { subject = subjects.indices.contains(id) ? subjects[id] : nil }
         guard let subject, subject != lastRingSubject, let rect = rect(for: subject) else {

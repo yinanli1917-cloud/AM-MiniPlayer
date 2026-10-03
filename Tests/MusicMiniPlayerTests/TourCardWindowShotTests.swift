@@ -79,7 +79,7 @@ final class TourCardWindowShotTests: XCTestCase {
             Shot(name: "G-connect", model: F.gate(.en), gesture: nil, cardOnLeft: true, anchorIsPlay: false),
             Shot(name: "S1-reveal-beat1done-left", model: F.reveal(.en), gesture: nil, cardOnLeft: true, anchorIsPlay: true),
             Shot(name: "S1-reveal-beat1done-right", model: F.reveal(.en), gesture: nil, cardOnLeft: false, anchorIsPlay: true),
-            Shot(name: "S5-move", model: F.move(.en), gesture: .nudgeToCorner, cardOnLeft: true, anchorIsPlay: false),
+            Shot(name: "S5-move", model: F.move(.en), gesture: .nudgeToCorner(), cardOnLeft: true, anchorIsPlay: false),
             Shot(name: "S7-finale", model: F.finale(.en), gesture: nil, cardOnLeft: true, anchorIsPlay: false),
             Shot(name: "S1-reveal-zh", model: F.reveal(.zh), gesture: nil, cardOnLeft: true, anchorIsPlay: true),
         ]

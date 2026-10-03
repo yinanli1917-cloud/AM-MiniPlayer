@@ -20,6 +20,7 @@ final class TourMoveStepGlyphTests: XCTestCase {
     private let allButMoveAndBack: Set<TourStep> = Set(TourStep.orderedSteps).subtracting([.moveTuck, .back])
     private let band = 10.0 + 72.0 * 1.15
 
+    private func isNudge(_ kind: TourGestureKind?) -> Bool { if case .nudgeToCorner? = kind { return true }; return false }
     private func presence() -> Double { f.controller.guidance.lastFrame.glyphPresence }
     private var cardHeight: Double { Double(f.cardWindow?.frame.height ?? 0) }
 
@@ -38,7 +39,7 @@ final class TourMoveStepGlyphTests: XCTestCase {
 
         // The user comes back to the cover: the nudge beat is now current.
         f.music.currentPage = .album
-        XCTAssertTrue(f.wait(2) { store.gestureKind == .nudgeToCorner })
+        XCTAssertTrue(f.wait(2) { self.isNudge(store.gestureKind) })
         // …and it grows in over several frames rather than popping.
         var samples: [Double] = []
         var pairs: [(p: Double, growth: Double)] = []
@@ -59,13 +60,13 @@ final class TourMoveStepGlyphTests: XCTestCase {
         XCTAssertEqual(window.frame.height, window.contentFittingSize.height, accuracy: 1.5, "and it is exactly as tall as its content: nothing clipped, no blank")
     }
 
-    func test_theDemo_foldsAway_whenTheNudgeBeatIsDone_andTheEdgeDemoTakesItsPlace() throws {
+    func test_theDemo_foldsAwayAfterTheCornerBeat_andTheEdgeDemoTakesItsPlace() throws {
         f = TourRealPanelFixture(page: .album)
         f.controller.send(.resume(completed: allButMoveAndBack))
         XCTAssertTrue(f.wait { f.cardWindow != nil })
         f.spin(1.6)
         let store = try XCTUnwrap(f.controller.debugCardStore)
-        XCTAssertEqual(store.gestureKind, .nudgeToCorner)
+        XCTAssertTrue(isNudge(store.gestureKind))
         XCTAssertEqual(presence(), 1, accuracy: 0.02, "a card that opens on the nudge beat has its demo at once")
 
         f.controller.send(.panelSettled(corner: .bottomLeft))
@@ -80,7 +81,7 @@ final class TourMoveStepGlyphTests: XCTestCase {
         XCTAssertTrue(f.wait { f.cardWindow != nil })
         f.spin(1.6)
         let store = try XCTUnwrap(f.controller.debugCardStore)
-        XCTAssertEqual(store.gestureKind, .nudgeToCorner)
+        XCTAssertTrue(isNudge(store.gestureKind))
         let tall = cardHeight
         f.music.userManuallyOpenedLyrics = true
         f.music.currentPage = .lyrics

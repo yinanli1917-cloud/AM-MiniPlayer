@@ -57,6 +57,25 @@ struct TourRingGeometry: Equatable {
     var rect: CGRect { CGRect(x: cx - w / 2, y: cy - h / 2, width: w, height: h) }
 }
 
+/// The four snap-target marks of the move step (prototype C.4.5): faint rounded rects where the panel lands, in screen
+/// space, in `ScreenCorner.allCases` order. `opacity` is 0...1 (the gentle fade in / out), `breath` 0...1 is the one
+/// soft swell they do on arrival, `pulses[i]` is the brief fill + tick of mark i (0 = none, else progress 0...1).
+struct TourSnapMarksVisual: Equatable {
+    var rects: [CGRect] = []
+    var opacity = 0.0
+    var breath = 0.0
+    var pulses: [Double] = [0, 0, 0, 0]
+    /// The corner the panel sits in right now.
+    var here: Int?
+    /// The corner the demo in the card is aiming at: its mark is a little stronger than the others.
+    var target: Int?
+    /// Corners the user has landed in during this step (they carry a small check).
+    var landed: [Bool] = [false, false, false, false]
+
+    static let hidden = TourSnapMarksVisual()
+    var isDrawn: Bool { opacity > 0.003 && !rects.isEmpty }
+}
+
 /// Everything the live shell needs at one instant.
 struct TourGuidanceFrame: Equatable {
     // Card window
@@ -102,6 +121,9 @@ struct TourGuidanceFrame: Equatable {
     /// The "you're hovering here" ripple under the parked ghost: progress 0...1, nil = none.
     var ghostRipple: Double?
     var panelGlow = 0.0
+
+    /// Snap-target marks (move step, corner beats, cover page).
+    var marks = TourSnapMarksVisual.hidden
 
     static let idle = TourGuidanceFrame()
 }
@@ -232,6 +254,14 @@ enum TourGuidanceTokens {
     static let rippleScale = 0.35
     static let rippleAlpha = 0.5
     static let pulseUp = 1.14
+    // C.4.5 snap-target marks
+    static let marksFadeIn = 0.6
+    static let marksFadeOut = 0.2
+    /// They swell once, softly, after they have faded in (never a loop).
+    static let marksBreathDelay = 0.5
+    static let marksBreathPeriod = 2.4
+    /// A mark that just received the panel: fill + tick, then settles.
+    static let markPulseDuration = 0.75
     // C.4.2 ghost cursor
     static let ghostDelay = 0.6
     static let ghostCycle = 3.4
@@ -282,6 +312,16 @@ final class TourGuidanceMotion {
     private(set) var ringVisible = false
     private var breathStart: Double?
 
+    // Snap-target marks (C.4.5)
+    private let mop: TourFeedbackValue
+    private(set) var marksVisible = false
+    private var marksBreathStart: Double?
+    private var markPulseStart: [Double?] = [nil, nil, nil, nil]
+    private var markRects: [CGRect] = []
+    private var markHere: Int?
+    private var markTarget: Int?
+    private var markLanded: [Bool] = [false, false, false, false]
+
     // Hints
     private var ghostStart: Double?
     private var ghostTarget: CGPoint = .zero
@@ -304,6 +344,7 @@ final class TourGuidanceMotion {
         hx = TourFeedbackValue(0, clock: c); hy = TourFeedbackValue(0, clock: c)
         hw = TourFeedbackValue(40, clock: c); hh = TourFeedbackValue(40, clock: c)
         hop = TourFeedbackValue(0, clock: c); hsc = TourFeedbackValue(1, clock: c); hpulse = TourFeedbackValue(1, clock: c)
+        mop = TourFeedbackValue(0, clock: c)
     }
 
     // MARK: Clock
@@ -313,18 +354,19 @@ final class TourGuidanceMotion {
     /// True while anything still moves or a hint is still running — the shell
     /// keeps its display link alive only while this holds (zero idle cost).
     var isAnimating: Bool {
-        let values: [TourFeedbackValue] = [cx, ctop, ch, bOff, bScale, cop, csc, capp, glyph, hx, hy, hw, hh, hop, hsc, hpulse] + contentOp + contentY
+        let values: [TourFeedbackValue] = [cx, ctop, ch, bOff, bScale, cop, csc, capp, glyph, hx, hy, hw, hh, hop, hsc, hpulse, mop] + contentOp + contentY
         if values.contains(where: { $0.isActive }) { return true }
         if glyphIsRunning { return true }
         if !cues.isEmpty { return true }
         if ghostStart != nil || breathStart != nil { return true }
         if glowStart != nil { return true }
+        if marksBreathStart != nil || markPulseStart.contains(where: { $0 != nil }) { return true }
         return false
     }
 
     func step(_ dt: Double) {
         clock.now += dt
-        let all: [TourFeedbackValue] = [cx, ctop, ch, bOff, bScale, cop, csc, capp, glyph, hx, hy, hw, hh, hop, hsc, hpulse] + contentOp + contentY
+        let all: [TourFeedbackValue] = [cx, ctop, ch, bOff, bScale, cop, csc, capp, glyph, hx, hy, hw, hh, hop, hsc, hpulse, mop] + contentOp + contentY
         all.forEach { $0.step(dt) }
         // Cues, in time order (a cue may register more cues).
         var guardCount = 0
@@ -336,6 +378,10 @@ final class TourGuidanceMotion {
         if let s = breathStart, clock.now - s - T.breathDelay >= T.breathCycles * T.breathPeriod + T.rippleDuration { breathStart = nil }
         if let g = ghostStart, clock.now - g >= Double(T.ghostCycles) * T.ghostCycle { ghostStart = nil }
         if let g = glowStart, clock.now - g - (glowFollowsBreath ? T.breathDelay : 0) >= glowCycles * T.breathPeriod { glowStart = nil }
+        if let b = marksBreathStart, clock.now - b - T.marksBreathDelay >= T.marksBreathPeriod { marksBreathStart = nil }
+        for i in markPulseStart.indices {
+            if let p = markPulseStart[i], clock.now - p >= T.markPulseDuration { markPulseStart[i] = nil }
+        }
     }
 
     /// Test/shell entry: advance in frames of at most 1/60 s (a hair over, so a
@@ -604,6 +650,41 @@ final class TourGuidanceMotion {
         apply(g, animated: !reduceMotion)
     }
 
+    // MARK: Snap-target marks (C.4.5)
+
+    /// Shows the four marks. First appearance: a gentle fade in, then ONE soft swell (never a loop). Already up: the
+    /// rects / "here" / ticks are updated in place and nothing restarts. Reduce Motion: a short fade, no swell.
+    func showMarks(rects: [CGRect], here: Int?, landed: [Bool], target: Int? = nil) {
+        markRects = rects
+        markHere = here
+        markTarget = target
+        markLanded = landed
+        guard !marksVisible else { return }
+        marksVisible = true
+        if reduceMotion {
+            if mop.v < 0.02 { mop.set(0) }
+            mop.to(1, dur: 0.16, ease: .lin)
+            marksBreathStart = nil
+        } else {
+            if mop.v < 0.02 { mop.set(0) }
+            mop.to(1, dur: T.marksFadeIn, ease: .out)
+            marksBreathStart = clock.now
+        }
+    }
+
+    func hideMarks() {
+        guard marksVisible else { return }
+        marksVisible = false
+        marksBreathStart = nil
+        mop.to(0, dur: reduceMotion ? 0.12 : T.marksFadeOut, ease: reduceMotion ? .lin : .in)
+    }
+
+    /// The panel landed in a NEW corner: that mark pulses (fill + tick). Reduce Motion: the tick shows without the pulse.
+    func pulseMark(_ index: Int) {
+        guard marksVisible, markPulseStart.indices.contains(index), !reduceMotion else { return }
+        markPulseStart[index] = clock.now
+    }
+
     // MARK: Hints (C.4.2)
 
     /// Ghost cursor: floats from the card's beak to `target` twice; panel-edge
@@ -698,6 +779,27 @@ final class TourGuidanceMotion {
                 let p = u / T.breathPeriod
                 if p < glowCycles { f.panelGlow = 0.5 - 0.5 * cos(2 * Double.pi * p) }
             }
+        }
+
+        // Snap-target marks
+        if (marksVisible || mop.v > 0.003), !markRects.isEmpty {
+            var m = TourSnapMarksVisual()
+            m.rects = markRects
+            m.opacity = mop.v
+            m.here = markHere
+            m.target = markTarget
+            m.landed = markLanded
+            if let b = marksBreathStart, !reduceMotion {
+                let u = (clock.now - b - T.marksBreathDelay) / T.marksBreathPeriod
+                if u >= 0, u < 1 { m.breath = 0.5 - 0.5 * cos(2 * Double.pi * u) }
+            }
+            for i in markPulseStart.indices {
+                if let p = markPulseStart[i], !reduceMotion {
+                    let u = (clock.now - p) / T.markPulseDuration
+                    m.pulses[i] = min(max(u, 0), 1)
+                }
+            }
+            f.marks = m
         }
         return f
     }

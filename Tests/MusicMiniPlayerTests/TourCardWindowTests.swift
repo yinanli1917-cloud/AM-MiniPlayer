@@ -111,7 +111,7 @@ final class TourCardWindowTests: XCTestCase {
         let before = window.frame
         // A taller card lands in the store WITHOUT the controller re-placing
         // it (font/copy/state changed under a live window).
-        store.gestureKind = .nudgeToCorner
+        store.gestureKind = .nudgeToCorner()
         store.model = TourSceneFixtures.move(.en)
         store.contentKey += 1
         spin(1.0)   // the height springs (0.4 s) to the new content

@@ -82,10 +82,19 @@ public enum TourMachine {
             break
 
         case .panelSettled(let corner):
-            if case .step(.moveTuck, var beats) = state.phase, corner != nil, beats.indices.contains(0), !beats[0] {
-                beats[0] = true
-                state.phase = .step(.moveTuck, beats: beats)
-                effects = [.checkBeat(.moveTuck, index: 0), .haptic(.levelChange), .relocateCardToPanel, .persist]
+            // The move step: a landing in ANY corner the panel has not been in yet (adjacent or diagonal; the one it
+            // started in counts as been). The first ticks the corner beat. Later ones are optional encouragement: nothing
+            // is checked and nothing blocks, the card just comes back to the panel. The edge beat is `panelTucked`'s.
+            if case .step(.moveTuck, var beats) = state.phase, beats.count == 2, let corner,
+               corner != state.moveStartCorner, !state.cornersLanded.contains(corner) {
+                state.cornersLanded.append(corner)
+                if !beats[0] {
+                    beats[0] = true
+                    state.phase = .step(.moveTuck, beats: beats)
+                    effects = [.checkBeat(.moveTuck, index: 0), .haptic(.levelChange), .relocateCardToPanel, .persist]
+                } else {
+                    effects = [.relocateCardToPanel, .persist]
+                }
             }
 
         case .panelTucked:
@@ -292,6 +301,10 @@ public enum TourMachine {
                 continue
             }
 
+            if s == .moveTuck {
+                state.moveStartCorner = snapshot.panelCorner
+                state.cornersLanded = []
+            }
             state.phase = .step(s, beats: initialBeats)
             effects.append(.showStepCard(s))
             return (state, effects)

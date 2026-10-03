@@ -113,7 +113,7 @@ final class TourGestureRoutingTests: XCTestCase {
 
     /// Candidate (e) — can "nudge it to a corner" from the corner the panel already sits in work? It does, with the panel
     /// following the fingers 1.5x and, on release, landing in the corner its projected centre is nearest (`calculateTargetCorner`):
-    /// a tiny push settles straight back in the same corner (the beat still completes: any settle in a corner counts), a
+    /// a tiny push settles straight back in the same corner (that is not a new corner: no beat ticks), a
     /// medium push down lands in the other corner of that edge, a firm one across the screen. Nothing swallows the gesture.
     func test_nudgeFromTopRight_followsTheFingers_andSettlesInTheNearestCornerOfWhereItWouldLand() throws {
         struct Case { let name: String; let dx: CGFloat; let dy: CGFloat; let lands: ScreenCorner }
@@ -137,7 +137,10 @@ final class TourGestureRoutingTests: XCTestCase {
             XCTAssertEqual(held.y - start.y, -12 * c.dy * 1.5, accuracy: 10, "\(c.name)")
             if let e = f.gestureEvent(dx: 0, dy: 0, phase: .ended) { f.panel.sendEvent(e) }
             XCTAssertTrue(f.wait(3) { f.panel.currentCorner() == c.lands }, "\(c.name): settles in \(c.lands), is at \(String(describing: f.panel.currentCorner()))")
-            XCTAssertTrue(f.wait(2) { f.controller.state.phase == .step(.moveTuck, beats: [true, false]) }, "\(c.name): the first beat completes")
+            let expected: [Bool] = c.lands == .topRight ? [false, false] : [true, false]
+            f.spin(0.3)
+            XCTAssertTrue(f.wait(2) { f.controller.state.phase == .step(.moveTuck, beats: expected) },
+                          "\(c.name): the first beat \(c.lands == .topRight ? "stays open (it landed where it started)" : "completes")")
             f.tearDown(); f = nil
         }
     }

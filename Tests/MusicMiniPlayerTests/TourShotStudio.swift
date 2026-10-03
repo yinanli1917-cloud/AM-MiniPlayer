@@ -46,12 +46,13 @@ final class TourShotStudio {
     private let savedAppearance: NSAppearance?
     private(set) var skipped: [String] = []
 
-    init(dark: Bool) {
+    /// `fullScreen`: the backdrop covers the whole visible frame (for stills of things at the far corners, e.g. the snap-target marks).
+    init(dark: Bool, fullScreen: Bool = false) {
         self.dark = dark
         savedAppearance = NSApplication.shared.appearance
         NSApplication.shared.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         let visible = NSScreen.main!.visibleFrame
-        let size = CGSize(width: 700, height: 780)
+        let size = fullScreen ? visible.size : CGSize(width: 700, height: 780)
         let frame = NSRect(x: visible.maxX - size.width, y: visible.maxY - size.height, width: size.width, height: size.height)
         let w = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
         w.isReleasedWhenClosed = false
@@ -97,7 +98,7 @@ final class TourShotStudio {
     /// Composite of the panel + card (+ FX window when `includeFX`) over the backdrop, written to `name-light|dark.png`.
     @discardableResult
     func shoot(_ name: String, fixture f: TourRealPanelFixture, includeFX: Bool = false, extraRect: CGRect? = nil) -> CGImage? {
-        var windows: [NSWindow] = [f.cardWindow, f.controller.debugOverlayWindow, f.panel].compactMap { $0 }
+        var windows: [NSWindow] = [f.cardWindow, f.controller.debugOverlayWindow, f.panel].compactMap { $0 } + f.controller.debugMarkWindows.filter { $0.isVisible }
         var rect = f.panel.frame
         if let card = f.cardWindow?.frame { rect = rect.union(card) }
         if includeFX, let fx = f.controller.debugFeedback.debugSparkOverlay.window, fx.isVisible {

@@ -199,13 +199,13 @@ enum L10n {
 
         "tour.move.title":          ("Put it in a corner you like", "放到你喜欢的角落"),
         // Corners work on the cover page only; the lyrics page can only be pushed into a screen edge.
-        "tour.move.body":           ("On the cover page, two fingers nudge the panel toward a corner and it settles there. The lyrics page can't be moved around; it only slides into a screen edge.", "在封面页，双指按住面板往一个角轻推，它会自己落好。歌词页不能随意挪，只能往屏幕边上推，让它藏进去。"),
+        "tour.move.body":           ("On the cover page, two fingers nudge the panel toward a corner and it settles into any of the four, right on the faint outlines. The lyrics page only slides into a screen edge.", "在封面页，双指按住面板往一个角轻推，它会落进四个角中的任意一个，正好落在淡淡的轮廓上。歌词页只能往屏幕边上推，让它藏进去。"),
         "tour.move.bodyLyrics":     ("Corners only work on the cover page, so let's go back there first. (On the lyrics page the panel can only be pushed into a screen edge.)", "落角只在封面页能用，我们先回到封面页。（歌词页只能往屏幕边上推，不能挪到角落。）"),
         "tour.move.beat0":          ("Back to the cover page", "先回到封面页"),
-        "tour.move.beat1":          ("Nudge it to a corner", "推到一个角落"),
+        "tour.move.beat1":          ("Nudge it to a corner", "推到一个角"),
         "tour.move.beat2":          ("Now nudge it into the edge", "再往屏幕边上推一下"),
-        "tour.move.bodyTuckRight":  ("Settled. Nudge it right once more and it slips into the edge.", "落好了。往右边再推一下，它会藏进屏幕边。"),
-        "tour.move.bodyTuckLeft":   ("Settled. Nudge it left once more and it slips into the edge.", "落好了。往左边再推一下，它会藏进屏幕边。"),
+        "tour.move.bodyTuckRight":  ("Settled. Try another corner if you like; it settles in any of the four. When you're ready, nudge it right and it slips into the edge.", "落好了。想的话再换一个角试试，四个角都能停。准备好了，往右边推一下，它会藏进屏幕边。"),
+        "tour.move.bodyTuckLeft":   ("Settled. Try another corner if you like; it settles in any of the four. When you're ready, nudge it left and it slips into the edge.", "落好了。想的话再换一个角试试，四个角都能停。准备好了，往左边推一下，它会藏进屏幕边。"),
         "tour.move.forMe":          ("Tuck it for me", "替我收起来"),
         "tour.move.tucking":        ("Tucking…", "正在收…"),
         "tour.move.mouseNote":      ("On a mouse, give Hide to Edge a key in Settings › Shortcuts.", "用鼠标的话，在 设置 › 快捷键 给「贴边隐藏」录个键就好。"),
