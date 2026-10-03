@@ -35,7 +35,9 @@ public enum TourStep: String, CaseIterable, Codable, Sendable {
     public var beatCount: Int {
         switch self {
         case .connect, .lyrics, .translate: return 1
-        case .reveal, .corners, .moveTuck, .back: return 2
+        case .reveal, .corners, .back: return 2
+        // A corner -> across the diagonal -> the edge (`TourMoveBeat`).
+        case .moveTuck: return 3
         }
     }
 }
@@ -220,8 +222,8 @@ public struct TourState: Equatable, Sendable {
     /// The move step: the corner the panel was in when the step began (nil = it was between corners).
     public var moveStartCorner: ScreenCorner?
     /// The move step: the corners the panel has landed in since, in order, each counted once. The first ticks the corner
-    /// beat; later ones are optional (a light acknowledgement on their mark, nothing blocks). A landing in the start corner
-    /// or in one already used counts for nothing (2026-10-03: the user should feel that there are four corners).
+    /// beat, the second the diagonal beat (the opposite corner, or any other new one). A landing in the start corner (corner
+    /// beat only) or in one already landed in counts for nothing (2026-10-03: the user should feel that there are four corners).
     public var cornersLanded: [ScreenCorner]
 
     public init(

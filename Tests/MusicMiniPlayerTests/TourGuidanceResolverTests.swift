@@ -121,7 +121,7 @@ final class TourGuidanceResolverTests: XCTestCase {
     // MARK: - move (item 8)
 
     func test_move_ringOnlyWhenTheFirstBeatIsBackToTheCoverPage() {
-        let phase = TourPhase.step(.moveTuck, beats: [false, false])
+        let phase = TourPhase.step(.moveTuck, beats: [false, false, false])
         XCTAssertNil(TourGuidanceResolver.target(phase: phase, surface: surface(.album)))
         XCTAssertNil(TourGuidanceResolver.target(phase: phase, surface: surface(.lyrics)), "no album-first beat: no ring")
         let t = TourGuidanceResolver.target(phase: phase, surface: surface(.lyrics), preface: .backToCover)
@@ -131,10 +131,10 @@ final class TourGuidanceResolverTests: XCTestCase {
     }
 
     func test_panelHint_moveOnTheCoverIsAGlow_notOnLyrics() {
-        let phase = TourPhase.step(.moveTuck, beats: [false, false])
+        let phase = TourPhase.step(.moveTuck, beats: [false, false, false])
         XCTAssertEqual(TourGuidanceResolver.panelHint(phase: phase, surface: surface(.album)), .gestureInvite)
         XCTAssertEqual(TourGuidanceResolver.panelHint(phase: phase, surface: surface(.lyrics)), .none)
-        XCTAssertEqual(TourGuidanceResolver.panelHint(phase: .step(.moveTuck, beats: [true, true]), surface: surface(.album)), .none)
+        XCTAssertEqual(TourGuidanceResolver.panelHint(phase: .step(.moveTuck, beats: [true, true, true]), surface: surface(.album)), .none)
     }
 
     // MARK: - back (item 10)

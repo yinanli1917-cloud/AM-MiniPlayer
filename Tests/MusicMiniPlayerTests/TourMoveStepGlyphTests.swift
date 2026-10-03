@@ -31,7 +31,7 @@ final class TourMoveStepGlyphTests: XCTestCase {
         XCTAssertTrue(f.wait { f.cardWindow != nil })
         f.spin(1.6)
         let store = try XCTUnwrap(f.controller.debugCardStore)
-        XCTAssertEqual(store.model.beats.first?.id, 2, "fixture sanity: the leading beat is on the card")
+        XCTAssertEqual(store.model.beats.first?.id, 3, "fixture sanity: the leading beat is on the card")
         XCTAssertEqual(store.model.beats.first?.checked, false)
         XCTAssertNil(store.gestureKind, "no demo while the current beat is 'Back to the cover page'")
         XCTAssertEqual(presence(), 0, accuracy: 1e-9)
@@ -69,7 +69,12 @@ final class TourMoveStepGlyphTests: XCTestCase {
         XCTAssertTrue(isNudge(store.gestureKind))
         XCTAssertEqual(presence(), 1, accuracy: 0.02, "a card that opens on the nudge beat has its demo at once")
 
+        f.panel.setFrameOrigin(try XCTUnwrap(f.panel.cornerLandingFrames()[.bottomLeft]).origin)
         f.controller.send(.panelSettled(corner: .bottomLeft))
+        f.spin(1.6)
+        XCTAssertTrue(isNudge(store.gestureKind), "the second beat (the diagonal) is a nudge too")
+        f.panel.setFrameOrigin(try XCTUnwrap(f.panel.cornerLandingFrames()[.topRight]).origin)
+        f.controller.send(.panelSettled(corner: .topRight))
         f.spin(1.6)
         if case .swipeToEdge = store.gestureKind {} else { XCTFail("the second beat's demo: \(String(describing: store.gestureKind))") }
         XCTAssertEqual(presence(), 1, accuracy: 0.02)

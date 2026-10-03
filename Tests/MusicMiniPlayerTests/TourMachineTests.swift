@@ -81,11 +81,11 @@ final class TourMachineTests: XCTestCase {
         (state, _) = TourMachine.reduce(state, .signal(.translationEnabled), snapshot: authorized)
         guard case .transitioning(.translate, .moveTuck) = state.phase else { return XCTFail("got \(state.phase)") }
         (state, _) = TourMachine.reduce(state, .advanceTransition, snapshot: authorized)
-        guard case .step(.moveTuck, [false, false]) = state.phase else { return XCTFail() }
+        guard case .step(.moveTuck, [false, false, false]) = state.phase else { return XCTFail() }
 
         (state, effects) = TourMachine.reduce(state, .panelSettled(corner: .bottomRight), snapshot: authorized)
         XCTAssertTrue(effects.contains(.relocateCardToPanel))
-        guard case .step(.moveTuck, [true, false]) = state.phase else { return XCTFail() }
+        guard case .step(.moveTuck, [true, false, false]) = state.phase else { return XCTFail() }
 
         (state, effects) = TourMachine.reduce(state, .panelTucked, snapshot: authorized)
         XCTAssertEqual(state.stepStates[.moveTuck], .completed)

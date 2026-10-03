@@ -1,15 +1,102 @@
 /**
- * [INPUT]: CoreGraphics; ScreenCorner (SnappablePanel.swift).
- * [OUTPUT]: Exports TourCornerGuide — the pure answers behind the move step's direction cues: which corner to suggest
- *           next, which way the panel travels to get there, which way the FINGERS must move for it (natural scrolling on
- *           or off), and which screen edge is nearest.
- * [POS]: MusicMiniPlayerCore/Onboarding. The trackpad demo in the card and the emphasised snap-target mark on screen
- *        both read these, so they cannot disagree. No AppKit: takes plain values.
+ * [INPUT]: CoreGraphics; ScreenCorner (SnappablePanel.swift); LiquidEdgeTokens (the tucked sliver's size).
+ * [OUTPUT]: Exports TourCornerGuide, TourMoveBeat, TourMoveSuggestion — the pure answers behind the move step's direction
+ *           cues: which corner to suggest next (the nearest unvisited one, then the diagonal opposite), which way the
+ *           panel travels to get there, where it starts and lands (the ghost's path), which way the FINGERS must move for
+ *           it (natural scrolling on or off), and which screen edge is nearest.
+ * [POS]: MusicMiniPlayerCore/Onboarding. The trackpad demo in the card, the on-screen ghost of the panel and the
+ *        emphasised snap-target mark all read `TourMoveSuggestion`, so they cannot disagree. No AppKit: takes plain values.
  */
 
 import CoreGraphics
 
+/// The move step's three required moves, in order (2026-10-03: corner -> across the diagonal -> the edge).
+public enum TourMoveBeat: Int, CaseIterable, Sendable {
+    case corner = 0, diagonal = 1, edge = 2
+}
+
+/// One suggested move: where the ghost of the panel starts and lands, which way the panel travels, and what is emphasised.
+/// The single source for the card's trackpad demo (`fingerHeading`), the ghost's path (`from` -> `to`) and the emphasised
+/// snap-target mark (`targetCorner`): they are derived here, once, and cannot disagree.
+public struct TourMoveSuggestion: Equatable, Sendable {
+    public var beat: TourMoveBeat
+    /// The corner to land in (nil for the edge beat).
+    public var targetCorner: ScreenCorner?
+    /// The edge to slide into (nil for the corner beats).
+    public var edgeIsRight: Bool?
+    /// The panel's frame now (screen space, y up).
+    public var from: CGRect
+    /// Where the panel lands: the corner's landing frame, or the tucked sliver at the edge.
+    public var to: CGRect
+    /// Unit vector of the PANEL's travel (screen space, y up).
+    public var panelHeading: CGVector
+
+    public init(beat: TourMoveBeat, targetCorner: ScreenCorner?, edgeIsRight: Bool?, from: CGRect, to: CGRect, panelHeading: CGVector) {
+        self.beat = beat
+        self.targetCorner = targetCorner
+        self.edgeIsRight = edgeIsRight
+        self.from = from
+        self.to = to
+        self.panelHeading = panelHeading
+    }
+
+    /// Same move, same identity: a replay is wanted when this changes.
+    public var key: String {
+        switch beat {
+        case .corner, .diagonal: return "\(beat)-\(targetCorner.map { "\($0)" } ?? "-")"
+        case .edge: return "edge-\(edgeIsRight == true ? "right" : "left")"
+        }
+    }
+
+    /// How the FINGERS move for this move, a unit vector in view space (y down).
+    public func fingerHeading(naturalScrolling: Bool) -> CGVector {
+        TourCornerGuide.fingerHeading(panelHeading: panelHeading, naturalScrolling: naturalScrolling)
+    }
+
+    /// The fingers move rightward (edge beat).
+    public func fingerRightward(naturalScrolling: Bool) -> Bool {
+        TourCornerGuide.fingerRightward(panelRightward: edgeIsRight == true, naturalScrolling: naturalScrolling)
+    }
+}
+
+extension ScreenCorner {
+    /// The corner across the diagonal.
+    public var opposite: ScreenCorner {
+        switch self {
+        case .topLeft: return .bottomRight
+        case .topRight: return .bottomLeft
+        case .bottomLeft: return .topRight
+        case .bottomRight: return .topLeft
+        }
+    }
+}
+
 public enum TourCornerGuide {
+    /// The suggested move for `beat`, or nil when the geometry gives no direction.
+    /// - `current`: the corner the panel sits in (nil = between corners: the nearest one stands in).
+    /// - `visited`: corners the corner beat should not suggest again (the start corner and any landed in).
+    /// - `frames`: the four landing frames; `screenFrame`: the whole screen (the sliver is joined to its bezel).
+    public static func suggestion(beat: TourMoveBeat, panelFrame: CGRect, current: ScreenCorner?, visited: Set<ScreenCorner>,
+                                  frames: [ScreenCorner: CGRect], screenFrame: CGRect, visibleMidX: CGFloat) -> TourMoveSuggestion? {
+        let center = CGPoint(x: panelFrame.midX, y: panelFrame.midY)
+        switch beat {
+        case .corner, .diagonal:
+            guard frames.count == ScreenCorner.allCases.count,
+                  let from = current ?? nearestCorner(to: center, frames: frames) else { return nil }
+            let goal: ScreenCorner? = beat == .corner ? target(from: from, visited: visited, frames: frames) : from.opposite
+            guard let goal, let rect = frames[goal],
+                  let heading = heading(from: center, to: CGPoint(x: rect.midX, y: rect.midY)) else { return nil }
+            return TourMoveSuggestion(beat: beat, targetCorner: goal, edgeIsRight: nil, from: panelFrame, to: rect, panelHeading: heading)
+        case .edge:
+            let right = nearestEdgeIsRight(panelMidX: center.x, visibleMidX: visibleMidX)
+            let size = LiquidEdgeTokens.sliverSize
+            let sliver = CGRect(x: right ? screenFrame.maxX - size.width : screenFrame.minX, y: center.y - size.height / 2,
+                                width: size.width, height: size.height)
+            return TourMoveSuggestion(beat: .edge, targetCorner: nil, edgeIsRight: right, from: panelFrame, to: sliver,
+                                      panelHeading: CGVector(dx: right ? 1 : -1, dy: 0))
+        }
+    }
+
     /// The corner whose landing frame is nearest to `point` (ties: `ScreenCorner.allCases` order).
     public static func nearestCorner(to point: CGPoint, frames: [ScreenCorner: CGRect]) -> ScreenCorner? {
         ScreenCorner.allCases.filter { frames[$0] != nil }.min { distance(point, frames[$0]!) < distance(point, frames[$1]!) }

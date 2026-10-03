@@ -37,7 +37,7 @@ final class TourCornerMarksShotTests: XCTestCase {
         studio.shoot("2-first-landing-pulse", fixture: f, extraRect: screen)
         f.spin(2.4)
         studio.shoot("3-first-landing-rest-anotherCornerBeat", fixture: f, extraRect: screen)
-        XCTAssertEqual(f.controller.state.phase, .step(.moveTuck, beats: [true, false]))
+        XCTAssertEqual(f.controller.state.phase, .step(.moveTuck, beats: [true, false, false]))
     }
 
     /// One still per start corner (light): the demo's dots mid-slide with their trails, and the emphasised mark, agreeing.

@@ -307,6 +307,10 @@ code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;backgroun
 .mp .pn{--pw:250;left:0;top:0}
 .mp .rim{position:absolute;inset:0;border-radius:inherit;pointer-events:none}
 /* C.4.5 四个落点的淡轮廓：面板落下时的真实位置；描边约 .18、浅填充；目标角稍强；所在角带圆点；落过的角带小勾 */
+/* C.4.7 虚影：面板大小、约 .22 填充 + 柔和描边的半透明矩形，从面板现在的位置沿建议路径滑向目标落点；与卡里手指示意同一个时钟（手指滑动与虚影滑动同时开始） */
+.ghostpanel{position:absolute;left:0;top:0;z-index:5;box-sizing:border-box;pointer-events:none;opacity:0;border:1.5px solid rgba(250,64,88,.55);background:rgba(250,64,88,.22);border-radius:16px}
+.ghostpath{position:absolute;left:0;top:0;z-index:1;pointer-events:none;opacity:0}
+.ghostpath line{stroke:rgba(250,64,88,.5);stroke-width:5;stroke-linecap:round;stroke-dasharray:0 13}
 .snapmark{--fa:.07;--sa:.18;--hit:0;--grow:1;position:absolute;left:0;top:0;width:250px;height:284px;box-sizing:border-box;border-radius:16px;
   border:1.5px solid rgba(250,64,88,calc(var(--sa) + .3*var(--hit)));background:rgba(250,64,88,calc(var(--fa) + .2*var(--hit)));
   transform:scale(var(--grow));opacity:0;z-index:2;cursor:pointer}
@@ -1434,7 +1438,10 @@ function glyphStyle(h) {
 const glyphHTML = (v, h) => `<div class="tp" data-act="glyph" title="点一下，代替双指手势"><div class="pad ${v}"${glyphStyle(h)}><i class="f a"></i><i class="f b"></i></div></div><div class="tpcap">点这里，代替双指手势</div>`;
 /* 建议的角 = 离面板现在所在角最近、还没去过的那个；手指方向 = 面板→目标的方向（自然滚动下手指与面板同向；关掉则相反） */
 const natural = () => $('#natChk').checked;
+const OPP = { TL: 'BR', TR: 'BL', BL: 'TR', BR: 'TL' };
 function suggestTarget() {
+  const o0 = Q.s5first ? 1 : 0, b0 = Bt().beats;
+  if (b0[o0] && b0[o0].done) return OPP[Q.corner];                  // 第二拍：对角（C.4.7）
   const visited = new Set([Q.startCorner, ...Q.landed]), c0 = cornerCenter(Q.corner);
   const options = CORNER_KEYS.filter(k => !visited.has(k) && k !== Q.corner);
   options.sort((a, b) => Math.hypot(cornerCenter(a).x - c0.x, cornerCenter(a).y - c0.y) - Math.hypot(cornerCenter(b).x - c0.x, cornerCenter(b).y - c0.y));
@@ -1450,11 +1457,12 @@ function edgeGlyph() { const fingerRight = natural() ? edgeIsRight() : !edgeIsRi
 const LINKS = `<div class="cfoot"><a class="clink" data-act="skip" tabindex="0" role="button">这一步先不做</a><a class="clink" data-act="stop" tabindex="0" role="button">先到这里</a></div>`;
 const S4_BODY = '右下角的按钮。译文会跟在每一句下面。', S4_BODY_COVER = '翻译按钮在歌词页里。鼠标移到面板上，点左下角的小气泡就过去了。';
 const S4_BEAT0 = '先到歌词页', S4_BEAT1 = '点一下翻译按钮';
-const S5_BODY = '在封面页，双指按住面板往一个角轻推，它会落进四个角中的任意一个，正好落在淡淡的轮廓上。歌词页只能往屏幕边上推，让它藏进去。', S5_TUCK_BASE = '落好了。想的话再换一个角试试，四个角都能停。准备好了，往';
-const S5_TUCK = () => S5_TUCK_BASE + (edgeIsRight() ? '右' : '左') + '边推一下，它会藏进屏幕边。';
+const S5_BODY = '在封面页，双指按住面板往那个角轻推，它会自己落在淡淡的轮廓上。屏幕上的虚影会先带你走一遍。', S5_DIAG = '落好了。再走一段远的：斜着推到对角。虚影会带你看一遍路线。';
+const S5_TUCK = () => (Q.landed.length >= 2 && Q.landed[1] === OPP[Q.landed[0]] ? '到对角了，漂亮。最后一下：往' : '换了个角，也很好，不用改。最后一下：往') + (edgeIsRight() ? '右' : '左') + '边推，它会藏进屏幕边。';
 /* 09-29 创始人定：落角只在封面页有效，歌词页只能推向屏幕边。面板在歌词页时进入这一步，第一拍是「先回到封面页」，环在歌词气泡上。 */
 const S5_BODY_LYR = '落角只在封面页能用，我们先回到封面页。（歌词页只能往屏幕边上推，不能挪到角落。）';
-const S5_BEATS = ['推到一个角', '再往屏幕边上推一下'], S5_BEAT0 = '先回到封面页';
+const S5_BEATS = ['推到一个角', '再斜着推到对角', '往边上推，让它藏起来'], S5_BEAT0 = '先回到封面页';
+const s5CornersDone = () => { const o = Q.s5first ? 1 : 0, b = Bt().beats; return !!(b[o] && b[o].done && b[o + 1] && b[o + 1].done); };
 const S5_ACTS = () => glyphHTML('nudge', nudgeHeading()) + `<div class="cbtns" style="margin-top:8px"><button class="cbtn sec sm" data-act="tuckForMe">替我收起来</button></div>`;
 const CSTEPS = [
   { id: 'S0', title: '你好，很高兴见到你', body: '接下来几分钟，我陪你把 nanoPod 走一遍。都是些顺手的小事，不着急。', num: 1, ringMode: 'check', anchor: 'edge',
@@ -1512,6 +1520,7 @@ const CSTAGE_HTML = () => `
     <button class="hp hp-tr" data-ev="translate" aria-label="翻译">${TR_ICON}</button>
     <div class="cpop" id="c-pop"><div class="r on"><span>MacBook 扬声器</span><b>✓</b></div><div class="r"><span>AirPods</span></div></div>
   </div>
+  <svg class="ghostpath" id="ghostpath" width="${CW}" height="${CH}"><line x1="0" y1="0" x2="0" y2="0"/></svg><div class="ghostpanel" id="ghost"></div>
   ${CORNER_KEYS.map(k => `<div class="snapmark" data-k="${k}" aria-label="落点"><i></i><svg viewBox="0 0 22 20"><path d="M2 10.5l6 6.5L20 3"/></svg></div>`).join('')}
   <div class="cmw" id="c-mw"><div class="tb"><i></i><i></i><i></i><span>Apple Music</span></div><div class="sd"></div><div class="tl"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
   <div class="vcard cap" id="c-cap"><div class="th"></div><b class="ti"></b><b class="ar"></b>
@@ -1807,7 +1816,7 @@ function enterStep(id) {
     case 'S2': haloShow('out', hovering() ? 'wait' : 'hint'); break;
     case 'S3': haloShow('nav', hovering() ? 'wait' : 'hint'); break;
     case 'S4': haloShow(Q.s4first ? 'nav' : 'tr', hovering() ? 'wait' : 'hint'); break;
-    case 'S5': Q.startCorner = Q.corner; Q.landed = []; if (Q.s5first) haloShow('nav', hovering() ? 'wait' : 'hint'); else if (!S.rm) Q.gl0 = TC.B.now; break;
+    case 'S5': Q.startCorner = Q.corner; Q.landed = []; if (Q.s5first) haloShow('nav', hovering() ? 'wait' : 'hint'); else { if (!S.rm) Q.gl0 = TC.B.now; TC.cue(.05, ghostArm); } break;
     case 'S6': haloShow('strip', 'wait'); break;
   }
   if (id === 'S2' || id === 'S3' || (id === 'S4' && !Q.s4first)) { if (!hovering()) { setBody(cur().bodyAway); Q.bodyMode = 'away'; } }
@@ -1835,31 +1844,34 @@ function userDid(ev) {
     case 'S3:nav': haloHide(); TC.completeStep(); break;
     case 'S4:nav': if (Q.s4first && !b[0].done) { TC.beatCheck(0, false); TC.haptic('.levelChange'); CSTEPS[CIDX.S4]._body = S4_BODY; setBody(S4_BODY); Q.bodyMode = 'base'; haloShow('tr', hovering() ? 'wait' : 'hint'); } break;
     case 'S4:translate': haloHide(); TC.completeStep(); break;
-    case 'S5:nav': if (o && !b[0].done) { TC.beatCheck(0, false); TC.haptic('.levelChange'); haloHide(); CSTEPS[CIDX.S5]._body = S5_BODY; setBody(S5_BODY); if (!S.rm) Q.gl0 = TC.B.now; } break;
-    case 'S5:corner': if (!b[o].done) doCorner(suggestTarget()); else if (!b[o + 1].done) { const t = suggestTarget(); t && doCorner(t); } break;
-    case 'S5:tuck': if (b[o].done && !b[o + 1].done) doTuck(); else if (!b[o].done) { doCorner(suggestTarget()); TC.cue(1.6, () => doTuck()); } break;
+    case 'S5:nav': if (o && !b[0].done) { TC.beatCheck(0, false); TC.haptic('.levelChange'); haloHide(); CSTEPS[CIDX.S5]._body = S5_BODY; setBody(S5_BODY); if (!S.rm) Q.gl0 = TC.B.now; ghostArm(); } break;
+    case 'S5:corner': if (!s5CornersDone()) { const t = suggestTarget(); t && doCorner(t); } break;
+    case 'S5:tuck': if (s5CornersDone()) { if (!b[o + 2].done) doTuck(); } else { const t = suggestTarget(); t && doCorner(t); TC.cue(1.6, () => userDid('tuck')); } break;
     case 'S6:peek': if (!b[0].done) doPeek(); break;
     case 'S6:return': if (!b[0].done) { doPeek(); TC.cue(.7, () => doReturn()); } else if (!b[1].done) doReturn(); break;
   }
 }
-/* 落到任意一个还没去过的角（相邻或对角都算）。第一次勾掉「推到一个角」；之后再换角只给那个落点打勾，不挡路 */
+/* 落到任意一个还没落过的角（相邻或对角都算）：第一次勾「推到一个角」，第二次勾「再斜着推到对角」（对角最好，别的新角也收，正文温和确认）；落过的角不算 */
 function doCorner(key) {
   if (!key || Q.lock) return;
-  const o = Q.s5first ? 1 : 0, first = !Bt().beats[o].done;
+  const o = Q.s5first ? 1 : 0, bs = Bt().beats, first = !bs[o].done, second = bs[o].done && !bs[o + 1].done;
+  if (!first && !second) return;
+  if (key === Q.corner || Q.landed.includes(key) || (first && key === Q.startCorner)) return;
   Q.lock = true; Q.simHover = false; updateHover();
-  if (first) { TC.beatCheck(o, false); TC.haptic('.levelChange'); }
-  cardHide(); haloHide(); Q.gl0 = null;
-  if (key !== Q.startCorner && !Q.landed.includes(key)) { Q.landed.push(key); mkPulse(key); }
+  TC.beatCheck(first ? o : o + 1, false); TC.haptic('.levelChange');
+  cardHide(); haloHide(); Q.gl0 = null; Q.gh0 = null; Q.ghMove = null;      // 用户自己动手了：虚影立刻停
+  Q.landed.push(key); mkPulse(key);
   Q.corner = key; panelMoveTo(CORNER[key]);
   TC.cue(S.rm ? .3 : .75, () => {
-    CSTEPS[CIDX.S5].body = S5_TUCK(); CSTEPS[CIDX.S5].acts = edgeGlyph() + `<div class="cbtns" style="margin-top:8px"><button class="cbtn sec sm" data-act="tuckForMe">替我收起来</button></div>`;
-    TC.content.body.textContent = S5_TUCK(); TC.content.acts.innerHTML = CSTEPS[CIDX.S5].acts;
-    cardAppear('edge'); Q.lock = false;
+    const body = first ? S5_DIAG : S5_TUCK();
+    CSTEPS[CIDX.S5].body = body; CSTEPS[CIDX.S5].acts = (first ? glyphHTML('nudge', nudgeHeading()) : edgeGlyph()) + `<div class="cbtns" style="margin-top:8px"><button class="cbtn sec sm" data-act="tuckForMe">替我收起来</button></div>`;
+    TC.content.body.textContent = body; TC.content.acts.innerHTML = CSTEPS[CIDX.S5].acts;
+    cardAppear('edge'); Q.lock = false; ghostArm();
   });
   wake();
 }
 function doTuck() {
-  Q.lock = true; cardHide(); haloHide(); TC.beatCheck(Bt().beats.length - 1, false); TC.haptic('.levelChange');
+  Q.lock = true; cardHide(); haloHide(); Q.gh0 = null; Q.ghMove = null; TC.beatCheck(Bt().beats.length - 1, false); TC.haptic('.levelChange');
   panelTuck();
   TC.cue(S.rm ? .4 : .95, () => {
     TC.silentAdvance(CIDX.S6); Q.stepId = 'S6'; markStep(); cardAppear('strip');
@@ -1931,6 +1943,7 @@ function cFrame(dt) {
     if (Q.autoAt != null && B.now >= Q.autoAt) { Q.autoAt = null; nextAction(); }
   }
   if (marksFrame(B.now)) active = true;
+  if (ghostFrame(B.now)) active = true;
   paintC(g, rg);
   return active;
 }
@@ -1941,7 +1954,7 @@ function marksFrame(now) {
   if (want !== Q.mkOn) { Q.mkOn = want; fade(CV.mk, want ? 1 : 0, want ? .6 : .2, want ? 'out' : 'in'); Q.mk0 = want && !S.rm ? now : null; }
   let active = Q.mkOn && Q.mk0 != null, breath = 0;
   if (Q.mk0 != null) { const u = now - Q.mk0 - .5; if (u >= 2.4) Q.mk0 = null; else if (u >= 0) breath = .5 - .5 * Math.cos(2 * Math.PI * u / 2.4); }
-  const o = Q.s5first ? 1 : 0, cornerBeat = bs[o] && !bs[o].done, tgt = cornerBeat ? suggestTarget() : null;
+  const cornerBeat = cur().id === 'S5' && !s5CornersDone() && !(Q.s5first && !bs[0].done), tgt = cornerBeat ? suggestTarget() : null;
   for (const el of document.querySelectorAll('.snapmark')) {
     const k = el.dataset.k, here = Math.abs(CV.px.v - CORNER[k].x) < 2 && Math.abs(CV.py.v - CORNER[k].y) < 2;
     let hit = 0, p = Q.mkP[k] != null ? (now - Q.mkP[k]) / .75 : -1;
@@ -1954,6 +1967,41 @@ function marksFrame(now) {
     el.style.pointerEvents = Q.mkOn && !here && !Q.lock ? 'auto' : 'none';
     const tick = el.querySelector('svg'); tick.style.opacity = hit > 0 ? Math.max(Q.landed.includes(k) ? .5 : 0, Math.min(1, .5 + hit)).toFixed(3) : '';
   }
+  return active;
+}
+/* C.4.7 虚影：与卡里手指示意同一个时钟（Q.gh0）。节奏 = 手指示意的一轮 3.55 s：淡入 0.45 s → 停在面板上 → 0.80 s 起滑动（真实吸附弹簧 duration .5 bounce .15）→ 落在目标上停 0.4 s → 淡出 0.3 s；播两轮后静止。边这一拍：滑向最近的边、缩成细条。减少动态效果：不滑，只画面板到目标的点线 + 目标（淡轮廓已强调）。 */
+const GH = { cycle: 3.55, glide: .225 * 3.55, hold: .4, fade: .3, fadeIn: .127 * 3.55, settle: .85 };
+const ghSpring = t => { if (t <= 0) return 0; const w = 2 * Math.PI / .5, z = .85, r = Math.sqrt(1 - z * z); return 1 - Math.exp(-z * w * t) * (Math.cos(w * r * t) + z / r * Math.sin(w * r * t)); };
+function ghostArm() {
+  const o = Q.s5first ? 1 : 0, bs = Bt().beats;
+  if (cur().id !== 'S5' || (Q.s5first && !bs[0].done) || Q.tucked) return;
+  const from = { x: CV.px.v, y: CV.py.v, w: PW, h: PH };
+  let to;
+  if (s5CornersDone()) { const r = edgeIsRight(); to = { x: r ? CW - 6 : 0, y: from.y + PH / 2 - 28, w: 6, h: 56, edge: true }; }
+  else { const t = suggestTarget(); if (!t) return; to = { x: CORNER[t].x, y: CORNER[t].y, w: PW, h: PH }; }
+  Q.ghMove = { from, to }; Q.gh0 = TC.B.now + .12;
+}
+function ghostFrame(now) {
+  const g = $('#ghost'), pth = $('#ghostpath'), m = Q.ghMove;
+  let op = 0, active = false, pathOp = 0;
+  if (m && Q.gh0 != null && cur().id === 'S5') {
+    if (S.rm) { pathOp = 1; const ln = pth.querySelector('line'), a = { x: m.from.x + m.from.w / 2, y: m.from.y + m.from.h / 2 }, b = { x: m.to.x + m.to.w / 2, y: m.to.y + m.to.h / 2 }; ln.setAttribute('x1', a.x); ln.setAttribute('y1', a.y); ln.setAttribute('x2', b.x); ln.setAttribute('y2', b.y); }
+    else {
+      const e = now - Q.gh0;
+      if (e >= 2 * GH.cycle) { Q.gh0 = null; }
+      else if (e >= 0) {
+        active = true;
+        const u = e % GH.cycle, t = u - GH.glide, k = t >= GH.settle ? 1 : ghSpring(t), sh = Math.min(Math.max((Math.min(Math.max(k, 0), 1) - .45) / .55, 0), 1), sm = sh * sh * (3 - 2 * sh);
+        const f = m.from, d = m.to, cx = f.x + f.w / 2 + (d.x + d.w / 2 - f.x - f.w / 2) * k, cy = f.y + f.h / 2 + (d.y + d.h / 2 - f.y - f.h / 2) * k;
+        const w = f.w + (d.w - f.w) * (d.edge ? sm : 0), h = f.h + (d.h - f.h) * (d.edge ? sm : 0);
+        g.style.left = (k >= 1 ? d.x : cx - w / 2) + 'px'; g.style.top = (k >= 1 ? d.y : cy - h / 2) + 'px'; g.style.width = (k >= 1 ? d.w : w) + 'px'; g.style.height = (k >= 1 ? d.h : h) + 'px';
+        g.style.borderRadius = (d.edge ? 16 + (3 - 16) * sm : 16) + 'px';
+        const out = GH.glide + GH.settle + GH.hold;
+        op = u < GH.fadeIn ? u / GH.fadeIn : u < out ? 1 : Math.max(0, 1 - (u - out) / GH.fade);
+      }
+    }
+  }
+  g.style.opacity = op.toFixed(3); pth.style.opacity = pathOp;
   return active;
 }
 function autoDelay() {
@@ -1976,7 +2024,7 @@ function nextAction() {
       sim(); press(d0 ? 'music' : 'out', $(d0 ? '.hp-music' : '.hp-out', cel.mp)); break;
     case 'S3': sim(); press('nav', $('.hp-nav', cel.mp)); break;
     case 'S4': sim(); if (Q.s4first && !d0) press('nav', $('.hp-nav', cel.mp)); else press('translate', $('.hp-tr', cel.mp)); break;
-    case 'S5': if (Q.s5first && !d0) { sim(); press('nav', $('.hp-nav', cel.mp)); } else userDid(Bt().beats[Q.s5first ? 1 : 0].done ? 'tuck' : 'corner'); break;
+    case 'S5': if (Q.s5first && !d0) { sim(); press('nav', $('.hp-nav', cel.mp)); } else userDid(s5CornersDone() ? 'tuck' : 'corner'); break;
     case 'S6': userDid(d0 ? 'return' : 'peek'); break;
     case 'S7': finishTour('引导结束'); break;
   }
@@ -1985,7 +2033,7 @@ function nextAction() {
 function nextLabel() {
   if (Q.stopped) return '已停下（点「重来」）'; if (Q.done) return '已结束（点「重来」）';
   const id = Q.stepId, d0 = Bt().beats[0]?.done;
-  return { S0: '点「开始」', S1: d0 ? '按一下播放' : '鼠标移到面板上', S2: Q.musicHold ? '（等待中）鼠标回到面板上' : d0 ? '点左上角 Music' : '点右上角输出', S3: '点左下角歌词气泡', S4: Q.s4first && !d0 ? '点左下角歌词气泡，到歌词页' : '点右下角翻译', S5: Q.s5first && !d0 ? '点左下角歌词气泡，回到封面页' : (Bt().beats[Q.s5first ? 1 : 0]?.done ? '往边上再推一下（或点另一个落点，换个角）' : '双指推到淡轮廓标出的角（也可点任一落点）'), S6: d0 ? '点一下小卡，回来' : '鼠标停到小条上', S7: '点「好」' }[id];
+  return { S0: '点「开始」', S1: d0 ? '按一下播放' : '鼠标移到面板上', S2: Q.musicHold ? '（等待中）鼠标回到面板上' : d0 ? '点左上角 Music' : '点右上角输出', S3: '点左下角歌词气泡', S4: Q.s4first && !d0 ? '点左下角歌词气泡，到歌词页' : '点右下角翻译', S5: Q.s5first && !d0 ? '点左下角歌词气泡，回到封面页' : (s5CornersDone() ? '往边上推一下' : Bt().beats[Q.s5first ? 1 : 0]?.done ? '斜着推到对角（虚影会示范，也可点任一新的落点）' : '双指推到淡轮廓标出的角（也可点任一落点）'), S6: d0 ? '点一下小卡，回来' : '鼠标停到小条上', S7: '点「好」' }[id];
 }
 function refreshNextLabel() { $('#cNextLbl').textContent = nextLabel(); }
 
@@ -2051,7 +2099,7 @@ TC.card.addEventListener('click', e => {
     case 'start': userDid('start'); break;
     case 'later': case 'stop': stopTour(); break;
     case 'skip': skipStep(); break;
-    case 'glyph': userDid(Bt().beats[Q.s5first ? 1 : 0]?.done ? 'tuck' : 'corner'); break;
+    case 'glyph': userDid(s5CornersDone() ? 'tuck' : 'corner'); break;
     case 'tuckForMe': userDid('tuck'); break;
     case 'shortcut': finishTour('→ 打开 设置 › 快捷键'); break;
     case 'ok': finishTour('引导结束'); break;
@@ -2079,7 +2127,7 @@ function syncAutoBtn() { const b = $('#cAuto'); b.textContent = Q.auto ? '⏸ �
 function resetC() {
   cel.mw.classList.remove('on'); Object.assign(Q, { mwin: false, menuOpen: false, musicHome: false, corner: 'TR', tucked: false, playing: false, trOn: false, realHover: false, simHover: false, auto: Q.auto, autoAt: null, stopped: false, done: false, lock: false, musicHold: false, musicAway: false, musicBack: false, stepId: 'S0', haloKind: null, breathT0: null, dwell: null, bodyMode: 'base', capOut: false, popT: null });
   CSTEPS[CIDX.S4]._body = null; Q.s4first = false;
-  Q.startCorner = 'TR'; Q.landed = []; Q.mkOn = false; Q.mk0 = null; Q.mkP = {}; CV.mk.set(0);
+  Q.startCorner = 'TR'; Q.landed = []; Q.gh0 = null; Q.ghMove = null; Q.mkOn = false; Q.mk0 = null; Q.mkP = {}; CV.mk.set(0);
   CSTEPS[CIDX.S5]._body = null; CSTEPS[CIDX.S5].acts = S5_ACTS(); Q.s5first = false; Q.gl0 = null;
   TC.reset();
   [CV.pOp, CV.stripOp, CV.hov, CV.page, CV.tr, CV.cap, CV.hop, CV.cop, CV.capp].forEach(v => v.set(0)); CV.pOp.set(1);
@@ -2091,7 +2139,7 @@ function resetC() {
   paintC(0); wake(); refreshNextLabel();
 }
 $('#c-stage').addEventListener('click', e => { const m = e.target.closest?.('.snapmark'); if (m && Q.mkOn && !Q.lock && !Q.stopped && !Q.done) { doCorner(m.dataset.k); } });
-$('#natChk').addEventListener('change', () => { if (Q.stepId === 'S5') { CSTEPS[CIDX.S5].acts = Bt().beats[Q.s5first ? 1 : 0]?.done ? edgeGlyph() + `<div class="cbtns" style="margin-top:8px"><button class="cbtn sec sm" data-act="tuckForMe">替我收起来</button></div>` : S5_ACTS(); TC.content.acts.innerHTML = CSTEPS[CIDX.S5].acts; } });
+$('#natChk').addEventListener('change', () => { if (Q.stepId === 'S5') { CSTEPS[CIDX.S5].acts = s5CornersDone() ? edgeGlyph() + `<div class="cbtns" style="margin-top:8px"><button class="cbtn sec sm" data-act="tuckForMe">替我收起来</button></div>` : S5_ACTS(); TC.content.acts.innerHTML = CSTEPS[CIDX.S5].acts; } });
 $('#cAuto').addEventListener('click', () => { Q.auto = !Q.auto; if (Q.auto && (Q.stopped || Q.done)) resetC(); syncAutoBtn(); Q.autoAt = null; wake(); });
 $('#cNext').addEventListener('click', () => { nextAction(); wake(); });
 $('#cReset').addEventListener('click', () => resetC());

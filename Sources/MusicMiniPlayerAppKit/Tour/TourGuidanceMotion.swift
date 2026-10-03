@@ -125,6 +125,9 @@ struct TourGuidanceFrame: Equatable {
     /// Snap-target marks (move step, corner beats, cover page).
     var marks = TourSnapMarksVisual.hidden
 
+    /// The translucent ghost of the panel demonstrating the move (move step). Rides the card glyph's clock.
+    var panelGhost = TourPanelGhostVisual.hidden
+
     static let idle = TourGuidanceFrame()
 }
 
@@ -293,6 +296,9 @@ final class TourGuidanceMotion {
     private let glyph: TourFeedbackValue
     private var glyphStart: Double?
     private(set) var glyphWanted = false
+    private var ghostMove: TourMoveSuggestion?
+    private var ghostKey: String?
+    private var ghostStopped = false
     private var cardWidth = 272.0
     private var beakSide: TourCardSide = .right
     private(set) var cardVisible = false
@@ -551,11 +557,27 @@ final class TourGuidanceMotion {
         }
     }
 
-    /// Hover replay: the cycle starts over.
+    /// Hover replay: the cycle starts over (the ghost, which rides the same clock, plays again with it).
     func replayGlyph() {
         guard glyphWanted, !reduceMotion else { return }
         glyphStart = clock.now
+        ghostStopped = false
     }
+
+    // MARK: Panel ghost (move step)
+
+    /// The move the ghost demonstrates (nil = none). Geometry is refreshed on every call; a DIFFERENT move (its `key`) lifts a
+    /// stop, so each new suggestion plays again.
+    func setGhost(_ move: TourMoveSuggestion?) {
+        guard let move else { ghostMove = nil; ghostKey = nil; return }
+        if move.key != ghostKey { ghostKey = move.key; ghostStopped = false }
+        ghostMove = move
+    }
+
+    /// The user started moving the panel themselves: the ghost stops at once and does not come back for the same move.
+    func stopGhost() { ghostStopped = true }
+
+    var ghostIsStopped: Bool { ghostStopped }
 
     private var glyphIsRunning: Bool {
         guard let g = glyphStart else { return false }
@@ -729,6 +751,10 @@ final class TourGuidanceMotion {
         f.contentOffsetY = contentY.map { $0.v }
         f.glyphPresence = glyph.v
         if let g = glyphStart, glyphIsRunning { f.glyphElapsed = max(clock.now - g, 0) }
+        // The ghost plays the glyph's cycle: same clock, so the glyph's slide and the ghost's glide start together.
+        if let move = ghostMove, !ghostStopped, glyphWanted {
+            f.panelGhost = TourPanelGhostMotion.visual(path: move, elapsed: f.glyphElapsed, reduceMotion: reduceMotion)
+        }
 
         f.ringVisible = ringVisible || hop.v > 0.003
         f.ring = TourRingGeometry(cx: hx.v, cy: hy.v, w: hw.v, h: hh.v, corner: ringCorner)

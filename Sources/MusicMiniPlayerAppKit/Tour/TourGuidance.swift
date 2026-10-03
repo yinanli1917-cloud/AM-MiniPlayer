@@ -32,6 +32,8 @@ final class TourGuidance {
     private(set) weak var overlayWindow: TourHaloWindow?
     /// One small click-through window per snap-target mark (created on first use, parked when the marks are not drawn).
     private(set) var markWindows: [TourHaloWindow] = []
+    /// The panel ghost's one small click-through window (created on first use; it moves with the ghost).
+    private(set) var ghostWindow: TourHaloWindow?
     private(set) var lastFrame: TourGuidanceFrame = .idle
     /// The screen the overlay may cover (the panel's screen).
     var screenFrame: () -> CGRect = { NSScreen.main?.frame ?? .zero }
@@ -106,7 +108,9 @@ final class TourGuidance {
         store.glyphClock.elapsed = nil
         store.overlay = .hidden
         store.marksStore.visual = .hidden
+        store.ghostStore.art = .none
         for w in markWindows where w.isVisible { w.orderOut(nil) }
+        if ghostWindow?.isVisible == true { ghostWindow?.orderOut(nil) }
         store.overlayFrame = .zero
         store.panelFrame = .zero
         lastFrame = .idle
@@ -130,6 +134,31 @@ final class TourGuidance {
         if let overlay = overlayWindow { applyOverlay(overlayVisual, to: overlay) }
         if f.marks != store.marksStore.visual { store.marksStore.visual = f.marks }
         applyMarks(f.marks)
+        applyGhost(f.panelGhost)
+    }
+
+    /// The ghost: ONE window the size of the panel (plus room for its outline) that moves with it; the fade is the window's
+    /// alpha, so a glide at constant size publishes nothing to SwiftUI. It sits under the card, over the panel.
+    private func applyGhost(_ ghost: TourPanelGhostVisual) {
+        guard ghost.isDrawn else {
+            if let w = ghostWindow, w.isVisible { w.orderOut(nil) }
+            return
+        }
+        if ghostWindow == nil {
+            let w = TourHaloWindow()
+            w.contentView = TourHostingView(rootView: TourPanelGhostView(store: store.ghostStore))
+            ghostWindow = w
+        }
+        guard let w = ghostWindow else { return }
+        let target = TourPanelGhostRegion.windowFrame(for: ghost)
+        let art = TourPanelGhostRegion.art(for: ghost, window: target)
+        if art != store.ghostStore.art { store.ghostStore.art = art }
+        if w.frame != target { w.setFrame(target, display: false) }
+        let alpha = CGFloat(min(max(ghost.opacity, 0), 1))
+        if w.alphaValue != alpha { w.alphaValue = alpha }
+        if !w.isVisible {
+            if let card = cardWindow, card.isVisible { w.order(.below, relativeTo: card.windowNumber) } else { w.orderFront(nil) }
+        }
     }
 
     private func applyMarks(_ marks: TourSnapMarksVisual) {
@@ -155,6 +184,9 @@ final class TourGuidance {
     func releaseMarkWindows() {
         for w in markWindows { w.contentView = nil; w.orderOut(nil) }
         markWindows = []
+        ghostWindow?.contentView = nil
+        ghostWindow?.orderOut(nil)
+        ghostWindow = nil
     }
 
     private func applyCard(_ f: TourGuidanceFrame, to window: TourCardWindow) {

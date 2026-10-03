@@ -82,18 +82,24 @@ public enum TourMachine {
             break
 
         case .panelSettled(let corner):
-            // The move step: a landing in ANY corner the panel has not been in yet (adjacent or diagonal; the one it
-            // started in counts as been). The first ticks the corner beat. Later ones are optional encouragement: nothing
-            // is checked and nothing blocks, the card just comes back to the panel. The edge beat is `panelTucked`'s.
-            if case .step(.moveTuck, var beats) = state.phase, beats.count == 2, let corner,
-               corner != state.moveStartCorner, !state.cornersLanded.contains(corner) {
-                state.cornersLanded.append(corner)
+            // The move step: corner -> across the diagonal -> the edge. A landing in ANY corner the panel has not been in
+            // ticks the first beat (adjacent or diagonal; the one it started in counts as been). The next new corner ticks
+            // the diagonal beat: the opposite one is what the ghost shows, any other new corner is accepted without
+            // scolding (the card acknowledges which). A corner already landed in ticks nothing. The edge beat is
+            // `panelTucked`'s.
+            if case .step(.moveTuck, var beats) = state.phase, beats.count == 3, let corner, !state.cornersLanded.contains(corner) {
                 if !beats[0] {
-                    beats[0] = true
+                    if corner != state.moveStartCorner {
+                        beats[0] = true
+                        state.cornersLanded.append(corner)
+                        state.phase = .step(.moveTuck, beats: beats)
+                        effects = [.checkBeat(.moveTuck, index: 0), .haptic(.levelChange), .relocateCardToPanel, .persist]
+                    }
+                } else if !beats[1] {
+                    beats[1] = true
+                    state.cornersLanded.append(corner)
                     state.phase = .step(.moveTuck, beats: beats)
-                    effects = [.checkBeat(.moveTuck, index: 0), .haptic(.levelChange), .relocateCardToPanel, .persist]
-                } else {
-                    effects = [.relocateCardToPanel, .persist]
+                    effects = [.checkBeat(.moveTuck, index: 1), .haptic(.levelChange), .relocateCardToPanel, .persist]
                 }
             }
 

@@ -1,6 +1,7 @@
 /**
  * [INPUT]: TourCornerGuide (pure), TourGestureMotion, TourRealPanelFixture (real panel + tour windows).
- * [OUTPUT]: TourCornerGuideTests — the trackpad demo in the card and the emphasised snap-target mark on screen agree:
+ * [OUTPUT]: TourCornerGuideTests — the trackpad demo in the card and the emphasised snap-target mark on screen agree
+ *           (corner beat toward the nearest unvisited corner, diagonal beat toward the opposite one):
  *           the demo's direction is the normalized panel -> target vector for all four start corners and both corner beats,
  *           it points at the nearest edge on the edge beat, it flips with natural scrolling off, and the emphasised mark is
  *           the demo's target.
@@ -159,8 +160,9 @@ final class TourCornerGuideRealPanelTests: XCTestCase {
     }
 
     /// The user heads somewhere other than the suggestion (any of the other three corners, adjacent or diagonal): it ticks,
-    /// nobody is scolded, and the guidance moves on to the edge, aimed at the nearest edge from where the panel now is.
-    func test_landingAnywhere_ticks_andTheGuidanceMovesOnToTheEdge_allTwelvePairs() throws {
+    /// nobody is scolded, and the guidance moves on to the DIAGONAL beat: the demo and the emphasised mark now point at the
+    /// corner opposite the one the panel landed in.
+    func test_landingAnywhere_ticks_andTheGuidanceMovesOnToTheOppositeCorner_allTwelvePairs() throws {
         for start in ScreenCorner.allCases {
             for landing in ScreenCorner.allCases where landing != start {
                 f = TourRealPanelFixture(corner: start, page: .album)
@@ -172,11 +174,17 @@ final class TourCornerGuideRealPanelTests: XCTestCase {
                 f.panel.setFrameOrigin(frame.origin)
                 f.controller.send(.panelSettled(corner: landing))
                 f.spin(0.5)
-                XCTAssertEqual(f.controller.state.phase, .step(.moveTuck, beats: [true, false]), "\(start) -> \(landing) (suggested \(ScreenCorner.allCases[suggested]))")
-                guard case .swipeToEdge(let rightward)? = f.controller.debugCardStore?.gestureKind else { return XCTFail("\(start) -> \(landing): the edge demo takes over") }
-                let panelRight = landing == .topRight || landing == .bottomRight
-                XCTAssertEqual(rightward, panelRight, "\(start) -> \(landing): toward the nearest edge from the new spot")
-                XCTAssertNil(f.controller.debugSnapMarks.target, "no corner is emphasised on the edge beat")
+                XCTAssertEqual(f.controller.state.phase, .step(.moveTuck, beats: [true, false, false]), "\(start) -> \(landing) (suggested \(ScreenCorner.allCases[suggested]))")
+                let marks = f.controller.debugSnapMarks
+                let target = try XCTUnwrap(marks.target, "\(start) -> \(landing): the diagonal's target is emphasised")
+                XCTAssertEqual(ScreenCorner.allCases[target], landing.opposite, "\(start) -> \(landing)")
+                // The demo points the same way the ghost's path does: panel centre -> the opposite corner's landing frame.
+                let rect = marks.rects[target], panel = f.panel.frame
+                let v = CGVector(dx: rect.midX - panel.midX, dy: rect.midY - panel.midY)
+                let l = hypot(v.dx, v.dy)
+                let (dx, dy) = try fingerDirection()
+                XCTAssertEqual(dx, v.dx / l, accuracy: 0.002, "\(start) -> \(landing)")
+                XCTAssertEqual(dy, -v.dy / l, accuracy: 0.002, "\(start) -> \(landing)")
                 f.tearDown(); f = nil
             }
         }
@@ -191,9 +199,10 @@ final class TourCornerGuideRealPanelTests: XCTestCase {
             let other: ScreenCorner = right ? .bottomLeft : .topRight
             f.controller.send(.panelSettled(corner: other))
             f.spin(0.4)
-            // Park the panel in the corner the question is about.
+            // Park the panel in the corner the question is about: the second corner ticks the diagonal beat, the edge is next.
             let landing = try XCTUnwrap(f.panel.cornerLandingFrames()[corner])
             f.panel.setFrameOrigin(landing.origin)
+            f.controller.send(.panelSettled(corner: corner))
             f.controller.debugRefreshCard()
             f.spin(0.8)
             guard case .swipeToEdge(let rightward)? = f.controller.debugCardStore?.gestureKind else { return XCTFail("edge demo expected, got \(String(describing: f.controller.debugCardStore?.gestureKind))") }

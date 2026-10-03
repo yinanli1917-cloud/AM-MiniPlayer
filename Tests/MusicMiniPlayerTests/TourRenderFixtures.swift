@@ -66,9 +66,10 @@ enum TourSceneFixtures {
         var m = TourCardModel(
             kind: .step(.moveTuck),
             title: t("tour.move.title", lang, zh: "放到你喜欢的角落"),
-            body: t("tour.move.body", lang, zh: "在封面页，双指按住面板往一个角轻推，它会落进四个角中的任意一个，正好落在淡淡的轮廓上。歌词页只能往屏幕边上推，让它藏进去。"),
+            body: t("tour.move.body", lang, zh: "在封面页，双指按住面板往那个角轻推，它会自己落在淡淡的轮廓上。屏幕上的虚影会先带你走一遍。"),
             beats: [TourBeatModel(id: 0, text: t("tour.move.beat1", lang, zh: "推到一个角"), checked: false),
-                    TourBeatModel(id: 1, text: t("tour.move.beat2", lang, zh: "再往屏幕边上推一下"), checked: false)],
+                    TourBeatModel(id: 1, text: t("tour.move.beatDiagonal", lang, zh: "再斜着推到对角"), checked: false),
+                    TourBeatModel(id: 2, text: t("tour.move.beat2", lang, zh: "往边上推，让它藏起来"), checked: false)],
             secondaryTitle: t("tour.move.forMe", lang, zh: "替我收起来"),
             footNote: t("tour.move.mouseNote", lang, zh: "用鼠标的话，在 设置 › 快捷键 给「贴边隐藏」录个键就好。"),
             ringCompleted: 4, stepLabel: "6"

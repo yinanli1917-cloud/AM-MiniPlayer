@@ -199,13 +199,19 @@ enum L10n {
 
         "tour.move.title":          ("Put it in a corner you like", "放到你喜欢的角落"),
         // Corners work on the cover page only; the lyrics page can only be pushed into a screen edge.
-        "tour.move.body":           ("On the cover page, two fingers nudge the panel toward a corner and it settles into any of the four, right on the faint outlines. The lyrics page only slides into a screen edge.", "在封面页，双指按住面板往一个角轻推，它会落进四个角中的任意一个，正好落在淡淡的轮廓上。歌词页只能往屏幕边上推，让它藏进去。"),
+        // The move step is three moves: a corner -> across to the opposite corner -> into the edge. Each beat has its own body;
+        // the ghost of the panel on screen shows the move, the card says it in words (2026-10-03).
+        "tour.move.body":           ("On the cover page, two fingers nudge the panel toward a corner and it settles right on the faint outline. Watch the ghost on screen; it shows the way.", "在封面页，双指按住面板往那个角轻推，它会自己落在淡淡的轮廓上。屏幕上的虚影会先带你走一遍。"),
+        "tour.move.bodyDiagonal":   ("Settled. Now the longer trip: push it across to the opposite corner. The ghost shows the path.", "落好了。再走一段远的：斜着推到对角。虚影会带你看一遍路线。"),
         "tour.move.bodyLyrics":     ("Corners only work on the cover page, so let's go back there first. (On the lyrics page the panel can only be pushed into a screen edge.)", "落角只在封面页能用，我们先回到封面页。（歌词页只能往屏幕边上推，不能挪到角落。）"),
         "tour.move.beat0":          ("Back to the cover page", "先回到封面页"),
         "tour.move.beat1":          ("Nudge it to a corner", "推到一个角"),
-        "tour.move.beat2":          ("Now nudge it into the edge", "再往屏幕边上推一下"),
-        "tour.move.bodyTuckRight":  ("Settled. Try another corner if you like; it settles in any of the four. When you're ready, nudge it right and it slips into the edge.", "落好了。想的话再换一个角试试，四个角都能停。准备好了，往右边推一下，它会藏进屏幕边。"),
-        "tour.move.bodyTuckLeft":   ("Settled. Try another corner if you like; it settles in any of the four. When you're ready, nudge it left and it slips into the edge.", "落好了。想的话再换一个角试试，四个角都能停。准备好了，往左边推一下，它会藏进屏幕边。"),
+        "tour.move.beatDiagonal":   ("Now across to the opposite corner", "再斜着推到对角"),
+        "tour.move.beat2":          ("Now nudge it into the edge", "往边上推，让它藏起来"),
+        "tour.move.bodyTuckRight":  ("That's the far corner, nicely done. One more: nudge it right and it slips into the edge.", "到对角了，漂亮。最后一下：往右边推，它会藏进屏幕边。"),
+        "tour.move.bodyTuckLeft":   ("That's the far corner, nicely done. One more: nudge it left and it slips into the edge.", "到对角了，漂亮。最后一下：往左边推，它会藏进屏幕边。"),
+        "tour.move.bodyTuckOtherRight": ("A different corner, and a good one; nothing to fix. One more: nudge it right and it slips into the edge.", "换了个角，也很好，不用改。最后一下：往右边推，它会藏进屏幕边。"),
+        "tour.move.bodyTuckOtherLeft":  ("A different corner, and a good one; nothing to fix. One more: nudge it left and it slips into the edge.", "换了个角，也很好，不用改。最后一下：往左边推，它会藏进屏幕边。"),
         "tour.move.forMe":          ("Tuck it for me", "替我收起来"),
         "tour.move.tucking":        ("Tucking…", "正在收…"),
         "tour.move.mouseNote":      ("On a mouse, give Hide to Edge a key in Settings › Shortcuts.", "用鼠标的话，在 设置 › 快捷键 给「贴边隐藏」录个键就好。"),

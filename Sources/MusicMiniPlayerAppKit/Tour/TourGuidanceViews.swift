@@ -55,6 +55,7 @@ final class TourGuidanceStore {
     let glyphClock = TourGlyphClock()
     let overlayStore = TourOverlayStore()
     let marksStore = TourMarksStore()
+    let ghostStore = TourGhostStore()
 
     var card: TourCardVisual {
         get { cardStore.visual }

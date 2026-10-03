@@ -98,7 +98,7 @@ final class TourShotStudio {
     /// Composite of the panel + card (+ FX window when `includeFX`) over the backdrop, written to `name-light|dark.png`.
     @discardableResult
     func shoot(_ name: String, fixture f: TourRealPanelFixture, includeFX: Bool = false, extraRect: CGRect? = nil) -> CGImage? {
-        var windows: [NSWindow] = [f.cardWindow, f.controller.debugOverlayWindow, f.panel].compactMap { $0 } + f.controller.debugMarkWindows.filter { $0.isVisible }
+        var windows: [NSWindow] = [f.cardWindow, f.controller.debugOverlayWindow, f.panel].compactMap { $0 } + f.controller.debugMarkWindows.filter { $0.isVisible } + [f.controller.debugGhostWindow].compactMap { $0 }.filter { $0.isVisible }
         var rect = f.panel.frame
         if let card = f.cardWindow?.frame { rect = rect.union(card) }
         if includeFX, let fx = f.controller.debugFeedback.debugSparkOverlay.window, fx.isVisible {

@@ -1,9 +1,10 @@
 /**
  * [INPUT]: TourMachine (pure reducer), TourGuidanceResolver, TourGuidanceMotion (fake clock), TourRealPanelFixture
  *          (real panel + real tour windows), L10n.
- * [OUTPUT]: TourSnapMarksTests — the move step's two corner beats and the four snap-target marks (2026-10-03):
- *           a landing in a new corner ticks beat 1, a landing in a third corner ticks beat 2, a corner already used
- *           (or the one the panel started in) ticks nothing; the marks show on the corner beats on the cover page only,
+ * [OUTPUT]: TourSnapMarksTests — the move step's three beats (corner -> across the diagonal -> edge) and the four snap-target
+ *           marks (2026-10-03): a landing in a new corner ticks the corner beat, the next new corner (the opposite one, or any
+ *           other) ticks the diagonal beat, a corner already used (or the one the panel started in) ticks nothing; completion
+ *           order is corner -> diagonal -> edge; the marks show on the corner beats on the cover page only,
  *           sit exactly where the panel lands, fade in and swell once, pulse where the panel arrives, and stay still
  *           under Reduce Motion; the copy exists in zh and en and never uses 「甩」.
  * [POS]: Tests. Pure value tests first, then real windows (the panel is the real SnappablePanel).
@@ -29,31 +30,57 @@ final class TourCornerBeatsMachineTests: XCTestCase {
         TourMachine.reduce(state, .panelSettled(corner: corner), snapshot: TourSnapshot())
     }
 
-    func test_theMoveStepStillNeedsTwoMoves_aCornerAndTheEdge() {
-        XCTAssertEqual(TourStep.moveTuck.beatCount, 2)
-        XCTAssertEqual(moveStep(startingIn: .topRight).phase, .step(.moveTuck, beats: [false, false]))
+    func test_theMoveStepNeedsThreeMoves_aCorner_theDiagonal_andTheEdge() {
+        XCTAssertEqual(TourStep.moveTuck.beatCount, 3)
+        XCTAssertEqual(moveStep(startingIn: .topRight).phase, .step(.moveTuck, beats: [false, false, false]))
     }
 
     func test_aLandingInAnyOtherCorner_adjacentOrDiagonal_ticksTheCornerBeat_allTwelvePairs() {
         for start in ScreenCorner.allCases {
             for landing in ScreenCorner.allCases where landing != start {
                 let (state, effects) = settle(moveStep(startingIn: start), landing)
-                XCTAssertEqual(state.phase, .step(.moveTuck, beats: [true, false]), "\(start) -> \(landing)")
+                XCTAssertEqual(state.phase, .step(.moveTuck, beats: [true, false, false]), "\(start) -> \(landing)")
                 XCTAssertTrue(effects.contains(.checkBeat(.moveTuck, index: 0)), "\(start) -> \(landing)")
                 XCTAssertEqual(state.cornersLanded, [landing])
             }
         }
     }
 
-    func test_aSecondCorner_isOptional_itTicksNothing_blocksNothing_andIsRemembered() {
+    func test_theDiagonalBeat_ticksOnTheOppositeCorner_andOnAnyOtherNewCorner_butNotOnAUsedOne() {
+        for start in ScreenCorner.allCases {
+            for first in ScreenCorner.allCases where first != start {
+                let (afterFirst, _) = settle(moveStep(startingIn: start), first)
+                // Every corner but the one just landed in is a candidate; the start corner was never LANDED in, so it is new here.
+                for second in ScreenCorner.allCases where second != first {
+                    let (state, effects) = settle(afterFirst, second)
+                    XCTAssertEqual(state.phase, .step(.moveTuck, beats: [true, true, false]), "\(start) -> \(first) -> \(second)\(second == first.opposite ? " (opposite)" : "")")
+                    XCTAssertTrue(effects.contains(.checkBeat(.moveTuck, index: 1)), "\(start) -> \(first) -> \(second)")
+                    XCTAssertTrue(effects.contains(.relocateCardToPanel))
+                    XCTAssertEqual(state.cornersLanded, [first, second])
+                }
+                // The corner it is already in: nothing.
+                let (same, e) = settle(afterFirst, first)
+                XCTAssertEqual(same, afterFirst, "\(start) -> \(first) -> \(first)")
+                XCTAssertTrue(e.isEmpty)
+            }
+        }
+    }
+
+    func test_completionOrder_isCorner_thenDiagonal_thenEdge_andTheEdgeCannotJumpTheQueueBySettling() {
         var (state, _) = settle(moveStep(startingIn: .topRight), .bottomLeft)
-        let effects: [TourEffect]
-        (state, effects) = settle(state, .topLeft)
-        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [true, false]), "no beat for it")
+        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [true, false, false]))
+        (state, _) = settle(state, .topLeft)
+        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [true, true, false]))
+        // A third landing ticks nothing more: the edge beat is the tuck's.
+        let (afterThird, effects) = settle(state, .bottomRight)
+        XCTAssertEqual(afterThird.phase, .step(.moveTuck, beats: [true, true, false]))
         XCTAssertFalse(effects.contains { if case .checkBeat = $0 { return true }; return false })
-        XCTAssertTrue(effects.contains(.relocateCardToPanel), "the card comes back to the panel")
-        XCTAssertEqual(state.cornersLanded, [.bottomLeft, .topLeft], "the mark of the new corner gets its acknowledgement")
-        // Tucking completes the step with one corner, with two, or with none.
+        let (after, _) = TourMachine.reduce(afterThird, .panelTucked, snapshot: TourSnapshot())
+        XCTAssertEqual(after.stepStates[.moveTuck], .completed)
+        guard case .step(.back, _) = after.phase else { return XCTFail("got \(after.phase)") }
+    }
+
+    func test_tuckingEarly_stillCompletesTheStep_withOneCorner_withTwo_orNone() {
         for corners in [[], [ScreenCorner.bottomLeft], [.bottomLeft, .topLeft]] {
             var s = moveStep(startingIn: .topRight)
             for c in corners { (s, _) = settle(s, c) }
@@ -62,25 +89,22 @@ final class TourCornerBeatsMachineTests: XCTestCase {
         }
     }
 
-    func test_landingBackInTheStartOrAUsedCorner_countsForNothing() {
+    func test_landingBackInTheStartCorner_countsForNothingOnTheCornerBeat() {
         var (state, effects) = settle(moveStep(startingIn: .topRight), .topRight)
-        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [false, false]))
+        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [false, false, false]))
         XCTAssertTrue(effects.isEmpty)
         (state, _) = settle(state, .bottomLeft)
-        for used in [ScreenCorner.bottomLeft, .topRight] {
-            let (next, e) = settle(state, used)
-            XCTAssertEqual(next, state, "\(used)")
-            XCTAssertTrue(e.isEmpty, "\(used)")
-            state = next
-        }
+        let (next, e) = settle(state, .bottomLeft)
+        XCTAssertEqual(next, state)
+        XCTAssertTrue(e.isEmpty)
         (state, effects) = settle(moveStep(startingIn: nil), nil)
-        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [false, false]), "between corners")
+        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [false, false, false]), "between corners")
         XCTAssertTrue(effects.isEmpty)
     }
 
     func test_aStepBegunBetweenCorners_countsTheFirstLandingAnywhere() {
         let (state, _) = settle(moveStep(startingIn: nil), .topRight)
-        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [true, false]))
+        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [true, false, false]))
     }
 }
 
@@ -92,11 +116,11 @@ final class TourSnapMarksValueTests: XCTestCase {
     private func surface(_ page: PlayerPage, edge: LiquidEdgeState = .card) -> TourSurface { TourSurface(page: page, edge: edge) }
 
     func test_marksShowThroughTheMoveStep_onTheCoverPageOnly() {
-        let corner = TourPhase.step(.moveTuck, beats: [false, false])
-        let edge = TourPhase.step(.moveTuck, beats: [true, false])
+        let corner = TourPhase.step(.moveTuck, beats: [false, false, false])
+        let edge = TourPhase.step(.moveTuck, beats: [true, true, false])
         XCTAssertTrue(TourGuidanceResolver.snapMarksVisible(phase: corner, surface: surface(.album)))
         XCTAssertTrue(TourGuidanceResolver.snapMarksVisible(phase: edge, surface: surface(.album)), "they stay up on the edge beat so the four corners stay obvious")
-        XCTAssertFalse(TourGuidanceResolver.snapMarksVisible(phase: .step(.moveTuck, beats: [true, true]), surface: surface(.album)))
+        XCTAssertFalse(TourGuidanceResolver.snapMarksVisible(phase: .step(.moveTuck, beats: [true, true, true]), surface: surface(.album)))
         for page in [PlayerPage.lyrics, .playlist] {
             XCTAssertFalse(TourGuidanceResolver.snapMarksVisible(phase: corner, surface: surface(page)), "\(page): corners only work on the cover")
         }
@@ -185,24 +209,30 @@ final class TourSnapMarksValueTests: XCTestCase {
         XCTAssertFalse(TourOverlayVisual().hasContent, "marks are not the ring overlay's business")
     }
 
-    func test_copy_hasBothLanguages_invitesASecondCorner_andNeverUsesTheBannedWord() throws {
-        for key in ["tour.move.beat1", "tour.move.body", "tour.move.bodyTuckRight", "tour.move.bodyTuckLeft"] {
+    func test_copy_hasBothLanguages_forAllThreeBeats_andNeverUsesTheBannedWord() throws {
+        let keys = ["tour.move.title", "tour.move.beat1", "tour.move.beatDiagonal", "tour.move.beat2", "tour.move.body", "tour.move.bodyDiagonal",
+                    "tour.move.bodyTuckRight", "tour.move.bodyTuckLeft", "tour.move.bodyTuckOtherRight", "tour.move.bodyTuckOtherLeft"]
+        for key in keys {
             let pair = try XCTUnwrap(L10n.allStrings[key], key)
             XCTAssertFalse(pair.en.isEmpty, key); XCTAssertFalse(pair.zh.isEmpty, key)
             XCTAssertFalse(pair.zh.contains("甩"), key)
             XCTAssertNotEqual(pair.en, pair.zh, key)
         }
+        XCTAssertEqual(L10n.allStrings["tour.move.beatDiagonal"]?.zh, "再斜着推到对角")
+        XCTAssertEqual(L10n.allStrings["tour.move.beatDiagonal"]?.en, "Now across to the opposite corner")
+        XCTAssertEqual(L10n.allStrings["tour.move.beat2"]?.zh, "往边上推，让它藏起来")
         XCTAssertEqual(L10n.allStrings["tour.move.beat1"]?.zh, "推到一个角")
-        XCTAssertEqual(L10n.allStrings["tour.move.beat1"]?.en, "Nudge it to a corner")
-        XCTAssertNil(L10n.allStrings["tour.move.beatAnother"], "the second corner is not a beat")
-        let body = try XCTUnwrap(L10n.allStrings["tour.move.body"])
-        XCTAssertTrue(body.en.contains("four"), body.en)
-        XCTAssertTrue(body.zh.contains("四个角"), body.zh)
-        for key in ["tour.move.bodyTuckRight", "tour.move.bodyTuckLeft"] {
+        XCTAssertNil(L10n.allStrings["tour.move.beatAnother"], "the old silent invitation is gone")
+        for key in ["tour.move.bodyTuckRight", "tour.move.bodyTuckLeft", "tour.move.bodyTuckOtherRight", "tour.move.bodyTuckOtherLeft"] {
             let pair = try XCTUnwrap(L10n.allStrings[key])
-            XCTAssertTrue(pair.en.contains("Try another corner if you like"), pair.en)
-            XCTAssertTrue(pair.zh.contains("想的话再换一个角试试，四个角都能停"), pair.zh)
+            XCTAssertFalse(pair.en.contains("Try another corner"), "the old invitation text is gone: \(pair.en)")
+            XCTAssertFalse(pair.zh.contains("再换一个角试试"), pair.zh)
         }
+        let right = try XCTUnwrap(L10n.allStrings["tour.move.bodyTuckRight"]), left = try XCTUnwrap(L10n.allStrings["tour.move.bodyTuckLeft"])
+        XCTAssertTrue(right.en.contains("right") && right.zh.contains("右边"))
+        XCTAssertTrue(left.en.contains("left") && left.zh.contains("左边"))
+        let other = try XCTUnwrap(L10n.allStrings["tour.move.bodyTuckOtherRight"])
+        XCTAssertTrue(other.en.contains("good one") && other.zh.contains("也很好"), "a gentle acknowledgement, no scolding")
     }
 }
 
@@ -251,9 +281,14 @@ final class TourSnapMarksRealPanelTests: XCTestCase {
         f.music.currentPage = .album
         XCTAssertTrue(f.wait(3) { f.controller.debugSnapMarks.opacity > 0.9 }, "back on the cover: the marks fade in")
 
+        f.panel.setFrameOrigin(try XCTUnwrap(f.panel.cornerLandingFrames()[.bottomLeft]).origin)
         f.controller.send(.panelSettled(corner: .bottomLeft))
         f.spin(0.5)
-        XCTAssertTrue(f.controller.debugSnapMarks.opacity > 0.9, "after the first corner the four marks stay (the edge beat)")
+        XCTAssertTrue(f.controller.debugSnapMarks.opacity > 0.9, "after the first corner the four marks stay (the diagonal beat)")
+        XCTAssertEqual(f.controller.debugSnapMarks.target, ScreenCorner.allCases.firstIndex(of: .topRight), "and the opposite corner is the emphasised one")
+        f.controller.send(.panelSettled(corner: .topRight))
+        f.spin(0.5)
+        XCTAssertTrue(f.controller.debugSnapMarks.opacity > 0.9, "after the diagonal the four marks stay (the edge beat)")
         XCTAssertNil(f.controller.debugSnapMarks.target, "and no corner is emphasised any more")
         f.controller.send(.panelTucked)
         XCTAssertTrue(f.wait(3) { f.controller.debugSnapMarks.opacity < 0.01 }, "the step is done: the marks go")
@@ -302,20 +337,20 @@ final class TourSnapMarksRealPanelTests: XCTestCase {
         XCTAssertTrue(f.controller.debugSnapMarks.landed.contains(true))
     }
 
-    /// A real drag: the first landing ticks the corner beat, a second (optional) one only gets its mark ticked.
-    func test_aRealDrag_ticksTheCornerBeat_andALaterDragToAnotherCornerBlocksNothing() throws {
+    /// A real drag: the first landing ticks the corner beat, a second (into a new corner) the diagonal beat.
+    func test_aRealDrag_ticksTheCornerBeat_andALaterDragToAnotherCornerTicksTheDiagonal() throws {
         f = TourRealPanelFixture(page: .album)
         f.controller.send(.resume(completed: allButMoveAndBack))
         XCTAssertTrue(f.wait { f.cardWindow != nil })
         f.spin(1.0)
         f.twoFingerDrag(dx: -40, dy: 30)          // top right -> bottom left: a diagonal
-        XCTAssertTrue(f.wait(4) { f.controller.state.phase == .step(.moveTuck, beats: [true, false]) })
+        XCTAssertTrue(f.wait(4) { f.controller.state.phase == .step(.moveTuck, beats: [true, false, false]) })
         f.spin(1.0)
         let br = try XCTUnwrap(ScreenCorner.allCases.firstIndex(of: .bottomRight))
-        f.twoFingerDrag(dx: 40, dy: 0)            // bottom left -> bottom right
+        f.twoFingerDrag(dx: 40, dy: 0)            // bottom left -> bottom right: not the opposite corner, still a new one
         XCTAssertTrue(f.wait(4) { f.controller.state.cornersLanded.contains(.bottomRight) })
-        XCTAssertEqual(f.controller.state.phase, .step(.moveTuck, beats: [true, false]), "the second corner is not a beat")
-        XCTAssertTrue(f.controller.debugSnapMarks.landed[br], "but its mark is ticked")
+        XCTAssertEqual(f.controller.state.phase, .step(.moveTuck, beats: [true, true, false]), "any other new corner ticks the diagonal beat")
+        XCTAssertTrue(f.controller.debugSnapMarks.landed[br], "and its mark is ticked")
         XCTAssertEqual(f.panel.currentCorner(), .bottomRight)
     }
 }

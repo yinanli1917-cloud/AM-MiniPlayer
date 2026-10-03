@@ -159,6 +159,10 @@ final class TourController: ObservableObject {
     var debugRingIsDashed: Bool { guidance.motion.makeFrame().ringDashed }
     /// The four snap-target marks as they would be drawn this instant (hidden = opacity 0).
     var debugSnapMarks: TourSnapMarksVisual { guidance.motion.makeFrame().marks }
+    /// The panel ghost as it would be drawn this instant (hidden = opacity 0).
+    var debugGhost: TourPanelGhostVisual { guidance.motion.makeFrame().panelGhost }
+    /// The ghost's one window (nil until it has been drawn once).
+    var debugGhostWindow: NSWindow? { guidance.ghostWindow }
     /// Re-derives the card (its demo included) and the guidance from live state, as the controller does after a landing.
     func debugRefreshCard() { presentCurrentCard(); refreshGuidance() }
     var debugOverlayWindow: NSWindow? { haloWindow }
@@ -581,7 +585,7 @@ final class TourController: ObservableObject {
             case .pulseRing: closes = true
             case .confetti: confetti = true
             case .haptic(let kind): haptics.append(kind)
-            case .relocateCardToPanel: cardYielded = false; presentCurrentCard()
+            case .relocateCardToPanel: cardYielded = false; ghostQuietUntil = 0; presentCurrentCard()
             case .persist: TourPersistence.save(state, to: defaults)
             case .armDeferredWatcher: armDeferredWatcher()
             case .cancelDeferredWatcher: deferredWatcher.cancel()
@@ -953,13 +957,20 @@ final class TourController: ObservableObject {
             )
 
         case .step(.moveTuck, let beats):
-            // Beats: 0 = a corner, 1 = the edge. A second corner is an invitation inside the edge beat's text, not a beat.
+            // Beats: 0 = a corner, 1 = across to the opposite corner, 2 = the edge. Each has its own body, so the words follow
+            // the ghost on screen; the edge beat's body also acknowledges how the second corner went.
             let cornersDone = beats[0]
             let onAlbum = surface.page == .album
             let rightward = TourCornerGuide.nearestEdgeIsRight(panelMidX: panel?.frame.midX ?? 0, visibleMidX: ((panel?.screen ?? NSScreen.main)?.visibleFrame ?? .zero).midX)
             let body: String
-            if cornersDone { body = L(rightward ? "tour.move.bodyTuckRight" : "tour.move.bodyTuckLeft") }
+            if beats[1] {
+                let landed = state.cornersLanded
+                let acrossTheDiagonal = landed.count >= 2 && landed[1] == landed[0].opposite
+                let key = acrossTheDiagonal ? "tour.move.bodyTuck" : "tour.move.bodyTuckOther"
+                body = L(key + (rightward ? "Right" : "Left"))
+            }
             else if !onAlbum { body = L("tour.move.bodyLyrics") }
+            else if cornersDone { body = L("tour.move.bodyDiagonal") }
             else { body = L("tour.move.body") }
             var list: [TourBeatModel] = []
             if preface == .backToCover {
@@ -967,7 +978,8 @@ final class TourController: ObservableObject {
                 list.append(TourBeatModel(id: Self.moveTuckPrefaceBeatID, text: L("tour.move.beat0"), checked: onAlbum || cornersDone))
             }
             list.append(TourBeatModel(id: 0, text: L("tour.move.beat1"), checked: beats[0]))
-            list.append(TourBeatModel(id: 1, text: L("tour.move.beat2"), checked: beats[1]))
+            list.append(TourBeatModel(id: 1, text: L("tour.move.beatDiagonal"), checked: beats[1]))
+            list.append(TourBeatModel(id: 2, text: L("tour.move.beat2"), checked: beats[2]))
             markSkipped(&list)
             var model = TourCardModel(
                 kind: .step(.moveTuck),
@@ -1033,46 +1045,49 @@ final class TourController: ObservableObject {
 
     /// The two-finger demo the CURRENT beat asks for, nil when the current beat has nothing to demonstrate.
     /// The move step's beats, in order: (leading, only off the cover) go back to the cover page -> nudge it to a
-    /// corner -> nudge it to another corner -> push it into the edge. The demo belongs to the last three: on the
+    /// corner -> across to the opposite corner -> push it into the edge. The demo belongs to the last three: on the
     /// leading beat the user is being walked to another page and a trackpad picture would be teaching a gesture that
-    /// does not work there (founder 2026-09-29: it showed on "Back to the cover page"). Both corner beats show the
-    /// same nudge (2026-10-03).
+    /// does not work there (founder 2026-09-29: it showed on "Back to the cover page"). The glyph's fingers, the
+    /// ghost's path and the emphasised mark all come from `moveSuggestion()` (one source, 2026-10-03).
     private func gestureKind(for phase: TourPhase) -> TourGestureKind? {
-        guard case .step(.moveTuck, let beats) = phase, beats.count >= 2 else { return nil }
-        if !beats[0] {
-            guard musicController.currentPage == .album else { return nil }
-            guard let guide = cornerGuide() else { return .nudgeToCorner() }
-            return .nudgeToCorner(TourGestureHeading(TourCornerGuide.fingerHeading(panelHeading: guide.panelHeading, naturalScrolling: naturalScrollingProvider())))
+        guard case .step(.moveTuck, let beats) = phase, beats.count >= 3 else { return nil }
+        let beat: TourMoveBeat = !beats[0] ? .corner : !beats[1] ? .diagonal : .edge
+        if beat != .edge, musicController.currentPage != .album { return nil }
+        guard let move = moveSuggestion(for: beat) else {
+            return beat == .edge ? nil : .nudgeToCorner()
         }
-        // The edge beat: the fingers go toward the edge the panel is nearest to.
-        let visible = (panel?.screen ?? NSScreen.main)?.visibleFrame ?? .zero
-        let panelRight = TourCornerGuide.nearestEdgeIsRight(panelMidX: panel?.frame.midX ?? 0, visibleMidX: visible.midX)
-        return .swipeToEdge(rightward: TourCornerGuide.fingerRightward(panelRightward: panelRight, naturalScrolling: naturalScrollingProvider()))
+        if beat == .edge { return .swipeToEdge(rightward: move.fingerRightward(naturalScrolling: naturalScrollingProvider())) }
+        return .nudgeToCorner(TourGestureHeading(move.fingerHeading(naturalScrolling: naturalScrollingProvider())))
     }
 
     /// Whether the system's scroll direction is "natural" (the content, and here the panel, follows the fingers). Read from the
     /// global preference; a test seam.
     var naturalScrollingProvider: () -> Bool = { (UserDefaults.standard.object(forKey: "com.apple.swipescrolldirection") as? Bool) ?? true }
 
-    /// The corner beat's suggestion: the nearest corner to where the panel is that it has not been in yet, and the way the panel
-    /// travels to get there (screen space, y up). The card's demo and the emphasised mark both read this.
-    func cornerGuide() -> (target: ScreenCorner, panelHeading: CGVector)? {
-        guard let panel else { return nil }
+    /// The beat the move step is on now (nil = not on the move step).
+    private func currentMoveBeat() -> TourMoveBeat? {
+        guard case .step(.moveTuck, let beats) = state.phase, beats.count >= 3 else { return nil }
+        return !beats[0] ? .corner : !beats[1] ? .diagonal : .edge
+    }
+
+    /// THE suggestion for `beat`: where the panel travels, which way the fingers go, which mark is emphasised. The card's
+    /// demo, the ghost and the mark all read this, so they cannot disagree.
+    func moveSuggestion(for beat: TourMoveBeat? = nil) -> TourMoveSuggestion? {
+        guard let panel, let beat = beat ?? currentMoveBeat() else { return nil }
         let frames = panel.cornerLandingFrames()
-        guard frames.count == ScreenCorner.allCases.count else { return nil }
+        let screen = panel.screen ?? NSScreen.main
         let center = CGPoint(x: panel.frame.midX, y: panel.frame.midY)
-        guard let from = panel.currentCorner() ?? TourCornerGuide.nearestCorner(to: center, frames: frames) else { return nil }
+        let current = panel.currentCorner() ?? TourCornerGuide.nearestCorner(to: center, frames: frames)
         var visited = Set(state.cornersLanded)
         if let start = state.moveStartCorner { visited.insert(start) }
-        guard let target = TourCornerGuide.target(from: from, visited: visited, frames: frames), let rect = frames[target],
-              let heading = TourCornerGuide.heading(from: center, to: CGPoint(x: rect.midX, y: rect.midY)) else { return nil }
-        return (target, heading)
+        return TourCornerGuide.suggestion(beat: beat, panelFrame: panel.frame, current: current, visited: visited, frames: frames,
+                                          screenFrame: screen?.frame ?? panel.frame, visibleMidX: (screen?.visibleFrame ?? panel.frame).midX)
     }
 
     // MARK: - Surface, anchors, targets
 
-    /// The move step's leading beat ("Back to the cover page") is not a machine beat; its row id sits after the three real ones.
-    static let moveTuckPrefaceBeatID = 2
+    /// The move step's leading beat ("Back to the cover page") is not a machine beat; its row id sits after the three real ones (corner, diagonal, edge).
+    static let moveTuckPrefaceBeatID = 3
 
     private func currentSurface() -> TourSurface {
         TourSurface(page: musicController.currentPage, controlsVisible: TourHookBus.shared.controlsVisible.value,
@@ -1429,6 +1444,7 @@ final class TourController: ObservableObject {
         let motion = guidance.motion
         guidance.store.panelFrame = panel.frame
         syncSnapMarks(panel: panel)
+        syncGhost()
         // Between a completion and the next card the ring belongs to the handoff.
         if case .transitioning(let from, _) = state.phase, from != .translate { return }
         if feedback.isActive, case .finale = state.phase { return }
@@ -1479,11 +1495,27 @@ final class TourController: ObservableObject {
 
     /// The four snap-target marks follow the move step's corner beats on the cover page. They stay up while the card
     /// steps aside for a drag (that is when the user needs them), and are re-derived from the panel's real landing math.
-    /// The corner beat is the current one (the edge beat has no suggested corner).
-    private var stateIsCornerBeat: Bool {
-        if case .step(.moveTuck, let beats) = state.phase { return beats.first == false }
-        return false
+    /// The corner to emphasise: the corner beats' target (the edge beat has none).
+    private var emphasisedCorner: ScreenCorner? {
+        guard let beat = currentMoveBeat(), beat != .edge else { return nil }
+        return moveSuggestion(for: beat)?.targetCorner
     }
+
+    /// The ghost of the panel demonstrates the CURRENT move (corner, diagonal or edge) while the card's glyph does (it rides the
+    /// glyph's clock). It is handed the move only while the user is NOT moving the panel: a drag changes the nearest corner every
+    /// frame, and a new suggestion would lift the stop and put the ghost back under the user's fingers.
+    private func syncGhost() {
+        let moving = CACurrentMediaTime() < ghostQuietUntil
+        guard !skipping, !musicTripActive, currentMoveBeat() != nil, let move = moveSuggestion() else {
+            guidance.motion.setGhost(nil)
+            return
+        }
+        if cardYielded || moving { return }
+        guidance.motion.setGhost(move)
+    }
+
+    /// While the panel is being moved (and for a moment after) the ghost is not given a new suggestion.
+    private var ghostQuietUntil: CFTimeInterval = 0
 
     private func syncSnapMarks(panel: SnappablePanel) {
         let motion = guidance.motion
@@ -1497,7 +1529,7 @@ final class TourController: ObservableObject {
         let here = panel.currentCorner().flatMap { ScreenCorner.allCases.firstIndex(of: $0) }
         motion.showMarks(rects: ScreenCorner.allCases.map { landings[$0] ?? .zero }, here: here,
                          landed: ScreenCorner.allCases.map { state.cornersLanded.contains($0) },
-                         target: stateIsCornerBeat ? cornerGuide().flatMap { ScreenCorner.allCases.firstIndex(of: $0.target) } : nil)
+                         target: emphasisedCorner.flatMap { ScreenCorner.allCases.firstIndex(of: $0) })
     }
 
     /// A beat row was hovered: the ring temporarily points at that beat's
@@ -1557,6 +1589,7 @@ final class TourController: ObservableObject {
 
     private func panelDidMove() {
         guard cardWindow != nil else { return }
+        ghostQuietUntil = CACurrentMediaTime() + 0.3
         refreshGuidance()
         // A moving panel is not chased by the card: when it holds still again the card returns.
         if cardYielded { scheduleResume() }
@@ -1566,6 +1599,9 @@ final class TourController: ObservableObject {
         #if DEBUG
         TourPerfProbe.mark("panel movement began")
         #endif
+        // The user's own gesture starts: the ghost stops at once and never competes with the real panel.
+        ghostQuietUntil = CACurrentMediaTime() + 0.3
+        guidance.motion.stopGhost()
         guard cardWindow != nil, guidance.motion.cardVisible, !cardYielded, !feedback.isActive, !skipping else { return }
         if isSliverAnchored(state.phase) { return }
         switch state.phase {

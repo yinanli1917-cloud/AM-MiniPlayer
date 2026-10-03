@@ -137,7 +137,7 @@ final class TourGestureRoutingTests: XCTestCase {
             XCTAssertEqual(held.y - start.y, -12 * c.dy * 1.5, accuracy: 10, "\(c.name)")
             if let e = f.gestureEvent(dx: 0, dy: 0, phase: .ended) { f.panel.sendEvent(e) }
             XCTAssertTrue(f.wait(3) { f.panel.currentCorner() == c.lands }, "\(c.name): settles in \(c.lands), is at \(String(describing: f.panel.currentCorner()))")
-            let expected: [Bool] = c.lands == .topRight ? [false, false] : [true, false]
+            let expected: [Bool] = c.lands == .topRight ? [false, false, false] : [true, false, false]
             f.spin(0.3)
             XCTAssertTrue(f.wait(2) { f.controller.state.phase == .step(.moveTuck, beats: expected) },
                           "\(c.name): the first beat \(c.lands == .topRight ? "stays open (it landed where it started)" : "completes")")

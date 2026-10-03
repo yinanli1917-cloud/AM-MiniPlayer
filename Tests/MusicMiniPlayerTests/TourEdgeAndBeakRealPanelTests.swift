@@ -45,7 +45,7 @@ final class TourEdgeAndBeakRealPanelTests: XCTestCase {
     func test_A_tuckItForMe_backCardBeakTipStandsAtTheStrip() throws {
         f = TourRealPanelFixture(page: .album)
         f.controller.send(.resume(completed: allButMoveAndBack))
-        XCTAssertEqual(f.controller.state.phase, .step(.moveTuck, beats: [false, false]))
+        XCTAssertEqual(f.controller.state.phase, .step(.moveTuck, beats: [false, false, false]))
         XCTAssertTrue(f.wait { f.cardWindow != nil })
         f.spin(0.8)
         let fallback = try XCTUnwrap(f.controller.debugCardStore?.onFallback, "the move card offers Tuck it for me")

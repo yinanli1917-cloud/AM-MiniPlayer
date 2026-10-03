@@ -325,7 +325,7 @@ final class TourGuidanceControllerTests: XCTestCase {
         f.spin(0.8)
         let model = try XCTUnwrap(f.controller.debugCardStore?.model)
         XCTAssertEqual(model.kind, .step(.moveTuck))
-        XCTAssertEqual(model.beats.map(\.id), [0, 1], "on the cover: a corner, then the edge")
+        XCTAssertEqual(model.beats.map(\.id), [0, 1, 2], "on the cover: a corner, across the diagonal, then the edge")
         XCTAssertEqual(model.body, L("tour.move.body"))
         let card = try XCTUnwrap(f.cardWindow).frame
         let visible = try XCTUnwrap(NSScreen.main).visibleFrame
@@ -340,7 +340,7 @@ final class TourGuidanceControllerTests: XCTestCase {
         XCTAssertTrue(f.wait { f.controller.debugHaloFrame != nil })
         f.spin(0.7)
         let model = try XCTUnwrap(f.controller.debugCardStore?.model)
-        XCTAssertEqual(model.beats.map(\.id), [2, 0, 1], "back to the cover first")
+        XCTAssertEqual(model.beats.map(\.id), [3, 0, 1, 2], "back to the cover first")
         XCTAssertEqual(model.beats.first?.text, L("tour.move.beat0"))
         XCTAssertEqual(model.beats.first?.checked, false)
         XCTAssertEqual(model.body, L("tour.move.bodyLyrics"))
@@ -352,14 +352,16 @@ final class TourGuidanceControllerTests: XCTestCase {
     }
 
     func test_item8_moveCopy_saysWhereCornersWork_inBothLanguages_andNeverUsesTheBannedWord() throws {
-        for key in ["tour.move.body", "tour.move.bodyLyrics"] {
-            let pair = try XCTUnwrap(L10n.allStrings[key], key)
+        let body = try XCTUnwrap(L10n.allStrings["tour.move.body"])
+        XCTAssertTrue(body.en.contains("cover page")); XCTAssertTrue(body.zh.contains("封面页"))
+        let lyrics = try XCTUnwrap(L10n.allStrings["tour.move.bodyLyrics"])
+        for pair in [lyrics] {
             XCTAssertTrue(pair.en.contains("cover page"), pair.en)
             XCTAssertTrue(pair.en.contains("lyrics page"), pair.en)
             XCTAssertTrue(pair.zh.contains("封面页"), pair.zh)
             XCTAssertTrue(pair.zh.contains("歌词页"), pair.zh)
         }
-        XCTAssertTrue(try XCTUnwrap(L10n.allStrings["tour.move.body"]).en.contains("edge"))
+        XCTAssertTrue(try XCTUnwrap(L10n.allStrings["tour.move.bodyTuckRight"]).en.contains("edge"))
         for (key, pair) in L10n.allStrings where key.hasPrefix("tour.") {
             XCTAssertFalse(pair.zh.contains("甩"), "\(key): the word is banned in the tour copy")
         }
@@ -411,7 +413,7 @@ final class TourGuidanceControllerTests: XCTestCase {
         f.twoFingerDrag(dx: -40, dy: 30)
         XCTAssertLessThan(f.panel.frame.origin.x, start.x - 100, "the panel follows the fingers")
         XCTAssertLessThan(f.panel.frame.origin.y, start.y - 60)
-        XCTAssertTrue(f.wait(4) { f.controller.state.phase == .step(.moveTuck, beats: [true, false]) },
+        XCTAssertTrue(f.wait(4) { f.controller.state.phase == .step(.moveTuck, beats: [true, false, false]) },
                       "and after the spring it has snapped to a corner, which completes the first beat")
         let screen = try XCTUnwrap(f.panel.screen ?? NSScreen.main)
         XCTAssertNotNil(TourCornerMatch.corner(origin: f.panel.frame.origin, frameSize: f.panel.frame.size,
