@@ -28,9 +28,11 @@ Sources/
 ├── MusicMiniPlayerAppKit/         - App 层库 target（原 MusicMiniPlayerApp 源码整体 git mv 至此，零逻辑改动）
 │   ├── MusicMiniPlayerApp.swift  - AppDelegate + window management（AppMain 与委托方法 public）
 │   ├── SettingsView.swift        - Settings view (menu bar + settings window + components)
+│   ├── Tour/                     - 「认识 nanoPod」引导：TourController（状态机驱动卡片/环/庆祝）、TourGuidance(+Motion/Views)（卡片弹簧位移、环呼吸与跳转、手势示意）、TourCardWindow、TourCompletionFeedback（卡内庆祝）、TourGestureTrace（引导期双指取证，失败写 ~/Library/Logs/nanoPod/tour-gesture.log）、TourMusicWindowWatcher（点 Music 后卡片飞到播放器窗口旁）；设计源 docs/design/2026-09-29-motion-prototype
 │   ├── SettingsDemo{Stage,Motion,Drawing,SVGPath}.swift - 设置页演示台（09-29 原型落地）：300×169 居中圆角台、6 段动画（全屏封面/贴边换歌/显示翻译/翻译为/显示隐藏面板/贴边隐藏）+ 通用段 2 段 + 静帧；`frame(at:t)` 纯函数 + Canvas 绘制 + 会结束的 TimelineView 时钟（空闲零定时器）
 │   └── LocalizedStrings.swift    - L10n localization + UserDefaults binding helpers
 ├── MusicMiniPlayerCore/
+│   ├── Onboarding/               - 引导纯逻辑：TourMachine/Model/Persistence、TourGuidanceTarget（环指向下一个未完成 beat、跨页先导 beat）、TourPlacement（卡片/箭头放置）、TourCornerGuide（四个落点+手势方向，随自然滚动翻转）、TourMusicWindow（播放器窗口定位）、TourAnchorRegistry
 │   ├── Services/
 │   │   ├── MusicController.swift          - Thin facade: @Published state + notifications/polling/Timer
 │   │   ├── MusicController+Artwork.swift  - Artwork extraction/fetching/caching
