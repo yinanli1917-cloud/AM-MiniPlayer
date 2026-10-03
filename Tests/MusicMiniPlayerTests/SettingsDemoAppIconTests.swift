@@ -60,6 +60,30 @@ final class SettingsDemoAppIconTests: XCTestCase {
         XCTAssertTrue(DemoAppIcon.rendered(pixels: 64)?.image === r.image || DemoAppIcon.rendered(pixels: 64) != nil, "cached per size")
     }
 
+    /// Founder 2026-10-02: the demo's icon read darker than the real one (an untagged deviceRGB redraw). The rendered
+    /// icon's mean colour must match the system's own rendering of the same icon.
+    func test_realRepoIcon_keepsItsColours() throws {
+        let icon = try XCTUnwrap(Self.repoIcon, "Resources/AppIcon.icns")
+        DemoAppIcon.source = { icon }
+        DemoAppIcon.resetCache()
+        let rendered = try XCTUnwrap(DemoAppIcon.rendered(pixels: 128))
+        var proposed = NSRect(x: 0, y: 0, width: 128, height: 128)
+        let reference = try XCTUnwrap(icon.cgImage(forProposedRect: &proposed, context: nil, hints: nil))
+        func mean(_ cg: CGImage) -> (Double, Double, Double) {
+            let rep = NSBitmapImageRep(cgImage: cg)
+            var r = 0.0, g = 0.0, b = 0.0, n = 0.0
+            for y in Swift.stride(from: 0, to: rep.pixelsHigh, by: 2) {
+                for x in Swift.stride(from: 0, to: rep.pixelsWide, by: 2) {
+                    guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), c.alphaComponent > 0.9 else { continue }
+                    r += c.redComponent; g += c.greenComponent; b += c.blueComponent; n += 1
+                }
+            }
+            return (r / n * 255, g / n * 255, b / n * 255)
+        }
+        let a = mean(rendered.image), b = mean(reference)
+        XCTAssertEqual(a.0, b.0, accuracy: 4, "red"); XCTAssertEqual(a.1, b.1, accuracy: 4, "green"); XCTAssertEqual(a.2, b.2, accuracy: 4, "blue")
+    }
+
     func test_realRepoIcon_renders_withAVisibleBody() throws {
         let icon = try XCTUnwrap(Self.repoIcon, "Resources/AppIcon.icns")
         DemoAppIcon.source = { icon }

@@ -53,28 +53,33 @@ enum DemoAppIcon {
     }
 
     private static func render(_ image: NSImage, pixels: Int) -> Rendered? {
-        guard let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8, samplesPerPixel: 4,
-            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
-            let context = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = context
-        context.imageInterpolation = .high
-        image.draw(in: NSRect(x: 0, y: 0, width: pixels, height: pixels), from: .zero, operation: .copy, fraction: 1)
-        NSGraphicsContext.restoreGraphicsState()
-        guard let cg = rep.cgImage else { return nil }
+        // The system's own rendering of the icon at this size, in the icon's own colour space. Redrawing it into an
+        // untagged deviceRGB bitmap (the first version) made it read noticeably darker than the real Dock icon
+        // (founder 2026-10-02; mean green 119 vs 139).
+        var proposed = NSRect(x: 0, y: 0, width: pixels, height: pixels)
+        guard let source = image.cgImage(forProposedRect: &proposed, context: nil, hints: nil),
+              let space = source.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB),
+              let cgx = CGContext(data: nil, width: pixels, height: pixels, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        // Exactly `pixels` square, scaled once with high quality, in the source's own colour space.
+        cgx.interpolationQuality = .high
+        cgx.draw(source, in: CGRect(x: 0, y: 0, width: pixels, height: pixels))
+        guard let cg = cgx.makeImage() else { return nil }
+        let rep = NSBitmapImageRep(cgImage: cg)
+        let w = rep.pixelsWide, h = rep.pixelsHigh
+        guard w > 0, h > 0 else { return nil }
 
         // Tight box of the visible body, so the margin the icon grid leaves does not shrink it.
-        var minX = pixels, minY = pixels, maxX = -1, maxY = -1
-        for y in 0..<pixels {
-            for x in 0..<pixels where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 {
+        var minX = w, minY = h, maxX = -1, maxY = -1
+        for y in 0..<h {
+            for x in 0..<w where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 {
                 minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
             }
         }
         guard maxX >= minX, maxY >= minY else { return nil }
-        let n = CGFloat(pixels)
-        let content = CGRect(x: CGFloat(minX) / n, y: CGFloat(minY) / n,
-                             width: CGFloat(maxX - minX + 1) / n, height: CGFloat(maxY - minY + 1) / n)
+        let content = CGRect(x: CGFloat(minX) / CGFloat(w), y: CGFloat(minY) / CGFloat(h),
+                             width: CGFloat(maxX - minX + 1) / CGFloat(w), height: CGFloat(maxY - minY + 1) / CGFloat(h))
         return Rendered(image: cg, content: content)
     }
 
