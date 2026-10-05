@@ -1,8 +1,9 @@
 /**
  * [INPUT]: MusicMiniPlayerAppKit's TourCardWindow/TourCardStore/TourCardMaterialArm, TourSceneFixtures, TourWindowCapture.
  * [OUTPUT]: TourCardGlassShotTests — opt-in (NANOPOD_TOUR_GLASS_SHOT_DIR=<dir>) composited stills of the REAL card window over
- *           two backdrops (warm sunset, flat purple) x light/dark x arm glass (the old look) / liquid (the new one);
- *           TourCardMaterialArmTests — the arm default, A/B keys and the finish numbers' shape.
+ *           two backdrops (warm sunset, flat purple) x light/dark x the old `glass` arm / the native default / native with a
+ *           window shadow / a key-window reference (test-only; the app's card is never key);
+ *           TourCardMaterialArmTests — the arm default and A/B keys.
  * [POS]: Tests. ImageRenderer cannot draw Liquid Glass, so the look is judged from WindowServer's own composite of this
  *        process's windows. Only our windows are captured: if another app's window sits above the backdrop the shot is skipped.
  */
@@ -19,7 +20,7 @@ final class TourCardGlassShotTests: XCTestCase {
 
     /// `sunset`: peach at the top to dusky purple at the bottom (the reference's wallpaper).
     /// `purple`: the founder's flat purple desktop with fine deterministic grain.
-    private final class BackdropView: NSView {
+    final class BackdropView: NSView {
         var kind = Backdrop.sunset
         override func draw(_ dirtyRect: NSRect) {
             switch kind {
@@ -44,9 +45,9 @@ final class TourCardGlassShotTests: XCTestCase {
         }
     }
 
-    private func spin(_ s: Double) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
+    func spin(_ s: Double) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
 
-    private func onlyOurWindowsAbove(_ backdrop: NSWindow) -> Bool {
+    func onlyOurWindowsAbove(_ backdrop: NSWindow) -> Bool {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return false }
         let pid = Int(ProcessInfo.processInfo.processIdentifier)
         guard let backIndex = list.firstIndex(where: { ($0[kCGWindowNumber as String] as? Int) == backdrop.windowNumber }) else { return false }
@@ -60,7 +61,39 @@ final class TourCardGlassShotTests: XCTestCase {
         return true
     }
 
-    func test_compositedStills_oldGlassVsLiquid() throws {
+    /// Reference only: the card's content in a window that CAN be key. The app never does this (the card must never take
+    /// keyboard focus); it exists to show what system glass looks like in a key window.
+    private final class KeyReferencePanel: NSPanel {
+        override var canBecomeKey: Bool { true }
+        override var canBecomeMain: Bool { false }
+        init(store: TourCardStore) {
+            super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            isFloatingPanel = true
+            level = .tourOverlay
+            collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+            isOpaque = false
+            backgroundColor = .clear
+            hasShadow = false
+            hidesOnDeactivate = false
+            isReleasedWhenClosed = false
+            contentView = TourHostingView(rootView: TourCardRoot(store: store))
+        }
+    }
+
+    private enum Shot: String, CaseIterable {
+        /// The previous `glass` arm: custom buttons, fixed palette, dark hairline.
+        case oldGlass = "glass-old"
+        /// The shipping default: native glass, system text and button styles, window not key.
+        case native
+        /// Investigation: native + the window's own shadow (the glass cannot draw one outside a window that is exactly its size).
+        case nativeShadow = "native-shadow"
+        /// Investigation reference only: the same card in a key window.
+        case keyReference = "key-reference"
+
+        var arm: TourCardMaterialArm { self == .oldGlass ? .glass : .liquid }
+    }
+
+    func test_compositedStills_oldGlassVsNative() throws {
         guard let dir = ProcessInfo.processInfo.environment["NANOPOD_TOUR_GLASS_SHOT_DIR"], !dir.isEmpty else {
             throw XCTSkip("opt-in: puts two windows on the screen for a few seconds (NANOPOD_TOUR_GLASS_SHOT_DIR=<dir>)")
         }
@@ -77,38 +110,52 @@ final class TourCardGlassShotTests: XCTestCase {
         backdrop.contentView = view
 
         let fb = TourCompletionFeedback(autoTick: false)
-        let store = TourCardStore(model: TourSceneFixtures.welcome(.en), feedback: fb, arm: .glass)
-        store.onPrimary = {}; store.onSecondary = {}; store.onStop = {}; store.onSkipStep = {}; store.onFallback = {}
-        store.beakSide = .right
+        func makeStore() -> TourCardStore {
+            let store = TourCardStore(model: TourSceneFixtures.welcome(.en), feedback: fb, arm: .glass)
+            store.onPrimary = {}; store.onSecondary = {}; store.onStop = {}; store.onSkipStep = {}; store.onFallback = {}
+            store.beakSide = .right
+            return store
+        }
+        let store = makeStore(), keyStore = makeStore()
         let card = TourCardWindow(store: store)
-        defer { card.orderOut(nil); card.contentView = nil; backdrop.orderOut(nil); backdrop.contentView = nil }
+        let keyCard = KeyReferencePanel(store: keyStore)
+        defer {
+            for w in [card as NSWindow, keyCard] { w.orderOut(nil); w.contentView = nil }
+            backdrop.orderOut(nil); backdrop.contentView = nil
+        }
 
         var written = 0
         let cards: [(String, TourCardModel)] = [("", TourSceneFixtures.welcome(.en)), ("_finale", TourSceneFixtures.finale(.en))]
+        // A key window makes its app active, so the key reference is the last shot of each pass and its window
+        // is ordered out straight after its captures.
         for kind in Backdrop.allCases {
             view.kind = kind
             view.needsDisplay = true
             backdrop.orderFrontRegardless()
             for dark in [false, true] {
-                card.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-                for arm in [TourCardMaterialArm.glass, .liquid] {
+                let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                for shot in Shot.allCases {
+                    let (s, window): (TourCardStore, NSWindow) = shot == .keyReference ? (keyStore, keyCard) : (store, card)
+                    window.appearance = appearance
                     for (suffix, model) in cards {
-                        store.arm = arm
-                        card.hasShadow = arm.needsWindowShadow
-                        store.model = model
-                        store.contentKey += 1
+                        s.arm = shot.arm
+                        window.hasShadow = shot == .nativeShadow || shot.arm.needsWindowShadow
+                        s.model = model
+                        s.contentKey += 1
                         spin(0.2)
-                        let fit = card.contentFittingSize
+                        let fit = window.contentView?.fittingSize ?? .zero
                         XCTAssertGreaterThan(fit.height, 100)
-                        store.beakOffset = fit.height / 2
-                        card.place(NSRect(x: frame.midX - fit.width / 2, y: frame.midY - fit.height / 2, width: fit.width, height: fit.height), animated: false)
-                        card.orderFrontRegardless()
+                        s.beakOffset = fit.height / 2
+                        window.setFrame(NSRect(x: frame.midX - fit.width / 2, y: frame.midY - fit.height / 2, width: fit.width, height: fit.height), display: true)
+                        window.orderFrontRegardless()
+                        if shot == .keyReference { window.makeKey() }
                         spin(0.6)
-                        guard onlyOurWindowsAbove(backdrop) else { print("[glass-shots] SKIPPED \(kind) \(dark) \(arm): another app's window is above the backdrop"); continue }
-                        let image = try XCTUnwrap(TourWindowCapture.composite(through: card, in: TourWindowCapture.cgRect(frame)))
-                        TourWindowCapture.writePNG(image, to: "\(dir)/\(kind.rawValue)_\(dark ? "dark" : "light")_\(arm.rawValue)\(suffix).png")
+                        guard onlyOurWindowsAbove(backdrop) else { print("[glass-shots] SKIPPED \(kind) \(dark) \(shot): another app's window is above the backdrop"); continue }
+                        let image = try XCTUnwrap(TourWindowCapture.composite(through: window, in: TourWindowCapture.cgRect(frame)))
+                        TourWindowCapture.writePNG(image, to: "\(dir)/\(kind.rawValue)_\(dark ? "dark" : "light")_\(shot.rawValue)\(suffix).png")
                         written += 1
                     }
+                    window.orderOut(nil)
                 }
             }
         }
@@ -138,23 +185,67 @@ final class TourCardMaterialArmTests: XCTestCase {
         XCTAssertEqual(TourCardMaterialArm.current(d), .liquid, "simulated never comes from defaults")
     }
 
-    func test_liquidDrawsItsOwnShadowAndUsesGlassButtons_onlyLiquidDoes() {
+    func test_liquidDrawsItsOwnShadowAndUsesSystemControls_onlyLiquidDoes() {
         XCTAssertFalse(TourCardMaterialArm.liquid.needsWindowShadow)
-        XCTAssertTrue(TourCardMaterialArm.liquid.usesGlassButtons)
-        for arm in [TourCardMaterialArm.glass, .clear, .vibrancy, .simulated] { XCTAssertFalse(arm.usesGlassButtons) }
+        XCTAssertTrue(TourCardMaterialArm.liquid.usesSystemControls)
+        for arm in [TourCardMaterialArm.glass, .clear, .vibrancy, .simulated] { XCTAssertFalse(arm.usesSystemControls) }
         XCTAssertTrue(TourCardMaterialArm.vibrancy.needsWindowShadow)
     }
+}
 
-    func test_finish_rimIsBrightestAtTheTopAndFadesDown_sheenFadesOutByFortyPercent() {
-        for dark in [false, true] {
-            let f = TourGlassFinish.resolve(dark: dark)
-            XCTAssertGreaterThan(f.rimTop, f.rimUpper)
-            XCTAssertGreaterThan(f.rimUpper, f.rimLower)
-            XCTAssertGreaterThanOrEqual(f.rimLower, f.rimBottom)
-            XCTAssertGreaterThan(f.rimBottom, 0, "the rim never vanishes")
-            XCTAssertGreaterThan(f.sheenOpacity, 0)
-            XCTAssertLessThanOrEqual(f.sheenReach, 0.40)
+/// The native arm's system buttons must work in the card's window: it is never key, and a system button in a window that
+/// is not key has to fire on the FIRST click (no "click to focus" swallowing it) without the window becoming key.
+@MainActor
+final class TourCardSystemControlsClickTests: XCTestCase {
+    /// A control's mouseDown runs a tracking loop that waits for the mouseUp in the application's queue, so the up event
+    /// is queued BEFORE the down is delivered (delivering both through `sendEvent` would block in that loop forever).
+    private func click(_ window: NSWindow, at p: CGPoint) {
+        func event(_ type: NSEvent.EventType) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
         }
-        XCTAssertGreaterThan(TourGlassFinish.light.rimTop, TourGlassFinish.dark.rimTop)
+        NSApp.postEvent(event(.leftMouseUp), atStart: false)
+        window.sendEvent(event(.leftMouseDown))
+        window.sendEvent(event(.leftMouseUp))   // SwiftUI gestures take the up here; an AppKit button already consumed the queued one
+        RunLoop.main.run(until: Date().addingTimeInterval(0.03))
+    }
+
+    /// Welcome card: the text action (bottom left) and the primary button (bottom right). Finale card: the filled
+    /// secondary (bottom left). The custom arm is the harness control: if it fires, a silent native button is real.
+    func test_footerButtons_fireOnTheFirstClick_inTheNonKeyCardWindow() throws {
+        for arm in [TourCardMaterialArm.glass, .liquid] {
+            let welcome = try fire(arm, TourSceneFixtures.welcome(.en))
+            XCTAssertEqual(welcome.primary, 1, "\(arm): primary button must fire on the first click in a non-key window")
+            XCTAssertEqual(welcome.secondary, 1, "\(arm): text action must fire on the first click in a non-key window")
+            let finale = try fire(arm, TourSceneFixtures.finale(.en))
+            XCTAssertEqual(finale.secondary, 1, "\(arm): filled secondary must fire on the first click in a non-key window")
+        }
+    }
+
+    private func fire(_ arm: TourCardMaterialArm, _ model: TourCardModel) throws -> (primary: Int, secondary: Int) {
+        let store = TourCardStore(model: model, feedback: TourCompletionFeedback(autoTick: false), arm: arm)
+        var primary = 0, secondary = 0
+        store.onPrimary = { primary += 1 }
+        store.onSecondary = { secondary += 1 }
+        store.beakSide = .right
+        let card = TourCardWindow(store: store)
+        defer { card.orderOut(nil); card.contentView = nil }
+        let fit = card.contentFittingSize
+        card.setFrame(NSRect(x: 200, y: 200, width: fit.width, height: fit.height), display: true)
+        card.orderFrontRegardless()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertFalse(card.isKeyWindow)
+
+        // The footer row sits above the note (window coordinates, y up). Sweep a small grid through each button's
+        // area and stop at the first click that fires.
+        func sweep(xs: [CGFloat], until fired: () -> Bool) {
+            for y in stride(from: CGFloat(44), through: 84, by: 4) {
+                for x in xs where !fired() { click(card, at: CGPoint(x: x, y: y)) }
+            }
+        }
+        sweep(xs: [fit.width - 70, fit.width - 55, fit.width - 40]) { primary > 0 }
+        sweep(xs: [22, 30, 38]) { secondary > 0 }
+        XCTAssertFalse(card.isKeyWindow, "clicking the card must never make it key")
+        return (primary, secondary)
     }
 }

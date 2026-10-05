@@ -3,14 +3,12 @@
  * [OUTPUT]: Exports TourCardMetrics (sizes/spacings pinned to the storyboard's
  *           `.card` CSS), TourCardPalette (ink/muted/track/accent per
  *           appearance), TourContrast (WCAG ratio), TourLinkStyle,
- *           TourPrimaryButtonStyle, TourSecondaryButtonStyle (solid, or glass capsules
- *           with `glass: true` on the `liquid` card arm).
+ *           TourPrimaryButtonStyle, TourSecondaryButtonStyle.
  * [POS]: MusicMiniPlayerAppKit/Tour. The one place the card's numbers live so
  *        `TourCardView` reads like the storyboard and tests can pin the
- *        numbers. Buttons are custom, NOT system `.bordered*`/`.link` styles:
- *        the card window is never key, and system controls in a non-key
- *        window render their grey "inactive" look (founder 2026-09-29: grey
- *        buttons, blue links). These styles never depend on window state.
+ *        numbers. These custom button styles serve the non-native arms (`glass`,
+ *        `vibrancy`, `simulated`); the native `liquid` arm uses system styles
+ *        (TourCardView.footerButton). They never depend on window state.
  */
 
 import SwiftUI
@@ -177,25 +175,6 @@ private struct TourHoverBody<Content: View>: View {
     }
 }
 
-extension View {
-    /// A capsule button surface on the `liquid` arm: interactive glass with an optional accent wash, else the solid `fallback` fill.
-    /// The wash is a fill, not `.tint(_:)`: glass in a window that is not key (this card never is) draws every tint
-    /// desaturated to grey (verified with a red tint in a key and a non-key panel), so a tint would never read as the accent.
-    /// The wash sits above the glass (which `glassEffect` puts behind everything it wraps) and below the label.
-    @ViewBuilder
-    fileprivate func tourButtonSurface<F: View>(glass: Bool, wash: Color?, @ViewBuilder fallback: () -> F) -> some View {
-        if glass, #available(macOS 26.0, *) {
-            if let wash {
-                background(Capsule().fill(wash)).glassEffect(.regular.interactive(), in: Capsule())
-            } else {
-                glassEffect(.regular.interactive(), in: Capsule())
-            }
-        } else {
-            background { fallback() }
-        }
-    }
-}
-
 /// `.card .link`: 12pt, secondary ink, no chrome. Hover: ink + the underline
 /// draws from the left in 0.18 s; pressed 0.55 opacity. `emphasized` (the step
 /// has sat unfinished for 6 s) tints it with the accent ink, no motion.
@@ -230,8 +209,6 @@ struct TourLinkStyle: ButtonStyle {
 /// +7 %, scale 1.03; press: brightness -7 %, scale 0.96.
 struct TourPrimaryButtonStyle: ButtonStyle {
     var palette: TourCardPalette
-    /// `liquid` arm: interactive glass under an accent wash instead of the solid capsule (macOS 26 only; older systems never get this arm).
-    var glass = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
@@ -241,8 +218,8 @@ struct TourPrimaryButtonStyle: ButtonStyle {
                 .foregroundStyle(Color.white)
                 .padding(.horizontal, TourCardMetrics.buttonPaddingH)
                 .padding(.vertical, TourCardMetrics.buttonPaddingV)
-                .tourButtonSurface(glass: glass, wash: palette.accent.opacity(TourGlassFinish.accentWash)) { Capsule().fill(palette.accent) }
-                .brightness(glass ? 0 : (pressed ? -0.07 : (hovering ? 0.07 : 0)))
+                .background(Capsule().fill(palette.accent))
+                .brightness(pressed ? -0.07 : (hovering ? 0.07 : 0))
                 .opacity(pressed && reduceMotion ? 0.75 : 1)
                 .scaleEffect(TourPressFeel.scale(hovering: hovering, pressed: pressed, reduceMotion: reduceMotion))
                 .animation(TourPressFeel.animation(pressed: pressed, reduceMotion: reduceMotion), value: pressed)
@@ -254,8 +231,6 @@ struct TourPrimaryButtonStyle: ButtonStyle {
 /// `.card .mbtn.sec`: 10-14% contrast fill (16 -> 26 % on hover, 36 % pressed), ink text.
 struct TourSecondaryButtonStyle: ButtonStyle {
     var palette: TourCardPalette
-    /// `liquid` arm: plain interactive glass instead of the ink-tinted fill.
-    var glass = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
@@ -265,7 +240,7 @@ struct TourSecondaryButtonStyle: ButtonStyle {
                 .foregroundStyle(palette.ink)
                 .padding(.horizontal, TourCardMetrics.buttonPaddingH)
                 .padding(.vertical, TourCardMetrics.buttonPaddingV)
-                .tourButtonSurface(glass: glass, wash: nil) { Capsule().fill(palette.ink.opacity(pressed ? 0.36 : (hovering ? 0.26 : 0.16))) }
+                .background(Capsule().fill(palette.ink.opacity(pressed ? 0.36 : (hovering ? 0.26 : 0.16))))
                 .opacity(pressed && reduceMotion ? 0.75 : 1)
                 .scaleEffect(TourPressFeel.scale(hovering: hovering, pressed: pressed, reduceMotion: reduceMotion))
                 .animation(TourPressFeel.animation(pressed: pressed, reduceMotion: reduceMotion), value: pressed)

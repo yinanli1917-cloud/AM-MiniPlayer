@@ -7,8 +7,9 @@
  * [POS]: MusicMiniPlayerAppKit/Tour. Layout pinned to storyboard.html `.card`
  *        (proposal §4.7): head = title (left) + 28pt ring (top right), then
  *        body, chip, beats, gesture, note, footer; footer = two text links or a
- *        link and a capsule button, never system-styled controls. One glass
- *        shape per card (body + beak); buttons are solid capsules (glass capsules on the `liquid` arm).
+ *        link and a capsule button. One glass shape per card (body + beak). The
+ *        `liquid` arm (default) uses system text styles and system button styles;
+ *        the other arms keep the card's own palette and custom buttons.
  */
 
 import SwiftUI
@@ -125,6 +126,9 @@ struct TourCardView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var palette: TourCardPalette { .resolve(dark: colorScheme == .dark) }
+    /// Title / body / notes: the system's vibrant label colors on the native arm, the card's fixed palette elsewhere.
+    private var inkStyle: AnyShapeStyle { arm.usesSystemControls ? AnyShapeStyle(.primary) : AnyShapeStyle(palette.ink) }
+    private var mutedStyle: AnyShapeStyle { arm.usesSystemControls ? AnyShapeStyle(.secondary) : AnyShapeStyle(palette.muted) }
     private var effectiveSide: TourCardSide { guide?.cardBeakSide ?? beakSide }
     private var effectiveOffset: CGFloat { guide.map { CGFloat($0.cardBeakOffset) } ?? beakOffset }
     private var shape: TourBubbleShape {
@@ -206,7 +210,7 @@ struct TourCardView: View {
             if !model.body.isEmpty {
                 Text(model.body)
                     .font(.system(size: M.bodySize))
-                    .foregroundStyle(palette.muted)
+                    .foregroundStyle(mutedStyle)
                     .lineSpacing(M.bodyLineSpacing)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, M.bodyTop)
@@ -221,7 +225,7 @@ struct TourCardView: View {
             if let confirm = model.confirm {
                 Text(confirm)
                     .font(.system(size: M.confirmSize, weight: .semibold))
-                    .foregroundStyle(palette.ink)
+                    .foregroundStyle(inkStyle)
                     .padding(.top, M.confirmTop)
                     .tourFeedbackBlock(2, feedback, guide: guide)
             }
@@ -272,7 +276,7 @@ struct TourCardView: View {
         HStack(alignment: .top, spacing: M.headGap) {
             Text(model.title)
                 .font(.system(size: M.titleSize, weight: .semibold))
-                .foregroundStyle(palette.ink)
+                .foregroundStyle(inkStyle)
                 .lineSpacing(M.titleLineSpacing)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -288,7 +292,7 @@ struct TourCardView: View {
     private func chipView(_ text: String) -> some View {
         HStack(spacing: 5) {
             Image(systemName: "checkmark").font(.system(size: 8.5, weight: .bold)).foregroundStyle(Color(hex: 0x22A06B))
-            Text(text).font(.system(size: M.noteSize)).foregroundStyle(palette.muted)
+            Text(text).font(.system(size: M.noteSize)).foregroundStyle(mutedStyle)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 2)
@@ -308,7 +312,7 @@ struct TourCardView: View {
     private func noteView(_ text: String) -> some View {
         Text(text)
             .font(.system(size: M.noteSize))
-            .foregroundStyle(palette.muted)
+            .foregroundStyle(mutedStyle)
             .lineSpacing(2)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, M.noteTop)
@@ -338,12 +342,12 @@ struct TourCardView: View {
     @ViewBuilder
     private var leftSlot: some View {
         if model.showStop, let onStop {
-            link(L10n.localized("tour.stop"), onStop)
+            footerButton(.text, L10n.localized("tour.stop"), onStop)
         } else if !model.showFallbackButton, let title = model.secondaryTitle, let onSecondary {
             if case .finale = model.kind {
-                Button(title, action: onSecondary).buttonStyle(TourSecondaryButtonStyle(palette: palette, glass: arm.usesGlassButtons))
+                footerButton(.secondary, title, onSecondary)
             } else {
-                link(title, onSecondary)
+                footerButton(.text, title, onSecondary)
             }
         }
     }
@@ -351,16 +355,41 @@ struct TourCardView: View {
     @ViewBuilder
     private var rightSlot: some View {
         if let title = model.primaryTitle, let onPrimary {
-            Button(title, action: onPrimary).buttonStyle(TourPrimaryButtonStyle(palette: palette, glass: arm.usesGlassButtons))
+            footerButton(.primary, title, onPrimary)
         } else if model.showFallbackButton, let title = model.secondaryTitle, let onFallback {
-            Button(title, action: onFallback).buttonStyle(TourSecondaryButtonStyle(palette: palette, glass: arm.usesGlassButtons))
+            footerButton(.secondary, title, onFallback)
         } else if model.showSkipStep, let onSkipStep {
-            link(L10n.localized("tour.skipStep"), onSkipStep, emphasized: stalled)
+            footerButton(.text, L10n.localized("tour.skipStep"), onSkipStep, emphasized: stalled)
         }
     }
 
-    private func link(_ title: String, _ action: @escaping () -> Void, emphasized: Bool = false) -> some View {
-        Button(title, action: action).buttonStyle(TourLinkStyle(palette: palette, emphasized: emphasized))
+    private enum FooterRole { case primary, secondary, text }
+
+    /// Native arm: system button styles (they bring hover, press, focus and accessibility states);
+    /// the accent goes on the primary button's background (`.borderedProminent` + `.tint`, which stays
+    /// vivid in a window that is not key; `.glassProminent` greys its tint there). The filled secondary is `.glass`;
+    /// the inline text action is `.plain` with the system secondary label colour (`.borderless` is an AppKit button
+    /// that did not fire on the first click in this never-key window, `.link` is system blue).
+    /// Other arms: the card's custom styles.
+    @ViewBuilder
+    private func footerButton(_ role: FooterRole, _ title: String, _ action: @escaping () -> Void, emphasized: Bool = false) -> some View {
+        if arm.usesSystemControls, #available(macOS 26.0, *) {
+            switch role {
+            case .primary:
+                Button(title, action: action).buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(palette.accent)
+            case .secondary:
+                Button(title, action: action).buttonStyle(.glass).buttonBorderShape(.capsule)
+            case .text:
+                Button(title, action: action).buttonStyle(.plain)
+                    .foregroundStyle(emphasized ? AnyShapeStyle(palette.accentInk) : AnyShapeStyle(.secondary))
+            }
+        } else {
+            switch role {
+            case .primary: Button(title, action: action).buttonStyle(TourPrimaryButtonStyle(palette: palette))
+            case .secondary: Button(title, action: action).buttonStyle(TourSecondaryButtonStyle(palette: palette))
+            case .text: Button(title, action: action).buttonStyle(TourLinkStyle(palette: palette, emphasized: emphasized))
+            }
+        }
     }
 }
 

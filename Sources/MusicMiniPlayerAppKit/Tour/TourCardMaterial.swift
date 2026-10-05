@@ -2,19 +2,21 @@
  * [INPUT]: SwiftUI, AppKit (NSVisualEffectView), this folder's TourBubbleShape /
  *          TourCardStyle.
  * [OUTPUT]: Exports TourCardMaterialArm (liquid | glass | clear | vibrancy | simulated),
- *           TourGlassFinish (rim/sheen numbers per appearance),
  *           TourCardMaterialModifier (`View.tourCardMaterial`),
  *           TourVibrancyBackground.
  * [POS]: MusicMiniPlayerAppKit/Tour. The card's surface (proposal §4.6):
  *        macOS 26 = real Liquid Glass (`glassEffect`) in ONE bubble shape
  *        (body + beak), macOS 14/15 = `.popover` `NSVisualEffectView` masked
- *        to the same shape. `liquid` (default, 2026-10-04) is `glass` plus what
- *        makes system glass read as glass: a thin specular rim around the whole
- *        outline (brightest along the top), a soft top sheen, and glass buttons
- *        (see TourCardStyle) inside ONE `GlassEffectContainer`; nothing opaque
- *        sits between the glass and the wallpaper. `glass` is the plain
- *        previous look (`defaults write … NanoPodTourCardMaterial glass`). `simulated` exists ONLY for offscreen renders
- *        (ImageRenderer cannot draw glass or NSViewRepresentable material):
+ *        to the same shape. `liquid` (default, 2026-10-05) is plain native
+ *        Liquid Glass (`.glassEffect(.regular)`) with nothing drawn on it, and the
+ *        card's controls are system styles (see TourCardView); the founder rejected
+ *        the hand-drawn rim/sheen of the first liquid version. A non-key window draws
+ *        glass without the key window's specular rim and desaturates glass tints;
+ *        that is the system's look for a window that never takes focus
+ *        (TourCardGlassShotTests records it). `glass` is the same glass with the
+ *        old custom buttons and a hairline (`defaults write … NanoPodTourCardMaterial
+ *        glass`). `simulated` exists ONLY for offscreen renders (ImageRenderer cannot
+ *        draw glass or NSViewRepresentable material):
  *        it paints the storyboard's translucent fill so the card's CONTENT
  *        can be reviewed on light/dark desktops. It is never selected in the
  *        shipping app. `vibrancy` is also the live A/B fallback if glass looks
@@ -47,47 +49,8 @@ enum TourCardMaterialArm: String, CaseIterable {
     /// Non-glass arms need the window's own shadow (glass draws its own).
     var needsWindowShadow: Bool { resolved == .vibrancy }
 
-    /// Buttons are glass capsules (and the card's glass shapes share one container).
-    var usesGlassButtons: Bool { resolved == .liquid }
-}
-
-/// The `liquid` arm's finish, per appearance: a ~1pt specular rim (a vertical
-/// gradient, brightest at the top edge, fading down the sides, faint at the
-/// bottom) and a white sheen that is gone by `sheenReach` of the height.
-/// Numbers tuned against composited window shots (TourCardGlassShotTests),
-/// pinned in the tests so a tweak is a deliberate edit.
-struct TourGlassFinish: Equatable {
-    /// Rim opacity at the top edge, at 30 % and 65 % of the height, and at the bottom.
-    var rimTop: Double
-    var rimUpper: Double
-    var rimLower: Double
-    var rimBottom: Double
-    var sheenOpacity: Double
-    var sheenReach: Double
-
-    /// Opacity of the accent wash over the primary button's glass (both appearances).
-    static let accentWash: Double = 0.9
-
-    static func resolve(dark: Bool) -> TourGlassFinish { dark ? .dark : .light }
-
-    static let light = TourGlassFinish(rimTop: 0.95, rimUpper: 0.55, rimLower: 0.35, rimBottom: 0.30, sheenOpacity: 0.32, sheenReach: 0.40)
-    static let dark = TourGlassFinish(rimTop: 0.80, rimUpper: 0.40, rimLower: 0.18, rimBottom: 0.14, sheenOpacity: 0.10, sheenReach: 0.40)
-
-    var rimGradient: LinearGradient {
-        LinearGradient(stops: [
-            .init(color: .white.opacity(rimTop), location: 0),
-            .init(color: .white.opacity(rimUpper), location: 0.30),
-            .init(color: .white.opacity(rimLower), location: 0.65),
-            .init(color: .white.opacity(rimBottom), location: 1),
-        ], startPoint: .top, endPoint: .bottom)
-    }
-
-    var sheenGradient: LinearGradient {
-        LinearGradient(stops: [
-            .init(color: .white.opacity(sheenOpacity), location: 0),
-            .init(color: .white.opacity(0), location: sheenReach),
-        ], startPoint: .top, endPoint: .bottom)
-    }
+    /// Controls and text are system styles (the other arms keep the card's own palette and button styles).
+    var usesSystemControls: Bool { resolved == .liquid }
 }
 
 struct TourCardMaterialModifier: ViewModifier {
@@ -100,22 +63,8 @@ struct TourCardMaterialModifier: ViewModifier {
         switch arm.resolved {
         case .liquid:
             if #available(macOS 26.0, *) {
-                // Rim + sheen are the content's own background, so they land ABOVE the glass (which
-                // `glassEffect` puts behind everything it wraps) and below the text. The container
-                // gives the body glass and the buttons' glass one shared sampling region.
-                let finish = TourGlassFinish.resolve(dark: dark)
-                GlassEffectContainer {
-                    content
-                        .background {
-                            ZStack {
-                                shape.fill(finish.sheenGradient)
-                                // 2pt stroke clipped to the shape = a 1pt rim hugging the inside of the outline.
-                                shape.stroke(finish.rimGradient, lineWidth: 2).clipShape(shape)
-                            }
-                            .allowsHitTesting(false)
-                        }
-                        .glassEffect(.regular, in: shape)
-                }
+                // One container: the body's glass and the system glass buttons share one sampling region.
+                GlassEffectContainer { content.glassEffect(.regular, in: shape) }
             } else {
                 content.background(TourVibrancyBackground(shape: shape))
             }
@@ -142,10 +91,10 @@ struct TourCardMaterialModifier: ViewModifier {
 }
 
 extension View {
-    /// The dark 0.5pt hairline flattens a glass edge, so the `liquid` arm (which has its own rim) leaves it off.
+    /// The dark 0.5pt hairline flattens a glass edge, so the native `liquid` arm leaves it off.
     @ViewBuilder
     func tourCardHairline(_ arm: TourCardMaterialArm, shape: TourBubbleShape, color: Color) -> some View {
-        if arm.usesGlassButtons { self } else { overlay(shape.stroke(color, lineWidth: 0.5)) }
+        if arm.usesSystemControls { self } else { overlay(shape.stroke(color, lineWidth: 0.5)) }
     }
 
     func tourCardMaterial(_ arm: TourCardMaterialArm, shape: TourBubbleShape, dark: Bool) -> some View {
