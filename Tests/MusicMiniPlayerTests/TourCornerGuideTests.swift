@@ -114,6 +114,27 @@ final class TourCornerGuideValueTests: XCTestCase {
         }
     }
 
+    /// Stage Manager keeps the left edge from tucking (founder 2026-10-04): the edge beat suggests the nearest edge that CAN.
+    func test_theEdgeSuggestion_isTheNearestAllowedEdge() throws {
+        let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        func edge(from corner: ScreenCorner, allowed: Set<SnappablePanel.Edge>) throws -> TourMoveSuggestion {
+            try XCTUnwrap(TourCornerGuide.suggestion(beat: .edge, panelFrame: frames[corner]!, current: corner, visited: [], frames: frames,
+                                                     screenFrame: screen, visibleMidX: visible.midX, tuckableEdges: allowed), "\(corner)")
+        }
+        XCTAssertEqual(try edge(from: .topLeft, allowed: [.left, .right]).edgeIsRight, false, "both allowed: the nearest, as before")
+        XCTAssertEqual(try edge(from: .bottomRight, allowed: [.left, .right]).edgeIsRight, true)
+        for corner in [ScreenCorner.topLeft, .bottomLeft] {
+            let right = try edge(from: corner, allowed: [.right])
+            XCTAssertEqual(right.edgeIsRight, true, "\(corner): only the right can tuck")
+            XCTAssertEqual(right.to.maxX, screen.maxX, "the ghost travels to the right edge")
+            XCTAssertEqual(right.panelHeading.dx, 1)
+            XCTAssertEqual(right.key, "edge-right")
+        }
+        XCTAssertEqual(try edge(from: .topRight, allowed: [.left]).edgeIsRight, false, "and the mirror")
+        XCTAssertNil(TourCornerGuide.suggestion(beat: .edge, panelFrame: frames[.topLeft]!, current: .topLeft, visited: [], frames: frames,
+                                                screenFrame: screen, visibleMidX: visible.midX, tuckableEdges: []), "no edge can tuck: no direction to give")
+    }
+
     func test_thePrototypeDiagonalIsUnchanged() {
         XCTAssertEqual(M.dotCenters(.nudgeToCorner()).a.x, 25.5)
         XCTAssertEqual(M.displacement(.nudgeToCorner()).dx, 30 * M.scale, accuracy: 1e-9)
@@ -190,16 +211,45 @@ final class TourCornerGuideRealPanelTests: XCTestCase {
         }
     }
 
+    /// The founder has Stage Manager on: its strip owns the left edge, a push there does nothing. The edge beat points right from
+    /// anywhere (the ghost, the demo and the words), however far left the panel sits.
+    func test_theEdgeBeat_withStageManagerOn_alwaysPointsRight() throws {
+        for corner in [ScreenCorner.topLeft, .bottomLeft] {
+            f = TourRealPanelFixture(corner: corner, page: .album)
+            f.panel.stageManagerEnabledProvider = { true }
+            f.controller.naturalScrollingProvider = { true }
+            f.controller.send(.resume(completed: allButMoveAndBack))
+            XCTAssertTrue(f.wait { f.cardWindow != nil })
+            f.spin(0.6)
+            // Across the screen (the first corner), then back to the left corner: across again, the diagonal beat ticks.
+            for target in [corner.opposite, corner] {
+                f.panel.setFrameOrigin(try XCTUnwrap(f.panel.cornerLandingFrames()[target]).origin)
+                f.controller.send(.panelSettled(corner: target))
+                f.spin(0.3)
+            }
+            f.controller.debugRefreshCard()
+            f.spin(0.8)
+            XCTAssertEqual(f.controller.state.phase, .step(.moveTuck, beats: [true, true, false]), "\(corner)")
+            let move = try XCTUnwrap(f.controller.moveSuggestion())
+            XCTAssertEqual(move.edgeIsRight, true, "\(corner): the left edge cannot tuck")
+            XCTAssertEqual(move.to.maxX, NSScreen.main!.frame.maxX)
+            XCTAssertEqual(f.controller.debugCardStore?.model.body, L10n.localized("tour.move.bodyTuckRight"))
+            guard case .swipeToEdge(let rightward)? = f.controller.debugCardStore?.gestureKind else { return XCTFail("edge demo expected") }
+            XCTAssertTrue(rightward, "natural scrolling: the fingers go right")
+            f.tearDown(); f = nil
+        }
+    }
+
     func test_theEdgeBeat_pointsAtTheNearestEdge_andFlipsWithScrollDirection() throws {
         for (corner, right) in [(ScreenCorner.topLeft, false), (.bottomRight, true)] {
             f = TourRealPanelFixture(corner: corner, page: .album)
             f.controller.send(.resume(completed: allButMoveAndBack))
             XCTAssertTrue(f.wait { f.cardWindow != nil })
             f.spin(0.8)
-            let other: ScreenCorner = right ? .bottomLeft : .topRight
+            // The first corner ticks the corner beat; the corner across from it, where the question is about, ticks the diagonal.
+            let other = corner.opposite
             f.controller.send(.panelSettled(corner: other))
             f.spin(0.4)
-            // Park the panel in the corner the question is about: the second corner ticks the diagonal beat, the edge is next.
             let landing = try XCTUnwrap(f.panel.cornerLandingFrames()[corner])
             f.panel.setFrameOrigin(landing.origin)
             f.controller.send(.panelSettled(corner: corner))

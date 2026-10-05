@@ -82,12 +82,13 @@ public enum TourMachine {
             break
 
         case .panelSettled(let corner):
-            // The move step: corner -> across the diagonal -> the edge. A landing in ANY corner the panel has not been in
-            // ticks the first beat (adjacent or diagonal; the one it started in counts as been). The next new corner ticks
-            // the diagonal beat: the opposite one is what the ghost shows, any other new corner is accepted without
-            // scolding (the card acknowledges which). A corner already landed in ticks nothing. The edge beat is
-            // `panelTucked`'s.
-            if case .step(.moveTuck, var beats) = state.phase, beats.count == 3, let corner, !state.cornersLanded.contains(corner) {
+            // The move step: corner -> across the diagonal -> the edge. The first beat ticks for any corner but the one the
+            // panel started in. The diagonal beat ticks only for the corner ACROSS the screen from the one the panel was in
+            // just before this move (`moveLastCorner`, which follows every settle, ticking or not); a corner next door ticks
+            // nothing and the card says so. The edge beat is `panelTucked`'s.
+            if case .step(.moveTuck, var beats) = state.phase, beats.count == 3, let corner {
+                let before = state.moveLastCorner
+                state.moveLastCorner = corner
                 if !beats[0] {
                     if corner != state.moveStartCorner {
                         beats[0] = true
@@ -95,11 +96,15 @@ public enum TourMachine {
                         state.phase = .step(.moveTuck, beats: beats)
                         effects = [.checkBeat(.moveTuck, index: 0), .haptic(.levelChange), .relocateCardToPanel, .persist]
                     }
-                } else if !beats[1] {
-                    beats[1] = true
-                    state.cornersLanded.append(corner)
-                    state.phase = .step(.moveTuck, beats: beats)
-                    effects = [.checkBeat(.moveTuck, index: 1), .haptic(.levelChange), .relocateCardToPanel, .persist]
+                } else if !beats[1], let before, corner != before {
+                    if corner == before.opposite {
+                        beats[1] = true
+                        state.cornersLanded.append(corner)
+                        state.phase = .step(.moveTuck, beats: beats)
+                        effects = [.checkBeat(.moveTuck, index: 1), .haptic(.levelChange), .relocateCardToPanel, .persist]
+                    } else {
+                        effects = [.relocateCardToPanel]   // nothing ticks: the card follows the panel and says what to do
+                    }
                 }
             }
 
@@ -129,7 +134,17 @@ public enum TourMachine {
             }
 
         case .canTranslateBecameTrue(let seconds):
-            if case .idle(let armed) = state.phase, armed, seconds >= 3, !state.deferredShownThisLaunch {
+            if state.isShowingDeferralNote {
+                // A song that can be translated started while the "doesn't need translating" card is up: the card becomes the
+                // real translate step right here. The snapshot may still carry the old flag (the publisher fires before the
+                // value lands), so it is overridden.
+                state.stepStates[.translate] = .pending
+                var live = snapshot
+                live.canTranslate = true
+                let (nextState, entryEffects) = enterStep(.translate, state: state, snapshot: live)
+                state = nextState
+                effects = entryEffects + [.persist]
+            } else if case .idle(let armed) = state.phase, armed, seconds >= 3, !state.deferredShownThisLaunch {
                 state.deferredShownThisLaunch = true
                 if snapshot.showTranslation {
                     // Already on (the user opened it from Settings) — nothing
@@ -272,7 +287,8 @@ public enum TourMachine {
     /// satisfied before its card ever showed, and lands on the first step
     /// that needs a real card — or `.finale` if none remain. Handles the
     /// translate deferral (§3.3 S4′) as a stopping point of its own, exactly
-    /// like a normal step, so `TourController` can time its 1.1s note.
+    /// like a normal step. The note has no timer: it waits for the user ("Later" is `.advanceTransition`) or for a
+    /// translatable song (`.canTranslateBecameTrue`).
     static func enterStep(_ step: TourStep?, state: TourState, snapshot: TourSnapshot) -> (TourState, [TourEffect]) {
         var state = state
         var effects: [TourEffect] = []
@@ -309,6 +325,7 @@ public enum TourMachine {
 
             if s == .moveTuck {
                 state.moveStartCorner = snapshot.panelCorner
+                state.moveLastCorner = snapshot.panelCorner
                 state.cornersLanded = []
             }
             state.phase = .step(s, beats: initialBeats)

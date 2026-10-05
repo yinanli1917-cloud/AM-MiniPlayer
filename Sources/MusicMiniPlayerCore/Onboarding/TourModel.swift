@@ -66,7 +66,7 @@ public enum TourPhase: Equatable, Sendable {
     /// A completed step's card has faded and the next card hasn't landed
     /// yet — real time (or a fake clock in tests) must pass via
     /// `TourEvent.advanceTransition` before `to` (or finale, if `to == nil`)
-    /// shows. Also used for the 1.1s "这首不用翻" deferral note (§3.3 S4′).
+    /// shows. Also the "这首不用翻" deferral note (§3.3 S4′), which has no timer: "Later" sends `advanceTransition`.
     case transitioning(from: TourStep?, to: TourStep?)
     case finale
     /// The one card allowed to reappear after the tour otherwise tore down
@@ -154,8 +154,8 @@ public enum TourEvent: Equatable, Sendable {
     /// (real or fake clock, §11.1 "假时钟驱动 transitioning") is the thing
     /// that drives the machine on to the next card/finale, instead of the
     /// reducer jumping there synchronously inside the completion event.
-    /// `TourController` sends this after the feedback duration (§8.1: 800ms,
-    /// §3.3 S4′: 1.1s for the deferral note).
+    /// `TourController` sends this after the feedback duration (§8.1: 800ms);
+    /// the deferral note's "Later" button sends it too.
     case advanceTransition
 }
 
@@ -221,10 +221,13 @@ public struct TourState: Equatable, Sendable {
     public var resumeCount: Int
     /// The move step: the corner the panel was in when the step began (nil = it was between corners).
     public var moveStartCorner: ScreenCorner?
-    /// The move step: the corners the panel has landed in since, in order, each counted once. The first ticks the corner
-    /// beat, the second the diagonal beat (the opposite corner, or any other new one). A landing in the start corner (corner
-    /// beat only) or in one already landed in counts for nothing (2026-10-03: the user should feel that there are four corners).
+    /// The move step: the corners that ticked a beat, in order (the first the corner beat, the second the diagonal beat). Only
+    /// the snap-target marks read it (their "been here" fill).
     public var cornersLanded: [ScreenCorner]
+    /// The move step: the corner the panel last settled in (starts as `moveStartCorner`, follows EVERY settle: ones that tick
+    /// nothing and ones in corners already visited too). The diagonal beat ticks only across the screen from it
+    /// (2026-10-04: a corner next door used to count).
+    public var moveLastCorner: ScreenCorner?
 
     public init(
         status: TourRunStatus = .notStarted,
@@ -236,8 +239,10 @@ public struct TourState: Equatable, Sendable {
         deferredShownThisLaunch: Bool = false,
         resumeCount: Int = 0,
         moveStartCorner: ScreenCorner? = nil,
-        cornersLanded: [ScreenCorner] = []
+        cornersLanded: [ScreenCorner] = [],
+        moveLastCorner: ScreenCorner? = nil
     ) {
+        self.moveLastCorner = moveLastCorner
         self.moveStartCorner = moveStartCorner
         self.cornersLanded = cornersLanded
         self.status = status
@@ -270,5 +275,18 @@ public struct TourState: Equatable, Sendable {
         }
     }
 
+    /// The panel settled somewhere that is not across from the first corner while the diagonal beat waits: the card says so.
+    public func diagonalNeedsRetry(beats: [Bool]) -> Bool {
+        guard beats.count == 3, beats[0], !beats[1], let last = moveLastCorner else { return false }
+        return last != cornersLanded.last
+    }
+
     public var hasDeferredTranslate: Bool { stepStates[.translate] == .deferred }
+
+    /// The "this one doesn't need translating" card is up: translate was deferred and the tour is parked on it. (The same
+    /// `.transitioning(from: .translate, ...)` phase also follows a real translate completion; that one has no deferral.)
+    public var isShowingDeferralNote: Bool {
+        if case .transitioning(let from, _) = phase, from == .translate, hasDeferredTranslate { return true }
+        return false
+    }
 }

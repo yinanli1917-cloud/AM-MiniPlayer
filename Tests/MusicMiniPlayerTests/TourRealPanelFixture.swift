@@ -68,6 +68,7 @@ final class TourRealPanelFixture {
         panel.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: true)
         let music = self.music
         panel.currentPageProvider = { music.currentPage }
+        panel.stageManagerEnabledProvider = { false }   // never read the machine's real Stage Manager setting
         panel.orderFrontRegardless()
 
         liquidEdge = LiquidEdgeController(card: panel)

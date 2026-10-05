@@ -93,7 +93,7 @@ final class TourTeardownTests: XCTestCase {
         // so entering `.translate` defers it live rather than prefilling it.
         XCTAssertTrue(controller.state.hasDeferredTranslate)
 
-        // Skip the real 1.1s deferral-note timer — advance synchronously.
+        // "Later" on the deferral note (it has no timer) — advance synchronously.
         controller.send(.advanceTransition)
         XCTAssertEqual(controller.state.phase, .finale)
 

@@ -242,6 +242,97 @@ final class TourMachineTests: XCTestCase {
         guard case .transitioning(.translate, .moveTuck) = next.phase else { return XCTFail("got \(next.phase)") }
     }
 
+    /// The deferral note waits for the user (2026-10-04: it flashed by in 1.1 s). "Later" is `.advanceTransition`: the same
+    /// outcome the old timer had — translate stays deferred, the move step comes up.
+    func test_deferralNote_laterContinuesToTheMoveStep_translateStaysDeferred() {
+        var state = deferralNoteState()
+        var effects: [TourEffect]
+        (state, effects) = TourMachine.reduce(state, .advanceTransition, snapshot: cannotTranslate)
+        guard case .step(.moveTuck, _) = state.phase else { return XCTFail("got \(state.phase)") }
+        XCTAssertEqual(state.stepStates[.translate], .deferred)
+        XCTAssertTrue(state.hasDeferredTranslate)
+        XCTAssertTrue(effects.contains(.showStepCard(.moveTuck)))
+    }
+
+    /// A translatable song starts while the note is up: the note becomes the real translate step, right there.
+    func test_deferralNote_canTranslateBecomingTrue_entersTheTranslateStep() {
+        let state = deferralNoteState()
+        XCTAssertTrue(state.isShowingDeferralNote)
+        // The snapshot may still carry the old canTranslate (the publisher fires before the value lands).
+        let (next, effects) = TourMachine.reduce(state, .canTranslateBecameTrue(secondsIntoSong: 0), snapshot: cannotTranslate)
+        XCTAssertEqual(next.phase, .step(.translate, beats: [false]))
+        XCTAssertEqual(next.stepStates[.translate], .pending)
+        XCTAssertFalse(next.hasDeferredTranslate)
+        XCTAssertTrue(effects.contains(.showStepCard(.translate)))
+    }
+
+    func test_deferralNote_isNotTheRealTranslateCompletionTransition() {
+        var state = TourState()
+        state.stepStates[.translate] = .completed
+        state.phase = .transitioning(from: .translate, to: .moveTuck)
+        XCTAssertFalse(state.isShowingDeferralNote)
+        let (next, _) = TourMachine.reduce(state, .canTranslateBecameTrue(secondsIntoSong: 0), snapshot: authorized)
+        XCTAssertEqual(next.phase, state.phase, "only the note reacts")
+    }
+
+    private func deferralNoteState() -> TourState {
+        var state = TourState()
+        for step in [TourStep.connect, .reveal, .corners, .lyrics] { state.stepStates[step] = .completed }
+        return TourMachine.enterStep(.translate, state: state, snapshot: cannotTranslate).0
+    }
+
+    // MARK: - Move step: the diagonal beat takes only the corner across the screen from where the panel just was
+
+    private func moveStepState(startingIn corner: ScreenCorner) -> TourState {
+        var state = TourState()
+        for step in TourStep.orderedSteps where step != .moveTuck && step != .back { state.stepStates[step] = .completed }
+        let snapshot = TourSnapshot(automationAuthorized: true, canTranslate: true, panelCorner: corner)
+        return TourMachine.enterStep(.moveTuck, state: state, snapshot: snapshot).0
+    }
+
+    private func settle(_ state: TourState, _ corner: ScreenCorner) -> (TourState, [TourEffect]) {
+        TourMachine.reduce(state, .panelSettled(corner: corner), snapshot: authorized)
+    }
+
+    func test_moveStep_diagonalBeat_ticksOnlyForTheOppositeOfTheCornerThePanelWasIn() {
+        var state = moveStepState(startingIn: .topRight)
+        var effects: [TourEffect]
+        (state, effects) = settle(state, .topLeft)
+        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [true, false, false]), "any corner but the start ticks the first beat")
+
+        // The corner next door (bottom-left is adjacent to top-left): no tick, the card is asked to follow the panel.
+        (state, effects) = settle(state, .bottomLeft)
+        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [true, false, false]))
+        XCTAssertFalse(effects.contains(.checkBeat(.moveTuck, index: 1)))
+        XCTAssertTrue(effects.contains(.relocateCardToPanel))
+
+        // The opposite of where it sits NOW (bottom-left -> top-right, a corner it started in) ticks.
+        (state, effects) = settle(state, .topRight)
+        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [true, true, false]))
+        XCTAssertTrue(effects.contains(.checkBeat(.moveTuck, index: 1)))
+    }
+
+    /// Every settle moves the reference corner, including the ones that tick nothing and the ones in corners already visited.
+    func test_moveStep_diagonalBeat_followsEverySettle() {
+        var state = moveStepState(startingIn: .topRight)
+        (state, _) = settle(state, .topLeft)                 // beat 0
+        (state, _) = settle(state, .topRight)                // back in the start corner: adjacent to top-left, no tick
+        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [true, false, false]))
+        (state, _) = settle(state, .bottomRight)             // the opposite of where it was before (top-right is not it): no tick
+        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [true, false, false]))
+        // Across from bottom-right is top-left, a corner already landed in: still the diagonal.
+        (state, _) = settle(state, .topLeft)
+        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [true, true, false]))
+    }
+
+    func test_moveStep_firstBeat_ignoresTheStartCornerAndTheSameCornerAgain() {
+        var state = moveStepState(startingIn: .bottomLeft)
+        (state, _) = settle(state, .bottomLeft)
+        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [false, false, false]))
+        (state, _) = settle(state, .topRight)                // across the screen straight away still counts as the first corner
+        XCTAssertEqual(state.phase, .step(.moveTuck, beats: [true, false, false]))
+    }
+
     func test_finale_withDeferredTranslate_armsWatcherInstead_ofFullIdle() {
         var state = TourState()
         state.stepStates[.translate] = .deferred

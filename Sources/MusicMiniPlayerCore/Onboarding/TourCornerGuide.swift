@@ -1,9 +1,9 @@
 /**
- * [INPUT]: CoreGraphics; ScreenCorner (SnappablePanel.swift); LiquidEdgeTokens (the tucked sliver's size).
+ * [INPUT]: CoreGraphics; ScreenCorner and Edge (SnappablePanel.swift, plain values); LiquidEdgeTokens (the tucked sliver's size).
  * [OUTPUT]: Exports TourCornerGuide, TourMoveBeat, TourMoveSuggestion — the pure answers behind the move step's direction
  *           cues: which corner to suggest next (the nearest unvisited one, then the diagonal opposite), which way the
  *           panel travels to get there, where it starts and lands (the ghost's path), which way the FINGERS must move for
- *           it (natural scrolling on or off), and which screen edge is nearest.
+ *           it (natural scrolling on or off), and which tuckable screen edge is nearest.
  * [POS]: MusicMiniPlayerCore/Onboarding. The trackpad demo in the card, the on-screen ghost of the panel and the
  *        emphasised snap-target mark all read `TourMoveSuggestion`, so they cannot disagree. No AppKit: takes plain values.
  */
@@ -76,8 +76,10 @@ public enum TourCornerGuide {
     /// - `current`: the corner the panel sits in (nil = between corners: the nearest one stands in).
     /// - `visited`: corners the corner beat should not suggest again (the start corner and any landed in).
     /// - `frames`: the four landing frames; `screenFrame`: the whole screen (the sliver is joined to its bezel).
+    /// - `tuckableEdges`: the edges the panel can tuck into right now; the edge beat suggests the nearest of them.
     public static func suggestion(beat: TourMoveBeat, panelFrame: CGRect, current: ScreenCorner?, visited: Set<ScreenCorner>,
-                                  frames: [ScreenCorner: CGRect], screenFrame: CGRect, visibleMidX: CGFloat) -> TourMoveSuggestion? {
+                                  frames: [ScreenCorner: CGRect], screenFrame: CGRect, visibleMidX: CGFloat,
+                                  tuckableEdges: Set<SnappablePanel.Edge>) -> TourMoveSuggestion? {
         let center = CGPoint(x: panelFrame.midX, y: panelFrame.midY)
         switch beat {
         case .corner, .diagonal:
@@ -88,7 +90,7 @@ public enum TourCornerGuide {
                   let heading = heading(from: center, to: CGPoint(x: rect.midX, y: rect.midY)) else { return nil }
             return TourMoveSuggestion(beat: beat, targetCorner: goal, edgeIsRight: nil, from: panelFrame, to: rect, panelHeading: heading)
         case .edge:
-            let right = nearestEdgeIsRight(panelMidX: center.x, visibleMidX: visibleMidX)
+            guard let right = nearestTuckableEdgeIsRight(panelMidX: center.x, visibleMidX: visibleMidX, tuckableEdges: tuckableEdges) else { return nil }
             let size = LiquidEdgeTokens.sliverSize
             let sliver = CGRect(x: right ? screenFrame.maxX - size.width : screenFrame.minX, y: center.y - size.height / 2,
                                 width: size.width, height: size.height)
@@ -129,6 +131,16 @@ public enum TourCornerGuide {
 
     /// The panel is nearer the right edge of the visible frame than the left.
     public static func nearestEdgeIsRight(panelMidX: CGFloat, visibleMidX: CGFloat) -> Bool { panelMidX > visibleMidX }
+
+    /// The nearest edge that CAN tuck (`SnappablePanel.tuckableEdges`: Stage Manager keeps the left one): true = right.
+    /// With both allowed it is the nearest; with one, that one; with none, nil.
+    public static func nearestTuckableEdgeIsRight(panelMidX: CGFloat, visibleMidX: CGFloat, tuckableEdges: Set<SnappablePanel.Edge>) -> Bool? {
+        let left = tuckableEdges.contains(.left), right = tuckableEdges.contains(.right)
+        if left && right { return nearestEdgeIsRight(panelMidX: panelMidX, visibleMidX: visibleMidX) }
+        if right { return true }
+        if left { return false }
+        return nil
+    }
 
     /// The fingers move rightward for the panel to travel `panelRightward`.
     public static func fingerRightward(panelRightward: Bool, naturalScrolling: Bool) -> Bool {

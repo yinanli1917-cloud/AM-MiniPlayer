@@ -211,7 +211,7 @@ final class TourSnapMarksValueTests: XCTestCase {
 
     func test_copy_hasBothLanguages_forAllThreeBeats_andNeverUsesTheBannedWord() throws {
         let keys = ["tour.move.title", "tour.move.beat1", "tour.move.beatDiagonal", "tour.move.beat2", "tour.move.body", "tour.move.bodyDiagonal",
-                    "tour.move.bodyTuckRight", "tour.move.bodyTuckLeft", "tour.move.bodyTuckOtherRight", "tour.move.bodyTuckOtherLeft"]
+                    "tour.move.bodyTuckRight", "tour.move.bodyTuckLeft", "tour.move.bodyDiagonalRetry"]
         for key in keys {
             let pair = try XCTUnwrap(L10n.allStrings[key], key)
             XCTAssertFalse(pair.en.isEmpty, key); XCTAssertFalse(pair.zh.isEmpty, key)
@@ -223,7 +223,7 @@ final class TourSnapMarksValueTests: XCTestCase {
         XCTAssertEqual(L10n.allStrings["tour.move.beat2"]?.zh, "往边上推，让它藏起来")
         XCTAssertEqual(L10n.allStrings["tour.move.beat1"]?.zh, "推到一个角")
         XCTAssertNil(L10n.allStrings["tour.move.beatAnother"], "the old silent invitation is gone")
-        for key in ["tour.move.bodyTuckRight", "tour.move.bodyTuckLeft", "tour.move.bodyTuckOtherRight", "tour.move.bodyTuckOtherLeft"] {
+        for key in ["tour.move.bodyTuckRight", "tour.move.bodyTuckLeft"] {
             let pair = try XCTUnwrap(L10n.allStrings[key])
             XCTAssertFalse(pair.en.contains("Try another corner"), "the old invitation text is gone: \(pair.en)")
             XCTAssertFalse(pair.zh.contains("再换一个角试试"), pair.zh)
@@ -231,8 +231,11 @@ final class TourSnapMarksValueTests: XCTestCase {
         let right = try XCTUnwrap(L10n.allStrings["tour.move.bodyTuckRight"]), left = try XCTUnwrap(L10n.allStrings["tour.move.bodyTuckLeft"])
         XCTAssertTrue(right.en.contains("right") && right.zh.contains("右边"))
         XCTAssertTrue(left.en.contains("left") && left.zh.contains("左边"))
-        let other = try XCTUnwrap(L10n.allStrings["tour.move.bodyTuckOtherRight"])
-        XCTAssertTrue(other.en.contains("good one") && other.zh.contains("也很好"), "a gentle acknowledgement, no scolding")
+        XCTAssertNil(L10n.allStrings["tour.move.bodyTuckOtherRight"], "any new corner no longer counts as the diagonal")
+        XCTAssertNil(L10n.allStrings["tour.move.bodyTuckOtherLeft"])
+        let retry = try XCTUnwrap(L10n.allStrings["tour.move.bodyDiagonalRetry"])
+        XCTAssertEqual(retry.zh, "这是旁边的角。斜对面在另一头，跟着虚影再推一次。")
+        XCTAssertEqual(retry.en, "That's the corner next door. The opposite one is across the screen; follow the ghost once more.")
     }
 }
 

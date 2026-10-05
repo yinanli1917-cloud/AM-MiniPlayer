@@ -148,6 +148,8 @@ final class TourController: ObservableObject {
             || releaseWork != nil || skipWork != nil || stallWork != nil || resumeWork != nil
             || outputAckWork != nil || musicReturnWork != nil
     }
+    /// The timer that moves a finished step on to the next card (never running behind the deferral note).
+    var debugHasTransitionTimer: Bool { transitionWork != nil }
     var debugIsDeferredWatcherArmed: Bool { deferredWatcher.isArmed }
     /// Geometry seams for TourCardPlacementIntegrationTests (screen coordinates).
     var debugCardFrame: NSRect? { cardWindow?.frame }
@@ -298,6 +300,13 @@ final class TourController: ObservableObject {
             .sink { [weak self] _ in DispatchQueue.main.async { self?.surfaceDidChange() } }.store(in: &cancellables)
         liquidEdge.statePublisher.removeDuplicates()
             .sink { [weak self] edge in self?.edgeStateDidChange(edge) }.store(in: &cancellables)
+        // A translatable song while the "doesn't need translating" card is up turns it into the real translate step. (The
+        // deferred watcher is only armed once the tour is over, so this phase has to listen on its own.)
+        lyricsService.$canTranslate.removeDuplicates().filter { $0 }
+            .sink { [weak self] _ in
+                guard let self, self.state.isShowingDeferralNote else { return }
+                self.send(.canTranslateBecameTrue(secondsIntoSong: 0))
+            }.store(in: &cancellables)
         TourHookBus.shared.audioOutputMenuPresented.dropFirst().removeDuplicates()
             .sink { [weak self] open in self?.outputMenuDidChange(open) }.store(in: &cancellables)
         TourHookBus.shared.audioOutputDeviceSwitched
@@ -517,12 +526,14 @@ final class TourController: ObservableObject {
     }
 
     private func scheduleTransitionIfNeeded() {
-        guard case .transitioning(let from, _) = state.phase else { return }
+        guard case .transitioning = state.phase else { return }
         transitionWork?.cancel()
-        let delay = (from == .translate) ? TourMotionPolicy.Tokens.deferralNoteHold : TourMotionPolicy.Tokens.stepCompletionFeedback
+        transitionWork = nil
+        // The deferral note waits for the user ("Later") or for a translatable song: no timer behind it.
+        guard !state.isShowingDeferralNote else { return }
         let work = DispatchWorkItem { [weak self] in self?.send(.advanceTransition) }
         transitionWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + TourMotionPolicy.Tokens.stepCompletionFeedback, execute: work)
     }
 
     private func scheduleFinaleAutoDismissIfNeeded() {
@@ -961,15 +972,14 @@ final class TourController: ObservableObject {
             // the ghost on screen; the edge beat's body also acknowledges how the second corner went.
             let cornersDone = beats[0]
             let onAlbum = surface.page == .album
-            let rightward = TourCornerGuide.nearestEdgeIsRight(panelMidX: panel?.frame.midX ?? 0, visibleMidX: ((panel?.screen ?? NSScreen.main)?.visibleFrame ?? .zero).midX)
             let body: String
             if beats[1] {
-                let landed = state.cornersLanded
-                let acrossTheDiagonal = landed.count >= 2 && landed[1] == landed[0].opposite
-                let key = acrossTheDiagonal ? "tour.move.bodyTuck" : "tour.move.bodyTuckOther"
-                body = L(key + (rightward ? "Right" : "Left"))
+                // The same edge the ghost and the demo head for: the nearest one that can tuck (Stage Manager keeps the left).
+                let rightward = moveSuggestion(for: .edge)?.edgeIsRight ?? true
+                body = L("tour.move.bodyTuck" + (rightward ? "Right" : "Left"))
             }
             else if !onAlbum { body = L("tour.move.bodyLyrics") }
+            else if state.diagonalNeedsRetry(beats: beats) { body = L("tour.move.bodyDiagonalRetry") }
             else if cornersDone { body = L("tour.move.bodyDiagonal") }
             else { body = L("tour.move.body") }
             var list: [TourBeatModel] = []
@@ -1001,9 +1011,10 @@ final class TourController: ObservableObject {
                 ringCompleted: state.completedCount, stepLabel: "\(TourStep.back.index(in: total))"
             )
 
-        case .transitioning(let from, _) where from == .translate:
+        case .transitioning where state.isShowingDeferralNote:
             var model = TourCardModel(
                 kind: .deferralNote, title: L("tour.translate.deferred.title"), body: L("tour.translate.deferred.body"),
+                primaryTitle: L("tour.translate.deferred.later"),
                 ringCompleted: state.completedCount, stepLabel: "\(TourStep.translate.index(in: total))"
             )
             model.showStop = true; model.showSkipStep = false
@@ -1081,7 +1092,8 @@ final class TourController: ObservableObject {
         var visited = Set(state.cornersLanded)
         if let start = state.moveStartCorner { visited.insert(start) }
         return TourCornerGuide.suggestion(beat: beat, panelFrame: panel.frame, current: current, visited: visited, frames: frames,
-                                          screenFrame: screen?.frame ?? panel.frame, visibleMidX: (screen?.visibleFrame ?? panel.frame).midX)
+                                          screenFrame: screen?.frame ?? panel.frame, visibleMidX: (screen?.visibleFrame ?? panel.frame).midX,
+                                          tuckableEdges: panel.tuckableEdges)
     }
 
     // MARK: - Surface, anchors, targets
@@ -1695,6 +1707,7 @@ final class TourController: ObservableObject {
         case .welcome: send(.start)
         case .step(.connect, _): connectMusic()
         case .finale: AppMain.shared?.showSettingsWindow(selectedTab: .shortcuts)
+        case .transitioning where state.isShowingDeferralNote: send(.advanceTransition)   // "Later"
         default: break
         }
     }

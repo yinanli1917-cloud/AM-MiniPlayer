@@ -89,10 +89,20 @@ public class SnappablePanel: NSPanel {
 
     // MARK: - Stage Manager Detection
 
-    private func isStageManagerEnabled() -> Bool {
+    /// Whether Stage Manager is on. Defaults to the system preference; a test seam.
+    public var stageManagerEnabledProvider: () -> Bool = {
         let defaults = UserDefaults(suiteName: "com.apple.WindowManager")
         return defaults?.bool(forKey: "GloballyEnabled") ?? false
     }
+
+    /// THE answer to "which edges can the panel tuck into right now": Stage Manager's strip owns the left edge, so with it on
+    /// only the right one can. The edge-swipe gate, the velocity gate, "tuck it for me" / the global shortcut and the tour's
+    /// edge beat all ask this.
+    public var tuckableEdges: Set<Edge> {
+        stageManagerEnabledProvider() ? [.right] : [.left, .right]
+    }
+
+    public func canTuck(to edge: Edge) -> Bool { tuckableEdges.contains(edge) }
 
     // MARK: - Event Override
 
@@ -323,7 +333,7 @@ public class SnappablePanel: NSPanel {
         let visible = screen.visibleFrame
         let reach = LiquidEdgeTokens.edgeProximity
         if towardRight, frame.maxX >= visible.maxX - reach { return .right }
-        if !towardRight, frame.minX <= visible.minX + reach, !isStageManagerEnabled() { return .left }
+        if !towardRight, frame.minX <= visible.minX + reach, canTuck(to: .left) { return .left }
         return nil
     }
 
@@ -554,19 +564,18 @@ public class SnappablePanel: NSPanel {
         let visible = screen.visibleFrame
 
         let threshold: CGFloat = 20
-        let stageManagerOn = isStageManagerEnabled()
 
         let nearLeftEdge = frame.origin.x < visible.minX + threshold
         let nearRightEdge = frame.origin.x + frame.width > visible.maxX - threshold
         let horizontalDominant = abs(velocity.x) > abs(velocity.y) * 0.8
 
-        if !stageManagerOn && nearLeftEdge && velocity.x < -50 && horizontalDominant {
+        if canTuck(to: .left) && nearLeftEdge && velocity.x < -50 && horizontalDominant {
             if liquidEdgeHandler?(.left) == true { return true }
             hideToEdge(.left)
             return true
         }
 
-        if nearRightEdge && velocity.x > 50 && horizontalDominant {
+        if canTuck(to: .right) && nearRightEdge && velocity.x > 50 && horizontalDominant {
             if liquidEdgeHandler?(.right) == true { return true }
             hideToEdge(.right)
             return true
@@ -581,7 +590,9 @@ public class SnappablePanel: NSPanel {
         guard !isEdgeHidden, let screen = screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
         let windowCenterX = frame.origin.x + frame.width / 2
-        let edge: Edge = windowCenterX < visible.midX ? .left : .right
+        // The nearest side that can tuck (Stage Manager's strip owns the left one).
+        let nearest: Edge = windowCenterX < visible.midX ? .left : .right
+        let edge: Edge = canTuck(to: nearest) ? nearest : (nearest == .left ? .right : .left)
         if let handler = liquidEdgeHandler {
             // Not next to that edge yet: spring to its corner first, then tuck.
             if nearEdge(towardRight: edge == .right) != nil {

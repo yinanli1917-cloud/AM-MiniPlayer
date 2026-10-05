@@ -43,8 +43,6 @@ public enum TourMotionPolicy {
 
         /// §8.1: step completion → next card, from "beat 打勾" to "新内容淡入".
         public static let stepCompletionFeedback = 1.0
-        /// §3.3 S4′: the deferral note stays up before moving to S5.
-        public static let deferralNoteHold = 1.1
     }
 
     /// A resolved bundle of "should this animate at all" decisions — §8.4's

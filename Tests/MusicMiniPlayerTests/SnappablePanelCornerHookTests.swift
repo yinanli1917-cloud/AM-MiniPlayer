@@ -85,4 +85,42 @@ final class SnappablePanelCornerHookTests: XCTestCase {
         makePanel(at: NSPoint(x: visible.maxX - 250, y: visible.midY))
         XCTAssertEqual(panel.tuckableEdge(), .right)
     }
+
+    // MARK: - Which edges can tuck right now (Stage Manager owns the left one)
+
+    func test_tuckableEdges_stageManagerTakesTheLeftEdge() throws {
+        makePanel(at: NSPoint(x: 100, y: 100))
+        panel.stageManagerEnabledProvider = { false }
+        XCTAssertEqual(panel.tuckableEdges, [.left, .right])
+        XCTAssertTrue(panel.canTuck(to: .left))
+        panel.stageManagerEnabledProvider = { true }
+        XCTAssertEqual(panel.tuckableEdges, [.right])
+        XCTAssertFalse(panel.canTuck(to: .left))
+        XCTAssertTrue(panel.canTuck(to: .right))
+        XCTAssertFalse(panel.canTuck(to: .none))
+    }
+
+    /// "Tuck it for me" and the global shortcut: with Stage Manager on and the panel on the left half, the nearest edge that CAN
+    /// tuck is the right one (it used to pick the left and do nothing useful).
+    func test_hideToNearestEdge_stageManagerOn_picksTheRightEdgeFromTheLeftHalf() throws {
+        let visible = try XCTUnwrap(NSScreen.main).visibleFrame
+        for stageManager in [true, false] {
+            makePanel(at: NSPoint(x: visible.minX + 16, y: visible.minY + 16))
+            panel.stageManagerEnabledProvider = { stageManager }
+            var asked: [SnappablePanel.Edge] = []
+            panel.liquidEdgeHandler = { asked.append($0); return true }
+            panel.hideToNearestEdge()
+            XCTAssertEqual(asked, [stageManager ? .right : .left], "stage manager \(stageManager)")
+            panel.orderOut(nil)
+        }
+    }
+
+    func test_swipeLeftEdgeGate_stageManagerOn_refusesTheLeftEdge() throws {
+        let visible = try XCTUnwrap(NSScreen.main).visibleFrame
+        makePanel(at: NSPoint(x: visible.minX, y: visible.midY))
+        panel.stageManagerEnabledProvider = { true }
+        XCTAssertNil(panel.tuckableEdge(), "the left edge is Stage Manager's")
+        panel.stageManagerEnabledProvider = { false }
+        XCTAssertEqual(panel.tuckableEdge(), .left)
+    }
 }

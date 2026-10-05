@@ -29,7 +29,8 @@ final class TourPanelGhostValueTests: XCTestCase {
 
     private func suggestion(_ beat: TourMoveBeat, from start: ScreenCorner, visited: Set<ScreenCorner> = []) throws -> TourMoveSuggestion {
         try XCTUnwrap(TourCornerGuide.suggestion(beat: beat, panelFrame: frames[start]!, current: start, visited: visited.union([start]),
-                                                 frames: frames, screenFrame: screen, visibleMidX: visible.midX), "\(beat) from \(start)")
+                                                 frames: frames, screenFrame: screen, visibleMidX: visible.midX,
+                                                 tuckableEdges: [.left, .right]), "\(beat) from \(start)")
     }
 
     /// The elapsed time (glyph clock) of a frame in cycle 1 where the ghost has just landed.
@@ -328,22 +329,34 @@ final class TourPanelGhostRealPanelTests: XCTestCase {
         XCTAssertNil(f.controller.debugSnapMarks.target)
     }
 
-    func test_theDiagonalBeat_acceptsAnyOtherNewCornerGently_andNotAUsedOne() throws {
+    /// The corner next door is not across the screen (founder 2026-10-04: it counted as the diagonal). Nothing ticks, the card
+    /// says so, and the ghost and the trackpad demo aim across from where the panel sits NOW.
+    func test_theDiagonalBeat_refusesTheCornerNextDoor_saysSo_andReAimsFromThere() throws {
         start(corner: .topRight)
         spinToGlyph(0.2)
-        try land(.bottomLeft)
+        try land(.bottomLeft)                                // the first corner
         f.spin(0.6)
-        // A used corner (the one just landed in): nothing ticks.
-        f.controller.send(.panelSettled(corner: .bottomLeft))
-        f.spin(0.3)
+        XCTAssertEqual(f.controller.moveSuggestion()?.targetCorner, .topRight)
+        let fingersBefore = f.controller.debugCardStore?.gestureKind
+
+        try land(.topLeft)                                   // next door to the bottom left: not the diagonal
+        f.spin(0.8)
         XCTAssertEqual(f.controller.state.phase, .step(.moveTuck, beats: [true, false, false]))
-        // Another new corner that is not the opposite one: ticks, with its own gentle acknowledgement.
-        try land(.topLeft)
+        XCTAssertEqual(f.controller.debugCardStore?.model.body, L("tour.move.bodyDiagonalRetry"))
+        let move = try XCTUnwrap(f.controller.moveSuggestion())
+        XCTAssertEqual(move.beat, .diagonal)
+        XCTAssertEqual(move.targetCorner, .bottomRight, "across from the top left")
+        XCTAssertEqual(f.controller.debugSnapMarks.target, ScreenCorner.allCases.firstIndex(of: .bottomRight))
+        XCTAssertNotEqual(f.controller.debugCardStore?.gestureKind, fingersBefore, "the trackpad demo re-aims")
+        spinToGlyph(1.25)                                    // the ghost plays the new move from the start
+        XCTAssertTrue(f.controller.debugGhost.isDrawn)
+        XCTAssertEqual(move.to, try XCTUnwrap(f.panel.cornerLandingFrames()[.bottomRight]))
+
+        try land(.bottomRight)                               // across from where it was: now it ticks
         XCTAssertEqual(f.controller.state.phase, .step(.moveTuck, beats: [true, true, false]))
         f.spin(0.8)
         let body = try XCTUnwrap(f.controller.debugCardStore?.model.body)
-        XCTAssertTrue(body == L("tour.move.bodyTuckOtherRight") || body == L("tour.move.bodyTuckOtherLeft"), body)
-        XCTAssertFalse(body.contains("far corner"))
+        XCTAssertTrue(body == L("tour.move.bodyTuckRight") || body == L("tour.move.bodyTuckLeft"), body)
     }
 
     func test_tuckForMe_stillCompletesTheStep_fromAnyBeat() throws {
@@ -379,8 +392,8 @@ final class TourPanelGhostRealPanelTests: XCTestCase {
     }
 
     func test_copy_zhAndEn_noBannedWord_forEveryBeat() throws {
-        for key in ["tour.move.body", "tour.move.bodyDiagonal", "tour.move.bodyTuckRight", "tour.move.bodyTuckLeft", "tour.move.bodyTuckOtherRight",
-                    "tour.move.bodyTuckOtherLeft", "tour.move.beat1", "tour.move.beatDiagonal", "tour.move.beat2"] {
+        for key in ["tour.move.body", "tour.move.bodyDiagonal", "tour.move.bodyTuckRight", "tour.move.bodyTuckLeft", "tour.move.bodyDiagonalRetry",
+                    "tour.move.beat1", "tour.move.beatDiagonal", "tour.move.beat2"] {
             let pair = try XCTUnwrap(L10n.allStrings[key], key)
             XCTAssertFalse(pair.zh.isEmpty); XCTAssertFalse(pair.en.isEmpty)
             XCTAssertFalse(pair.zh.contains("甩"), key); XCTAssertFalse(pair.en.lowercased().contains("fling"), key)
