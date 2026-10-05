@@ -189,6 +189,16 @@ final class TourGuidance {
         ghostWindow = nil
     }
 
+    /// A window frame is stored in whole points: AppKit floors an origin and ceils a size on its own (measured: 100.75 -> 100,
+    /// 200.25 -> 201), so a fractional target never equals the frame it produced. That made every tick of a running ticker
+    /// (the ring breathes for ~9 s after every card) call `setFrame` again for nothing, and let the top edge hop 1 pt up and down
+    /// while the height sprang (origin floored and size ceiled independently, top pinned). Rounding each EDGE gives AppKit
+    /// nothing to adjust: equal targets are equal frames, and an edge only ever moves one way as its spring moves.
+    static func wholePointFrame(_ r: NSRect) -> NSRect {
+        let minX = r.minX.rounded(), minY = r.minY.rounded()
+        return NSRect(x: minX, y: minY, width: max(r.maxX.rounded() - minX, 1), height: max(r.maxY.rounded() - minY, 1))
+    }
+
     private func applyCard(_ f: TourGuidanceFrame, to window: TourCardWindow) {
         guard f.cardVisible else {
             if window.isVisible {
@@ -206,8 +216,11 @@ final class TourGuidance {
         case .top: y += f.cardApproach
         case .bottom: y -= f.cardApproach
         }
-        let target = NSRect(x: x, y: y, width: max(f.cardWidth, 1), height: max(f.cardHeight, 1))
+        let target = Self.wholePointFrame(NSRect(x: x, y: y, width: max(f.cardWidth, 1), height: max(f.cardHeight, 1)))
         if window.frame != target {
+            #if DEBUG
+            TourCardTrace.frameWrite("guidance.applyCard", old: window.frame, new: target)
+            #endif
             window.setFrame(target, display: false)
             #if DEBUG
             TourPerfProbe.bump(.cardSetFrame)

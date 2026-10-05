@@ -74,6 +74,9 @@ final class TourCardWindow: NSPanel {
     /// Moves/resizes the window to `frame` (the controller's placement).
     func place(_ frame: NSRect, animated: Bool, duration: TimeInterval = 0, timing: CAMediaTimingFunction? = nil) {
         targetFrame = frame
+        #if DEBUG
+        if self.frame != frame { TourCardTrace.frameWrite("window.place", old: self.frame, new: frame, "animated=\(animated)") }
+        #endif
         if animated, isVisible, self.frame != frame {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = duration
@@ -98,6 +101,9 @@ final class TourCardWindow: NSPanel {
         let current = frame
         let next = NSRect(x: current.minX, y: current.maxY - need.height, width: need.width, height: need.height)
         targetFrame = NSRect(x: basis.minX, y: basis.maxY - need.height, width: need.width, height: need.height)
+        #if DEBUG
+        TourCardTrace.frameWrite("window.refitToContent", old: current, new: next)
+        #endif
         setFrame(next, display: true)
     }
 }

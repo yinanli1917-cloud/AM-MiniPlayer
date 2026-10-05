@@ -84,7 +84,7 @@ final class TourCardPlacementIntegrationTests: XCTestCase {
 
     func test_revealCard_sitsBesideThePanelWithinSixteenPoints_andOnScreen() throws {
         controller.send(.resume(completed: [.connect]))
-        spin(0.2)
+        spin(1.0)   // settled: the card's window frame is whole points (TourGuidance.wholePointFrame), mid-spring it is still travelling
         let card = try XCTUnwrap(controller.debugCardFrame)
         let visible = NSScreen.main!.visibleFrame
         XCTAssertTrue(visible.contains(card), "card \(card) must be fully on screen \(visible)")

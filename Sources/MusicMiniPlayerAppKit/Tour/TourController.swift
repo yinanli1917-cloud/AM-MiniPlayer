@@ -124,6 +124,8 @@ final class TourController: ObservableObject {
     /// The pose the handoff already started moving the card to (C.3 "H + 40").
     private var pendingHandoffPose: TourCardPose?
     private var measured: (key: TourCardLayoutKey, side: TourCardSide, gesture: TourGestureKind?, size: CGSize)?
+    /// A same-card body change is crossfading: the store's text is still the old one (see `relayoutFromStore`).
+    private var bodySwapPending = false
     /// The system's Automation permission for Music (test seam: counting it proves which events pay for the query).
     var automationStatusProvider: () -> OnboardingAuthorizationStatus = { OnboardingState.shared.automationStatus }
     /// Where the card's anchor was when the card was last placed (a height change under the SAME anchor is a relayout, not a move).
@@ -674,6 +676,9 @@ final class TourController: ObservableObject {
     private func bounceCard(by dy: CGFloat) {
         let base = dy == 0 ? (cardPlacedOrigin ?? cardBounceBase) : cardBounceBase
         guard let window = cardWindow, let base else { return }
+        #if DEBUG
+        TourCardTrace.frameWrite("controller.bounceCard", old: window.frame, new: window.frame.offsetBy(dx: base.x - window.frame.minX, dy: base.y - dy - window.frame.minY), "dy=\(dy)")
+        #endif
         window.setFrameOrigin(NSPoint(x: base.x, y: base.y - dy))
     }
 
@@ -800,6 +805,7 @@ final class TourController: ObservableObject {
         pendingHandoffPose = nil
         measured = nil
         measuringHost = nil
+        bodySwapPending = false
         lastPlacedAnchorMidY = nil
     }
 
@@ -1296,6 +1302,7 @@ final class TourController: ObservableObject {
             // First appearance, or the card is coming back after stepping aside.
             entryGeneration += 1
             commit(store, bumpKey: newContent)
+            traceCard("present.appearing")
             motion.presentCard(at: pose)
             motion.setGlyph(present: gestureKind != nil, animated: false)
             raiseTourWindows()
@@ -1307,7 +1314,7 @@ final class TourController: ObservableObject {
             entryGeneration += 1
             commit(store, bumpKey: true)
             motion.setGlyph(present: gestureKind != nil, animated: false)
-            if pendingHandoffPose != pose { motion.moveCard(to: pose, delay: 0) }
+            if pendingHandoffPose != pose { traceCard("present.feedbackHandoff.move"); motion.moveCard(to: pose, delay: 0) }
             pendingHandoffPose = nil
             feedback.cardDidSwap()
             holdRing(for: 0.42)
@@ -1322,6 +1329,7 @@ final class TourController: ObservableObject {
             motion.stopHint()
             lastRingSubject = nil
             motion.fadeContentOut()
+            traceCard("present.newContent.move")
             motion.moveCard(to: pose)
             motion.schedule(after: 0.14) { [weak self] in
                 guard let self, let store = self.cardStore else { return }
@@ -1342,7 +1350,9 @@ final class TourController: ObservableObject {
             store.gestureKind = gestureKind
             guidance.motion.setGlyph(present: gestureKind != nil, animated: true, restart: previousKind != nil && gestureKind != nil && previousKind != gestureKind)
             if bodyChanged {
+                bodySwapPending = true
                 motion.crossfadeBody { [weak self] in
+                    self?.bodySwapPending = false
                     guard let store = self?.cardStore else { return }
                     store.model = model
                 }
@@ -1357,8 +1367,10 @@ final class TourController: ObservableObject {
                 // height — treating it as an anchor move made the height wait 0.1 s and the demo band outgrow its bubble).
                 if abs(target.x - pose.x) < 0.5, target.beakSide == pose.beakSide,
                    let was = lastPlacedAnchorMidY, abs(was - placed.anchor.midY) < 0.5 {
+                    traceCard("present.sameCard.relayout")
                     motion.relayoutCard(to: pose)        // same spot, new height / beak
                 } else {
+                    traceCard("present.sameCard.anchorMoved")
                     motion.moveCard(to: pose, delay: 0)  // the anchor moved (the ring jumped to the next control)
                 }
             }
@@ -1367,6 +1379,13 @@ final class TourController: ObservableObject {
         lastPlacedAnchorMidY = placed.anchor.midY
         feedback.raiseOverlay()
         guidance.kick()
+    }
+
+    /// DEBUG: names the controller branch that is about to command the card's motion (the motion's own note follows it).
+    private func traceCard(_ branch: String) {
+        #if DEBUG
+        TourCardTrace.note("controller.\(branch)", "phase=\(Self.traceDescription(of: state.phase))")
+        #endif
     }
 
     /// The panel goes to the front of its level at every step, so a floating
@@ -1672,6 +1691,7 @@ final class TourController: ObservableObject {
               let placed = computePlacement(model: model, phase: nextState.phase, gestureKind: gestureKind(for: nextState.phase),
                                             arm: store.arm, currentSide: store.beakSide) else { guidance.kick(); return }
         pendingHandoffPose = placed.pose
+        traceCard("handoffDidStart.move")
         guidance.motion.moveCard(to: placed.pose)
         guidance.kick()
     }
@@ -1680,11 +1700,16 @@ final class TourController: ObservableObject {
     /// for (its text changed under a live window): spring the height, same top
     /// edge, same beak tip.
     private func relayoutFromStore() {
+        // While the body text crossfades the store still holds the OLD text, but the pose already springs to the height of the
+        // NEW one (presentCard measured it). Measuring the old text here sent the height to the old value and back again
+        // (410 -> 391 -> 410 pt on the move step's beat change); the swap re-measures when the new text lands.
+        guard !bodySwapPending else { return }
         guard let store = cardStore, guidance.motion.cardVisible, let target = guidance.motion.targetPose else { return }
         let size = measureCardSize(model: store.model, beakSide: store.beakSide, gestureKind: store.gestureKind, arm: store.arm)
         guard abs(size.height - target.height) > 0.5 else { return }
         var pose = target
         pose.height = size.height
+        traceCard("relayoutFromStore")
         guidance.motion.relayoutCard(to: pose)
         guidance.kick()
     }

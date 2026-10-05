@@ -49,6 +49,14 @@ struct TourCardPose: Equatable {
     }
 }
 
+#if DEBUG
+extension TourCardPose {
+    var debugText: String {
+        String(format: "x=%.1f top=%.1f w=%.1f h=%.1f beak=%@ off=%.1f", x, top, width, height, "\(beakSide)", beakOffset)
+    }
+}
+#endif
+
 /// The ring's rect in screen space (centre + size).
 struct TourRingGeometry: Equatable {
     var cx: Double, cy: Double, w: Double, h: Double
@@ -370,6 +378,12 @@ final class TourGuidanceMotion {
         return false
     }
 
+    /// True while any of the CARD's own springs / fades is still in flight (the ring's breathing and the hints do not count).
+    var isCardAnimating: Bool {
+        let values: [TourFeedbackValue] = [cx, ctop, ch, bOff, bScale, cop, csc, capp, glyph] + contentOp + contentY
+        return values.contains(where: { $0.isActive })
+    }
+
     func step(_ dt: Double) {
         clock.now += dt
         let all: [TourFeedbackValue] = [cx, ctop, ch, bOff, bScale, cop, csc, capp, glyph, hx, hy, hw, hh, hop, hsc, hpulse, mop] + contentOp + contentY
@@ -440,6 +454,9 @@ final class TourGuidanceMotion {
     /// First appearance (and re-appearance after the card yielded): the card is
     /// placed at once, then grows from its beak tip (C.2).
     func presentCard(at pose: TourCardPose) {
+        #if DEBUG
+        TourCardTrace.note("motion.presentCard", "\(pose.debugText)")
+        #endif
         setPose(pose)
         targetPose = pose
         cardVisible = true
@@ -477,6 +494,17 @@ final class TourGuidanceMotion {
     /// re-aims, and across the panel the beak shrinks away and grows back on
     /// the other side.
     func moveCard(to pose: TourCardPose, delay: Double = T.moveStartDelay) {
+        // Already heading exactly there (two code paths asked for the same step change in one turn): a second command would
+        // only restart the springs' start delay and re-run the beat-swap cue for a move that is already under way.
+        if cardVisible, targetPose == pose {
+            #if DEBUG
+            TourCardTrace.note("motion.moveCard.ignored", "\(pose.debugText)")
+            #endif
+            return
+        }
+        #if DEBUG
+        TourCardTrace.note("motion.moveCard", "\(pose.debugText) from=\(targetPose?.debugText ?? "nil")")
+        #endif
         cardVisible = true
         targetPose = pose
         if reduceMotion {
@@ -505,6 +533,15 @@ final class TourGuidanceMotion {
     /// The body text changed line count (C.5.3): height, top and beak re-settle
     /// on the SAME anchor.
     func relayoutCard(to pose: TourCardPose) {
+        if targetPose == pose {
+            #if DEBUG
+            TourCardTrace.note("motion.relayoutCard.ignored", "\(pose.debugText)")
+            #endif
+            return
+        }
+        #if DEBUG
+        TourCardTrace.note("motion.relayoutCard", "\(pose.debugText) from=\(targetPose?.debugText ?? "nil")")
+        #endif
         targetPose = pose
         if reduceMotion { setPose(pose); return }
         ch.to(pose.height, springDuration: T.heightSpring.duration, bounce: T.heightSpring.bounce)
