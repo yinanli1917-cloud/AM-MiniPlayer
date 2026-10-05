@@ -155,7 +155,7 @@ final class TourCardPlacementIntegrationTests: XCTestCase {
         spin(0.3)
         let window = try XCTUnwrap(NSApp.windows.first { $0 is TourCardWindow && $0.isVisible })
         let store = try XCTUnwrap(controller.debugCardStore)
-        XCTAssertEqual(store.arm, .glass, "default arm is glass")
+        XCTAssertEqual(store.arm, .liquid, "default arm is liquid (glass body + rim)")
         let glassNames = allClassNames(window)
         print("[material] glass arm classes: \(Set(glassNames).sorted())")
         // Liquid Glass renders through signed-distance-field layers

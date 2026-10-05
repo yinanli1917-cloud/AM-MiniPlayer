@@ -298,7 +298,7 @@ struct TourSnapMarkView: View {
         let marks = store.visual
         return Canvas { ctx, _ in
             guard marks.rects.indices.contains(index) else { return }
-            TourGuidanceDrawing.drawSnapMarks(ctx, marks: marks, overlay: TourMarkWindowRegion.frame(for: marks.rects[index]), palette: palette, only: index)
+            TourGuidanceDrawing.drawSnapMarks(ctx, marks: marks, overlay: TourGuidance.wholePointFrame(TourMarkWindowRegion.frame(for: marks.rects[index])), palette: palette, only: index)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)

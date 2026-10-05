@@ -150,7 +150,7 @@ final class TourGuidance {
             ghostWindow = w
         }
         guard let w = ghostWindow else { return }
-        let target = TourPanelGhostRegion.windowFrame(for: ghost)
+        let target = Self.wholePointFrame(TourPanelGhostRegion.windowFrame(for: ghost))   // see wholePointFrame; the art is laid out in it
         let art = TourPanelGhostRegion.art(for: ghost, window: target)
         if art != store.ghostStore.art { store.ghostStore.art = art }
         if w.frame != target { w.setFrame(target, display: false) }
@@ -174,7 +174,7 @@ final class TourGuidance {
             }
         }
         for (i, w) in markWindows.enumerated() {
-            let target = TourMarkWindowRegion.frame(for: marks.rects[i])
+            let target = Self.wholePointFrame(TourMarkWindowRegion.frame(for: marks.rects[i]))
             if w.frame != target { w.setFrame(target, display: false) }
             if !w.isVisible { w.orderFront(nil) }
         }
