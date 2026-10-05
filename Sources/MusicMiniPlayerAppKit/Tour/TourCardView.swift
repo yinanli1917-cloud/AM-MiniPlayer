@@ -8,7 +8,7 @@
  *        (proposal §4.7): head = title (left) + 28pt ring (top right), then
  *        body, chip, beats, gesture, note, footer; footer = two text links or a
  *        link and a capsule button, never system-styled controls. One glass
- *        shape per card (body + beak); buttons are solid capsules.
+ *        shape per card (body + beak); buttons are solid capsules (glass capsules on the `liquid` arm).
  */
 
 import SwiftUI
@@ -102,7 +102,7 @@ struct TourCardView: View {
     var beakSide: TourCardSide
     var beakOffset: CGFloat
     var gestureKind: TourGestureKind?
-    var arm: TourCardMaterialArm = .glass
+    var arm: TourCardMaterialArm = .liquid
     var feedback: TourCompletionFeedback
     var contentKey = 0
     /// Non-nil = the card is driven by `TourGuidanceMotion` (height, beak, scale
@@ -176,7 +176,7 @@ struct TourCardView: View {
             // The big ring of the celebration moment (spec §B.10): above the content, never blurred or clipped by it.
             .overlay(TourCelebrationRingLayer(beakSide: side, stepLabel: model.stepLabel, closed: model.ringClosed,
                                                completed: model.ringCompleted, palette: palette, feedback: feedback))
-            .overlay(shape.stroke(palette.hairline, lineWidth: 0.5))
+            .tourCardHairline(arm, shape: shape, color: palette.hairline)
             .modifier(TourCardScale(guide: guide))
             // The card window is never key. Controls and materials that dim
             // themselves in inactive windows must still read as active here.
@@ -341,7 +341,7 @@ struct TourCardView: View {
             link(L10n.localized("tour.stop"), onStop)
         } else if !model.showFallbackButton, let title = model.secondaryTitle, let onSecondary {
             if case .finale = model.kind {
-                Button(title, action: onSecondary).buttonStyle(TourSecondaryButtonStyle(palette: palette))
+                Button(title, action: onSecondary).buttonStyle(TourSecondaryButtonStyle(palette: palette, glass: arm.usesGlassButtons))
             } else {
                 link(title, onSecondary)
             }
@@ -351,9 +351,9 @@ struct TourCardView: View {
     @ViewBuilder
     private var rightSlot: some View {
         if let title = model.primaryTitle, let onPrimary {
-            Button(title, action: onPrimary).buttonStyle(TourPrimaryButtonStyle(palette: palette))
+            Button(title, action: onPrimary).buttonStyle(TourPrimaryButtonStyle(palette: palette, glass: arm.usesGlassButtons))
         } else if model.showFallbackButton, let title = model.secondaryTitle, let onFallback {
-            Button(title, action: onFallback).buttonStyle(TourSecondaryButtonStyle(palette: palette))
+            Button(title, action: onFallback).buttonStyle(TourSecondaryButtonStyle(palette: palette, glass: arm.usesGlassButtons))
         } else if model.showSkipStep, let onSkipStep {
             link(L10n.localized("tour.skipStep"), onSkipStep, emphasized: stalled)
         }

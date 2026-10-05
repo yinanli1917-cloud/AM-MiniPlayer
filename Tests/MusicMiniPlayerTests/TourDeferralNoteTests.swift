@@ -1,7 +1,7 @@
 /**
  * [INPUT]: TourRealPanelFixture (the REAL panel, tour controller and card windows), LyricsService.debugSetCanTranslate.
  * [OUTPUT]: TourDeferralNoteTests — the "this one doesn't need translating" card (founder 2026-10-04: it flashed by in 1.1 s):
- *           it stays until the user acts, "Later" continues to the move step with translate still deferred, and a song that
+ *           it stays until the user acts, "Got it" continues to the move step with translate still deferred, and a song that
  *           can be translated turns the card into the real translate step.
  * [POS]: Tests.
  */
@@ -23,22 +23,22 @@ final class TourDeferralNoteTests: XCTestCase {
         XCTAssertTrue(f.wait { f.cardWindow != nil })
     }
 
-    func test_theNoteStaysUntilTheUserActs_andOffersLater() throws {
+    func test_theNoteStaysUntilTheUserActs_andOffersGotIt() throws {
         startOnTheNote()
         XCTAssertTrue(f.controller.state.isShowingDeferralNote)
         f.spin(2.5)                                         // well past the old 1.1 s timer
         XCTAssertTrue(f.controller.state.isShowingDeferralNote, "nothing advances it on its own")
         let model = try XCTUnwrap(f.controller.debugCardStore?.model)
         XCTAssertEqual(model.kind, .deferralNote)
-        XCTAssertEqual(model.primaryTitle, L10n.localized("tour.translate.deferred.later"))
+        XCTAssertEqual(model.primaryTitle, L10n.localized("tour.translate.deferred.gotIt"))
         XCTAssertFalse(f.controller.debugHasTransitionTimer, "no clock is running behind the card")
     }
 
-    func test_later_continuesToTheMoveStep_translateStaysDeferred() throws {
+    func test_gotIt_continuesToTheMoveStep_translateStaysDeferred() throws {
         startOnTheNote()
         f.spin(0.5)
-        let later = try XCTUnwrap(f.controller.debugCardStore?.onPrimary)
-        later()
+        let gotIt = try XCTUnwrap(f.controller.debugCardStore?.onPrimary)
+        gotIt()
         f.spin(0.3)
         guard case .step(.moveTuck, _) = f.controller.state.phase else { return XCTFail("got \(f.controller.state.phase)") }
         XCTAssertEqual(f.controller.state.stepStates[.translate], .deferred)
@@ -67,11 +67,11 @@ final class TourDeferralNoteTests: XCTestCase {
 
     func test_copy_hasBothLanguages_andNotTheBannedWord() throws {
         let body = try XCTUnwrap(L10n.allStrings["tour.translate.deferred.body"])
-        XCTAssertEqual(body.zh, "这首用不着翻译。想现在看看，就换一首外文歌，我在这儿等你；不急的话，以后遇到外文歌我再来提醒。")
-        XCTAssertEqual(body.en, "This one doesn't need translating. To see it now, switch to a song in another language and I'll wait right here; otherwise I'll show you when one comes along.")
-        let later = try XCTUnwrap(L10n.allStrings["tour.translate.deferred.later"])
-        XCTAssertEqual(later.zh, "以后再说")
-        XCTAssertEqual(later.en, "Later")
-        for pair in [body, later] { XCTAssertFalse(pair.zh.contains("甩")) }
+        XCTAssertEqual(body.zh, "这首用不着翻译。等遇到外文歌，我再来告诉你翻译在哪。")
+        XCTAssertEqual(body.en, "This one doesn't need translating. When a song in another language comes along, I'll show you where translation is.")
+        let gotIt = try XCTUnwrap(L10n.allStrings["tour.translate.deferred.gotIt"])
+        XCTAssertEqual(gotIt.zh, "知道了")
+        XCTAssertEqual(gotIt.en, "Got it")
+        for pair in [body, gotIt] { XCTAssertFalse(pair.zh.contains("甩")) }
     }
 }

@@ -236,7 +236,7 @@ final class TourController: ObservableObject {
         }
         if path.hasPrefix("material/") {
             let arm = String(path.dropFirst("material/".count))
-            defaults.set(TourCardMaterialArm(rawValue: arm)?.rawValue ?? "glass", forKey: TourCardMaterialArm.defaultsKey)
+            defaults.set(TourCardMaterialArm(rawValue: arm)?.rawValue ?? "liquid", forKey: TourCardMaterialArm.defaultsKey)
             return true
         }
         if path == "reset" {
@@ -529,7 +529,7 @@ final class TourController: ObservableObject {
         guard case .transitioning = state.phase else { return }
         transitionWork?.cancel()
         transitionWork = nil
-        // The deferral note waits for the user ("Later") or for a translatable song: no timer behind it.
+        // The deferral note waits for the user ("Got it") or for a translatable song: no timer behind it.
         guard !state.isShowingDeferralNote else { return }
         let work = DispatchWorkItem { [weak self] in self?.send(.advanceTransition) }
         transitionWork = work
@@ -1014,7 +1014,7 @@ final class TourController: ObservableObject {
         case .transitioning where state.isShowingDeferralNote:
             var model = TourCardModel(
                 kind: .deferralNote, title: L("tour.translate.deferred.title"), body: L("tour.translate.deferred.body"),
-                primaryTitle: L("tour.translate.deferred.later"),
+                primaryTitle: L("tour.translate.deferred.gotIt"),
                 ringCompleted: state.completedCount, stepLabel: "\(TourStep.translate.index(in: total))"
             )
             model.showStop = true; model.showSkipStep = false
@@ -1707,7 +1707,7 @@ final class TourController: ObservableObject {
         case .welcome: send(.start)
         case .step(.connect, _): connectMusic()
         case .finale: AppMain.shared?.showSettingsWindow(selectedTab: .shortcuts)
-        case .transitioning where state.isShowingDeferralNote: send(.advanceTransition)   // "Later"
+        case .transitioning where state.isShowingDeferralNote: send(.advanceTransition)   // "Got it"
         default: break
         }
     }

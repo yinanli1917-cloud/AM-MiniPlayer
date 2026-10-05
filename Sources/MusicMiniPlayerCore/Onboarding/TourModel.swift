@@ -66,7 +66,7 @@ public enum TourPhase: Equatable, Sendable {
     /// A completed step's card has faded and the next card hasn't landed
     /// yet — real time (or a fake clock in tests) must pass via
     /// `TourEvent.advanceTransition` before `to` (or finale, if `to == nil`)
-    /// shows. Also the "这首不用翻" deferral note (§3.3 S4′), which has no timer: "Later" sends `advanceTransition`.
+    /// shows. Also the "这首不用翻" deferral note (§3.3 S4′), which has no timer: "Got it" sends `advanceTransition`.
     case transitioning(from: TourStep?, to: TourStep?)
     case finale
     /// The one card allowed to reappear after the tour otherwise tore down
@@ -155,7 +155,7 @@ public enum TourEvent: Equatable, Sendable {
     /// that drives the machine on to the next card/finale, instead of the
     /// reducer jumping there synchronously inside the completion event.
     /// `TourController` sends this after the feedback duration (§8.1: 800ms);
-    /// the deferral note's "Later" button sends it too.
+    /// the deferral note's "Got it" button sends it too.
     case advanceTransition
 }
 

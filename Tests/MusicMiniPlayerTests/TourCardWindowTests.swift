@@ -126,7 +126,13 @@ final class TourCardWindowTests: XCTestCase {
     func test_pixelsOutsideTheBubbleAreTransparent_glass() throws {
         controller.send(.resume(completed: [.connect]))
         spin(0.6)
-        try assertOutsideBubbleTransparent(arm: nil)
+        try assertOutsideBubbleTransparent(arm: .glass)
+    }
+
+    func test_pixelsOutsideTheBubbleAreTransparent_liquid() throws {
+        controller.send(.resume(completed: [.connect]))
+        spin(0.6)
+        try assertOutsideBubbleTransparent(arm: nil)   // liquid is the shipping default
     }
 
     func test_pixelsOutsideTheBubbleAreTransparent_vibrancy() throws {

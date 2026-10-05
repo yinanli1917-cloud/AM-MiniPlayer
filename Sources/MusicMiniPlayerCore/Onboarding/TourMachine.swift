@@ -287,7 +287,7 @@ public enum TourMachine {
     /// satisfied before its card ever showed, and lands on the first step
     /// that needs a real card — or `.finale` if none remain. Handles the
     /// translate deferral (§3.3 S4′) as a stopping point of its own, exactly
-    /// like a normal step. The note has no timer: it waits for the user ("Later" is `.advanceTransition`) or for a
+    /// like a normal step. The note has no timer: it waits for the user ("Got it" is `.advanceTransition`) or for a
     /// translatable song (`.canTranslateBecameTrue`).
     static func enterStep(_ step: TourStep?, state: TourState, snapshot: TourSnapshot) -> (TourState, [TourEffect]) {
         var state = state
