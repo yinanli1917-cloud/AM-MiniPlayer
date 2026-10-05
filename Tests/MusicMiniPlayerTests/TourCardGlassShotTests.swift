@@ -61,25 +61,6 @@ final class TourCardGlassShotTests: XCTestCase {
         return true
     }
 
-    /// Reference only: the card's content in a window that CAN be key. The app never does this (the card must never take
-    /// keyboard focus); it exists to show what system glass looks like in a key window.
-    private final class KeyReferencePanel: NSPanel {
-        override var canBecomeKey: Bool { true }
-        override var canBecomeMain: Bool { false }
-        init(store: TourCardStore) {
-            super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-            isFloatingPanel = true
-            level = .tourOverlay
-            collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-            isOpaque = false
-            backgroundColor = .clear
-            hasShadow = false
-            hidesOnDeactivate = false
-            isReleasedWhenClosed = false
-            contentView = TourHostingView(rootView: TourCardRoot(store: store))
-        }
-    }
-
     private enum Shot: String, CaseIterable {
         /// The previous `glass` arm: custom buttons, fixed palette, dark hairline.
         case oldGlass = "glass-old"
@@ -87,8 +68,8 @@ final class TourCardGlassShotTests: XCTestCase {
         case native
         /// Investigation: native + the window's own shadow (the glass cannot draw one outside a window that is exactly its size).
         case nativeShadow = "native-shadow"
-        /// Investigation reference only: the same card in a key window.
-        case keyReference = "key-reference"
+        // No key-window reference: making a window key activates the test process and takes the founder's keyboard focus
+        // (2026-10-05). The 04c98e2f investigation shots are the record of that look.
 
         var arm: TourCardMaterialArm { self == .oldGlass ? .glass : .liquid }
     }
@@ -116,18 +97,15 @@ final class TourCardGlassShotTests: XCTestCase {
             store.beakSide = .right
             return store
         }
-        let store = makeStore(), keyStore = makeStore()
+        let store = makeStore()
         let card = TourCardWindow(store: store)
-        let keyCard = KeyReferencePanel(store: keyStore)
         defer {
-            for w in [card as NSWindow, keyCard] { w.orderOut(nil); w.contentView = nil }
+            card.orderOut(nil); card.contentView = nil
             backdrop.orderOut(nil); backdrop.contentView = nil
         }
 
         var written = 0
         let cards: [(String, TourCardModel)] = [("", TourSceneFixtures.welcome(.en)), ("_finale", TourSceneFixtures.finale(.en))]
-        // A key window makes its app active, so the key reference is the last shot of each pass and its window
-        // is ordered out straight after its captures.
         for kind in Backdrop.allCases {
             view.kind = kind
             view.needsDisplay = true
@@ -135,7 +113,7 @@ final class TourCardGlassShotTests: XCTestCase {
             for dark in [false, true] {
                 let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
                 for shot in Shot.allCases {
-                    let (s, window): (TourCardStore, NSWindow) = shot == .keyReference ? (keyStore, keyCard) : (store, card)
+                    let (s, window): (TourCardStore, NSWindow) = (store, card)
                     window.appearance = appearance
                     for (suffix, model) in cards {
                         s.arm = shot.arm
@@ -148,7 +126,6 @@ final class TourCardGlassShotTests: XCTestCase {
                         s.beakOffset = fit.height / 2
                         window.setFrame(NSRect(x: frame.midX - fit.width / 2, y: frame.midY - fit.height / 2, width: fit.width, height: fit.height), display: true)
                         window.orderFrontRegardless()
-                        if shot == .keyReference { window.makeKey() }
                         spin(0.6)
                         guard onlyOurWindowsAbove(backdrop) else { print("[glass-shots] SKIPPED \(kind) \(dark) \(shot): another app's window is above the backdrop"); continue }
                         let image = try XCTUnwrap(TourWindowCapture.composite(through: window, in: TourWindowCapture.cgRect(frame)))
