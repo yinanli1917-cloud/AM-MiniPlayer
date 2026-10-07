@@ -28,7 +28,7 @@ Sources/
 ├── MusicMiniPlayerAppKit/         - App 层库 target（原 MusicMiniPlayerApp 源码整体 git mv 至此，零逻辑改动）
 │   ├── MusicMiniPlayerApp.swift  - AppDelegate + window management（AppMain 与委托方法 public）
 │   ├── SettingsView.swift        - Settings view (menu bar + settings window + components)
-│   ├── Tour/                     - 「认识 nanoPod」引导：TourController（状态机驱动卡片/环/庆祝）、TourGuidance(+Motion/Views)（卡片弹簧位移、环呼吸与跳转、手势示意）、TourCardWindow、TourCompletionFeedback（卡内庆祝）、TourGestureTrace（引导期双指取证，失败写 ~/Library/Logs/nanoPod/tour-gesture.log）、TourMusicWindowWatcher（点 Music 后卡片飞到播放器窗口旁；离开期间卡片多一行待办「回到 nanoPod」，正文请用户把鼠标移回，幽灵光标+面板光晕指回面板，回来时先打勾再庆祝）；设计源 docs/design/2026-09-29-motion-prototype
+│   ├── Tour/                     - 「认识 nanoPod」引导：TourController（状态机驱动卡片/环/庆祝）、TourGuidance(+Motion/Views)（卡片弹簧位移、环呼吸与跳转、手势示意）、TourCardWindow、TourCompletionFeedback（卡内庆祝）、TourGestureTrace（引导期双指取证，失败写 ~/Library/Logs/nanoPod/tour-gesture.log）、TourMusicWindowWatcher（点 Music 后卡片飞到播放器窗口旁；离开期间卡片多一行待办「回到 nanoPod」，正文请用户把鼠标移回，幽灵光标+面板光晕指回面板（卡片落稳后再等 awayHintReadPause 1.5s 才出发，期间鼠标已回到面板附近就不放），回来时先打勾再庆祝）、TourCursorGlyph（幽灵光标：黑箭头白描边+尾部强调色八分音符，矢量绘制，到达时音符轻跳一次）；设计源 docs/design/2026-09-29-motion-prototype
 │   ├── SettingsDemo{Stage,Motion,Drawing,SVGPath}.swift - 设置页演示台（09-29 原型落地）：300×169 居中圆角台、6 段动画（全屏封面/贴边换歌/显示翻译/翻译为/显示隐藏面板/贴边隐藏）+ 通用段 2 段 + 静帧；`frame(at:t)` 纯函数 + Canvas 绘制 + 会结束的 TimelineView 时钟（空闲零定时器）
 │   └── LocalizedStrings.swift    - L10n localization + UserDefaults binding helpers
 ├── MusicMiniPlayerCore/
