@@ -74,6 +74,27 @@ final class TourTranslateTipCardTests: XCTestCase {
         XCTAssertTrue(f.wait(2) { !f.controller.guidance.motion.cardVisible })
     }
 
+    /// The stale-flash case: `canTranslate` is still true from before when the lyrics page opens, and the page re-derives it to
+    /// false straight away (the test panel has no lyrics, so the fixture does exactly that). The tip must not open on the
+    /// stale value and burn its once-per-launch slot: when the button really arrives it still shows.
+    func test_aStaleCanTranslateOnEnteringTheLyricsPage_doesNotFlashTheTip_orBurnItsSlot() throws {
+        armedTip(on: .album)
+        f.spin(3.4)                                       // past the 3 s mark; canTranslate is (stale) true
+        let motion = f.controller.guidance.motion
+        var opened = false                                 // (the card's visibility is the flash the user would see)
+        f.music.userManuallyOpenedLyrics = true
+        f.music.currentPage = .lyrics                      // NOT clearing canTranslate first: the stale true carries across
+        _ = f.wait(1.2) {
+            if f.controller.state.phase == .deferredTip(.translate) || motion.cardVisible { opened = true }
+            return false
+        }
+        XCTAssertFalse(opened, "the tip never opens on a value that is about to be re-derived")
+        XCTAssertFalse(f.controller.state.deferredShownThisLaunch, "so the once-per-launch slot is intact")
+
+        f.lyricsService.debugSetCanTranslate(true)        // the button really arrives
+        XCTAssertTrue(f.wait(4) { f.controller.state.phase == .deferredTip(.translate) }, "and the tip still shows")
+    }
+
     func test_withoutTheButton_onTheLyricsPage_neverShows() throws {
         armedTip(on: .lyrics, canTranslate: false)
         f.lyricsService.debugSetCanTranslate(false)

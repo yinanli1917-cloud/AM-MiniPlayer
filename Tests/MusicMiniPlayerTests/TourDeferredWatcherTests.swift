@@ -42,6 +42,13 @@ final class TourDeferredWatcherTests: XCTestCase {
         )
     }
 
+    /// Runs the watcher's pending check as the real scheduler would: the clock moves on by its delay, then it fires.
+    private func firePending(file: StaticString = #filePath, line: UInt = #line) {
+        guard let p = pending else { return XCTFail("nothing is scheduled", file: file, line: line) }
+        fakeNow.addTimeInterval(p.delay)
+        p.work()
+    }
+
     func test_arm_setsIsArmed() {
         XCTAssertFalse(watcher.isArmed)
         arm()
@@ -52,8 +59,10 @@ final class TourDeferredWatcherTests: XCTestCase {
         arm()
         fakeNow.addTimeInterval(4.2)
         canTranslate.send(true)
+        XCTAssertTrue(events.isEmpty, "not at once: the ground has to hold for the settle window first")
+        firePending()
         guard case .canTranslateBecameTrue(let seconds)? = events.first else { return XCTFail("got \(events)") }
-        XCTAssertEqual(seconds, 4.2, accuracy: 0.001)
+        XCTAssertEqual(seconds, 4.2 + TourDeferredWatcher.settleSeconds + 0.05, accuracy: 0.001)
         XCTAssertEqual(events.count, 1)
     }
 
@@ -79,10 +88,13 @@ final class TourDeferredWatcherTests: XCTestCase {
         XCTAssertEqual(events, [.songChanged])
 
         events.removeAll()
-        fakeNow.addTimeInterval(2.5)
+        fakeNow.addTimeInterval(1.5)
         canTranslate.send(true)
+        XCTAssertTrue(events.isEmpty, "1.5 s into the NEW song: not yet")
+        firePending()
         guard case .canTranslateBecameTrue(let seconds)? = events.first else { return XCTFail("got \(events)") }
-        XCTAssertEqual(seconds, 2.5, accuracy: 0.001, "the song clock must reset on track change")
+        XCTAssertGreaterThanOrEqual(seconds, 3.0, "counted from the track change, not from arming")
+        XCTAssertLessThan(seconds, 4.0)
     }
 
     func test_recordLaunch_onlyFires_whileArmed() {
@@ -106,9 +118,12 @@ final class TourDeferredWatcherTests: XCTestCase {
         arm()
         let secondCanTranslate = PassthroughSubject<Bool, Never>()
         watcher.arm(canTranslate: secondCanTranslate.eraseToAnyPublisher(), trackTitle: trackTitle.eraseToAnyPublisher(), panelVisible: { true })
+        fakeNow.addTimeInterval(5)
         canTranslate.send(true) // the OLD subject — must be ignored now
+        XCTAssertNil(pending)
         XCTAssertTrue(events.isEmpty)
         secondCanTranslate.send(true)
+        firePending()
         XCTAssertEqual(events.count, 1)
     }
 
@@ -130,21 +145,26 @@ final class TourDeferredWatcherTests: XCTestCase {
         XCTAssertTrue(events.isEmpty)
     }
 
-    func test_openingTheLyricsPageLater_firesThen_withTheSecondsIntoTheSong() {
+    func test_openingTheLyricsPageLater_firesAfterTheSettleWindow_withTheSecondsIntoTheSong() throws {
         onLyricsPage.send(false)
         arm()
         canTranslate.send(true)
         fakeNow.addTimeInterval(40)
         XCTAssertTrue(events.isEmpty)
         onLyricsPage.send(true)
+        XCTAssertTrue(events.isEmpty, "the page was only just opened")
+        XCTAssertEqual(try XCTUnwrap(pending).delay, TourDeferredWatcher.settleSeconds + 0.05, accuracy: 0.001)
+        firePending()
         guard case .canTranslateBecameTrue(let seconds)? = events.first else { return XCTFail("got \(events)") }
-        XCTAssertEqual(seconds, 40, accuracy: 0.001)
+        XCTAssertEqual(seconds, 40.65, accuracy: 0.001)
         XCTAssertEqual(events.count, 1)
     }
 
     func test_leavingTheLyricsPage_reportsTheTipUnavailable_once() {
         arm()
+        fakeNow.addTimeInterval(5)
         canTranslate.send(true)
+        firePending()
         events.removeAll()
         onLyricsPage.send(false)
         XCTAssertEqual(events, [.deferredTipUnavailable])
@@ -153,20 +173,36 @@ final class TourDeferredWatcherTests: XCTestCase {
         XCTAssertEqual(events, [.deferredTipUnavailable], "not repeated while it stays unavailable")
     }
 
-    func test_groundReachedBeforeThreeSeconds_isSentAgainWhenTheMarkPasses() throws {
+    /// The stale-flash case: the ground is there for an instant (a stale `canTranslate`), then is re-derived to false.
+    func test_aGroundThatDoesNotHold_isNeverSent_andLeavesNothingToReport() {
+        arm()
+        fakeNow.addTimeInterval(30)
+        onLyricsPage.send(false)
+        canTranslate.send(true)
+        onLyricsPage.send(true)                          // the page opens with the stale true
+        XCTAssertNotNil(pending)
+        fakeNow.addTimeInterval(0.3)
+        canTranslate.send(false)                         // and is re-derived inside the settle window
+        XCTAssertNil(pending, "the check is cancelled")
+        XCTAssertTrue(events.isEmpty, "no eligible event, so no unavailable event either")
+        canTranslate.send(true)                          // the button really arrives
+        firePending()
+        XCTAssertEqual(events.count, 1, "and the tip is still available")
+    }
+
+    func test_groundReachedBeforeThreeSeconds_isSentWhenTheMarkPasses() throws {
         arm()
         fakeNow.addTimeInterval(1.0)
         canTranslate.send(true)
-        guard case .canTranslateBecameTrue(let early)? = events.first else { return XCTFail("got \(events)") }
-        XCTAssertEqual(early, 1.0, accuracy: 0.001)
+        XCTAssertTrue(events.isEmpty, "before the 3 s mark nothing goes out")
         let recheck = try XCTUnwrap(pending)
         XCTAssertEqual(recheck.delay, 2.05, accuracy: 0.001, "set for just past the 3 s mark")
-        events.removeAll()
-        fakeNow.addTimeInterval(2.05)
+        fakeNow.addTimeInterval(recheck.delay)
         recheck.work()
         guard case .canTranslateBecameTrue(let late)? = events.first else { return XCTFail("got \(events)") }
         XCTAssertGreaterThanOrEqual(late, 3.0)
-        XCTAssertNil(pending, "the mark has passed: nothing more to wait for")
+        XCTAssertEqual(events.count, 1)
+        XCTAssertNil(pending, "and nothing more to wait for")
     }
 
     func test_leavingBeforeTheMark_cancelsTheRecheck() {

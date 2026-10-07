@@ -156,17 +156,4 @@ final class TourDetectorTests: XCTestCase {
         // Just past tolerance.
         XCTAssertNil(TourCornerMatch.corner(origin: CGPoint(x: 18, y: 18), frameSize: size, visibleFrame: visible, margin: 16, tolerance: 1))
     }
-
-    func test_translateReadiness_decidedImmediately_whenNotSearching() {
-        XCTAssertTrue(TourTranslateReadiness.isDecided(isSearching: false, secondsSearching: 0))
-    }
-
-    func test_translateReadiness_undecidedWithinGraceWindow() {
-        XCTAssertFalse(TourTranslateReadiness.isDecided(isSearching: true, secondsSearching: 1.0))
-        XCTAssertFalse(TourTranslateReadiness.isDecided(isSearching: true, secondsSearching: 3.0))
-    }
-
-    func test_translateReadiness_decidedPastGraceWindow() {
-        XCTAssertTrue(TourTranslateReadiness.isDecided(isSearching: true, secondsSearching: 3.01))
-    }
 }

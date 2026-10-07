@@ -2,7 +2,7 @@
  * [INPUT]: Combine (Publisher/PassthroughSubject), TourModel's TourEvent/TourSignal.
  * [OUTPUT]: Exports TourHookBus (the 3 new SwiftUI-side completion hooks),
  *           TourDetectors (merges every raw publisher into one `TourEvent`
- *           stream), TourTranslateReadiness, TourCornerMatch — pure helpers
+ *           stream), TourCornerMatch — pure helpers
  *           the detector and `SnappablePanel` both use; TourMusicReturn (does
  *           an app activation mean the user is back from the player app?).
  * [POS]: MusicMiniPlayerCore/Onboarding. Every publisher `TourDetectors`
@@ -50,23 +50,6 @@ public final class TourHookBus {
     public let controlsVisible = CurrentValueSubject<Bool, Never>(false)
 
     private init() {}
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// MARK: - TourTranslateReadiness
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-/// §3.3 S4's deferral trigger list — "无歌词 / 网络不可达 / 已是目标语言" all
-/// collapse to `LyricsService.canTranslate == false`; "displayState 仍在
-/// searching 超过 3 s" is the one case that ISN'T decided yet and gets a
-/// short grace window instead of an instant "deferred" card, so a fast
-/// fetch racing the tour doesn't lose to it.
-public enum TourTranslateReadiness {
-    /// True once `canTranslate` may be trusted as final for this song.
-    public static func isDecided(isSearching: Bool, secondsSearching: Double) -> Bool {
-        guard isSearching else { return true }
-        return secondsSearching > 3
-    }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -10,9 +10,12 @@
  *        (`.canTranslateBecameTrue`, `.deferredTipUnavailable`, `.songChanged`,
  *        `.launch`), so the reducer stays the single source of truth for the
  *        3 s gate, the 3-song/20-launch caps and the "already on" silent
- *        completion. Ground reached before the 3 s mark is re-sent once the
- *        mark passes (a user sitting on the lyrics page would otherwise never
- *        see the tip for that song).
+ *        completion. The ground must HOLD for a short settle window (and the
+ *        song be past the 3 s mark) before the event is sent: entering the
+ *        lyrics page can carry a stale `canTranslate == true` that is
+ *        re-derived to false a moment later, and a tip that opened on it
+ *        would flash and burn its once-per-launch slot. A user sitting on the
+ *        lyrics page still gets it: the event is sent when both have passed.
  */
 
 import Combine
@@ -25,13 +28,18 @@ public final class TourDeferredWatcher {
     private var songStartedAt: Date?
     private var canTranslateNow = false
     private var onLyricsPageNow = false
-    private var wasEligible = false
+    /// When the ground (panel + lyrics page + canTranslate) last became true; nil while it does not hold.
+    private var groundSince: Date?
+    /// The eligible event went out and the ground has held since (so losing it is worth reporting).
+    private var sent = false
     private var panelVisible: () -> Bool = { true }
     private let now: () -> Date
     private let schedule: (TimeInterval, @escaping @MainActor () -> Void) -> AnyCancellable
 
-    /// The gate the reducer applies (seconds into the song); the watcher re-sends when it passes.
+    /// The gate the reducer applies (seconds into the song); the watcher holds the event until it has passed.
     public static let tipGateSeconds: TimeInterval = 3
+    /// How long the ground must hold before the event is sent (a stale `canTranslate` is re-derived well inside this).
+    public static let settleSeconds: TimeInterval = 0.6
 
     /// Fires `.canTranslateBecameTrue`/`.deferredTipUnavailable`/`.songChanged`. Set by `TourController`
     /// to feed straight back into `TourMachine.reduce`.
@@ -75,7 +83,8 @@ public final class TourDeferredWatcher {
             guard let self else { return }
             self.songStartedAt = self.now()
             self.onEvent?(.songChanged)
-            self.reevaluate(forceSend: true)
+            self.sent = false
+            self.reevaluate()
         }.store(in: &cancellables)
 
         // (A `@Published` publisher fires BEFORE its value lands: the closures keep the values they were handed.)
@@ -92,31 +101,29 @@ public final class TourDeferredWatcher {
         }.store(in: &cancellables)
     }
 
-    /// The ground is: panel on screen + lyrics page + `canTranslate`. Reaching it sends the eligible event; losing it sends
-    /// the unavailable one; while it holds and the 3 s mark is ahead, one re-send is scheduled for when it passes.
-    private func reevaluate(forceSend: Bool = false) {
-        let eligible = canTranslateNow && onLyricsPageNow && panelVisible()
-        let before = wasEligible
-        wasEligible = eligible
+    /// The ground is: panel on screen + lyrics page + `canTranslate`. Once it has held for the settle window and the song is
+    /// past the 3 s mark, the eligible event is sent (once); until then one check is scheduled for when both will have
+    /// passed. Losing the ground cancels that check, and reports the tip unavailable if the event had gone out.
+    private func reevaluate() {
         recheck = nil
-        guard eligible else {
-            if before { onEvent?(.deferredTipUnavailable) }
+        guard canTranslateNow, onLyricsPageNow, panelVisible() else {
+            groundSince = nil
+            if sent {
+                sent = false
+                onEvent?(.deferredTipUnavailable)
+            }
             return
         }
-        guard let started = songStartedAt else { return }
-        if !before || forceSend { send(secondsSince: started) }
-        let seconds = now().timeIntervalSince(started)
-        if seconds < Self.tipGateSeconds {
-            recheck = schedule(Self.tipGateSeconds - seconds + 0.05) { [weak self] in
-                guard let self else { return }
-                self.recheck = nil
-                self.reevaluate(forceSend: true)
-            }
+        guard !sent, let started = songStartedAt else { return }
+        let t = now()
+        if groundSince == nil { groundSince = t }
+        let toWait = max(Self.settleSeconds - t.timeIntervalSince(groundSince ?? t), Self.tipGateSeconds - t.timeIntervalSince(started))
+        if toWait <= 0 {
+            sent = true
+            onEvent?(.canTranslateBecameTrue(secondsIntoSong: t.timeIntervalSince(started)))
+            return
         }
-    }
-
-    private func send(secondsSince started: Date) {
-        onEvent?(.canTranslateBecameTrue(secondsIntoSong: now().timeIntervalSince(started)))
+        recheck = schedule(toWait + 0.05) { [weak self] in self?.reevaluate() }
     }
 
     /// Called once per app launch while armed (§5.2's 20-launch cap).
@@ -132,6 +139,7 @@ public final class TourDeferredWatcher {
         songStartedAt = nil
         canTranslateNow = false
         onLyricsPageNow = false
-        wasEligible = false
+        groundSince = nil
+        sent = false
     }
 }
