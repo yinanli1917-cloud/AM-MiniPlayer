@@ -95,8 +95,6 @@ public enum TourPanelHint: Equatable, Sendable {
 public enum TourPreface: Equatable, Sendable {
     /// The move step off the cover page: corners only work on the cover.
     case backToCover
-    /// The translate step off the lyrics page: the translate button exists only there.
-    case toLyrics
     /// The corners step on the queue page: the two corner buttons are not on the queue.
     case leaveQueue
 
@@ -105,7 +103,6 @@ public enum TourPreface: Equatable, Sendable {
         let preface: TourPreface
         switch step {
         case .moveTuck: preface = .backToCover
-        case .translate: preface = .toLyrics
         case .corners: preface = .leaveQueue
         default: return nil
         }
@@ -116,7 +113,6 @@ public enum TourPreface: Equatable, Sendable {
     public func isDone(on page: PlayerPage) -> Bool {
         switch self {
         case .backToCover: return page == .album
-        case .toLyrics: return page == .lyrics
         case .leaveQueue: return page != .playlist
         }
     }
@@ -159,9 +155,8 @@ public enum TourGuidanceResolver {
         case .reveal: return [.control(.playPause), .control(.playPause)]
         case .corners: return [.control(.audioOutput), .control(.musicButton)]
         case .lyrics: return [.control(.lyricsNav)]
-        case .translate: return [.control(.translate)]
         case .back: return [.sliver, .peekCard]
-        case .moveTuck, .connect: return []
+        case .moveTuck, .connect, .translate: return []   // (translate is the standalone tip, not a step with beats)
         }
     }
 
@@ -190,12 +185,10 @@ public enum TourGuidanceResolver {
         case .step(.lyrics, _):
             return .circle(.control(.lyricsNav), lyricsDiameter, mode)
 
-        case .step(.translate, _), .deferredTip:
+        case .deferredTip:
+            // The standalone translation tip: only shown on the lyrics page, where the button really is.
             let reachable = surface.page == .lyrics && surface.controlsVisible
             return .circle(.control(.translate), controlDiameter, reachable ? .pressNow : .hint)
-
-        case .transitioning(let from, _) where from == .translate:
-            return .circle(.control(.translate), controlDiameter, .hint)
 
         case .step(.moveTuck, _):
             // The gesture has no control to point at (the "back to the cover" ring is the preface's).

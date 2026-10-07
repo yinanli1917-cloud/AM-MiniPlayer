@@ -109,7 +109,7 @@ final class TourController: ObservableObject {
 
     // Guidance bookkeeping
     /// The current step began with the panel on a page that lacks its control (corners on the
-    /// queue, translate off the lyrics page, move off the cover): its first beat walks the user
+    /// queue, move off the cover): its first beat walks the user
     /// to the right page. Fixed at step entry, so a step begun in the right place never grows one.
     private var preface: TourPreface?
     private var ringHeld = false
@@ -150,7 +150,7 @@ final class TourController: ObservableObject {
             || releaseWork != nil || skipWork != nil || stallWork != nil || resumeWork != nil
             || outputAckWork != nil || musicReturnWork != nil
     }
-    /// The timer that moves a finished step on to the next card (never running behind the deferral note).
+    /// The timer that moves a finished step on to the next card.
     var debugHasTransitionTimer: Bool { transitionWork != nil }
     var debugIsDeferredWatcherArmed: Bool { deferredWatcher.isArmed }
     /// Geometry seams for TourCardPlacementIntegrationTests (screen coordinates).
@@ -207,6 +207,9 @@ final class TourController: ObservableObject {
         #if DEBUG || LOCAL_DEVELOPER_BUILD
         forced = Self.debugForceShow
         #endif
+        // The translation tip outlives the tour: an armed one (tour over, tip not done) watches again in every launch, and the
+        // launch counts toward its cap. (Armed first: reaching the cap, `.launch` cancels the watcher again.)
+        if case .idle(deferredArmed: true) = state.phase { armDeferredWatcher() }
         guard TourPersistence.shouldPresent(status: state.status, launchCount: launchCount, resumeCount: state.resumeCount, forced: forced) else {
             if state.hasDeferredTranslate { send(.launch) } // deferred-watcher launch bookkeeping only
             return
@@ -220,6 +223,7 @@ final class TourController: ObservableObject {
     func requestTour(fromStart: Bool) {
         if fromStart {
             teardown()
+            deferredWatcher.cancel()
             TourPersistence.reset(defaults)
             state = TourState()
             send(.launch)
@@ -243,6 +247,7 @@ final class TourController: ObservableObject {
         }
         if path == "reset" {
             teardown()
+            deferredWatcher.cancel()
             TourPersistence.reset(defaults)
             state = TourState()
             Self.debugForceShow = false
@@ -302,13 +307,6 @@ final class TourController: ObservableObject {
             .sink { [weak self] _ in DispatchQueue.main.async { self?.surfaceDidChange() } }.store(in: &cancellables)
         liquidEdge.statePublisher.removeDuplicates()
             .sink { [weak self] edge in self?.edgeStateDidChange(edge) }.store(in: &cancellables)
-        // A translatable song while the "doesn't need translating" card is up turns it into the real translate step. (The
-        // deferred watcher is only armed once the tour is over, so this phase has to listen on its own.)
-        lyricsService.$canTranslate.removeDuplicates().filter { $0 }
-            .sink { [weak self] _ in
-                guard let self, self.state.isShowingDeferralNote else { return }
-                self.send(.canTranslateBecameTrue(secondsIntoSong: 0))
-            }.store(in: &cancellables)
         TourHookBus.shared.audioOutputMenuPresented.dropFirst().removeDuplicates()
             .sink { [weak self] open in self?.outputMenuDidChange(open) }.store(in: &cancellables)
         TourHookBus.shared.audioOutputDeviceSwitched
@@ -531,8 +529,6 @@ final class TourController: ObservableObject {
         guard case .transitioning = state.phase else { return }
         transitionWork?.cancel()
         transitionWork = nil
-        // The deferral note waits for the user ("Got it") or for a translatable song: no timer behind it.
-        guard !state.isShowingDeferralNote else { return }
         let work = DispatchWorkItem { [weak self] in self?.send(.advanceTransition) }
         transitionWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + TourMotionPolicy.Tokens.stepCompletionFeedback, execute: work)
@@ -578,7 +574,6 @@ final class TourController: ObservableObject {
             switch effect {
             case .showWelcomeCard: connectDenied = false; presentCurrentCard()
             case .showStepCard: connectDenied = false; presentCurrentCard()
-            case .showDeferralNote: presentCurrentCard()
             case .showFinaleCard: if !holdForFinale { presentCurrentCard() }
             case .showDeferredTipCard: presentCurrentCard()
             case .hideCard: hideCard()
@@ -686,6 +681,7 @@ final class TourController: ObservableObject {
         deferredWatcher.onEvent = { [weak self] in self?.send($0) }
         deferredWatcher.arm(
             canTranslate: lyricsService.$canTranslate.eraseToAnyPublisher(),
+            onLyricsPage: musicController.$currentPage.map { $0 == .lyrics }.eraseToAnyPublisher(),
             trackTitle: musicController.$currentTrackTitle.dropFirst().eraseToAnyPublisher(),
             panelVisible: { [weak self] in self?.panel?.isVisible ?? false }
         )
@@ -957,21 +953,8 @@ final class TourController: ObservableObject {
                 ringCompleted: state.completedCount, stepLabel: "\(TourStep.lyrics.index(in: total))"
             )
 
-        case .step(.translate, let beats):
-            var list: [TourBeatModel] = []
-            var body = awayOr(L("tour.translate.body"))
-            if preface == .toLyrics {
-                // Not a machine beat: the translate button exists only on the lyrics page.
-                let there = TourPreface.toLyrics.isDone(on: surface.page)
-                list.append(TourBeatModel(id: 2, text: L("tour.translate.beat0"), checked: there || beats[0]))
-                if !there { body = L("tour.translate.bodyGoLyrics") }
-            }
-            list.append(TourBeatModel(id: 0, text: L("tour.translate.beat1"), checked: beats[0]))
-            markSkipped(&list)
-            return TourCardModel(
-                kind: .step(.translate), title: L("tour.translate.title"), body: skipBody() ?? body, beats: list,
-                ringCompleted: state.completedCount, stepLabel: "\(TourStep.translate.index(in: total))"
-            )
+        case .step(.translate, _):
+            return nil   // not a tour step any more: the translation tip is `.deferredTip`
 
         case .step(.moveTuck, let beats):
             // Beats: 0 = a corner, 1 = across to the opposite corner, 2 = the edge. Each has its own body, so the words follow
@@ -1017,37 +1000,27 @@ final class TourController: ObservableObject {
                 ringCompleted: state.completedCount, stepLabel: "\(TourStep.back.index(in: total))"
             )
 
-        case .transitioning where state.isShowingDeferralNote:
-            var model = TourCardModel(
-                kind: .deferralNote, title: L("tour.translate.deferred.title"), body: L("tour.translate.deferred.body"),
-                primaryTitle: L("tour.translate.deferred.gotIt"),
-                ringCompleted: state.completedCount, stepLabel: "\(TourStep.translate.index(in: total))"
-            )
-            model.showStop = true; model.showSkipStep = false
-            return model
-
         case .transitioning:
             return nil
 
         case .finale:
-            let deferred = state.hasDeferredTranslate
             var model = TourCardModel(
-                kind: .finale(deferred: deferred), title: L("tour.done.title"),
-                body: L(deferred ? "tour.done.bodyDeferred" : "tour.done.body"),
+                kind: .finale, title: L("tour.done.title"), body: L("tour.done.body"),
                 primaryTitle: L("tour.done.shortcut"), secondaryTitle: L("tour.done.ok"),
                 footNote: L("tour.done.foot"),
-                ringCompleted: deferred ? total - 1 : total, ringClosed: !deferred,
-                stepLabel: deferred ? "\(total - 1)" : ""
+                ringCompleted: total, ringClosed: true, stepLabel: ""
             )
             model.showStop = false; model.showSkipStep = false
             return model
 
         case .deferredTip:
+            // The standalone translation tip: a closed ring (it follows the tour, whatever the tour reached) and one way out.
             var model = TourCardModel(
                 kind: .deferredTip, title: L("tour.later.title"), body: awayOr(L("tour.later.body")),
-                ringCompleted: state.completedCount, stepLabel: "\(TourStep.translate.index(in: total))"
+                ringCompleted: total, ringClosed: true, stepLabel: ""
             )
             model.showStop = true; model.showSkipStep = false
+            model.stopTitle = L("tour.later.dismiss")
             return model
         }
     }
@@ -1275,8 +1248,7 @@ final class TourController: ObservableObject {
         // very moment it should sit still. The handoff moves it to the next anchor (C.3).
         var holdsPlace = false
         switch state.phase {
-        case .transitioning(let from, _): holdsPlace = from != .translate
-        case .idle: holdsPlace = true
+        case .transitioning, .idle: holdsPlace = true
         default: break
         }
         var pose = placed.pose
@@ -1320,8 +1292,8 @@ final class TourController: ObservableObject {
             holdRing(for: 0.42)
             scheduleStallHint()
         } else if newContent {
-            // A quiet step-to-step transition (skip, welcome -> first step, a
-            // deferral note): fade out, move, swap, fade in — no tick, no sparks.
+            // A quiet step-to-step transition (skip, welcome -> first step):
+            // fade out, move, swap, fade in — no tick, no sparks.
             feedback.cancel()
             entryGeneration += 1
             pendingHandoffPose = nil
@@ -1477,7 +1449,7 @@ final class TourController: ObservableObject {
         syncSnapMarks(panel: panel)
         syncGhost()
         // Between a completion and the next card the ring belongs to the handoff.
-        if case .transitioning(let from, _) = state.phase, from != .translate { return }
+        if case .transitioning = state.phase { return }
         if feedback.isActive, case .finale = state.phase { return }
         if cardYielded || skipping { return }
         if musicTripActive {
@@ -1589,7 +1561,7 @@ final class TourController: ObservableObject {
     /// (body, beat labels) and the ring's mode may both need to follow.
     private func surfaceDidChange() {
         guard cardWindow != nil, !skipping, !cardYielded else { return }
-        if case .transitioning(let from, _) = state.phase, from != .translate { return }
+        if case .transitioning = state.phase { return }
         if feedback.isActive { return }
         if cardModel(for: state.phase, in: state) != nil, guidance.motion.cardVisible, cardStore?.model != nil {
             presentCurrentCard()
@@ -1732,7 +1704,6 @@ final class TourController: ObservableObject {
         case .welcome: send(.start)
         case .step(.connect, _): connectMusic()
         case .finale: AppMain.shared?.showSettingsWindow(selectedTab: .shortcuts)
-        case .transitioning where state.isShowingDeferralNote: send(.advanceTransition)   // "Got it"
         default: break
         }
     }
@@ -1793,6 +1764,6 @@ final class TourController: ObservableObject {
 }
 
 private extension TourStep {
-    /// 1-based position within the fixed 7-step order, for the ring's center label.
+    /// 1-based position within the fixed 6-step order, for the ring's center label.
     func index(in total: Int) -> Int { TourStep.orderedSteps.firstIndex(of: self).map { $0 + 1 } ?? total }
 }

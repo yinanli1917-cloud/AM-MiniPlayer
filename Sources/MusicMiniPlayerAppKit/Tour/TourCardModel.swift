@@ -27,8 +27,7 @@ struct TourCardModel: Equatable {
         case connect
         case connectDenied
         case step(TourStep)
-        case deferralNote
-        case finale(deferred: Bool)
+        case finale
         case deferredTip
     }
 
@@ -45,6 +44,8 @@ struct TourCardModel: Equatable {
     var ringClosed: Bool = false
     var stepLabel: String = ""
     var showStop: Bool = true
+    /// The stop button's label when it is not the tour's own "Stop here" (the translation tip's way out).
+    var stopTitle: String?
     var showSkipStep: Bool = true
     var showFallbackButton: Bool = false
 }
@@ -63,6 +64,7 @@ struct TourCardLayoutKey: Equatable {
     var footNote: String?
     var chip: String?
     var showStop: Bool
+    var stopTitle: String?
     var showSkipStep: Bool
     var showFallbackButton: Bool
 }
@@ -71,6 +73,6 @@ extension TourCardModel {
     var layoutKey: TourCardLayoutKey {
         TourCardLayoutKey(kind: kind, title: title, body: body, beatTexts: beats.map(\.text), confirm: confirm,
                           primaryTitle: primaryTitle, secondaryTitle: secondaryTitle, footNote: footNote, chip: chip,
-                          showStop: showStop, showSkipStep: showSkipStep, showFallbackButton: showFallbackButton)
+                          showStop: showStop, stopTitle: stopTitle, showSkipStep: showSkipStep, showFallbackButton: showFallbackButton)
     }
 }

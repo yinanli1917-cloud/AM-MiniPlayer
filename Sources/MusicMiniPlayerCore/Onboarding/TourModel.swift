@@ -15,15 +15,19 @@ import Foundation
 // MARK: - TourStep
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// The seven steps, in fixed order (proposal §3.1/§5.1). `connect` only ever
+/// The six tour steps, in fixed order (proposal §3.1/§5.1). `connect` only ever
 /// runs a real card when Automation isn't authorized yet — otherwise it is
 /// prefilled at `.start`/`.resume` and never shown (§3.3 "G", §5.4).
+///
+/// `translate` is NOT a step any more (founder 2026-10-06: the tour only teaches opening the lyrics page). The case stays
+/// because it names the standalone translation tip (`TourPhase.deferredTip(.translate)`, `TourState.stepStates[.translate]`)
+/// and is the raw value old saved states carry; it is not in `orderedSteps`, so it has no card, no ring segment, no number.
 public enum TourStep: String, CaseIterable, Codable, Sendable {
     case connect, reveal, corners, lyrics, translate, moveTuck, back
 
     /// Fixed order — also the ring's fill order. `TourMachine.next(after:)`
     /// walks this array; nothing outside this file should hardcode the order.
-    public static let orderedSteps: [TourStep] = [.connect, .reveal, .corners, .lyrics, .translate, .moveTuck, .back]
+    public static let orderedSteps: [TourStep] = [.connect, .reveal, .corners, .lyrics, .moveTuck, .back]
 
     /// Schema version this step was introduced in (§5.6). All v3 steps are
     /// 2 — C6's three-page wizard (schema 1) had no equivalent steps, so a
@@ -66,12 +70,12 @@ public enum TourPhase: Equatable, Sendable {
     /// A completed step's card has faded and the next card hasn't landed
     /// yet — real time (or a fake clock in tests) must pass via
     /// `TourEvent.advanceTransition` before `to` (or finale, if `to == nil`)
-    /// shows. Also the "这首不用翻" deferral note (§3.3 S4′), which has no timer: "Got it" sends `advanceTransition`.
+    /// shows.
     case transitioning(from: TourStep?, to: TourStep?)
     case finale
     /// The one card allowed to reappear after the tour otherwise tore down
-    /// (§3.3 S4L) — the deferred-translation tip, shown beside the
-    /// translate button once a foreign-language song plays.
+    /// (§3.3 S4L) — the standalone translation tip, shown beside the translate
+    /// button the first time the user is on the lyrics page with it really there.
     case deferredTip(TourStep)
 }
 
@@ -144,7 +148,11 @@ public enum TourEvent: Equatable, Sendable {
     case panelSettled(corner: ScreenCorner?)
     case panelTucked
     case panelExpanded
+    /// The translation tip became eligible: `TourDeferredWatcher` only sends it while the panel is on screen, on the lyrics
+    /// page and `canTranslate` is true (the reducer adds the 3 s-into-the-song gate). Re-sent when the 3 s mark passes.
     case canTranslateBecameTrue(secondsIntoSong: Double)
+    /// The open translation tip lost its ground (left the lyrics page, the button went away): it closes, no attempt counted.
+    case deferredTipUnavailable
     case songChanged
     case launch
     case resume(completed: Set<TourStep>)
@@ -154,8 +162,7 @@ public enum TourEvent: Equatable, Sendable {
     /// (real or fake clock, §11.1 "假时钟驱动 transitioning") is the thing
     /// that drives the machine on to the next card/finale, instead of the
     /// reducer jumping there synchronously inside the completion event.
-    /// `TourController` sends this after the feedback duration (§8.1: 800ms);
-    /// the deferral note's "Got it" button sends it too.
+    /// `TourController` sends this after the feedback duration (§8.1: 800ms).
     case advanceTransition
 }
 
@@ -175,8 +182,7 @@ public enum TourHaptic: Equatable, Sendable {
 public enum TourEffect: Equatable, Sendable {
     case showWelcomeCard(resuming: Bool)
     case showStepCard(TourStep)
-    case showDeferralNote
-    case showFinaleCard(deferred: Bool)
+    case showFinaleCard
     case showDeferredTipCard
     case hideCard
     case checkBeat(TourStep, index: Int)
@@ -208,10 +214,10 @@ public struct TourState: Equatable, Sendable {
     /// tour started) — §5.2 "乱序完成" / §5.4 "提前做过". Consulted by
     /// `TourMachine.enterStep` when that step's turn comes.
     public var pendingBeats: [TourStep: [Bool]]
-    /// Songs tried since the deferred-translate watcher armed (§5.2, capped
+    /// Songs the translation tip was open through since its watcher armed (§5.2, capped
     /// at 3).
     public var deferredAttempts: Int
-    /// Launches since the deferred-translate watcher armed (§5.2, capped at
+    /// Launches since the translation-tip watcher armed (§5.2, capped at
     /// 20).
     public var deferredLaunches: Int
     /// The S4L card may show at most once per launch.
@@ -281,12 +287,7 @@ public struct TourState: Equatable, Sendable {
         return last != cornersLanded.last
     }
 
+    /// The standalone translation tip is armed: `stepStates[.translate] == .deferred`. It is set when the tour ends (finished
+    /// or stopped), becomes `.completed` when the user toggles translation and `.skipped` when the tip gave up.
     public var hasDeferredTranslate: Bool { stepStates[.translate] == .deferred }
-
-    /// The "this one doesn't need translating" card is up: translate was deferred and the tour is parked on it. (The same
-    /// `.transitioning(from: .translate, ...)` phase also follows a real translate completion; that one has no deferral.)
-    public var isShowingDeferralNote: Bool {
-        if case .transitioning(let from, _) = phase, from == .translate, hasDeferredTranslate { return true }
-        return false
-    }
 }

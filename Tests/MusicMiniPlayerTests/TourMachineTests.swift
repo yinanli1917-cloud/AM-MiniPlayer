@@ -4,12 +4,11 @@ import XCTest
 /// The tour's pure reducer (`TourMachine.reduce`) — no window, no clock, no
 /// Combine. Exercises proposal §5.2's transition table directly: sequential
 /// completion, out-of-order beats, early tuck, stop/skip, resume, the
-/// translate deferral and its S4L reappearance, and the 8s/`finaleDismiss`
+/// the standalone translation tip (arming, S4L reappearance), and the 8s/`finaleDismiss`
 /// teardown split.
 final class TourMachineTests: XCTestCase {
     private let authorized = TourSnapshot(automationAuthorized: true, canTranslate: true, showTranslation: false)
     private let unauthorized = TourSnapshot(automationAuthorized: false, canTranslate: true, showTranslation: false)
-    private let cannotTranslate = TourSnapshot(automationAuthorized: true, canTranslate: false, showTranslation: false)
 
     // MARK: - Welcome / start
 
@@ -49,7 +48,7 @@ final class TourMachineTests: XCTestCase {
 
     // MARK: - Sequential completion, phase & effects table
 
-    func test_sequentialCompletion_walksAllSevenSteps() throws {
+    func test_sequentialCompletion_walksAllSixSteps() throws {
         var state = TourState()
         (state, _) = TourMachine.reduce(state, .start, snapshot: authorized)
 
@@ -74,12 +73,7 @@ final class TourMachineTests: XCTestCase {
         guard case .step(.lyrics, [false]) = state.phase else { return XCTFail() }
 
         (state, _) = TourMachine.reduce(state, .signal(.onLyricsPage), snapshot: authorized)
-        guard case .transitioning(.lyrics, .translate) = state.phase else { return XCTFail("got \(state.phase)") }
-        (state, _) = TourMachine.reduce(state, .advanceTransition, snapshot: authorized)
-        guard case .step(.translate, [false]) = state.phase else { return XCTFail("got \(state.phase)") }
-
-        (state, _) = TourMachine.reduce(state, .signal(.translationEnabled), snapshot: authorized)
-        guard case .transitioning(.translate, .moveTuck) = state.phase else { return XCTFail("got \(state.phase)") }
+        guard case .transitioning(.lyrics, .moveTuck) = state.phase else { return XCTFail("got \(state.phase)") }
         (state, _) = TourMachine.reduce(state, .advanceTransition, snapshot: authorized)
         guard case .step(.moveTuck, [false, false, false]) = state.phase else { return XCTFail() }
 
@@ -96,10 +90,10 @@ final class TourMachineTests: XCTestCase {
 
         (state, effects) = TourMachine.reduce(state, .panelExpanded, snapshot: authorized)
         XCTAssertEqual(state.stepStates[.back], .completed)
-        XCTAssertEqual(state.completedCount, 7)
+        XCTAssertEqual(state.completedCount, 6)
         XCTAssertTrue(effects.contains(.pulseRing))
         XCTAssertTrue(effects.contains(.confetti))
-        XCTAssertTrue(effects.contains(.showFinaleCard(deferred: false)))
+        XCTAssertTrue(effects.contains(.showFinaleCard))
         XCTAssertEqual(state.phase, .finale)
     }
 
@@ -168,8 +162,9 @@ final class TourMachineTests: XCTestCase {
         state.phase = .step(.corners, beats: [true, false])
         let (next, effects) = TourMachine.reduce(state, .stopTour, snapshot: authorized)
         XCTAssertEqual(next.status, .skipped)
-        XCTAssertEqual(next.phase, .idle(deferredArmed: false))
-        XCTAssertEqual(effects, [.hideCard, .teardown, .persist])
+        XCTAssertEqual(next.stepStates[.translate], .deferred)
+        XCTAssertEqual(effects, [.hideCard, .teardown, .armDeferredWatcher, .persist], "a tour that ran hands over to the translation tip")
+        XCTAssertEqual(next.phase, .idle(deferredArmed: true))
     }
 
     func test_skipStep_marksSkipped_ringDoesNotGrow_advancesToNext() {
@@ -179,7 +174,7 @@ final class TourMachineTests: XCTestCase {
         XCTAssertEqual(next.stepStates[.lyrics], .skipped)
         XCTAssertEqual(next.completedCount, 0)
         XCTAssertFalse(effects.contains(where: { if case .growRing = $0 { return true }; return false }))
-        guard case .step(.translate, _) = next.phase else { return XCTFail("got \(next.phase)") }
+        guard case .step(.moveTuck, _) = next.phase else { return XCTFail("got \(next.phase)") }
     }
 
     // MARK: - Resume
@@ -195,7 +190,7 @@ final class TourMachineTests: XCTestCase {
         let all = Set(TourStep.orderedSteps)
         let (state, effects) = TourMachine.reduce(TourState(), .resume(completed: all), snapshot: authorized)
         XCTAssertEqual(state.phase, .finale)
-        XCTAssertTrue(effects.contains(.showFinaleCard(deferred: false)))
+        XCTAssertTrue(effects.contains(.showFinaleCard))
     }
 
     // MARK: - finaleDismiss vs 8s auto-dismiss both teardown
@@ -205,9 +200,18 @@ final class TourMachineTests: XCTestCase {
         state.phase = .finale
         let (next, effects) = TourMachine.reduce(state, .finaleDismiss, snapshot: authorized)
         XCTAssertEqual(next.status, .completed)
-        XCTAssertEqual(next.phase, .idle(deferredArmed: false))
+        XCTAssertEqual(next.phase, .idle(deferredArmed: true), "the translation tip arms when the tour ends")
         XCTAssertTrue(effects.contains(.teardown))
         XCTAssertTrue(effects.contains(.hideCard))
+        XCTAssertTrue(effects.contains(.armDeferredWatcher))
+    }
+
+    func test_finaleDismiss_tipAlreadyDone_armsNothing() {
+        var state = TourState()
+        state.phase = .finale
+        state.stepStates[.translate] = .completed   // the user turned translation on themselves
+        let (next, effects) = TourMachine.reduce(state, .finaleDismiss, snapshot: authorized)
+        XCTAssertEqual(next.phase, .idle(deferredArmed: false))
         XCTAssertFalse(effects.contains(.armDeferredWatcher))
     }
 
@@ -223,62 +227,6 @@ final class TourMachineTests: XCTestCase {
         let (viaManual, manualEffects) = TourMachine.reduce(state, .finaleDismiss, snapshot: authorized)
         XCTAssertEqual(viaAuto, viaManual)
         XCTAssertEqual(autoEffects, manualEffects)
-    }
-
-    // MARK: - Deferral (§3.3 S4′)
-
-    func test_enteringTranslate_canTranslateFalse_defersWithoutGrowingRing() {
-        var state = TourState()
-        state.stepStates[.connect] = .completed
-        state.stepStates[.reveal] = .completed
-        state.stepStates[.corners] = .completed
-        state.stepStates[.lyrics] = .completed
-        let before = state.completedCount
-
-        let (next, effects) = TourMachine.enterStep(.translate, state: state, snapshot: cannotTranslate)
-        XCTAssertEqual(next.stepStates[.translate], .deferred)
-        XCTAssertEqual(next.completedCount, before, "deferring must not grow the ring")
-        XCTAssertTrue(effects.contains(.showDeferralNote))
-        guard case .transitioning(.translate, .moveTuck) = next.phase else { return XCTFail("got \(next.phase)") }
-    }
-
-    /// The deferral note waits for the user (2026-10-04: it flashed by in 1.1 s). "Later" is `.advanceTransition`: the same
-    /// outcome the old timer had — translate stays deferred, the move step comes up.
-    func test_deferralNote_laterContinuesToTheMoveStep_translateStaysDeferred() {
-        var state = deferralNoteState()
-        var effects: [TourEffect]
-        (state, effects) = TourMachine.reduce(state, .advanceTransition, snapshot: cannotTranslate)
-        guard case .step(.moveTuck, _) = state.phase else { return XCTFail("got \(state.phase)") }
-        XCTAssertEqual(state.stepStates[.translate], .deferred)
-        XCTAssertTrue(state.hasDeferredTranslate)
-        XCTAssertTrue(effects.contains(.showStepCard(.moveTuck)))
-    }
-
-    /// A translatable song starts while the note is up: the note becomes the real translate step, right there.
-    func test_deferralNote_canTranslateBecomingTrue_entersTheTranslateStep() {
-        let state = deferralNoteState()
-        XCTAssertTrue(state.isShowingDeferralNote)
-        // The snapshot may still carry the old canTranslate (the publisher fires before the value lands).
-        let (next, effects) = TourMachine.reduce(state, .canTranslateBecameTrue(secondsIntoSong: 0), snapshot: cannotTranslate)
-        XCTAssertEqual(next.phase, .step(.translate, beats: [false]))
-        XCTAssertEqual(next.stepStates[.translate], .pending)
-        XCTAssertFalse(next.hasDeferredTranslate)
-        XCTAssertTrue(effects.contains(.showStepCard(.translate)))
-    }
-
-    func test_deferralNote_isNotTheRealTranslateCompletionTransition() {
-        var state = TourState()
-        state.stepStates[.translate] = .completed
-        state.phase = .transitioning(from: .translate, to: .moveTuck)
-        XCTAssertFalse(state.isShowingDeferralNote)
-        let (next, _) = TourMachine.reduce(state, .canTranslateBecameTrue(secondsIntoSong: 0), snapshot: authorized)
-        XCTAssertEqual(next.phase, state.phase, "only the note reacts")
-    }
-
-    private func deferralNoteState() -> TourState {
-        var state = TourState()
-        for step in [TourStep.connect, .reveal, .corners, .lyrics] { state.stepStates[step] = .completed }
-        return TourMachine.enterStep(.translate, state: state, snapshot: cannotTranslate).0
     }
 
     // MARK: - Move step: the diagonal beat takes only the corner across the screen from where the panel just was
@@ -331,15 +279,6 @@ final class TourMachineTests: XCTestCase {
         XCTAssertEqual(state.phase, .step(.moveTuck, beats: [false, false, false]))
         (state, _) = settle(state, .topRight)                // across the screen straight away still counts as the first corner
         XCTAssertEqual(state.phase, .step(.moveTuck, beats: [true, false, false]))
-    }
-
-    func test_finale_withDeferredTranslate_armsWatcherInstead_ofFullIdle() {
-        var state = TourState()
-        state.stepStates[.translate] = .deferred
-        state.phase = .finale
-        let (next, effects) = TourMachine.reduce(state, .finaleDismiss, snapshot: authorized)
-        XCTAssertEqual(next.phase, .idle(deferredArmed: true))
-        XCTAssertTrue(effects.contains(.armDeferredWatcher))
     }
 
     // MARK: - canTranslateBecameTrue: 3s gate, panel-visibility, once per launch

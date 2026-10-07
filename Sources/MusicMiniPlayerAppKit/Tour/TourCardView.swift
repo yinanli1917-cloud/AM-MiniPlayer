@@ -342,7 +342,7 @@ struct TourCardView: View {
     @ViewBuilder
     private var leftSlot: some View {
         if model.showStop, let onStop {
-            footerButton(.text, L10n.localized("tour.stop"), onStop)
+            footerButton(.text, model.stopTitle ?? L10n.localized("tour.stop"), onStop)
         } else if !model.showFallbackButton, let title = model.secondaryTitle, let onSecondary {
             if case .finale = model.kind {
                 footerButton(.secondary, title, onSecondary)

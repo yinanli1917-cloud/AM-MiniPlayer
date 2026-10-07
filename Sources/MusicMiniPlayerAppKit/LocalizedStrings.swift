@@ -183,19 +183,10 @@ enum L10n {
         "tour.lyrics.hoverBack":    ("Bring your cursor back over", "鼠标再回到面板上"),
         "tour.lyrics.confirm":      ("Here they are.", "到了。"),
 
-        "tour.translate.title":     ("Translation", "翻译"),
-        "tour.translate.body":      ("The button at the bottom right. Each line gets one underneath.", "右下角的按钮。译文会跟在每一句下面。"),
-        // Begun off the lyrics page, where the translate button does not exist: a leading beat walks the user there.
-        "tour.translate.beat0":     ("Go to the lyrics page first", "先到歌词页"),
-        "tour.translate.bodyGoLyrics": ("The translate button lives on the lyrics page. Bring your cursor over and tap the speech bubble at the bottom left to get there.", "翻译按钮在歌词页里。鼠标移到面板上，点左下角的小气泡就过去了。"),
-        "tour.translate.beat1":     ("Tap the translate button", "点一下翻译按钮"),
-        "tour.translate.confirm":   ("Translated.", "译文来了。"),
-        "tour.translate.deferred.title": ("This one doesn't need it", "这首不用翻"),
-        "tour.translate.deferred.body":  ("This one doesn't need translating. When a song in another language comes along, I'll show you where translation is.", "这首用不着翻译。等遇到外文歌，我再来告诉你翻译在哪。"),
-        "tour.translate.deferred.gotIt": ("Got it", "知道了"),
-        "tour.translate.deferred.confirm": ("Noted.", "记下了。"),
-        "tour.later.title":         ("This one can be translated", "这首可以翻译"),
-        "tour.later.body":          ("Bring your cursor over and press the button at the bottom right.", "鼠标挪过来，右下角的按钮点一下。"),
+        // The standalone translation tip (not a tour step): shown once, on the lyrics page, beside the translate button.
+        "tour.later.title":         ("Translation", "翻译"),
+        "tour.later.body":          ("This one can be translated. Tap the button at the bottom right, and each line gets one underneath.", "这首可以翻译。点右下角的按钮，译文会跟在每一句下面。"),
+        "tour.later.dismiss":       ("Got it", "知道了"),
         "tour.later.confirm":       ("Translated.", "译文来了。"),
 
         "tour.move.title":          ("Put it in a corner you like", "放到你喜欢的角落"),
@@ -224,7 +215,6 @@ enum L10n {
 
         "tour.done.title":          ("That's all", "就这些了"),
         "tour.done.body":           ("From here on it stays quietly to the side, there whenever you want it. I hope the time you spend with music, and with nanoPod, is time you enjoy.", "往后它就安静地待在一边，想听的时候就在。愿有音乐陪着的时候，都是好时光。"),
-        "tour.done.bodyDeferred":   ("From here on it stays quietly to the side, there whenever you want it. Translation can wait for a song that needs it; I'll come back then. I hope the time you spend with music, and with nanoPod, is time you enjoy.", "往后它就安静地待在一边，想听的时候就在。翻译那一步，等有外文歌的时候我再来。愿有音乐陪着的时候，都是好时光。"),
         "tour.done.shortcut":       ("Set a shortcut", "录个快捷键"),
         "tour.done.ok":             ("OK", "好"),
         "tour.done.foot":           ("To walk through again: Settings › Get to know nanoPod again", "想再走一遍：设置 › 重新认识 nanoPod"),

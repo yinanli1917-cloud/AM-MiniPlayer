@@ -209,7 +209,7 @@ struct TourFeedbackEvent: Equatable {
     var beatIndices: [Int] = []
     /// The last segment: the ring closes into a solid disc (spec §B.3).
     var closesRing: Bool = false
-    /// Confetti (the finale, also when the translate step was deferred).
+    /// Confetti (the finale).
     var confetti: Bool = false
     /// Sparks at the arc head (ordinary steps; the closing seal has none).
     var sparks: Bool = true

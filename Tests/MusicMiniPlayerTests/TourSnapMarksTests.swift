@@ -300,7 +300,7 @@ final class TourSnapMarksRealPanelTests: XCTestCase {
 
     func test_otherSteps_haveNoMarks() throws {
         f = TourRealPanelFixture(page: .album)
-        f.controller.send(.resume(completed: Set(TourStep.orderedSteps).subtracting([.lyrics, .translate, .moveTuck, .back])))
+        f.controller.send(.resume(completed: Set(TourStep.orderedSteps).subtracting([.lyrics, .moveTuck, .back])))
         XCTAssertTrue(f.wait { f.cardWindow != nil })
         f.spin(1.0)
         XCTAssertEqual(f.controller.state.phase, .step(.lyrics, beats: [false]))

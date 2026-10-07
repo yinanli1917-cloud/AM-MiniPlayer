@@ -79,7 +79,7 @@ final class TourCardRenderTests: XCTestCase {
     func test_renderClosedRing_bigOnBothDesktops() throws {
         for (wall, dark) in [(TourSceneComposer.Wallpaper.light, false), (.dark, true)] {
             let p = dark ? TourCardPalette.dark : TourCardPalette.light
-            let ring = TourFeedbackRing(completed: 7, closed: true, stepLabel: "", palette: p, feedback: feedback())
+            let ring = TourFeedbackRing(completed: 6, closed: true, stepLabel: "", palette: p, feedback: feedback())
                 .scaleEffect(4).frame(width: 130, height: 130)
                 .environment(\.colorScheme, dark ? .dark : .light)
             let r = ImageRenderer(content: ring); r.scale = 2

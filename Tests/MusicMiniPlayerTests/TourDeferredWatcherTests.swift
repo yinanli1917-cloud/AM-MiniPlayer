@@ -3,8 +3,8 @@ import Combine
 @testable import MusicMiniPlayerCore
 
 /// `TourDeferredWatcher` — the one subscription allowed to survive a torn-
-/// down tour. Fake clock, injected `PassthroughSubject`s standing in for
-/// `LyricsService.$canTranslate` / `MusicController.$currentTrackTitle`.
+/// down tour. Fake clock and a manual scheduler, injected subjects standing in for
+/// `LyricsService.$canTranslate` / `MusicController.$currentPage` / `MusicController.$currentTrackTitle`.
 @MainActor
 final class TourDeferredWatcherTests: XCTestCase {
     private var canTranslate: PassthroughSubject<Bool, Never>!
@@ -12,7 +12,10 @@ final class TourDeferredWatcherTests: XCTestCase {
     private var watcher: TourDeferredWatcher!
     private var events: [TourEvent] = []
     private var fakeNow = Date(timeIntervalSince1970: 1_000_000)
+    private var onLyricsPage: CurrentValueSubject<Bool, Never>!
     private var panelIsVisible = true
+    /// The watcher's one pending re-check (the 3 s mark), run by hand.
+    private var pending: (delay: TimeInterval, work: @MainActor () -> Void)?
 
     override func setUp() {
         super.setUp()
@@ -21,13 +24,19 @@ final class TourDeferredWatcherTests: XCTestCase {
         events = []
         panelIsVisible = true
         fakeNow = Date(timeIntervalSince1970: 1_000_000)
-        watcher = TourDeferredWatcher(now: { [unowned self] in self.fakeNow })
+        onLyricsPage = CurrentValueSubject<Bool, Never>(true)
+        pending = nil
+        watcher = TourDeferredWatcher(now: { [unowned self] in self.fakeNow }, schedule: { [unowned self] delay, work in
+            self.pending = (delay, work)
+            return AnyCancellable { [weak self] in self?.pending = nil }
+        })
         watcher.onEvent = { [unowned self] in self.events.append($0) }
     }
 
     private func arm() {
         watcher.arm(
             canTranslate: canTranslate.eraseToAnyPublisher(),
+            onLyricsPage: onLyricsPage.eraseToAnyPublisher(),
             trackTitle: trackTitle.eraseToAnyPublisher(),
             panelVisible: { [unowned self] in self.panelIsVisible }
         )
@@ -101,5 +110,77 @@ final class TourDeferredWatcherTests: XCTestCase {
         XCTAssertTrue(events.isEmpty)
         secondCanTranslate.send(true)
         XCTAssertEqual(events.count, 1)
+    }
+
+    // MARK: - Where the tip may show: the lyrics page, with the button really there
+
+    func test_onTheAlbumPage_neverFires_evenWithTheButtonAvailable() {
+        onLyricsPage.send(false)
+        arm()
+        fakeNow.addTimeInterval(30)
+        canTranslate.send(true)
+        XCTAssertTrue(events.isEmpty)
+        XCTAssertNil(pending, "and nothing is waiting to try again")
+    }
+
+    func test_onTheLyricsPage_withoutTheButton_neverFires() {
+        arm()
+        fakeNow.addTimeInterval(30)
+        canTranslate.send(false)
+        XCTAssertTrue(events.isEmpty)
+    }
+
+    func test_openingTheLyricsPageLater_firesThen_withTheSecondsIntoTheSong() {
+        onLyricsPage.send(false)
+        arm()
+        canTranslate.send(true)
+        fakeNow.addTimeInterval(40)
+        XCTAssertTrue(events.isEmpty)
+        onLyricsPage.send(true)
+        guard case .canTranslateBecameTrue(let seconds)? = events.first else { return XCTFail("got \(events)") }
+        XCTAssertEqual(seconds, 40, accuracy: 0.001)
+        XCTAssertEqual(events.count, 1)
+    }
+
+    func test_leavingTheLyricsPage_reportsTheTipUnavailable_once() {
+        arm()
+        canTranslate.send(true)
+        events.removeAll()
+        onLyricsPage.send(false)
+        XCTAssertEqual(events, [.deferredTipUnavailable])
+        onLyricsPage.send(false)
+        canTranslate.send(false)
+        XCTAssertEqual(events, [.deferredTipUnavailable], "not repeated while it stays unavailable")
+    }
+
+    func test_groundReachedBeforeThreeSeconds_isSentAgainWhenTheMarkPasses() throws {
+        arm()
+        fakeNow.addTimeInterval(1.0)
+        canTranslate.send(true)
+        guard case .canTranslateBecameTrue(let early)? = events.first else { return XCTFail("got \(events)") }
+        XCTAssertEqual(early, 1.0, accuracy: 0.001)
+        let recheck = try XCTUnwrap(pending)
+        XCTAssertEqual(recheck.delay, 2.05, accuracy: 0.001, "set for just past the 3 s mark")
+        events.removeAll()
+        fakeNow.addTimeInterval(2.05)
+        recheck.work()
+        guard case .canTranslateBecameTrue(let late)? = events.first else { return XCTFail("got \(events)") }
+        XCTAssertGreaterThanOrEqual(late, 3.0)
+        XCTAssertNil(pending, "the mark has passed: nothing more to wait for")
+    }
+
+    func test_leavingBeforeTheMark_cancelsTheRecheck() {
+        arm()
+        canTranslate.send(true)
+        XCTAssertNotNil(pending)
+        onLyricsPage.send(false)
+        XCTAssertNil(pending)
+    }
+
+    func test_cancel_dropsTheRecheckToo() {
+        arm()
+        canTranslate.send(true)
+        watcher.cancel()
+        XCTAssertNil(pending)
     }
 }

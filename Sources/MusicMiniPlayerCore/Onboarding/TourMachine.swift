@@ -19,9 +19,9 @@ public enum TourMachine {
     }
 
     /// Which step + beat index a completion hook maps to (§6). `.translate`
-    /// via `.translationEnabled` is handled specially in `reduce` (deferral,
-    /// and the S4L deferred-tip closing choreography) — this table only
-    /// says WHERE the beat lands, not how it's interpreted.
+    /// via `.translationEnabled` is not a tour step: `handleSignal` treats it as
+    /// the translation tip's completion (S4L closing choreography when the tip card is
+    /// up, a silent "done" otherwise) — this table only says WHERE the beat lands.
     static func target(for signal: TourSignal) -> (TourStep, Int) {
         switch signal {
         case .automationAuthorized: return (.connect, 0)
@@ -61,9 +61,26 @@ public enum TourMachine {
             effects = entryEffects + [.persist]
 
         case .stopTour:
+            if case .deferredTip = state.phase {
+                // The translation tip's own "dismiss": the tip is done with, the tour's status is not touched.
+                state.stepStates[.translate] = .skipped
+                state.phase = .idle(deferredArmed: false)
+                effects = [.hideCard, .cancelDeferredWatcher, .persist]
+                break
+            }
+            // A user who stops a tour that actually ran (a step, the finale) still gets the translation tip later; one who
+            // says "later" on the welcome card never started it and gets none.
+            var ranTheTour = false
+            switch state.phase {
+            case .step, .transitioning, .finale: ranTheTour = true
+            case .idle, .welcome, .deferredTip: break
+            }
             state.status = .skipped
-            state.phase = .idle(deferredArmed: false)
-            effects = [.hideCard, .teardown, .persist]
+            let armTip = ranTheTour && armTranslateTip(&state)
+            state.phase = .idle(deferredArmed: armTip)
+            effects = [.hideCard, .teardown]
+            if armTip { effects.append(.armDeferredWatcher) }
+            effects.append(.persist)
 
         case .skipStep:
             if case .step(let s, _) = state.phase {
@@ -122,29 +139,18 @@ public enum TourMachine {
         case .panelExpanded:
             if case .step(.back, let beats) = state.phase, beats.count == 2 {
                 state.stepStates[.back] = .completed
-                let deferred = state.hasDeferredTranslate
                 effects = [.checkBeat(.back, index: 0), .checkBeat(.back, index: 1),
-                           .growRing(to: state.completedCount), .haptic(.alignment)]
-                if !deferred { effects.append(.pulseRing) }
-                effects.append(.confetti)
+                           .growRing(to: state.completedCount), .haptic(.alignment), .pulseRing, .confetti]
                 state.status = .inProgress // still needs finaleDismiss/timeout to become .completed
                 state.phase = .finale
-                effects.append(.showFinaleCard(deferred: deferred))
+                effects.append(.showFinaleCard)
                 effects.append(.persist)
             }
 
         case .canTranslateBecameTrue(let seconds):
-            if state.isShowingDeferralNote {
-                // A song that can be translated started while the "doesn't need translating" card is up: the card becomes the
-                // real translate step right here. The snapshot may still carry the old flag (the publisher fires before the
-                // value lands), so it is overridden.
-                state.stepStates[.translate] = .pending
-                var live = snapshot
-                live.canTranslate = true
-                let (nextState, entryEffects) = enterStep(.translate, state: state, snapshot: live)
-                state = nextState
-                effects = entryEffects + [.persist]
-            } else if case .idle(let armed) = state.phase, armed, seconds >= 3, !state.deferredShownThisLaunch {
+            // The watcher only sends this while the panel is up, on the lyrics page, with the button really there. The tip
+            // is armed only after the tour ended, so an idle armed phase also means no tour card is on screen.
+            if case .idle(let armed) = state.phase, armed, seconds >= 3, !state.deferredShownThisLaunch {
                 state.deferredShownThisLaunch = true
                 if snapshot.showTranslation {
                     // Already on (the user opened it from Settings) — nothing
@@ -156,6 +162,14 @@ public enum TourMachine {
                     state.phase = .deferredTip(.translate)
                     effects = [.showDeferredTipCard]
                 }
+            }
+
+        case .deferredTipUnavailable:
+            // Left the lyrics page (or the button went away) with the tip open: it closes without costing an attempt, and
+            // `deferredShownThisLaunch` stays set, so it does not come back in this launch.
+            if case .deferredTip = state.phase {
+                state.phase = .idle(deferredArmed: true)
+                effects = [.hideCard]
             }
 
         case .songChanged:
@@ -212,11 +226,11 @@ public enum TourMachine {
 
         case .finaleDismiss:
             if case .finale = state.phase {
-                let deferred = state.hasDeferredTranslate
+                let armTip = armTranslateTip(&state)
                 state.status = .completed
-                state.phase = .idle(deferredArmed: deferred)
+                state.phase = .idle(deferredArmed: armTip)
                 effects = [.hideCard, .teardown]
-                if deferred { effects.append(.armDeferredWatcher) }
+                if armTip { effects.append(.armDeferredWatcher) }
                 effects.append(.persist)
             }
         }
@@ -236,12 +250,29 @@ public enum TourMachine {
         // The S4L deferred-tip card closes through its own choreography
         // (§3.3 S4L): last segment fills, spark, haptic .alignment, a quiet
         // ring pulse (no confetti — that already played at S7), watcher
-        // cancelled, back to idle.
+        // cancelled, back to idle. The tip card shows a closed ring whatever
+        // the tour reached, so the ring it seals is always the full one.
         if case .deferredTip(let tip) = state.phase, tip == target {
             state.stepStates[tip] = .completed
-            effects = [.checkBeat(tip, index: beatIndex), .growRing(to: state.completedCount),
+            effects = [.checkBeat(tip, index: beatIndex), .growRing(to: TourStep.orderedSteps.count),
                        .spark, .haptic(.alignment), .pulseRing, .cancelDeferredWatcher]
             state.phase = .idle(deferredArmed: false)
+            effects.append(.persist)
+            return (state, effects)
+        }
+
+        // Translation is not a tour step. Toggling it anywhere else (Settings, the button before the tip ever showed, mid-tour)
+        // means there is nothing left to teach: the tip is done, silently, and a running tour is left alone.
+        if target == .translate {
+            switch state.stepStates[.translate] {
+            case .completed?, .skipped?: return (state, effects)
+            default: break
+            }
+            state.stepStates[.translate] = .completed
+            if case .idle(true) = state.phase {
+                state.phase = .idle(deferredArmed: false)
+                effects.append(.cancelDeferredWatcher)
+            }
             effects.append(.persist)
             return (state, effects)
         }
@@ -285,10 +316,7 @@ public enum TourMachine {
     /// Walks forward from `step`, skipping any step that's already resolved
     /// (completed/skipped/deferred) or whose pending beats were all already
     /// satisfied before its card ever showed, and lands on the first step
-    /// that needs a real card — or `.finale` if none remain. Handles the
-    /// translate deferral (§3.3 S4′) as a stopping point of its own, exactly
-    /// like a normal step. The note has no timer: it waits for the user ("Got it" is `.advanceTransition`) or for a
-    /// translatable song (`.canTranslateBecameTrue`).
+    /// that needs a real card — or `.finale` if none remain.
     static func enterStep(_ step: TourStep?, state: TourState, snapshot: TourSnapshot) -> (TourState, [TourEffect]) {
         var state = state
         var effects: [TourEffect] = []
@@ -298,13 +326,6 @@ public enum TourMachine {
             if state.isResolved(s) {
                 cursor = TourMachine.next(after: s)
                 continue
-            }
-
-            if s == .translate, !snapshot.canTranslate {
-                state.stepStates[.translate] = .deferred
-                effects.append(.showDeferralNote)
-                state.phase = .transitioning(from: .translate, to: .moveTuck)
-                return (state, effects)
             }
 
             // The panel is already on the lyrics page: nothing to open.
@@ -334,7 +355,18 @@ public enum TourMachine {
         }
 
         state.phase = .finale
-        effects.append(.showFinaleCard(deferred: state.hasDeferredTranslate))
+        effects.append(.showFinaleCard)
         return (state, effects)
+    }
+
+    /// The tour is over (finished or stopped after it ran): the standalone translation tip arms, unless it is already done
+    /// with (the user turned translation on themselves, or it gave up). True when it is armed after this call.
+    static func armTranslateTip(_ state: inout TourState) -> Bool {
+        switch state.stepStates[.translate] {
+        case .completed?, .skipped?: return false
+        default:
+            state.stepStates[.translate] = .deferred
+            return true
+        }
     }
 }

@@ -163,7 +163,7 @@ final class TourCompletionFlowTests: XCTestCase {
         spin(0.35)
         XCTAssertEqual(store.model.kind, .step(.back), "the last step's card stays while the ring closes")
         XCTAssertTrue(store.model.beats.allSatisfy(\.checked), "with both dots solid")
-        XCTAssertEqual(store.model.ringCompleted, 7)
+        XCTAssertEqual(store.model.ringCompleted, 6)
         XCTAssertTrue(controller.debugFeedback.isActive)
         spin(0.55)                                                     // ~0.9s: confetti is up
         XCTAssertNotNil(controller.debugFeedback.debugSparkOverlay.window, "the confetti window is open")

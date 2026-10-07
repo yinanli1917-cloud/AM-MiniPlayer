@@ -384,7 +384,7 @@ final class TourPanelGhostRealPanelTests: XCTestCase {
 
     func test_nonMoveSteps_haveNoGhost() throws {
         f = TourRealPanelFixture(page: .album)
-        f.controller.send(.resume(completed: Set(TourStep.orderedSteps).subtracting([.lyrics, .translate, .moveTuck, .back])))
+        f.controller.send(.resume(completed: Set(TourStep.orderedSteps).subtracting([.lyrics, .moveTuck, .back])))
         XCTAssertTrue(f.wait { f.cardWindow != nil })
         f.spin(2.5)
         XCTAssertFalse(f.controller.debugGhost.isDrawn)

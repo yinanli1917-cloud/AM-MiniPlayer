@@ -32,7 +32,7 @@ Sources/
 │   ├── SettingsDemo{Stage,Motion,Drawing,SVGPath}.swift - 设置页演示台（09-29 原型落地）：300×169 居中圆角台、6 段动画（全屏封面/贴边换歌/显示翻译/翻译为/显示隐藏面板/贴边隐藏）+ 通用段 2 段 + 静帧；`frame(at:t)` 纯函数 + Canvas 绘制 + 会结束的 TimelineView 时钟（空闲零定时器）
 │   └── LocalizedStrings.swift    - L10n localization + UserDefaults binding helpers
 ├── MusicMiniPlayerCore/
-│   ├── Onboarding/               - 引导纯逻辑：TourMachine/Model/Persistence、TourGuidanceTarget（环指向下一个未完成 beat、跨页先导 beat）、TourPlacement（卡片/箭头放置）、TourCornerGuide（四个落点+手势方向，随自然滚动翻转）、TourMusicWindow（播放器窗口定位）、TourAnchorRegistry
+│   ├── Onboarding/               - 引导纯逻辑：TourMachine/Model/Persistence（引导 6 步，翻译不在其中；10-06 起翻译是引导结束后才武装的一次性小贴士）、TourDeferredWatcher（小贴士的地基：面板可见+歌词页+翻译按钮真在，3 秒后才出）、TourGuidanceTarget（环指向下一个未完成 beat、跨页先导 beat）、TourPlacement（卡片/箭头放置）、TourCornerGuide（四个落点+手势方向，随自然滚动翻转）、TourMusicWindow（播放器窗口定位）、TourAnchorRegistry
 │   ├── Services/
 │   │   ├── MusicController.swift          - Thin facade: @Published state + notifications/polling/Timer
 │   │   ├── MusicController+Artwork.swift  - Artwork extraction/fetching/caching

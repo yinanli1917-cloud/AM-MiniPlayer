@@ -78,16 +78,16 @@ enum TourSceneFixtures {
         return m
     }
 
-    static func finale(_ lang: Lang, deferred: Bool = false) -> TourCardModel {
+    static func finale(_ lang: Lang) -> TourCardModel {
         var m = TourCardModel(
-            kind: .finale(deferred: deferred),
+            kind: .finale,
             title: t("tour.done.title", lang, zh: "就这些了"),
-            body: t(deferred ? "tour.done.bodyDeferred" : "tour.done.body", lang,
+            body: t("tour.done.body", lang,
                     zh: "往后它就安静地待在一边，想听的时候就在。愿有音乐陪着的时候，都是好时光。"),
             primaryTitle: t("tour.done.shortcut", lang, zh: "录个快捷键"),
             secondaryTitle: t("tour.done.ok", lang, zh: "好"),
             footNote: t("tour.done.foot", lang, zh: "想再走一遍：设置 › 重新认识 nanoPod"),
-            ringCompleted: deferred ? 6 : 7, ringClosed: !deferred, stepLabel: deferred ? "6" : ""
+            ringCompleted: 6, ringClosed: true, stepLabel: ""
         )
         m.showStop = false; m.showSkipStep = false
         return m

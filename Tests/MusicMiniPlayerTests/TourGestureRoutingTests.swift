@@ -92,7 +92,7 @@ final class TourGestureRoutingTests: XCTestCase {
     func test_moveStepAndNeighbour_theTopmostWindowAtThePanelIsThePanel() throws {
         var bad: [String] = []
         for corner in [ScreenCorner.topRight, .bottomLeft] {
-            for step in [TourStep.translate, .moveTuck] {
+            for step in [TourStep.lyrics, .moveTuck] {
                 for page in [PlayerPage.album, .lyrics] {
                     f = TourRealPanelFixture(corner: corner, page: page)
                     let i = TourStep.orderedSteps.firstIndex(of: step)!

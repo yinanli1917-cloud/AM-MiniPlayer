@@ -255,18 +255,6 @@ final class TourCardStabilityTests: XCTestCase {
                 TourHookBus.shared.controlsVisible.send(true)
                 self.f.controller.send(.resume(completed: [.connect, .reveal, .corners]))
             },
-            Step(name: "translate") {
-                self.f = TourRealPanelFixture(page: .lyrics, translationOn: false)
-                self.f.showControls(on: .lyrics)
-                self.f.lyricsService.debugSetCanTranslate(true)
-                self.f.spin(0.4)
-                TourHookBus.shared.controlsVisible.send(true)
-                self.f.controller.send(.resume(completed: [.connect, .reveal, .corners, .lyrics]))
-            },
-            Step(name: "translate-deferral-note") {
-                self.f = TourRealPanelFixture(page: .lyrics, canTranslate: false)
-                self.f.controller.send(.resume(completed: Set(TourStep.orderedSteps).subtracting([.translate, .moveTuck, .back])))
-            },
             Step(name: "move-beat0-corner", hasDemo: true) {
                 self.f = TourRealPanelFixture(page: .album)
                 self.f.controller.send(.resume(completed: self.allButMoveAndBack))
@@ -446,9 +434,6 @@ final class TourCardStabilityTests: XCTestCase {
         track("lyrics", minimum: 1.5)
         f.music.userManuallyOpenedLyrics = true
         f.music.currentPage = .lyrics
-        track("->deferral-note or translate", minimum: 0.3, timeout: 6) { self.phaseIs(.deferralNote) || self.phaseIs(.step(.translate)) }
-        track("deferral-note", minimum: 2.0)
-        c.debugCardStore?.onPrimary?()
         track("->move (handoff)", minimum: 0.3, timeout: 6) { self.phaseIs(.step(.moveTuck)) }
         track("move-leading-beat", minimum: 1.5)
         f.music.currentPage = .album

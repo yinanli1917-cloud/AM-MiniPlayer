@@ -5,8 +5,8 @@ import AppKit
 
 /// §11.1 TourTeardownTests / §11.2: once the tour stops or finishes, its
 /// three overlay windows must be fully released (not just hidden) and no
-/// timer left pending — the ONLY thing allowed to survive is the deferred-
-/// translate watcher, and only when a translate step was actually deferred.
+/// timer left pending — the ONLY thing allowed to survive is the translation
+/// tip's watcher, and only when a tour that ran has not already taught translation.
 /// Drives `TourController` directly via `send(_:)` (an internal test seam),
 /// bypassing real button clicks — the reducer's own transition table is
 /// TourMachineTests' job; this file is only about what the AppKit layer does
@@ -21,11 +21,9 @@ final class TourTeardownTests: XCTestCase {
     override func setUp() {
         super.setUp()
         TourPersistence.reset()
-        // `TourController.init()` wires `LyricsService.$showTranslation`
-        // (§5.4's legitimate "already on -> prefill translate" mechanism) —
+        // `TourController.init()` wires `LyricsService.$showTranslation` —
         // pin it to false here so that real, cross-test-shared singleton
-        // state can't pre-complete `.translate` out from under a test that's
-        // specifically exercising the deferral path. Restored in tearDown.
+        // state can't change what the tour does. Restored in tearDown.
         savedShowTranslation = LyricsService.shared.showTranslation
         LyricsService.shared.showTranslation = false
 
@@ -66,10 +64,12 @@ final class TourTeardownTests: XCTestCase {
 
         XCTAssertEqual(controller.debugAllocatedWindowCount, 0)
         XCTAssertFalse(controller.debugHasPendingTimers)
-        XCTAssertFalse(controller.debugIsDeferredWatcherArmed)
+        XCTAssertTrue(controller.debugIsDeferredWatcherArmed, "the tour ran: the one watcher of the translation tip is armed")
     }
 
-    func test_finaleDismiss_notDeferred_releasesEverything() {
+    /// The one exception (§3.3 S4L, §5.2 `idle(deferredArmed: true)`): a finished tour leaves exactly the translation
+    /// tip's watcher subscription armed — windows and timers are still fully released.
+    func test_finaleDismiss_leavesOnlyTheTipWatcherArmed() {
         controller.send(.resume(completed: Set(TourStep.orderedSteps)))
         XCTAssertEqual(controller.state.phase, .finale)
         XCTAssertGreaterThan(controller.debugAllocatedWindowCount, 0, "the finale card must be showing")
@@ -78,30 +78,17 @@ final class TourTeardownTests: XCTestCase {
 
         XCTAssertEqual(controller.debugAllocatedWindowCount, 0)
         XCTAssertFalse(controller.debugHasPendingTimers)
-        XCTAssertFalse(controller.debugIsDeferredWatcherArmed, "no deferred step -> nothing left running at all")
+        XCTAssertTrue(controller.debugIsDeferredWatcherArmed)
     }
 
-    /// The one exception (§3.3 S4L, §5.2 `idle(deferredArmed: true)`): a
-    /// deferred translate step leaves exactly the watcher subscription armed
-    /// — windows and timers are still fully released.
-    func test_finaleDismiss_deferredTranslate_leavesOnlyTheWatcherArmed() {
-        var completed = Set(TourStep.orderedSteps)
-        completed.remove(.translate)
-        controller.send(.resume(completed: completed))
-        // A bare test environment's LyricsService.shared.canTranslate is
-        // false (no lyrics loaded) and showTranslation is pinned false above,
-        // so entering `.translate` defers it live rather than prefilling it.
-        XCTAssertTrue(controller.state.hasDeferredTranslate)
-
-        // "Later" on the deferral note (it has no timer) — advance synchronously.
-        controller.send(.advanceTransition)
-        XCTAssertEqual(controller.state.phase, .finale)
-
+    func test_finaleDismiss_translationAlreadyTurnedOn_leavesNothingRunning() {
+        controller.send(.resume(completed: Set(TourStep.orderedSteps)))
+        controller.send(.signal(.translationEnabled))   // the user got there on their own
         controller.send(.finaleDismiss)
 
         XCTAssertEqual(controller.debugAllocatedWindowCount, 0)
         XCTAssertFalse(controller.debugHasPendingTimers)
-        XCTAssertTrue(controller.debugIsDeferredWatcherArmed)
+        XCTAssertFalse(controller.debugIsDeferredWatcherArmed, "nothing left to teach: nothing left running at all")
     }
 
     /// A second `stopTour` (or any further event) after teardown must not

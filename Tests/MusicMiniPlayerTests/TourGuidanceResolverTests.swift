@@ -50,7 +50,7 @@ final class TourGuidanceResolverTests: XCTestCase {
         XCTAssertEqual(t?.size, CGSize(width: 82, height: 42))
     }
 
-    // MARK: - lyrics / translate (items 6, 7)
+    // MARK: - lyrics / the translation tip (items 6, 7)
 
     func test_lyrics_ringIsOnTheSpeechBubble() {
         let t = TourGuidanceResolver.target(phase: .step(.lyrics, beats: [false]), surface: surface())
@@ -58,8 +58,8 @@ final class TourGuidanceResolverTests: XCTestCase {
         XCTAssertEqual(t?.size, CGSize(width: 36, height: 36))
     }
 
-    func test_translate_ringStaysOnTheButtonUntilTheStepCompletes() {
-        let phase = TourPhase.step(.translate, beats: [false])
+    func test_translationTip_ringIsOnTheRealButton_pressNowOnlyWhereItIsReachable() {
+        let phase = TourPhase.deferredTip(.translate)
         XCTAssertEqual(TourGuidanceResolver.target(phase: phase, surface: surface(.lyrics))?.subject, .control(.translate))
         XCTAssertEqual(TourGuidanceResolver.target(phase: phase, surface: surface(.lyrics))?.mode, .pressNow)
         XCTAssertEqual(TourGuidanceResolver.target(phase: phase, surface: surface(.album))?.mode, .hint,
@@ -72,7 +72,7 @@ final class TourGuidanceResolverTests: XCTestCase {
     func test_preface_neededOnlyWhenTheStepBeginsOffThePagesWhereItsControlExists() {
         // The table: step x page -> the leading beat.
         let table: [(TourStep, PlayerPage, TourPreface?)] = [
-            (.translate, .album, .toLyrics), (.translate, .playlist, .toLyrics), (.translate, .lyrics, nil),
+            (.translate, .album, nil), (.translate, .playlist, nil), (.translate, .lyrics, nil),   // translation is not a step: never a leading beat
             (.moveTuck, .lyrics, .backToCover), (.moveTuck, .playlist, .backToCover), (.moveTuck, .album, nil),
             (.corners, .playlist, .leaveQueue), (.corners, .album, nil), (.corners, .lyrics, nil),
             // Controls that exist on every page (play, the speech bubble) or are not controls: never a leading beat.
@@ -85,26 +85,6 @@ final class TourGuidanceResolverTests: XCTestCase {
         }
     }
 
-    func test_translate_beganOffTheLyricsPage_ringIsOnTheBubbleUntilThePanelArrives_thenTheTranslateButton() {
-        let phase = TourPhase.step(.translate, beats: [false])
-        for page in [PlayerPage.album, .playlist] {
-            let t = TourGuidanceResolver.target(phase: phase, surface: surface(page), preface: .toLyrics)
-            XCTAssertEqual(t?.subject, .control(.lyricsNav), "\(page): the bubble is what gets the user to the lyrics")
-            XCTAssertEqual(t?.mode, .pressNow)
-            XCTAssertEqual(t?.size, CGSize(width: 36, height: 36))
-        }
-        XCTAssertEqual(TourGuidanceResolver.target(phase: phase, surface: surface(.album, visible: false), preface: .toLyrics)?.mode, .hint,
-                       "controls hidden: the bubble is not out yet")
-        let arrived = TourGuidanceResolver.target(phase: phase, surface: surface(.lyrics), preface: .toLyrics)
-        XCTAssertEqual(arrived?.subject, .control(.translate), "on the lyrics page the ring springs to the translate button")
-        XCTAssertEqual(arrived?.mode, .pressNow)
-    }
-
-    func test_translate_beganOnTheLyricsPage_isUnchanged() {
-        let phase = TourPhase.step(.translate, beats: [false])
-        XCTAssertEqual(TourGuidanceResolver.target(phase: phase, surface: surface(.lyrics), preface: nil)?.subject, .control(.translate))
-    }
-
     func test_corners_beganOnTheQueue_ringOnTheBubbleUntilTheQueueIsLeft() {
         let phase = TourPhase.step(.corners, beats: [false, false])
         XCTAssertEqual(TourGuidanceResolver.target(phase: phase, surface: surface(.playlist), preface: .leaveQueue)?.subject, .control(.lyricsNav))
@@ -114,8 +94,8 @@ final class TourGuidanceResolverTests: XCTestCase {
     }
 
     func test_preface_neverTouchesAPhaseThatIsNotAStep() {
-        XCTAssertNil(TourGuidanceResolver.target(phase: .welcome, surface: surface(.album), preface: .toLyrics))
-        XCTAssertNil(TourGuidanceResolver.target(phase: .finale, surface: surface(.album), preface: .toLyrics))
+        XCTAssertNil(TourGuidanceResolver.target(phase: .welcome, surface: surface(.album), preface: .leaveQueue))
+        XCTAssertNil(TourGuidanceResolver.target(phase: .finale, surface: surface(.album), preface: .leaveQueue))
     }
 
     // MARK: - move (item 8)
@@ -188,7 +168,7 @@ final class TourGuidanceResolverTests: XCTestCase {
         let onLyrics = TourSnapshot(canTranslate: true, onLyricsPage: true)
         let (next, effects) = TourMachine.reduce(state, .resume(completed: state.completedSteps), snapshot: onLyrics)
         XCTAssertEqual(next.stepStates[.lyrics], .completed, "already there: the step counts")
-        XCTAssertEqual(next.phase, .step(.translate, beats: [false]), "and the tour moves on to translation")
+        XCTAssertEqual(next.phase, .step(.moveTuck, beats: [false, false, false]), "and the tour moves on to the move step")
         XCTAssertTrue(effects.contains(.growRing(to: 4)))
         XCTAssertFalse(effects.contains(.showStepCard(.lyrics)))
     }

@@ -52,16 +52,21 @@ public enum TourPersistence {
             if let step = TourStep(rawValue: raw) { stepStates[step] = .completed }
         }
 
+        // Translation stopped being a tour step (2026-10-06). Old saved states still carry `translate`: completed means the tip
+        // is done; the old "deferred" record (translate was waiting for a song that could be translated) is exactly "tip armed".
+        // (An old skipped translate was never persisted, so it reads as no record: no tip, as before.)
         let deferredDict = defaults.dictionary(forKey: deferredKey) as? [String: Int] ?? [:]
         var deferredAttempts = 0
-        if let translateAttempts = deferredDict[TourStep.translate.rawValue] {
+        if let translateAttempts = deferredDict[TourStep.translate.rawValue], stepStates[.translate] != .completed {
             stepStates[.translate] = .deferred
             deferredAttempts = translateAttempts
         }
 
+        // The tip's watcher runs only once the tour has ended; a tour still in progress arms it at its own end.
+        let tourEnded = status == .completed || status == .skipped
         return TourState(
             status: status,
-            phase: .idle(deferredArmed: stepStates[.translate] == .deferred),
+            phase: .idle(deferredArmed: tourEnded && stepStates[.translate] == .deferred),
             stepStates: stepStates,
             pendingBeats: [:],
             deferredAttempts: deferredAttempts,
@@ -74,7 +79,10 @@ public enum TourPersistence {
     public static func save(_ state: TourState, to defaults: UserDefaults = .standard) {
         defaults.set(currentSchema, forKey: schemaKey)
         defaults.set(state.status.rawValue, forKey: statusKey)
-        defaults.set(state.completedSteps.map(\.rawValue).sorted(), forKey: completedStepsKey)
+        // `completedSteps` is the ring's six; the translation tip's "done" rides in the same list under its old raw value.
+        var completed = state.completedSteps.map(\.rawValue)
+        if state.stepStates[.translate] == .completed { completed.append(TourStep.translate.rawValue) }
+        defaults.set(completed.sorted(), forKey: completedStepsKey)
         defaults.set(state.resumeCount, forKey: resumeCountKey)
         defaults.set(state.deferredLaunches, forKey: deferredLaunchesKey)
 
