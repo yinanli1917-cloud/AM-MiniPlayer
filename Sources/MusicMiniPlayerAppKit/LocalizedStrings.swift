@@ -161,19 +161,21 @@ enum L10n {
         "tour.corners.body":        ("Top right picks where the sound comes out. Top left takes you to Music.", "右上角选声音从哪里出，左上角一步到 Music。"),
         "tour.corners.beat1":       ("Top right: where the sound goes", "右上角：声音从哪出"),
         "tour.corners.beat2":       ("Top left: over to Music", "左上角：去 Music"),
+        // Shown, pending, while the user is away in the player app; ticks when they are back.
+        "tour.corners.beat3":       ("Back to nanoPod", "回到 nanoPod"),
         // Begun on the queue page, where neither corner button exists: a leading beat walks the user out.
         "tour.corners.beat0":       ("Step out of the queue first", "先离开播放列表"),
         "tour.corners.bodyQueue":   ("The two corner buttons aren't on the queue page. The speech bubble at the bottom left takes you out of it.", "播放列表里没有这两个角上的按钮。点左下角的小气泡，先从这里出来。"),
         // The Music beat is current: say plainly where the tap goes, and that the tour waits. {player} = the player app's product name.
         "tour.corners.bodyMusic":   ("Tapping the top left opens {player}. Just have a look; I'll wait here till you're back.", "点左上角会打开 {player}。去看一眼就好，我在这儿等你回来。"),
         // While the user is away in the player app: the card holds still (no celebration, no handoff) until they return.
-        "tour.corners.bodyWaiting": ("Pick up when you're back.", "回来就继续。"),
+        "tour.corners.bodyWaiting": ("When you're done looking, move the pointer back to nanoPod to carry on.", "看完了，把鼠标移回 nanoPod 就能接着来。"),
         // The output menu is open: a light invitation, nothing required (the beat was ticked by opening it).
         "tour.corners.bodyOutputMenu":     ("These are all the places that can play sound. Tap one to hear the difference; switching back is just as easy.", "这些都是能出声的地方。想换就点一个，听听差别；换回来也一样简单。"),
         // The user picked a device in the open menu: one soft line, then the step's normal flow again.
         "tour.corners.bodyOutputSwitched":  ("Okay, switched over.", "好，换过去了。"),
         // The card has hopped over to the player app's window: what that window is, and what nanoPod is next to it. {player} = the player app's product name.
-        "tour.corners.bodyMusicWindow":     ("This is the full {player}: finding songs and building playlists happen here. nanoPod is the little companion beside it, quietly keeping you company while you listen.", "这是完整的 {player}，找歌、整理歌单都在这儿。nanoPod 是它身边的小伙伴，平时安静地陪你听。"),
+        "tour.corners.bodyMusicWindow":     ("This is the full {player}: finding songs and building playlists happen here. nanoPod is the little companion beside it, quietly keeping you company while you listen. When you're done looking, move the pointer back to nanoPod to carry on.", "这是完整的 {player}，找歌、整理歌单都在这儿。nanoPod 是它身边的小伙伴，平时安静地陪你听。看完了，把鼠标移回 nanoPod 就能接着来。"),
         "tour.corners.musicOpened": ("Music's open. Come back whenever you're ready.", "Music 打开了，回来接着来。"),
         "tour.corners.confirm":     ("Both corners, right there.", "两个角都在这儿。"),
 

@@ -77,10 +77,10 @@ final class TourMusicHoldTests: XCTestCase {
         defer { L10n.languageOverride = saved }
         L10n.languageOverride = "zh"
         XCTAssertEqual(L10n.localized("tour.corners.bodyMusic", player: .appleMusic), "点左上角会打开 Apple Music。去看一眼就好，我在这儿等你回来。")
-        XCTAssertEqual(L10n.localized("tour.corners.bodyWaiting"), "回来就继续。")
+        XCTAssertEqual(L10n.localized("tour.corners.bodyWaiting"), "看完了，把鼠标移回 nanoPod 就能接着来。")
         XCTAssertTrue(L10n.localized("tour.corners.bodyMusic", player: .neteaseCloudMusic).contains("NetEase Cloud Music"), "another edition swaps in cleanly")
         L10n.languageOverride = "en"
-        XCTAssertEqual(L10n.localized("tour.corners.bodyWaiting"), "Pick up when you're back.")
+        XCTAssertEqual(L10n.localized("tour.corners.bodyWaiting"), "When you're done looking, move the pointer back to nanoPod to carry on.")
         XCTAssertTrue(L10n.localized("tour.corners.bodyMusic", player: .appleMusic).contains("Apple Music"))
     }
 
@@ -97,8 +97,10 @@ final class TourMusicHoldTests: XCTestCase {
         XCTAssertTrue(f.wait(2) { self.f.controller.debugCardStore?.model.beats.first { $0.id == 1 }?.checked == true }, "the Music beat shows its small check")
         XCTAssertEqual(f.controller.debugCardStore?.model.ringCompleted, 2)
 
-        // Let the check and the body crossfade finish, then it must be completely quiet.
-        XCTAssertTrue(f.wait(4) { !f.controller.debugFeedback.isActive && f.controller.debugHaloFrame == nil && !TourFrameDriver.shared.isRunning })
+        // Let the check, the body crossfade and the (bounded, few-second) way-back hint finish, then it must be completely quiet.
+        XCTAssertTrue(f.wait(14) {
+            !f.controller.debugFeedback.isActive && f.controller.debugHaloFrame == nil && !f.controller.guidance.motion.hintRunning && !TourFrameDriver.shared.isRunning
+        })
         XCTAssertEqual(body, L("tour.corners.bodyWaiting"), "the body settles to the one-liner")
         XCTAssertNotEqual(f.controller.debugFeedback.lastEvent?.growsRing, true, "only the beat's check ran: no ring growth, no sparks, no confetti")
         XCTAssertEqual(f.controller.debugFeedback.lastEvent?.confetti, false)
@@ -124,11 +126,65 @@ final class TourMusicHoldTests: XCTestCase {
         XCTAssertEqual(f.controller.state.phase, .step(.corners, beats: [true, false]))
     }
 
+    // MARK: - 2b. The way back: a "Back to nanoPod" beat, an invitation in the words, a pointer toward the panel
+
+    private func beat(_ id: Int) -> TourBeatModel? { f.controller.debugCardStore?.model.beats.first { $0.id == id } }
+
+    func test_awayBeat_isPendingWhileAway_ticksOnReturn_beforeTheCelebration() throws {
+        try musicBeatCurrent()
+        XCTAssertNil(beat(TourController.musicReturnBeatID), "no third row before the trip")
+        f.controller.send(.signal(.musicButtonTapped))
+        XCTAssertTrue(f.wait(2) { self.beat(TourController.musicReturnBeatID) != nil })
+        let ids = f.controller.debugCardStore?.model.beats.map(\.id)
+        XCTAssertEqual(ids, [0, 1, TourController.musicReturnBeatID], "under the existing two beats")
+        XCTAssertEqual(beat(TourController.musicReturnBeatID)?.text, L("tour.corners.beat3"))
+        XCTAssertEqual(beat(TourController.musicReturnBeatID)?.checked, false)
+        XCTAssertEqual(beat(TourController.musicReturnBeatID)?.pending, true, "pending: the one thing left to do")
+        XCTAssertEqual(beat(1)?.checked, true, "the 'over to Music' beat shows its check as before")
+
+        activations.send("com.apple.finder")                   // back
+        XCTAssertTrue(f.wait(1) { self.beat(TourController.musicReturnBeatID)?.checked == true }, "the return ticks")
+        XCTAssertEqual(f.controller.state.phase, .step(.corners, beats: [true, false]), "before the usual celebration, which has not been delivered yet")
+        XCTAssertEqual(f.controller.state.completedCount, 2)
+        XCTAssertTrue(f.wait(3) { f.controller.state.stepStates[.corners] == .completed }, "then the celebration")
+        XCTAssertEqual(beat(TourController.musicReturnBeatID)?.checked ?? true, true, "and the row never disappears under the check")
+    }
+
+    func test_awayBody_endsWithTheComeBackInvitation_inBothLanguages() throws {
+        let window = try XCTUnwrap(L10n.allStrings["tour.corners.bodyMusicWindow"])
+        XCTAssertEqual(window.zh, "这是完整的 {player}，找歌、整理歌单都在这儿。nanoPod 是它身边的小伙伴，平时安静地陪你听。看完了，把鼠标移回 nanoPod 就能接着来。")
+        XCTAssertEqual(window.en, "This is the full {player}: finding songs and building playlists happen here. nanoPod is the little companion beside it, quietly keeping you company while you listen. When you're done looking, move the pointer back to nanoPod to carry on.")
+        let waiting = try XCTUnwrap(L10n.allStrings["tour.corners.bodyWaiting"])
+        XCTAssertTrue(waiting.zh.contains("移回 nanoPod") && waiting.en.contains("move the pointer back to nanoPod"))
+        let beat3 = try XCTUnwrap(L10n.allStrings["tour.corners.beat3"])
+        XCTAssertEqual(beat3.zh, "回到 nanoPod")
+        XCTAssertEqual(beat3.en, "Back to nanoPod")
+        for pair in [window, waiting, beat3] { XCTAssertFalse(pair.zh.contains("甩")) }
+    }
+
+    func test_awayHint_ghostCursorAndGlow_pointAtThePanel_thenStopOnReturn() throws {
+        try musicBeatCurrent()
+        f.controller.send(.signal(.musicButtonTapped))
+        let motion = f.controller.guidance.motion
+        XCTAssertTrue(f.wait(4) { motion.makeFrame().ghostVisible }, "the ghost cursor glides from the card toward the panel")
+        XCTAssertTrue(f.wait(4) { motion.makeFrame().panelGlow > 0.05 }, "and the panel's edge glows")
+        XCTAssertNil(f.controller.debugHaloFrame, "no ring: the ring belongs to controls")
+        activations.send("com.apple.finder")
+        XCTAssertFalse(motion.hintRunning, "the hint stops the moment the user is back")
+    }
+
+    func test_panelHint_awayInThePlayerApp_isTheHoverInvite_onlyOnTheCornersStep() {
+        let surface = TourSurface(page: .album, controlsVisible: false)
+        XCTAssertEqual(TourGuidanceResolver.panelHint(phase: .step(.corners, beats: [true, false]), surface: surface, awayInPlayerApp: true), .hoverInvite)
+        XCTAssertEqual(TourGuidanceResolver.panelHint(phase: .step(.corners, beats: [true, false]), surface: surface), .none)
+        XCTAssertEqual(TourGuidanceResolver.panelHint(phase: .step(.lyrics, beats: [false]), surface: surface, awayInPlayerApp: true), .none)
+    }
+
     // MARK: - 3. Resume on return
 
     private func assertResumedWithCelebration(file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertFalse(f.controller.isHoldingForMusicReturn, file: file, line: line)
-        XCTAssertEqual(f.controller.state.stepStates[.corners], .completed, "the usual completion", file: file, line: line)
+        XCTAssertTrue(f.wait(3) { f.controller.state.stepStates[.corners] == .completed }, "the usual completion (after the return beat's tick)", file: file, line: line)
         XCTAssertEqual(f.controller.state.completedCount, 3, file: file, line: line)
         XCTAssertTrue(f.wait(5) {
             if case .step(.lyrics, _) = f.controller.state.phase { return f.controller.debugCardStore?.model.kind == .step(.lyrics) }
@@ -173,7 +229,7 @@ final class TourMusicHoldTests: XCTestCase {
         XCTAssertEqual(body, L("tour.corners.bodyWaiting"))
 
         activations.send("com.apple.finder")
-        XCTAssertEqual(f.controller.state.phase, .step(.corners, beats: [false, true]))
+        XCTAssertTrue(f.wait(2) { f.controller.state.phase == .step(.corners, beats: [false, true]) }, "the held tap lands after the return beat's tick")
         XCTAssertNotEqual(f.controller.state.stepStates[.corners], .completed, "the output beat is still open")
         XCTAssertTrue(f.wait(3) {
             guard let c = f.ringCenter else { return false }

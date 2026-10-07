@@ -76,6 +76,14 @@ final class TourController: ObservableObject {
     /// (no ring, no celebration, no handoff) until the user is back. Costs nothing while it lasts: two subscriptions, no timer, no display link.
     private(set) var isHoldingForMusicReturn = false
     private var musicReturnObservers = Set<AnyCancellable>()
+    /// The card lists a third beat, "Back to nanoPod": pending while the user is away, ticked when the return is detected, and it
+    /// stays (checked) through the celebration so the card does not lose a row on the frame the check lands. Cleared when the
+    /// step is left.
+    private var returnBeatShown = false
+    /// The ghost cursor + panel glow that point the way back have started for this trip (they run once, not on every refresh).
+    private var awayHintStarted = false
+    /// The "Back to nanoPod" row's id (the corners step's ids so far: 0 output, 1 Music, 2 leave the queue).
+    static let musicReturnBeatID = 3
     /// Who the card names where the copy says "{player}" (the edition's player app).
     var playerApp: PlayerAppIdentity = .appleMusic
     /// App activations as bundle identifiers (test seam; default: NSWorkspace's didActivateApplicationNotification).
@@ -353,6 +361,7 @@ final class TourController: ObservableObject {
         let newCorner = next.cornersLanded.count > previous.cornersLanded.count ? next.cornersLanded.last : nil
         if !Self.isCornersStep(state.phase) {
             if musicTripActive { endMusicHold(); resetMusicTrip() }   // skipped, stopped or moved on while away
+            returnBeatShown = false
             cancelOutputAck()
         }
         refreshGuidance()
@@ -375,6 +384,8 @@ final class TourController: ObservableObject {
     private func beginMusicHoldIfNeeded() -> Bool {
         guard !isHoldingForMusicReturn, case .step(.corners, let beats) = state.phase, beats.count == 2, !beats[1] else { return false }
         isHoldingForMusicReturn = true
+        returnBeatShown = true
+        awayHintStarted = false
         stallWork?.cancel(); stallWork = nil
         cardStore?.stalled = false
         // Back = the cursor enters the panel again (a real false -> true, not the hover the tap itself came from),
@@ -402,16 +413,16 @@ final class TourController: ObservableObject {
     private func musicReturned() {
         guard isHoldingForMusicReturn else { return }
         endMusicHold()
-        guard musicWindowFrame != nil else {
-            resetMusicTrip()
-            process(.signal(.musicButtonTapped))   // the tap, delivered now: the usual celebration and transition
-            return
-        }
-        // The card was over at the player app's window: it springs back beside the panel FIRST, then the held tap is
-        // delivered (the celebration plays where the user is looking, not over there).
+        // The user is back: the "Back to nanoPod" beat ticks FIRST (alone, like the Music beat's check), then the held tap is
+        // delivered. If the card was over at the player app's window it springs back beside the panel in that gap (the
+        // celebration plays where the user is looking, not over there).
+        let hopsHome = musicWindowFrame != nil
         musicWindowFrame = nil
         isReturningFromMusic = true
         presentCurrentCard()
+        if let store = cardStore {
+            beginFeedback(store: store, pops: [Self.musicReturnBeatID], ringTo: nil, spark: false, closes: false, confetti: false, holdForFinale: false)
+        }
         refreshGuidance()
         guidance.syncReduceMotion()
         let work = DispatchWorkItem { [weak self] in
@@ -423,11 +434,14 @@ final class TourController: ObservableObject {
             self.process(.signal(.musicButtonTapped))
         }
         musicReturnWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + (guidance.motion.reduceMotion ? 0.05 : Self.musicHopHomeDelay), execute: work)
+        let delay = guidance.motion.reduceMotion ? 0.05 : (hopsHome ? Self.musicHopHomeDelay : Self.musicReturnTickDelay)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     /// The card's spring back to the panel (a move is ~0.4 s) plus a beat of stillness before the celebration.
     static let musicHopHomeDelay: Double = 0.55
+    /// With no window to hop back from: just long enough to see the "Back to nanoPod" check land before the celebration.
+    static let musicReturnTickDelay: Double = 0.4
 
     private func endMusicHold() {
         isHoldingForMusicReturn = false
@@ -743,6 +757,7 @@ final class TourController: ObservableObject {
         skipping = false
         cardYielded = false
         preface = nil
+        returnBeatShown = false
         endMusicHold()
         resetMusicTrip()
         cancelOutputAck()
@@ -920,8 +935,9 @@ final class TourController: ObservableObject {
         case .step(.corners, let beats):
             var list: [TourBeatModel] = []
             var body = beats.allSatisfy { $0 } ? L("tour.corners.body") : awayOr(L("tour.corners.body"))
-            if musicTripActive {
+            if isHoldingForMusicReturn || (isReturningFromMusic && musicCardShown) {
                 // Away in the player app: standing by its window, the card says what that window is; otherwise it just waits.
+                // Both end by asking the user to move the pointer back (the card keeps saying it through its hop home).
                 body = musicCardShown ? L10n.localized("tour.corners.bodyMusicWindow", player: playerApp) : L("tour.corners.bodyWaiting")
             } else if outputAckActive, !beats.allSatisfy({ $0 }) {
                 body = L("tour.corners.bodyOutputSwitched")                                // picked a device in the open menu
@@ -938,6 +954,11 @@ final class TourController: ObservableObject {
             }
             list.append(TourBeatModel(id: 0, text: L("tour.corners.beat1"), checked: beats[0]))
             list.append(TourBeatModel(id: 1, text: L("tour.corners.beat2"), checked: beats[1] || musicTripActive))
+            if returnBeatShown {
+                // Not a machine beat: the way back from the player app. Pending while the user is away, solid once they are back.
+                list.append(TourBeatModel(id: Self.musicReturnBeatID, text: L("tour.corners.beat3"),
+                                          checked: !isHoldingForMusicReturn, pending: isHoldingForMusicReturn))
+            }
             markSkipped(&list)
             return TourCardModel(
                 kind: .step(.corners), title: L("tour.corners.title"),
@@ -1453,10 +1474,19 @@ final class TourController: ObservableObject {
         if feedback.isActive, case .finale = state.phase { return }
         if cardYielded || skipping { return }
         if musicTripActive {
-            // Away in the player app: the ring stops pulsing and goes down, nothing runs until they are back.
+            // Away in the player app: the ring stops pulsing and goes down. While they are still away the way back is shown
+            // once, with the reveal step's own affordance (a ghost cursor gliding from the card to the panel, and the panel's
+            // edge glowing, both for a few seconds); once they are back nothing runs.
             if motion.ringVisible { motion.hideRing() }
-            if motion.hintRunning { motion.stopHint() }
             lastRingSubject = nil
+            let pointsBack = isHoldingForMusicReturn
+                && TourGuidanceResolver.panelHint(phase: state.phase, surface: currentSurface(), awayInPlayerApp: true) == .hoverInvite
+            if pointsBack {
+                if !awayHintStarted {
+                    awayHintStarted = true
+                    motion.startHover(target: CGPoint(x: panel.frame.midX, y: panel.frame.midY))
+                }
+            } else if motion.hintRunning { motion.stopHint() }
             guidance.kick()
             return
         }

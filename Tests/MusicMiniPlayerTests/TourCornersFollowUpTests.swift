@@ -201,12 +201,13 @@ final class TourMusicWindowPureTests: XCTestCase {
         L10n.languageOverride = "zh"
         XCTAssertEqual(L10n.localized("tour.corners.bodyOutputMenu"), "这些都是能出声的地方。想换就点一个，听听差别；换回来也一样简单。")
         XCTAssertEqual(L10n.localized("tour.corners.bodyOutputSwitched"), "好，换过去了。")
-        XCTAssertEqual(L10n.localized("tour.corners.bodyMusicWindow", player: .appleMusic), "这是完整的 Apple Music，找歌、整理歌单都在这儿。nanoPod 是它身边的小伙伴，平时安静地陪你听。")
+        XCTAssertEqual(L10n.localized("tour.corners.bodyMusicWindow", player: .appleMusic), "这是完整的 Apple Music，找歌、整理歌单都在这儿。nanoPod 是它身边的小伙伴，平时安静地陪你听。看完了，把鼠标移回 nanoPod 就能接着来。")
         XCTAssertTrue(L10n.localized("tour.corners.bodyMusicWindow", player: .neteaseCloudMusic).contains("NetEase Cloud Music"), "another edition reads correctly")
         XCTAssertFalse(L10n.localized("tour.corners.bodyMusicWindow", player: .neteaseCloudMusic).contains("Apple Music"))
         L10n.languageOverride = "en"
         XCTAssertTrue(L10n.localized("tour.corners.bodyMusicWindow", player: .appleMusic).contains("full Apple Music"))
         XCTAssertTrue(L10n.localized("tour.corners.bodyMusicWindow", player: .appleMusic).contains("companion"))
+        XCTAssertTrue(L10n.localized("tour.corners.bodyMusicWindow", player: .appleMusic).hasSuffix("move the pointer back to nanoPod to carry on."), "it ends by inviting the user back")
     }
 }
 
@@ -404,7 +405,7 @@ final class TourCornersFollowUpTests: XCTestCase {
         musicWindow = window
         tapMusic()
         XCTAssertTrue(f.wait(3) { self.body == self.windowText }, "the card names the full app and nanoPod's role")
-        XCTAssertEqual(body, "This is the full Apple Music: finding songs and building playlists happen here. nanoPod is the little companion beside it, quietly keeping you company while you listen.")
+        XCTAssertEqual(body, "This is the full Apple Music: finding songs and building playlists happen here. nanoPod is the little companion beside it, quietly keeping you company while you listen. When you're done looking, move the pointer back to nanoPod to carry on.")
         f.spin(1.2)
         let card = try XCTUnwrap(f.cardWindow).frame
         XCTAssertFalse(card.intersects(f.panel.frame), "not over the panel")

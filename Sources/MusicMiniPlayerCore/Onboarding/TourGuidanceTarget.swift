@@ -229,8 +229,12 @@ public enum TourGuidanceResolver {
 
     /// The panel-level hint for `phase` (ghost cursor + edge glow, or the
     /// gesture glow), independent of the ring.
-    public static func panelHint(phase: TourPhase, surface: TourSurface) -> TourPanelHint {
+    /// `awayInPlayerApp`: the user took the corners step's Music beat and is in the player app, so the way back to the panel
+    /// is the invitation (the same ghost cursor + glow the reveal step uses; the mouse is, by definition, not over the panel).
+    public static func panelHint(phase: TourPhase, surface: TourSurface, awayInPlayerApp: Bool = false) -> TourPanelHint {
         switch phase {
+        case .step(.corners, _):
+            return awayInPlayerApp ? .hoverInvite : .none
         case .step(.reveal, let beats):
             // Only while the mouse is not over the panel yet.
             return (beats.first == false && !surface.controlsVisible) ? .hoverInvite : .none
