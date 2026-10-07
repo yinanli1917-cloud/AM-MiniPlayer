@@ -241,8 +241,8 @@ enum TourGuidanceDrawing {
         }
     }
 
-    /// The prototype's arrow (`M2 1.5v17l4.4-4 3 7 3.2-1.4-3-6.8H16z`) with the
-    /// hotspot at (2, 1.5), a drop shadow, and the "parked here" ripple.
+    /// The ghost cursor (`TourCursorGlyph`: a black arrow pointer with an accent music note at its tail, hotspot on the point)
+    /// and the "parked here" ripple, whose progress also gives the note its one bob.
     static func drawGhost(_ ctx: GraphicsContext, f: TourOverlayVisual, overlay: CGRect, palette: TourCardPalette) {
         let tip = local(f.ghost, in: overlay)
         var g = ctx
@@ -254,20 +254,7 @@ enum TourGuidanceDrawing {
             r.stroke(Path(ellipseIn: CGRect(x: tip.x - radius, y: tip.y - radius, width: radius * 2, height: radius * 2)),
                      with: .color(palette.accent), style: StrokeStyle(lineWidth: 2))
         }
-        var arrow = Path()
-        arrow.move(to: CGPoint(x: 2, y: 1.5))
-        arrow.addLine(to: CGPoint(x: 2, y: 18.5))
-        arrow.addLine(to: CGPoint(x: 6.4, y: 14.5))
-        arrow.addLine(to: CGPoint(x: 9.4, y: 21.5))
-        arrow.addLine(to: CGPoint(x: 12.6, y: 20.1))
-        arrow.addLine(to: CGPoint(x: 9.6, y: 13.3))
-        arrow.addLine(to: CGPoint(x: 16, y: 13.3))
-        arrow.closeSubpath()
-        let placed = arrow.applying(CGAffineTransform(translationX: tip.x - 2, y: tip.y - 1.5))
-        var shadowed = g
-        shadowed.addFilter(.shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 2))
-        shadowed.fill(placed, with: .color(.white))
-        g.stroke(placed, with: .color(Color(hex: 0x111111)), style: StrokeStyle(lineWidth: 1.3, lineJoin: .round))
+        TourCursorGlyph.draw(g, tip: tip, palette: palette, rippleProgress: f.ghostRipple)
     }
 }
 

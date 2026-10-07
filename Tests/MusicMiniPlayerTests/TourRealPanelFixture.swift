@@ -75,6 +75,7 @@ final class TourRealPanelFixture {
         panel.liquidEdgeHandler = { [weak liquidEdge] edge in liquidEdge?.collapse(to: edge) ?? false }
         let guidance = TourGuidance(reduceMotion: { reduceMotion })
         controller = TourController(panel: panel, liquidEdge: liquidEdge, defaults: defaults, feedback: feedback, guidance: guidance, gestureLogWriter: gestureWriter)
+        controller.pointerLocationProvider = { CGPoint(x: -20_000, y: -20_000) }   // never read the real pointer: the way-back ghost is gated on it
         controller.musicWindowProvider = { nil }   // never ask the real window list (the founder's Music) unless a test injects a window
         spin(0.6)
     }

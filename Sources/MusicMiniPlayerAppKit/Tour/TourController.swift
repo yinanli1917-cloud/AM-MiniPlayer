@@ -82,6 +82,15 @@ final class TourController: ObservableObject {
     private var returnBeatShown = false
     /// The ghost cursor + panel glow that point the way back have started for this trip (they run once, not on every refresh).
     private var awayHintStarted = false
+    /// The ghost may start only once the card has landed (by the player app's window, or beside the panel when there is none)
+    /// plus a read pause. This is that pending start; it dies with the trip.
+    private var awayHintWork: DispatchWorkItem?
+    /// The user returned or the pointer is already heading to the panel: the ghost never starts for this trip.
+    private var awayHintCancelled = false
+    /// The pause between "the card has landed" and "the ghost starts" (test seam; default: the motion token).
+    var awayHintReadPause = TourMotionPolicy.Tokens.awayHintReadPause
+    /// Where the pointer is, screen space y up (test seam; default: the live pointer, which needs no permission).
+    var pointerLocationProvider: () -> CGPoint = { NSEvent.mouseLocation }
     /// The "Back to nanoPod" row's id (the corners step's ids so far: 0 output, 1 Music, 2 leave the queue).
     static let musicReturnBeatID = 3
     /// Who the card names where the copy says "{player}" (the edition's player app).
@@ -386,6 +395,8 @@ final class TourController: ObservableObject {
         isHoldingForMusicReturn = true
         returnBeatShown = true
         awayHintStarted = false
+        awayHintCancelled = false
+        awayHintWork?.cancel(); awayHintWork = nil
         stallWork?.cancel(); stallWork = nil
         cardStore?.stalled = false
         // Back = the cursor enters the panel again (a real false -> true, not the hover the tap itself came from),
@@ -445,6 +456,8 @@ final class TourController: ObservableObject {
 
     private func endMusicHold() {
         isHoldingForMusicReturn = false
+        awayHintCancelled = true
+        awayHintWork?.cancel(); awayHintWork = nil
         musicReturnObservers.removeAll()
         musicWatcher?.stop()
     }
@@ -453,6 +466,7 @@ final class TourController: ObservableObject {
     private func resetMusicTrip() {
         musicWatcher?.stop()
         musicReturnWork?.cancel(); musicReturnWork = nil
+        awayHintWork?.cancel(); awayHintWork = nil
         musicWindowFrame = nil
         musicCardShown = false
         isReturningFromMusic = false
@@ -476,17 +490,49 @@ final class TourController: ObservableObject {
         guard isHoldingForMusicReturn, cardWindow != nil else { return }
         switch event {
         case .found(let frame), .moved(let frame):
+            let first = musicWindowFrame == nil
             musicWindowFrame = frame
             musicCardShown = true
+            presentCurrentCard()
+            refreshGuidance()
+            if first { armAwayHint(afterCardTravel: true) }     // the card is hopping over to the window now
+            return
         case .lost:
             guard musicWindowFrame != nil else { return }
             musicWindowFrame = nil          // the window closed: back to the panel's side, waiting as before
             musicCardShown = false
+            presentCurrentCard()
+            refreshGuidance()
+            armAwayHint(afterCardTravel: true)                  // and the card is hopping back beside the panel
+            return
         case .gaveUp:
-            return                          // no window: the waiting card stays beside the panel
+            armAwayHint(afterCardTravel: false)                 // no window: the waiting card has long been settled beside the panel
+            return
         }
-        presentCurrentCard()
-        refreshGuidance()
+    }
+
+    /// The way-back ghost's start gate (founder 2026-10-07): the card must have finished landing (`afterCardTravel`: its move spring
+    /// is still running from now), then `awayHintReadPause` more. A newer landing replaces a pending start; a trip that was
+    /// returned from, or whose ghost already ran, arms nothing.
+    private func armAwayHint(afterCardTravel: Bool) {
+        guard isHoldingForMusicReturn, !awayHintStarted, !awayHintCancelled else { return }
+        awayHintWork?.cancel()
+        let travel = afterCardTravel ? TourGuidanceTokens.moveStartDelay + TourGuidanceTokens.moveSpring.duration : 0
+        let work = DispatchWorkItem { [weak self] in self?.startAwayHintIfStillWanted() }
+        awayHintWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + travel + awayHintReadPause, execute: work)
+    }
+
+    private func startAwayHintIfStillWanted() {
+        awayHintWork = nil
+        guard isHoldingForMusicReturn, !awayHintStarted, !awayHintCancelled, !skipping, !cardYielded, let panel else { return }
+        // Already near / on the panel: the user is heading back by themselves, so the ghost never starts for this trip.
+        if TourMusicReturn.isPointerNearPanel(pointerLocationProvider(), panel: panel.frame) { awayHintCancelled = true; return }
+        guard TourGuidanceResolver.panelHint(phase: state.phase, surface: currentSurface(), awayInPlayerApp: true) == .hoverInvite else { return }
+        guidance.syncReduceMotion()
+        awayHintStarted = true
+        guidance.motion.startHover(target: CGPoint(x: panel.frame.midX, y: panel.frame.midY))
+        guidance.kick()
     }
 
     // MARK: - Output menu: a light invitation while it is open, a soft acknowledgement when a device is picked
@@ -1479,14 +1525,10 @@ final class TourController: ObservableObject {
             // edge glowing, both for a few seconds); once they are back nothing runs.
             if motion.ringVisible { motion.hideRing() }
             lastRingSubject = nil
+            // (The ghost does not start here: `armAwayHint` times it from the card's landing; this only stops it when it no longer applies.)
             let pointsBack = isHoldingForMusicReturn
                 && TourGuidanceResolver.panelHint(phase: state.phase, surface: currentSurface(), awayInPlayerApp: true) == .hoverInvite
-            if pointsBack {
-                if !awayHintStarted {
-                    awayHintStarted = true
-                    motion.startHover(target: CGPoint(x: panel.frame.midX, y: panel.frame.midY))
-                }
-            } else if motion.hintRunning { motion.stopHint() }
+            if !pointsBack, motion.hintRunning { motion.stopHint() }
             guidance.kick()
             return
         }

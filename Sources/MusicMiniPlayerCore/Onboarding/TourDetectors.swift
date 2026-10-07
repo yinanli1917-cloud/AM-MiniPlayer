@@ -176,4 +176,10 @@ public enum TourMusicReturn {
         if let own = ownBundleID, id == own { return false }
         return true
     }
+
+    /// The pointer is on the panel or close enough that the user is plainly heading back (screen space, y up): the way-back
+    /// ghost has nothing left to say, so it never starts for this trip.
+    public static func isPointerNearPanel(_ pointer: CGPoint, panel: CGRect, reach: CGFloat = TourMotionPolicy.Tokens.awayHintPointerReach) -> Bool {
+        panel.insetBy(dx: -reach, dy: -reach).contains(pointer)
+    }
 }

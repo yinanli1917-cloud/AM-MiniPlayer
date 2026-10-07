@@ -30,8 +30,8 @@ final class TourMusicHoldTests: XCTestCase {
     private var hintText: String { L10n.localized("tour.corners.bodyMusic", player: .appleMusic) }
 
     /// The corners step with the controls shown and the output beat already ticked: the Music beat is current.
-    private func musicBeatCurrent(outputFirst: Bool = true, dark: Bool = false) throws {
-        f = TourRealPanelFixture(dark: dark)
+    private func musicBeatCurrent(outputFirst: Bool = true, dark: Bool = false, reduceMotion: Bool = false) throws {
+        f = TourRealPanelFixture(dark: dark, reduceMotion: reduceMotion)
         f.controller.appActivations = activations.eraseToAnyPublisher()
         f.controller.ownBundleIdentifier = own
         f.showControls(on: .album)
@@ -164,6 +164,8 @@ final class TourMusicHoldTests: XCTestCase {
 
     func test_awayHint_ghostCursorAndGlow_pointAtThePanel_thenStopOnReturn() throws {
         try musicBeatCurrent()
+        f.controller.awayHintReadPause = 0.2
+        f.controller.musicWindowTiming.searchDeadline = 0.3
         f.controller.send(.signal(.musicButtonTapped))
         let motion = f.controller.guidance.motion
         XCTAssertTrue(f.wait(4) { motion.makeFrame().ghostVisible }, "the ghost cursor glides from the card toward the panel")
@@ -171,6 +173,88 @@ final class TourMusicHoldTests: XCTestCase {
         XCTAssertNil(f.controller.debugHaloFrame, "no ring: the ring belongs to controls")
         activations.send("com.apple.finder")
         XCTAssertFalse(motion.hintRunning, "the hint stops the moment the user is back")
+    }
+
+    // MARK: - 2c. When the ghost may start (founder 2026-10-07: too soon after the jump)
+
+    /// Seconds from the tap until the way-back hint is running; nil = it never ran within `within`.
+    private func secondsUntilHint(within: Double) -> Double? {
+        let tapped = Date()
+        f.controller.send(.signal(.musicButtonTapped))
+        guard f.wait(within, { f.controller.guidance.motion.hintRunning }) else { return nil }
+        return Date().timeIntervalSince(tapped)
+    }
+
+    func test_awayHint_tokenIsOneAndAHalfSeconds_andNearPanelRule() {
+        XCTAssertEqual(TourMotionPolicy.Tokens.awayHintReadPause, 1.5)
+        let panel = CGRect(x: 1000, y: 500, width: 250, height: 284)
+        XCTAssertTrue(TourMusicReturn.isPointerNearPanel(CGPoint(x: 1100, y: 600), panel: panel), "on the panel")
+        XCTAssertTrue(TourMusicReturn.isPointerNearPanel(CGPoint(x: 1000 - 100, y: 600), panel: panel), "within reach of its edge")
+        XCTAssertFalse(TourMusicReturn.isPointerNearPanel(CGPoint(x: 1000 - 200, y: 600), panel: panel), "far across the screen")
+    }
+
+    func test_awayHint_withNoPlayerWindow_startsOnlyAfterTheSearchEnds_plusTheReadPause() throws {
+        try musicBeatCurrent()
+        f.controller.musicWindowTiming.searchDeadline = 0.4          // gives up (no window) at ~0.4 s
+        f.controller.awayHintReadPause = 0.8
+        let started = try XCTUnwrap(secondsUntilHint(within: 4), "it starts")
+        XCTAssertGreaterThanOrEqual(started, 0.4 + 0.8 - 0.05, "not before the card settled + the read pause (\(started))")
+    }
+
+    func test_awayHint_withAPlayerWindow_startsOnlyAfterTheCardHasLanded_plusTheReadPause() throws {
+        try musicBeatCurrent()
+        f.controller.musicWindowProvider = { CGRect(x: 100, y: 200, width: 900, height: 600) }
+        f.controller.musicWindowTiming.searchInterval = 0.05
+        f.controller.awayHintReadPause = 0.6
+        let landing = TourGuidanceTokens.moveStartDelay + TourGuidanceTokens.moveSpring.duration
+        let started = try XCTUnwrap(secondsUntilHint(within: 5), "it starts")
+        // The window is found after two matching looks (>= 0.1 s); the card then travels, then the pause.
+        XCTAssertGreaterThanOrEqual(started, 0.1 + landing + 0.6 - 0.05, "not while the card is still landing or being read (\(started))")
+        XCTAssertNotNil(f.controller.musicWindowFrame, "the card did stand by the window")
+    }
+
+    func test_awayHint_neverStarts_ifTheUserIsBackBeforeTheReadPauseEnds() throws {
+        try musicBeatCurrent()
+        f.controller.musicWindowTiming.searchDeadline = 0.2
+        f.controller.awayHintReadPause = 1.0
+        f.controller.send(.signal(.musicButtonTapped))
+        f.spin(0.5)                                                   // the search is over, the pause is running
+        XCTAssertFalse(f.controller.guidance.motion.hintRunning, "not yet")
+        activations.send("com.apple.finder")                          // back
+        var ever = false
+        let end = Date().addingTimeInterval(2.2)
+        while Date() < end { f.spin(0.05); ever = ever || f.controller.guidance.motion.hintRunning }
+        XCTAssertFalse(ever, "the ghost never starts for a trip that is already over")
+    }
+
+    func test_awayHint_neverStarts_ifThePointerIsAlreadyHeadingBackToThePanel() throws {
+        try musicBeatCurrent()
+        f.controller.musicWindowTiming.searchDeadline = 0.2
+        f.controller.awayHintReadPause = 0.3
+        let panel = f.panel.frame
+        f.controller.pointerLocationProvider = { CGPoint(x: panel.minX - 60, y: panel.midY) }   // beside the panel
+        XCTAssertNil(secondsUntilHint(within: 2.5), "no ghost for a user who is already on the way")
+        XCTAssertTrue(f.controller.isHoldingForMusicReturn, "(the hold itself is unchanged)")
+    }
+
+    func test_awayHint_runsOncePerTrip() throws {
+        try musicBeatCurrent()
+        f.controller.musicWindowTiming.searchDeadline = 0.2
+        f.controller.awayHintReadPause = 0.2
+        XCTAssertNotNil(secondsUntilHint(within: 4))
+        let motion = f.controller.guidance.motion
+        XCTAssertTrue(f.wait(14) { !motion.hintRunning || !motion.makeFrame().ghostVisible }, "(it plays its two cycles)")
+        motion.stopHint()
+        f.controller.refreshGuidance()                                // e.g. the panel moved
+        XCTAssertFalse(motion.hintRunning, "a refresh does not start the ghost a second time")
+    }
+
+    func test_awayHint_reduceMotion_showsNoGhostAtAll() throws {
+        try musicBeatCurrent(reduceMotion: true)
+        f.controller.musicWindowTiming.searchDeadline = 0.2
+        f.controller.awayHintReadPause = 0.2
+        XCTAssertNil(secondsUntilHint(within: 2), "no ghost, no glow")
+        XCTAssertFalse(f.controller.guidance.motion.makeFrame().ghostVisible)
     }
 
     func test_panelHint_awayInThePlayerApp_isTheHoverInvite_onlyOnTheCornersStep() {

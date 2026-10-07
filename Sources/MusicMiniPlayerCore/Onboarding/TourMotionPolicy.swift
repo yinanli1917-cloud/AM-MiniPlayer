@@ -43,6 +43,13 @@ public enum TourMotionPolicy {
 
         /// §8.1: step completion → next card, from "beat 打勾" to "新内容淡入".
         public static let stepCompletionFeedback = 1.0
+
+        /// Founder 2026-10-07: the way-back ghost cursor must not start the moment the user is in the player app. It waits until
+        /// the card has finished landing beside the player app's window (or, with no window, has settled beside the panel),
+        /// then this long again, so the card's words get read first.
+        public static let awayHintReadPause = 1.5
+        /// A pointer already this close to the panel (pt, past its edge) is already on its way back: the ghost does not start.
+        public static let awayHintPointerReach: CGFloat = 120
     }
 
     /// A resolved bundle of "should this animate at all" decisions — §8.4's
