@@ -302,7 +302,7 @@ final class TourCompletionFeedbackTests: XCTestCase {
         let cy = parts.map(\.y).reduce(0, +) / Double(parts.count)
         let dx = cx - 100, dy = cy - 100
         let angle = atan2(dy, dx) * 180 / .pi
-        let want = -90 + 360.0 * 2 / 7                            // 2/7 of a turn clockwise from 12 o'clock
+        let want = -90 + 360.0 * 2 / Double(TourStep.orderedSteps.count)   // 2/n of a turn clockwise from 12 o'clock
         XCTAssertEqual(angle, want, accuracy: 12)
         XCTAssertEqual((dx * dx + dy * dy).squareRoot(), 11.25, accuracy: 6, "on the ring's centerline, plus a frame of drift")
     }
@@ -355,11 +355,21 @@ final class TourCompletionFeedbackTests: XCTestCase {
         let cap = 2 * 2.75 / (2 * Double.pi * 11.25)
         let start = arc(at: 0)
         let end = arc(at: 0.8)
-        XCTAssertEqual(start, 2.0 / 7 + cap, accuracy: 0.05, "before it moves the ring shows 2/7")
-        XCTAssertEqual(end, 3.0 / 7 + cap, accuracy: 0.05, "and 3/7 once settled")
+        let n = Double(TourStep.orderedSteps.count)
+        XCTAssertEqual(start, 2.0 / n + cap, accuracy: 0.05, "before it moves the ring shows 2/n")
+        XCTAssertEqual(end, 3.0 / n + cap, accuracy: 0.05, "and 3/n once settled")
         fb.advance(to: 100.25)
         XCTAssertGreaterThan(Double(fb.frame.ringProgress ?? 0), 2.2, "mid-flight the arc is between the two")
         XCTAssertLessThan(Double(fb.frame.ringProgress ?? 9), 3.0)
+    }
+
+    /// 2026-10-07: translation left the tour (6 steps) but the ring still divided by 7, so the last step left a gap.
+    func test_ringWithEveryStepDone_isFull_andItsSegmentsFollowTheStepCount() {
+        let n = TourStep.orderedSteps.count
+        let fb = makeFeedback()
+        let size = CGSize(width: 40, height: 40)
+        XCTAssertGreaterThan(arcFraction(render(ringView(fb, completed: n), size: size)), 0.97, "every step done fills the ring")
+        XCTAssertEqual(TourFeedbackEvent(ringFrom: 0, ringTo: 1).total, n)
     }
 
     func test_ringLineWidth_swellsThenReturnsToBase_inRenderedPixels() {

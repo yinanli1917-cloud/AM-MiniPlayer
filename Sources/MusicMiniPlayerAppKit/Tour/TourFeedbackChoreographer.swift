@@ -204,7 +204,7 @@ struct TourFeedbackEvent: Equatable {
     /// Steps completed before / after (0...total). Equal = a beat only.
     var ringFrom: Int
     var ringTo: Int
-    var total: Int = 7
+    var total: Int = TourStep.orderedSteps.count
     /// Beat dots (indices on the CURRENT card) that just turned solid.
     var beatIndices: [Int] = []
     /// The last segment: the ring closes into a solid disc (spec §B.3).

@@ -147,7 +147,7 @@ enum TourRingDrawing {
 /// cap, 12 o'clock clockwise, centerline radius (28 - 5.5) / 2 = 11.25.
 struct TourFeedbackRing: View {
     var completed: Int
-    var total: Int = 7
+    var total: Int = TourStep.orderedSteps.count
     /// A finished ring (the finale): solid disc with a white check.
     var closed: Bool = false
     var stepLabel: String = ""
@@ -227,7 +227,7 @@ struct TourCelebrationRingLayer: View {
     var stepLabel: String
     var closed: Bool
     var completed: Int
-    var total: Int = 7
+    var total: Int = TourStep.orderedSteps.count
     var palette: TourCardPalette
     @ObservedObject var feedback: TourCompletionFeedback
 
